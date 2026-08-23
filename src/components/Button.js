@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, Text, StyleSheet, ActivityIndicator, View } from 'react-native';
-import { colors, typography, radius, spacing } from '../theme/theme';
+import { typography, radius, spacing } from '../theme/theme';
+import { useTheme } from '../theme/ThemeContext';
 
 /**
  * variant: 'primary' | 'secondary' | 'ghost' | 'outline'
@@ -17,7 +18,10 @@ export default function Button({
   style,
   fullWidth = true,
 }) {
-  const isDark = variant === 'primary';
+  const { colors } = useTheme();
+  const isPrimary = variant === 'primary';
+  const styles = makeStyles(colors);
+  const variantStyles = makeVariantStyles(colors);
 
   return (
     <Pressable
@@ -34,14 +38,14 @@ export default function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={isDark ? colors.paper : colors.sageDeep} />
+        <ActivityIndicator color={isPrimary ? colors.onAccent : colors.sageDeep} />
       ) : (
         <View style={styles.content}>
           {icon}
           <Text
             style={[
               styles.text,
-              variant === 'primary' && { color: colors.paper },
+              variant === 'primary' && { color: colors.onAccent },
               variant === 'secondary' && { color: colors.sageDeep },
               variant === 'outline' && { color: colors.ink },
               variant === 'ghost' && { color: colors.sageDeep },
@@ -55,30 +59,34 @@ export default function Button({
   );
 }
 
-const variantStyles = StyleSheet.create({
-  primary: { backgroundColor: colors.sageDeep },
-  secondary: { backgroundColor: colors.sagePale },
-  outline: { backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.hairline },
-  ghost: { backgroundColor: 'transparent' },
-});
+function makeVariantStyles(colors) {
+  return StyleSheet.create({
+    primary: { backgroundColor: colors.sageDeep },
+    secondary: { backgroundColor: colors.sagePale },
+    outline: { backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.hairline },
+    ghost: { backgroundColor: 'transparent' },
+  });
+}
 
-const styles = StyleSheet.create({
-  base: {
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  content: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  lg: { paddingVertical: 16, paddingHorizontal: spacing.xl },
-  md: { paddingVertical: 12, paddingHorizontal: spacing.lg },
-  text: {
-    fontFamily: typography.body.semibold,
-    fontSize: typography.sizes.md,
-  },
-  pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
-  disabled: { opacity: 0.5 },
-});
+function makeStyles(colors) {
+  return StyleSheet.create({
+    base: {
+      borderRadius: radius.pill,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    content: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    lg: { paddingVertical: 16, paddingHorizontal: spacing.xl },
+    md: { paddingVertical: 12, paddingHorizontal: spacing.lg },
+    text: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.md,
+    },
+    pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
+    disabled: { opacity: 0.5 },
+  });
+}

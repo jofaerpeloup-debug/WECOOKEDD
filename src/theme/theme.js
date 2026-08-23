@@ -1,52 +1,61 @@
 // WeCooked design tokens
-// Derived directly from the "Sage & Stone" mockup set.
-// Two moods coexist by design in the source screens:
-//  - "Culinary warmth": cream surfaces, sage accents, serif display type
-//    (Landing, Login, Dashboard, Discovery, Ingredient Studio, Shopping List,
-//     Assistant, Saved, Swap Detail, Profile, Settings, Insights)
-// The molecular/ingredient-science screens (Ingredient Studio, Swap Detail)
-// lean harder into the serif "editorial lab notebook" feel with data tables,
-// pH/moisture readouts and confidence badges — that's preserved as a variant,
-// not a separate theme.
+// "Noir & Ember" — a single dark, orange-accented visual language used
+// across the entire app (replaces the earlier cream/sage theme). There is
+// no separate light palette anymore: lightColors and darkColors intentionally
+// point at the same values so ThemeContext's light/dark plumbing keeps
+// working without every screen needing to change, but toggling no longer
+// changes the look.
 
-export const colors = {
+const noir = {
   // Core neutrals
-  cream: '#FAF9F6',       // primary app background
-  creamDeep: '#F4F1EA',   // secondary/inset surfaces
-  paper: '#FFFFFF',       // cards, inputs, sheets
-  ink: '#232620',          // primary text (warm near-black, not pure black)
-  inkSoft: '#5B6058',      // secondary text
-  inkFaint: '#9B9F96',     // tertiary / placeholder text
-  hairline: '#E7E4DC',    // borders, dividers
+  cream: '#121212',       // primary app background (near-black)
+  creamDeep: '#1A1A1A',   // secondary/inset surfaces (search bars, chip fills)
+  paper: '#1C1C1E',       // cards, inputs, sheets
+  ink: '#FFFFFF',          // primary text
+  inkSoft: '#B4B4B9',     // secondary text
+  inkFaint: '#7C7C82',    // tertiary / placeholder text
+  hairline: '#2A2A2E',    // borders, dividers
 
-  // Sage system (brand primary)
-  sagePale: '#DCE7DD',    // pale sage fills (pills, chip backgrounds)
-  sageLight: '#C0D5C2',   // login panel, soft blocks
-  sage: '#8FA88F',        // mid sage — badges, secondary buttons
-  sageDeep: '#4A5D4E',    // primary buttons, active nav, headlines accent
-  sageDeeper: '#3A4A3E',  // pressed states
+  // Text/icon color for use on top of accent-colored (orange) surfaces
+  onAccent: '#FFFFFF',
 
-  // Stone / clay accent (used sparingly: swap ratios, warm highlights)
-  stone: '#B08968',
-  stoneLight: '#E8DCC8',
+  // Ember system (brand primary — was "sage")
+  sagePale: '#241A10',    // dark accent-tinted fills (pills, chip backgrounds)
+  sageLight: '#2E2118',   // soft blocks
+  sage: '#F0A155',        // mid accent — badges, secondary text
+  sageDeep: '#F5821F',    // primary buttons, active nav, headline accent
+  sageDeeper: '#D66F12',  // pressed states
+
+  // Gold accent (used sparingly: swap ratios, secondary highlights)
+  stone: '#E0A458',
+  stoneLight: '#2B2013',
 
   // Semantic
-  success: '#4A5D4E',
-  successBg: '#E4EDE4',
-  warning: '#B08968',
-  warningBg: '#F4E9DA',
-  error: '#B1503F',
-  errorBg: '#F4E1DC',
-  info: '#5B7C9E',
-  infoBg: '#E4EBF2',
+  success: '#3DD16F',
+  successBg: '#12291B',
+  warning: '#E0A458',
+  warningBg: '#332714',
+  error: '#F0544E',
+  errorBg: '#33191A',
+  info: '#5B9BD5',
+  infoBg: '#16232F',
 
   // Confidence / score tiers (molecular precision screens)
-  scoreHigh: '#4A5D4E',
-  scoreMid: '#B08968',
+  scoreHigh: '#3DD16F',
+  scoreMid: '#E0A458',
 
-  overlay: 'rgba(35, 38, 32, 0.55)',
-  shadow: 'rgba(35, 38, 32, 0.12)',
+  overlay: 'rgba(0, 0, 0, 0.65)',
+  shadow: 'rgba(0, 0, 0, 0.5)',
 };
+
+export const lightColors = noir;
+export const darkColors = noir;
+
+// Kept as a plain, non-reactive default so nothing breaks if a file imports
+// `colors` directly instead of going through useTheme(). Every screen in
+// this app has been converted to useTheme(); this export exists as a
+// safety net for future files, not the source of truth.
+export const colors = lightColors;
 
 export const typography = {
   // Display/serif: used for hero headlines, screen titles like
@@ -93,21 +102,27 @@ export const radius = {
   pill: 999,
 };
 
-export const shadow = {
-  card: {
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 1,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  soft: {
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-};
+// shadowColor needs to track the active palette, so this is a function of
+// the current colors rather than a static export.
+export function buildShadow(activeColors) {
+  return {
+    card: {
+      shadowColor: activeColors.shadow,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 1,
+      shadowRadius: 12,
+      elevation: 3,
+    },
+    soft: {
+      shadowColor: activeColors.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 1,
+      shadowRadius: 6,
+      elevation: 2,
+    },
+  };
+}
 
-export default { colors, typography, spacing, radius, shadow };
+export const shadow = buildShadow(lightColors);
+
+export default { colors, lightColors, darkColors, typography, spacing, radius, shadow, buildShadow };

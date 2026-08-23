@@ -13,11 +13,13 @@ import {
   Linking,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS, HeartIcon, LogoBadge } from '../theme/brandKit';
+import { COLORS, HeartIcon } from '../theme/brandKit';
 import useGoogleSignIn from '../hooks/useGoogleSignIn';
+import { useAuth } from '../context/AuthContext';
 
-const CHEF_HERO = require('../assets/landing/chef-hero-login.jpg');
+const LOGIN_BG = require('../assets/landing/login-bg.jpg');
 
 function MailIcon({ size = 16, color = COLORS.inkFaint }) {
   return (
@@ -85,6 +87,17 @@ function GoogleIcon({ size = 18 }) {
   );
 }
 
+function AppleIcon({ size = 19, color = '#fff' }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        d="M16.4 1c.1 1-.3 2-1 2.7-.7.8-1.8 1.4-2.8 1.3-.1-1 .4-2 1-2.7C14.3 1.4 15.4 1 16.4 1Zm3.6 16.3c-.3.7-.6 1.3-1 1.9-.6.9-1.1 1.6-1.6 2-.5.5-1.1.7-1.8.7-.5 0-1.1-.1-1.9-.5-.7-.3-1.4-.5-2-.5-.7 0-1.3.2-2 .5-.7.4-1.3.5-1.7.5-.7 0-1.3-.2-1.8-.7-.6-.5-1.1-1.2-1.7-2.1-.6-1-1.1-2.1-1.5-3.4-.4-1.4-.6-2.7-.6-4 0-1.5.3-2.7 1-3.8.5-.9 1.2-1.5 2-2 .8-.5 1.7-.7 2.6-.7.5 0 1.2.2 2.1.5.8.3 1.4.5 1.7.5.2 0 .8-.2 1.8-.6 1-.3 1.8-.5 2.4-.4 1.8.1 3.1.9 4 2.2-1.6 1-2.4 2.3-2.4 4.1 0 1.4.5 2.5 1.5 3.5.4.4.9.8 1.4 1-.1.3-.2.6-.3.8Z"
+        fill={color}
+      />
+    </Svg>
+  );
+}
+
 function FacebookIcon({ size = 18, color = '#1877F2' }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -98,17 +111,14 @@ function FacebookIcon({ size = 18, color = '#1877F2' }) {
 
 function Field({ icon, secureTextEntry, rightAction, style, ...props }) {
   const [hidden, setHidden] = useState(!!secureTextEntry);
-  const [focused, setFocused] = useState(false);
 
   return (
-    <View style={[styles.field, focused && styles.fieldFocused, style]}>
+    <View style={[styles.field, style]}>
       {icon}
       <TextInput
         style={styles.input}
         placeholderTextColor={COLORS.inkFaint}
         secureTextEntry={hidden}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
         {...props}
       />
       {secureTextEntry && (
@@ -126,15 +136,28 @@ export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const google = useGoogleSignIn();
+  const { login: markLoggedIn } = useAuth();
 
-  const login = () => navigation.replace('MainTabs');
+  const login = async () => {
+    await markLoggedIn();
+    navigation.replace('MainTabs');
+  };
 
   useEffect(() => {
-    if (google.profile) navigation.replace('MainTabs');
+    if (google.profile) {
+      markLoggedIn().then(() => navigation.replace('MainTabs'));
+    }
   }, [google.profile]);
 
   return (
     <View style={styles.root}>
+      <Image
+        source={LOGIN_BG}
+        style={[StyleSheet.absoluteFillObject, { width: '100%', height: '100%' }]}
+        resizeMode="cover"
+      />
+      <View style={styles.scrim} pointerEvents="none" />
+
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={[
@@ -145,9 +168,11 @@ export default function LoginScreen({ navigation }) {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.logoRow}>
-            <LogoBadge size={36} />
+            <View style={styles.logoMark}>
+              <MaterialCommunityIcons name="chef-hat" size={18} color="#fff" />
+            </View>
             <Text style={styles.wordmark}>
-              Ingredients<Text style={{ color: COLORS.greenMid }}>Hub</Text>
+              <Text style={{ color: COLORS.greenMid }}>We</Text>Cooked
             </Text>
           </View>
 
@@ -159,17 +184,13 @@ export default function LoginScreen({ navigation }) {
             </View>
           </View>
 
-          <View style={styles.heroWrap}>
-            <Image source={CHEF_HERO} style={styles.heroImg} resizeMode="cover" />
-          </View>
-
           <View style={styles.form}>
             <Text style={styles.label}>Email</Text>
             <Field
               icon={<MailIcon />}
               value={email}
               onChangeText={setEmail}
-              placeholder="Enter your email"
+              placeholder="youremail@gmail.com"
               autoCapitalize="none"
               keyboardType="email-address"
             />
@@ -204,18 +225,13 @@ export default function LoginScreen({ navigation }) {
                 disabled={google.loading || !!google.deviceCode}
                 onPress={google.signIn}
               >
-                {google.loading ? (
-                  <ActivityIndicator size="small" color={COLORS.ink} />
-                ) : (
-                  <>
-                    <GoogleIcon />
-                    <Text style={styles.socialText}>Google</Text>
-                  </>
-                )}
+                {google.loading ? <ActivityIndicator size="small" color={COLORS.ink} /> : <GoogleIcon />}
               </Pressable>
-              <Pressable style={styles.socialBtn}>
+              <Pressable style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed]}>
+                <AppleIcon />
+              </Pressable>
+              <Pressable style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed]}>
                 <FacebookIcon />
-                <Text style={styles.socialText}>Facebook</Text>
               </Pressable>
             </View>
 
@@ -259,19 +275,25 @@ export default function LoginScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.cream },
-  scrollContent: { paddingHorizontal: 26, flexGrow: 1 },
+  root: { flex: 1, backgroundColor: '#000' },
+  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
+  scrollContent: { paddingHorizontal: 26, flexGrow: 1, justifyContent: 'center' },
 
   logoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 10 },
+  logoMark: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    backgroundColor: COLORS.greenMid,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   wordmark: { fontSize: 18, fontWeight: '700', color: COLORS.ink },
 
-  headerText: { alignItems: 'center', marginBottom: 10 },
+  headerText: { alignItems: 'center', marginBottom: 32 },
   welcome: { fontSize: 20, fontWeight: '800', color: COLORS.ink, marginBottom: 3 },
   subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   subtitle: { fontSize: 12.5, fontWeight: '600', color: COLORS.inkSoft },
-
-  heroWrap: { flex: 1, minHeight: 130, marginHorizontal: -26, marginBottom: 12 },
-  heroImg: { width: '100%', height: '100%' },
 
   form: { width: '100%' },
   label: { fontSize: 12.5, fontWeight: '700', color: COLORS.inkSoft, marginBottom: 6 },
@@ -279,7 +301,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.creamCard,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: COLORS.hairline,
@@ -287,8 +309,7 @@ const styles = StyleSheet.create({
     height: 46,
     marginBottom: 10,
   },
-  fieldFocused: { borderColor: COLORS.greenMid },
-  input: { flex: 1, fontSize: 14, color: COLORS.ink, height: '100%' },
+  input: { flex: 1, fontSize: 14, color: COLORS.ink, height: '100%', outlineStyle: 'none' },
 
   forgotWrap: { alignSelf: 'flex-end', marginTop: -6, marginBottom: 10 },
   forgot: { fontSize: 12, fontWeight: '700', color: COLORS.greenLink },
@@ -308,24 +329,21 @@ const styles = StyleSheet.create({
   divider: { flex: 1, height: 1, backgroundColor: COLORS.hairline },
   dividerText: { fontSize: 11.5, fontWeight: '600', color: COLORS.inkFaint },
 
-  socialRow: { flexDirection: 'row', gap: 12, marginBottom: 14 },
+  socialRow: { flexDirection: 'row', gap: 14, marginBottom: 14, justifyContent: 'center' },
   socialBtn: {
-    flex: 1,
-    flexDirection: 'row',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.creamCard,
     borderWidth: 1,
     borderColor: COLORS.hairline,
   },
   socialBtnPressed: { opacity: 0.7 },
-  socialText: { fontSize: 13.5, fontWeight: '700', color: COLORS.ink },
 
   deviceBox: {
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.creamCard,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: COLORS.hairline,
@@ -351,12 +369,12 @@ const styles = StyleSheet.create({
   },
   deviceActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   deviceWaiting: { fontSize: 12, fontWeight: '600', color: COLORS.inkFaint },
-  deviceCancel: { fontSize: 12.5, fontWeight: '700', color: '#B1503F' },
+  deviceCancel: { fontSize: 12.5, fontWeight: '700', color: '#F0544E' },
 
   googleError: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#B1503F',
+    color: '#F0544E',
     textAlign: 'center',
     marginTop: -6,
     marginBottom: 12,

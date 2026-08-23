@@ -1,13 +1,16 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, typography, spacing, radius } from '../theme/theme';
+import { typography, spacing, radius } from '../theme/theme';
+import { useTheme } from '../theme/ThemeContext';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import { molecularSwap } from '../data/mockData';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function MetricRow({ label, value, note, noteTone }) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   return (
     <View style={styles.metricRow}>
       <Text style={styles.metricLabel}>{label}</Text>
@@ -20,6 +23,8 @@ function MetricRow({ label, value, note, noteTone }) {
 }
 
 export default function SwapDetailScreen({ navigation }) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const data = molecularSwap;
   const insets = useSafeAreaInsets();
 
@@ -120,139 +125,141 @@ export default function SwapDetailScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.cream },
-  header: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
-  },
-  backRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  backText: {
-    fontFamily: typography.body.medium,
-    fontSize: typography.sizes.sm,
-    color: colors.sageDeep,
-  },
-  scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-  pageTitle: {
-    fontFamily: typography.display.fontFamily,
-    fontSize: 34,
-    lineHeight: 38,
-    color: colors.ink,
-    marginBottom: spacing.md,
-  },
-  pageTitleItalic: {
-    fontFamily: typography.display.fontFamilyItalic,
-  },
-  matchPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-    backgroundColor: colors.sagePale,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 7,
-    marginBottom: spacing.xxl,
-  },
-  matchText: {
-    fontFamily: typography.body.semibold,
-    fontSize: 10,
-    color: colors.sageDeep,
-    letterSpacing: 0.4,
-  },
-  blockLabel: {
-    fontFamily: typography.body.semibold,
-    fontSize: typography.sizes.xs,
-    color: colors.inkFaint,
-    letterSpacing: 1,
-    marginBottom: spacing.xs,
-  },
-  itemName: {
-    fontFamily: typography.display.fontFamily,
-    fontSize: 21,
-    color: colors.ink,
-    marginBottom: spacing.md,
-  },
-  imageCard: {
-    borderRadius: radius.lg,
-    overflow: 'hidden',
-    marginBottom: spacing.md,
-    position: 'relative',
-  },
-  image: { width: '100%', height: 150, backgroundColor: colors.creamDeep },
-  idBadge: {
-    position: 'absolute',
-    top: spacing.sm,
-    right: spacing.sm,
-    backgroundColor: 'rgba(35,38,32,0.7)',
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-  },
-  idBadgeText: { color: colors.paper, fontFamily: typography.body.medium, fontSize: 10 },
-  dataCard: {
-    backgroundColor: colors.paper,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    marginBottom: spacing.xxl,
-  },
-  dataCardHighlight: {
-    borderColor: colors.sage,
-    marginBottom: 0,
-  },
-  dataCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.hairline,
-  },
-  dataCardTitle: {
-    fontFamily: typography.body.semibold,
-    fontSize: 10,
-    color: colors.inkFaint,
-    letterSpacing: 1,
-  },
-  metricRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 7,
-  },
-  metricLabel: {
-    fontFamily: typography.body.fontFamily,
-    fontSize: typography.sizes.sm,
-    color: colors.inkSoft,
-  },
-  metricValueRow: { flexDirection: 'row', alignItems: 'center' },
-  metricValue: {
-    fontFamily: typography.body.semibold,
-    fontSize: typography.sizes.sm,
-    color: colors.ink,
-  },
-  optimizedHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.xs,
-  },
-  optimizedLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dotSage: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.sageDeep },
-  optimizedLabel: {
-    fontFamily: typography.body.semibold,
-    fontSize: typography.sizes.xs,
-    color: colors.sageDeep,
-    letterSpacing: 0.6,
-  },
-  confidenceText: {
-    fontFamily: typography.body.bold,
-    fontSize: 10,
-    color: colors.error,
-  },
-  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
-  statBadge: { paddingHorizontal: spacing.sm },
-});
+function makeStyles(colors) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.cream },
+    header: {
+      paddingHorizontal: spacing.lg,
+      paddingBottom: spacing.md,
+    },
+    backRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    backText: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
+    scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    pageTitle: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 34,
+      lineHeight: 38,
+      color: colors.ink,
+      marginBottom: spacing.md,
+    },
+    pageTitleItalic: {
+      fontFamily: typography.display.fontFamilyItalic,
+    },
+    matchPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      alignSelf: 'flex-start',
+      backgroundColor: colors.sagePale,
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 7,
+      marginBottom: spacing.xxl,
+    },
+    matchText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 10,
+      color: colors.sageDeep,
+      letterSpacing: 0.4,
+    },
+    blockLabel: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      letterSpacing: 1,
+      marginBottom: spacing.xs,
+    },
+    itemName: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 21,
+      color: colors.ink,
+      marginBottom: spacing.md,
+    },
+    imageCard: {
+      borderRadius: radius.lg,
+      overflow: 'hidden',
+      marginBottom: spacing.md,
+      position: 'relative',
+    },
+    image: { width: '100%', height: 150, backgroundColor: colors.creamDeep },
+    idBadge: {
+      position: 'absolute',
+      top: spacing.sm,
+      right: spacing.sm,
+      backgroundColor: 'rgba(35,38,32,0.7)',
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 4,
+    },
+    idBadgeText: { color: colors.onAccent, fontFamily: typography.body.medium, fontSize: 10 },
+    dataCard: {
+      backgroundColor: colors.paper,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      padding: spacing.lg,
+      marginBottom: spacing.xxl,
+    },
+    dataCardHighlight: {
+      borderColor: colors.sage,
+      marginBottom: 0,
+    },
+    dataCardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.md,
+      paddingBottom: spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.hairline,
+    },
+    dataCardTitle: {
+      fontFamily: typography.body.semibold,
+      fontSize: 10,
+      color: colors.inkFaint,
+      letterSpacing: 1,
+    },
+    metricRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 7,
+    },
+    metricLabel: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+    },
+    metricValueRow: { flexDirection: 'row', alignItems: 'center' },
+    metricValue: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+    },
+    optimizedHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.xs,
+    },
+    optimizedLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    dotSage: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.sageDeep },
+    optimizedLabel: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+      letterSpacing: 0.6,
+    },
+    confidenceText: {
+      fontFamily: typography.body.bold,
+      fontSize: 10,
+      color: colors.error,
+    },
+    statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
+    statBadge: { paddingHorizontal: spacing.sm },
+  });
+}

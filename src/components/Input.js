@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, typography, radius, spacing } from '../theme/theme';
+import { typography, radius, spacing } from '../theme/theme';
+import { useTheme } from '../theme/ThemeContext';
 
 export default function Input({
   label,
@@ -12,6 +13,8 @@ export default function Input({
   style,
   ...props
 }) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const [hidden, setHidden] = useState(secureTextEntry);
   const [focused, setFocused] = useState(false);
 
@@ -47,40 +50,42 @@ export default function Input({
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: { marginBottom: spacing.lg },
-  label: {
-    fontFamily: typography.body.medium,
-    fontSize: typography.sizes.sm,
-    color: colors.inkSoft,
-    marginBottom: spacing.sm,
-    letterSpacing: 0.2,
-  },
-  field: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.paper,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    paddingHorizontal: spacing.md,
-    height: 48,
-    gap: spacing.sm,
-  },
-  fieldFocused: {
-    borderColor: colors.sageDeep,
-  },
-  icon: { marginRight: 2 },
-  input: {
-    flex: 1,
-    fontFamily: typography.body.fontFamily,
-    fontSize: typography.sizes.base,
-    color: colors.ink,
-    height: '100%',
-  },
-  rightAction: {
-    fontFamily: typography.body.medium,
-    fontSize: typography.sizes.xs,
-    color: colors.sageDeep,
-  },
-});
+function makeStyles(colors) {
+  return StyleSheet.create({
+    wrap: { marginBottom: spacing.lg },
+    label: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+      marginBottom: spacing.sm,
+      letterSpacing: 0.2,
+    },
+    field: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.paper,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      paddingHorizontal: spacing.md,
+      height: 48,
+      gap: spacing.sm,
+    },
+    fieldFocused: {
+      borderColor: colors.sageDeep,
+    },
+    icon: { marginRight: 2 },
+    input: {
+      flex: 1,
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+      height: '100%',
+    },
+    rightAction: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+    },
+  });
+}

@@ -2,17 +2,20 @@ import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, typography, spacing } from '../theme/theme';
+import { typography, spacing } from '../theme/theme';
+import { useTheme } from '../theme/ThemeContext';
 
 const TABS = [
   { key: 'Home', label: 'Home', icon: 'home', iconOutline: 'home-outline' },
-  { key: 'Discover', label: 'Discover', icon: 'search', iconOutline: 'search-outline' },
-  { key: 'Assistant', label: 'Assistant', icon: 'sparkles', iconOutline: 'sparkles-outline' },
-  { key: 'Saved', label: 'Saved', icon: 'bookmark', iconOutline: 'bookmark-outline' },
-  { key: 'List', label: 'List', icon: 'list', iconOutline: 'list-outline' },
+  { key: 'Discover', label: 'Explore', icon: 'compass', iconOutline: 'compass-outline' },
+  { key: 'Assistant', label: '', icon: 'add', iconOutline: 'add' },
+  { key: 'Saved', label: 'Favorites', icon: 'heart', iconOutline: 'heart-outline' },
+  { key: 'Profile', label: 'Profile', icon: 'person', iconOutline: 'person-outline' },
 ];
 
 export default function TabBar({ state, navigation }) {
+  const { colors, shadow } = useTheme();
+  const styles = makeStyles(colors, shadow);
   const insets = useSafeAreaInsets();
   const activeIndex = state.index;
 
@@ -29,21 +32,19 @@ export default function TabBar({ state, navigation }) {
             hitSlop={6}
           >
             {isCenter ? (
-              <View style={[styles.centerIcon, focused && styles.centerIconActive]}>
-                <Ionicons
-                  name={focused ? tab.icon : tab.iconOutline}
-                  size={18}
-                  color={focused ? colors.paper : colors.sageDeep}
-                />
+              <View style={styles.centerIcon}>
+                <Ionicons name="add" size={26} color={colors.onAccent} />
               </View>
             ) : (
-              <Ionicons
-                name={focused ? tab.icon : tab.iconOutline}
-                size={21}
-                color={focused ? colors.sageDeep : colors.inkFaint}
-              />
+              <>
+                <Ionicons
+                  name={focused ? tab.icon : tab.iconOutline}
+                  size={21}
+                  color={focused ? colors.sageDeep : colors.inkFaint}
+                />
+                <Text style={[styles.label, focused && styles.labelActive]}>{tab.label}</Text>
+              </>
             )}
-            <Text style={[styles.label, focused && styles.labelActive]}>{tab.label}</Text>
           </Pressable>
         );
       })}
@@ -51,39 +52,41 @@ export default function TabBar({ state, navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  wrap: {
-    flexDirection: 'row',
-    backgroundColor: colors.paper,
-    borderTopWidth: 1,
-    borderTopColor: colors.hairline,
-    paddingTop: spacing.sm,
-    paddingHorizontal: spacing.sm,
-  },
-  tab: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
-  },
-  centerIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: colors.sagePale,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 1,
-  },
-  centerIconActive: {
-    backgroundColor: colors.sageDeep,
-  },
-  label: {
-    fontFamily: typography.body.medium,
-    fontSize: 10,
-    color: colors.inkFaint,
-  },
-  labelActive: {
-    color: colors.sageDeep,
-    fontFamily: typography.body.semibold,
-  },
-});
+function makeStyles(colors, shadow) {
+  return StyleSheet.create({
+    wrap: {
+      flexDirection: 'row',
+      backgroundColor: colors.paper,
+      borderTopWidth: 1,
+      borderTopColor: colors.hairline,
+      paddingTop: spacing.sm,
+      paddingHorizontal: spacing.sm,
+    },
+    tab: {
+      flex: 1,
+      alignItems: 'center',
+      gap: 4,
+    },
+    centerIcon: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: -26,
+      borderWidth: 4,
+      borderColor: colors.paper,
+      ...shadow.card,
+    },
+    label: {
+      fontFamily: typography.body.medium,
+      fontSize: 10,
+      color: colors.inkFaint,
+    },
+    labelActive: {
+      color: colors.sageDeep,
+      fontFamily: typography.body.semibold,
+    },
+  });
+}

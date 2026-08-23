@@ -6,7 +6,7 @@ import DashboardScreen from '../screens/DashboardScreen';
 import DiscoverScreen from '../screens/DiscoverScreen';
 import AssistantScreen from '../screens/AssistantScreen';
 import SavedScreen from '../screens/SavedScreen';
-import ShoppingListScreen from '../screens/ShoppingListScreen';
+import ProfileScreen from '../screens/ProfileScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -20,7 +20,7 @@ export default function MainTabs() {
       <Tab.Screen name="Discover" component={DiscoverScreen} />
       <Tab.Screen name="Assistant" component={AssistantScreen} />
       <Tab.Screen name="Saved" component={SavedScreen} />
-      <Tab.Screen name="List" component={ShoppingListScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }

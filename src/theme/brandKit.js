@@ -1,22 +1,20 @@
 import React from 'react';
 import Svg, { Path, Circle, Line } from 'react-native-svg';
 
-// Shared visual language for the IngredientsHub onboarding flow (Landing +
-// Login). Colors are tuned to blend seamlessly with the real chef photo
-// assets in src/assets/landing/, which is why they diverge slightly from
-// the app-wide theme in src/theme/theme.js.
+// Shared visual language for the WeCooked onboarding flow (Landing +
+// Login) — matches the app-wide "Noir & Ember" theme in src/theme/theme.js.
 export const COLORS = {
-  cream: '#F9F0E3',
-  creamCard: '#FCF5EB',
-  greenBright: '#95AE4A',
-  greenMid: '#779536',
-  greenChef: '#64802F',
-  greenLink: '#4B7015',
-  greenDark: '#27380B',
-  ink: '#1D1F1A',
-  inkSoft: '#5B5647',
-  inkFaint: '#9B9483',
-  hairline: '#E9DFCC',
+  cream: '#121212',
+  creamCard: '#1C1C1E',
+  greenBright: '#F0A155',
+  greenMid: '#F5821F',
+  greenChef: '#D66F12',
+  greenLink: '#F5821F',
+  greenDark: '#FFFFFF',
+  ink: '#FFFFFF',
+  inkSoft: '#B4B4B9',
+  inkFaint: '#7C7C82',
+  hairline: '#2A2A2E',
 };
 
 // ---- small reusable icons -------------------------------------------------
