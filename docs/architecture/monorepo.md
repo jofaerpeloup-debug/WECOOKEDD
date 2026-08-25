@@ -26,12 +26,14 @@ deployment pipeline.
 - `apps/api` is the only component that talks to MongoDB and to any external
   LLM provider. AI provider credentials live only in the backend.
 
-## Backend architecture (future)
+## Backend architecture
 
-`apps/api` is planned as a modular monolith following clean/layered
-architecture principles — not microservices. This has not been implemented
-yet; this migration only establishes the workspace and its dependency
-baseline.
+`apps/api` is a modular monolith following clean/layered architecture
+principles — not microservices. Its application foundation (config
+validation, database lifecycle, security middleware, versioned router,
+health check, standard error handling) is implemented; business feature
+modules are not yet built. See
+[docs/architecture/backend.md](./backend.md) for details.
 
 ## Frontend architecture
 
