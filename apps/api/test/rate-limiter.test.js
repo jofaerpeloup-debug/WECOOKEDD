@@ -2,6 +2,7 @@ process.env.NODE_ENV = 'test';
 process.env.PORT = '4003';
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/wecooked_test';
 process.env.CORS_ORIGINS = 'http://localhost:5173';
+process.env.JWT_ACCESS_SECRET = 'test-suite-access-secret-at-least-32-chars-long';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

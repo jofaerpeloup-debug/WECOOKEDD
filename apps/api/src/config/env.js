@@ -12,6 +12,12 @@ const envSchema = z.object({
       'MONGODB_URI must start with mongodb:// or mongodb+srv://'
     ),
   CORS_ORIGINS: z.string().default(''),
+  JWT_ACCESS_SECRET: z
+    .string()
+    .min(32, 'JWT_ACCESS_SECRET must be at least 32 characters long'),
+  JWT_ACCESS_TTL: z.string().min(1).default('15m'),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  BCRYPT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
 });
 
 /**
@@ -41,6 +47,10 @@ function parseEnv(source) {
     port: parsed.PORT,
     mongodbUri: parsed.MONGODB_URI,
     corsOrigins,
+    jwtAccessSecret: parsed.JWT_ACCESS_SECRET,
+    jwtAccessTtl: parsed.JWT_ACCESS_TTL,
+    refreshTokenTtlDays: parsed.REFRESH_TOKEN_TTL_DAYS,
+    bcryptRounds: parsed.BCRYPT_ROUNDS,
   };
 }
 
