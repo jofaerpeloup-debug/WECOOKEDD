@@ -1,10 +1,50 @@
 // WeCooked design tokens
-// "Noir & Ember" — a single dark, orange-accented visual language used
-// across the entire app (replaces the earlier cream/sage theme). There is
-// no separate light palette anymore: lightColors and darkColors intentionally
-// point at the same values so ThemeContext's light/dark plumbing keeps
-// working without every screen needing to change, but toggling no longer
-// changes the look.
+// Two palettes share the same shape so every screen (all on useTheme())
+// repaints correctly when the mode switches:
+//  - "Sage & Stone": the original cream/sage light palette.
+//  - "Noir & Ember": a dark, orange-accented palette.
+
+const sageAndStone = {
+  // Core neutrals
+  cream: '#FAF9F6',       // primary app background
+  creamDeep: '#F4F1EA',   // secondary/inset surfaces
+  paper: '#FFFFFF',       // cards, inputs, sheets
+  ink: '#232620',          // primary text (warm near-black, not pure black)
+  inkSoft: '#5B6058',      // secondary text
+  inkFaint: '#9B9F96',     // tertiary / placeholder text
+  hairline: '#E7E4DC',    // borders, dividers
+
+  // Text/icon color for use on top of accent-colored (sage) surfaces
+  onAccent: '#FFFFFF',
+
+  // Sage system (brand primary)
+  sagePale: '#DCE7DD',    // pale sage fills (pills, chip backgrounds)
+  sageLight: '#C0D5C2',   // login panel, soft blocks
+  sage: '#8FA88F',        // mid sage — badges, secondary buttons
+  sageDeep: '#4A5D4E',    // primary buttons, active nav, headlines accent
+  sageDeeper: '#3A4A3E',  // pressed states
+
+  // Stone / clay accent (used sparingly: swap ratios, warm highlights)
+  stone: '#B08968',
+  stoneLight: '#E8DCC8',
+
+  // Semantic
+  success: '#4A5D4E',
+  successBg: '#E4EDE4',
+  warning: '#B08968',
+  warningBg: '#F4E9DA',
+  error: '#B1503F',
+  errorBg: '#F4E1DC',
+  info: '#5B7C9E',
+  infoBg: '#E4EBF2',
+
+  // Confidence / score tiers (molecular precision screens)
+  scoreHigh: '#4A5D4E',
+  scoreMid: '#B08968',
+
+  overlay: 'rgba(35, 38, 32, 0.55)',
+  shadow: 'rgba(35, 38, 32, 0.12)',
+};
 
 const noir = {
   // Core neutrals
@@ -48,7 +88,7 @@ const noir = {
   shadow: 'rgba(0, 0, 0, 0.5)',
 };
 
-export const lightColors = noir;
+export const lightColors = sageAndStone;
 export const darkColors = noir;
 
 // Kept as a plain, non-reactive default so nothing breaks if a file imports
