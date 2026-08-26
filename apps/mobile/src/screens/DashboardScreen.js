@@ -1,91 +1,131 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, Pressable, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import { recipes } from '../data/mockData';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
+import { imageSource } from '../utils/image';
 
 const CATEGORIES = [
   { key: 'Breakfast', label: 'Breakfast', icon: 'sunny-outline' },
   { key: 'Lunch', label: 'Lunch', icon: 'restaurant-outline' },
   { key: 'Dinner', label: 'Dinner', icon: 'moon-outline' },
   { key: 'Dessert', label: 'Desserts', icon: 'ice-cream-outline' },
-  { key: 'Healthy', label: 'Healthy', icon: 'leaf-outline' },
+  { key: 'Vegies', label: 'Vegies', icon: 'leaf-outline' },
 ];
 
-const HEALTHY_TAGS = ['Vegan', 'High-Protein'];
+const VEGIE_TAGS = ['Vegan', 'Vegetarian'];
 
 export default function DashboardScreen({ navigation }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
   const { isSaved, toggleSaved } = useSavedRecipes();
   const [category, setCategory] = useState(null);
+  const [query, setQuery] = useState('');
+  const searching = query.trim().length > 0;
 
   const featured = useMemo(() => {
+    if (searching) {
+      const q = query.trim().toLowerCase();
+      return recipes.filter(
+        (r) =>
+          r.title.toLowerCase().includes(q) ||
+          r.ingredients.some((ing) => ing.toLowerCase().includes(q))
+      );
+    }
     if (!category) return recipes.slice(0, 6);
-    if (category === 'Healthy') {
-      return recipes.filter((r) => r.tags.some((t) => HEALTHY_TAGS.includes(t)));
+    if (category === 'Vegies') {
+      return recipes.filter((r) => r.tags.some((t) => VEGIE_TAGS.includes(t)));
     }
     return recipes.filter((r) => r.tags.includes(category));
-  }, [category]);
+  }, [query, searching, category]);
 
-  const selectCategory = (key) => setCategory((prev) => (prev === key ? null : key));
+  const selectCategory = (key) => {
+    setQuery('');
+    setCategory((prev) => (prev === key ? null : key));
+  };
+
+  const onSearchChange = (text) => {
+    setQuery(text);
+    if (text.trim()) setCategory(null);
+  };
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
+      <TopBar mode="brand" />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.greeting}>Hello, Chef! 👋</Text>
         <Text style={styles.subGreeting}>What shall we cook today?</Text>
 
         <View style={styles.searchRow}>
-          <Pressable style={styles.searchBar} onPress={() => navigation.navigate('Discover')}>
+          <View style={styles.searchBar}>
             <Ionicons name="search" size={17} color={colors.inkFaint} />
-            <Text style={styles.searchPlaceholder}>Search recipes, ingredients...</Text>
-          </Pressable>
-          <Pressable style={styles.filterBtn} onPress={() => navigation.navigate('Discover')}>
-            <Ionicons name="options-outline" size={18} color={colors.onAccent} />
-          </Pressable>
-        </View>
-
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionLabel}>Categories</Text>
-          <Pressable onPress={() => navigation.navigate('Discover')}>
-            <Text style={styles.seeAll}>See all</Text>
-          </Pressable>
-        </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryRow}
-        >
-          {CATEGORIES.map((c) => {
-            const active = category === c.key;
-            return (
-              <Pressable
-                key={c.key}
-                onPress={() => selectCategory(c.key)}
-                style={[styles.categoryChip, active && styles.categoryChipActive]}
-              >
-                <Ionicons name={c.icon} size={18} color={active ? colors.sageDeep : colors.inkSoft} />
-                <Text style={[styles.categoryLabel, active && styles.categoryLabelActive]}>
-                  {c.label}
-                </Text>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search recipes, ingredients..."
+              placeholderTextColor={colors.inkFaint}
+              value={query}
+              onChangeText={onSearchChange}
+              autoCapitalize="none"
+              autoComplete="off"
+              returnKeyType="search"
+            />
+            {searching && (
+              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={17} color={colors.inkFaint} />
               </Pressable>
-            );
-          })}
-        </ScrollView>
+            )}
+          </View>
+        </View>
+
+        {!searching && (
+          <>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionLabel}>Categories</Text>
+              <Pressable onPress={() => navigation.navigate('Discover')}>
+                <Text style={styles.seeAll}>See all</Text>
+              </Pressable>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.categoryRow}
+            >
+              {CATEGORIES.map((c) => {
+                const active = category === c.key;
+                return (
+                  <Pressable
+                    key={c.key}
+                    onPress={() => selectCategory(c.key)}
+                    style={[styles.categoryChip, active && styles.categoryChipActive]}
+                  >
+                    <Ionicons name={c.icon} size={18} color={active ? colors.sageDeep : colors.inkSoft} />
+                    <Text style={[styles.categoryLabel, active && styles.categoryLabelActive]}>
+                      {c.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </>
+        )}
 
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionLabel}>Featured Recipes</Text>
-          <Pressable onPress={() => navigation.navigate('Discover')}>
-            <Text style={styles.seeAll}>See all</Text>
-          </Pressable>
+          <Text style={styles.sectionLabel}>
+            {searching ? `Results for "${query.trim()}"` : 'Featured Recipes'}
+          </Text>
+          {!searching && (
+            <Pressable onPress={() => navigation.navigate('Discover')}>
+              <Text style={styles.seeAll}>See all</Text>
+            </Pressable>
+          )}
         </View>
         {featured.length === 0 ? (
-          <Text style={styles.emptyText}>No recipes in this category yet.</Text>
+          <Text style={styles.emptyText}>
+            {searching ? `No recipes match "${query.trim()}".` : 'No recipes in this category yet.'}
+          </Text>
         ) : (
           <ScrollView
             horizontal
@@ -101,7 +141,7 @@ export default function DashboardScreen({ navigation }) {
                   onPress={() => navigation.navigate('RecipeDetail', { recipe })}
                 >
                   <View style={styles.featuredImageWrap}>
-                    <Image source={{ uri: recipe.image }} style={styles.featuredImage} />
+                    <Image source={imageSource(recipe.image)} style={styles.featuredImage} />
                     <Pressable style={styles.heartBtn} onPress={() => toggleSaved(recipe.id)} hitSlop={8}>
                       <Ionicons
                         name={saved ? 'heart' : 'heart-outline'}
@@ -124,12 +164,6 @@ export default function DashboardScreen({ navigation }) {
         )}
 
         <View style={styles.toolsGrid}>
-          <Pressable style={styles.toolCard} onPress={() => navigation.navigate('IngredientStudio')}>
-            <View style={styles.toolIconWrap}>
-              <Ionicons name="swap-horizontal" size={20} color={colors.sageDeep} />
-            </View>
-            <Text style={styles.toolLabel}>Substitute{'\n'}Finder</Text>
-          </Pressable>
           <Pressable style={styles.toolCard} onPress={() => navigation.navigate('Saved')}>
             <View style={styles.toolIconWrap}>
               <Ionicons name="book" size={20} color={colors.sageDeep} />
@@ -137,17 +171,6 @@ export default function DashboardScreen({ navigation }) {
             <Text style={styles.toolLabel}>Recipe{'\n'}Collection</Text>
           </Pressable>
         </View>
-
-        <Pressable style={styles.listBanner} onPress={() => navigation.navigate('List')}>
-          <View style={styles.listBannerIcon}>
-            <Ionicons name="list" size={16} color={colors.onAccent} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.listBannerTitle}>Smart Shopping List</Text>
-            <Text style={styles.listBannerSub}>3 items remaining for dinner</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.onAccent} />
-        </Pressable>
       </ScrollView>
     </View>
   );
@@ -183,18 +206,12 @@ function makeStyles(colors, shadow) {
       paddingHorizontal: spacing.lg,
       height: 46,
     },
-    searchPlaceholder: {
+    searchInput: {
+      flex: 1,
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.base,
-      color: colors.inkFaint,
-    },
-    filterBtn: {
-      width: 46,
-      height: 46,
-      borderRadius: 23,
-      backgroundColor: colors.sageDeep,
-      alignItems: 'center',
-      justifyContent: 'center',
+      color: colors.ink,
+      outlineStyle: 'none',
     },
     sectionHeaderRow: {
       flexDirection: 'row',
@@ -308,33 +325,6 @@ function makeStyles(colors, shadow) {
       color: colors.ink,
       textAlign: 'center',
       lineHeight: 17,
-    },
-    listBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.md,
-      backgroundColor: colors.sageDeep,
-      borderRadius: radius.lg,
-      padding: spacing.lg,
-    },
-    listBannerIcon: {
-      width: 34,
-      height: 34,
-      borderRadius: 10,
-      backgroundColor: 'rgba(255,255,255,0.2)',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    listBannerTitle: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.base,
-      color: colors.onAccent,
-    },
-    listBannerSub: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.xs,
-      color: 'rgba(255,255,255,0.8)',
-      marginTop: 2,
     },
   });
 }
