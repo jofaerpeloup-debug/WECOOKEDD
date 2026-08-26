@@ -3,6 +3,7 @@ import { View, Text, Image, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../theme/brandKit';
 import { recipes } from '../../data/mockData';
+import { imageSource } from '../../utils/image';
 import { SectionHeading, previewStyles as p, pageTextStyles as pt } from './shared';
 
 const hero = recipes[7];
@@ -18,7 +19,7 @@ export default function FavoritesPage() {
       <View style={pt.previewWrap}>
         <View style={{ width: '100%' }}>
           <View style={styles.heroWrap}>
-            <Image source={{ uri: hero.image }} style={styles.heroImage} />
+            <Image source={imageSource(hero.image)} style={styles.heroImage} />
             <View style={styles.heartBadge}>
               <Ionicons name="heart" size={16} color={COLORS.greenMid} />
             </View>
@@ -31,7 +32,7 @@ export default function FavoritesPage() {
             <Text style={styles.savedCount}>{recipes.length} recipes saved</Text>
             {rows.map((r) => (
               <View key={r.id} style={styles.row}>
-                <Image source={{ uri: r.image }} style={styles.rowThumb} />
+                <Image source={imageSource(r.image)} style={styles.rowThumb} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle} numberOfLines={1}>
                     {r.title}
