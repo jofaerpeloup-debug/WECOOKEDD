@@ -70,7 +70,7 @@ export default function AssistantScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
+      <TopBar mode="brand" />
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
