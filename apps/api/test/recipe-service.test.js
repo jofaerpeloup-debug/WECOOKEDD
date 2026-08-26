@@ -652,3 +652,88 @@ test('archiveRecipe throws RECIPE_NOT_FOUND when no document matches', async (t)
     }
   );
 });
+
+// findUsableRecipeById is the cross-module lookup Favorites/ShoppingList
+// depend on. Every consumer-side test mocks it away entirely, so its real
+// implementation needs its own direct coverage here — otherwise a change
+// to its behavior/shape could go unnoticed by the whole suite.
+test('findUsableRecipeById resolves null (never throws) when the recipe does not exist', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => null);
+
+  const result = await recipeService.findUsableRecipeById('missing');
+  assert.equal(result, null);
+});
+
+test('findUsableRecipeById resolves null for an archived recipe', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
+    _id: 'recipe1',
+    isActive: false,
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
+  }));
+
+  const result = await recipeService.findUsableRecipeById('recipe1');
+  assert.equal(result, null);
+});
+
+test('findUsableRecipeById resolves null when a required (non-optional) ingredient is inactive', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
+    _id: 'recipe1',
+    isActive: true,
+    ingredients: [{ ingredientId: inactiveIngredient(CHICKEN_ID), optional: false }],
+  }));
+
+  const result = await recipeService.findUsableRecipeById('recipe1');
+  assert.equal(result, null);
+});
+
+test('findUsableRecipeById propagates an unexpected repository/database failure instead of resolving null', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => {
+    throw new Error('MongoServerSelectionError: connection timed out');
+  });
+
+  await assert.rejects(
+    () => recipeService.findUsableRecipeById('recipe1'),
+    (err) => {
+      assert.equal(err instanceof AppError, false);
+      assert.equal(err.message, 'MongoServerSelectionError: connection timed out');
+      return true;
+    }
+  );
+});
+
+test('findUsableRecipeById returns a decoupled { ingredient: { id, name } } usage shape, not the raw populated ingredientId field', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
+    _id: 'recipe1',
+    isActive: true,
+    ingredients: [
+      { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false, note: 'secret internal note' },
+    ],
+  }));
+
+  const result = await recipeService.findUsableRecipeById('recipe1');
+
+  assert.equal(result.ingredients.length, 1);
+  const [usage] = result.ingredients;
+  assert.deepEqual(usage.ingredient, { id: CHICKEN_ID, name: 'Chicken' });
+  assert.equal(usage.quantity, 1);
+  assert.equal(usage.unit, 'kg');
+  assert.equal(usage.optional, false);
+  assert.equal('ingredientId' in usage, false);
+  assert.equal('note' in usage, false);
+});
+
+test('findUsableRecipeById omits an archived optional ingredient usage from the returned usages, same as getRecipeById', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
+    _id: 'recipe1',
+    isActive: true,
+    ingredients: [
+      { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false },
+      { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), quantity: 1, unit: 'clove', optional: true },
+    ],
+  }));
+
+  const result = await recipeService.findUsableRecipeById('recipe1');
+
+  assert.equal(result.ingredients.length, 1);
+  assert.equal(result.ingredients[0].ingredient.name, 'Chicken');
+});
