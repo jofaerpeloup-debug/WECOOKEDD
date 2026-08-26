@@ -6,6 +6,7 @@ import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import { recipes } from '../data/mockData';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
+import { imageSource } from '../utils/image';
 
 const FILTERS = ['All', 'Vegan', 'Quick', 'High-Protein'];
 
@@ -20,7 +21,7 @@ export default function DiscoverScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
+      <TopBar mode="brand" />
 
       <View style={styles.filterRow}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
@@ -51,14 +52,14 @@ export default function DiscoverScreen({ navigation }) {
             style={styles.card}
             onPress={() => navigation.navigate('RecipeDetail', { recipe })}
           >
-            <Image source={{ uri: recipe.image }} style={styles.cardImage} />
+            <Image source={imageSource(recipe.image)} style={styles.cardImage} />
             <Pressable
               style={styles.saveIcon}
               hitSlop={8}
               onPress={() => toggleSaved(recipe.id)}
             >
               <Ionicons
-                name={isSaved(recipe.id) ? 'bookmark' : 'bookmark-outline'}
+                name={isSaved(recipe.id) ? 'heart' : 'heart-outline'}
                 size={16}
                 color={isSaved(recipe.id) ? colors.sageDeep : colors.onAccent}
               />
