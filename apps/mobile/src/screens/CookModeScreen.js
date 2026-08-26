@@ -5,6 +5,7 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import { loadJSON, saveJSON } from '../utils/storage';
+import { imageSource } from '../utils/image';
 
 const TABS = [
   { key: 'ingredients', label: 'Ingredients' },
@@ -13,7 +14,7 @@ const TABS = [
 ];
 
 export default function CookModeScreen({ navigation, route }) {
-  const { recipe, ingredients } = route.params;
+  const { recipe, ingredients, servings } = route.params;
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
   const [tab, setTab] = useState('steps');
@@ -72,7 +73,7 @@ export default function CookModeScreen({ navigation, route }) {
           <>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionLabel}>Ingredients</Text>
-              <Text style={styles.servingsBadge}>4 servings</Text>
+              <Text style={styles.servingsBadge}>{servings || 4} servings</Text>
             </View>
             <View style={styles.ingredientsCard}>
               {(ingredients || []).map((ing, i) => (
@@ -98,7 +99,7 @@ export default function CookModeScreen({ navigation, route }) {
                     </View>
                     {i < steps.length - 1 && <View style={styles.stepLine} />}
                   </View>
-                  <Image source={{ uri: recipe.image }} style={styles.stepThumb} />
+                  <Image source={imageSource(recipe.image)} style={styles.stepThumb} />
                   <View style={styles.stepBody}>
                     <Text style={styles.stepTitle}>{step.title}</Text>
                     <Text style={styles.stepDesc}>{step.description}</Text>
