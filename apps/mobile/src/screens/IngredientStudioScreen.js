@@ -25,7 +25,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
+      <TopBar mode="brand" />
 
       <View style={styles.searchWrap}>
         <View style={styles.searchBar}>
@@ -37,6 +37,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
             value={query}
             onChangeText={setQuery}
             autoCapitalize="none"
+            autoComplete="off"
           />
           {query.length > 0 && (
             <Pressable onPress={() => setQuery('')} hitSlop={8}>
@@ -141,6 +142,7 @@ function makeStyles(colors, shadow) {
       fontSize: typography.sizes.base,
       color: colors.ink,
       height: '100%',
+      outlineStyle: 'none',
     },
     chipRow: { gap: spacing.sm, paddingBottom: spacing.xs },
     chip: {
