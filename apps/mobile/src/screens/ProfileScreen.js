@@ -1,108 +1,98 @@
-import React, { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Image,
-  Pressable,
-} from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, Pressable, Alert, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { typography, spacing, radius } from '../theme/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { typography, spacing } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
-import Input from '../components/Input';
-import Button from '../components/Button';
-import Badge from '../components/Badge';
 import { chef } from '../data/mockData';
-import { loadJSON, saveJSON } from '../utils/storage';
+import { useAuth } from '../context/AuthContext';
 
-const STORAGE_KEY = 'wecooked:profile';
+const ITEMS = [
+  { id: 'account', icon: 'person-outline', label: 'My Account', route: 'AccountDetails' },
+  { id: 'community', icon: 'people-outline', label: 'Community', route: 'Community' },
+  { id: 'settings', icon: 'settings-outline', label: 'Settings', route: 'Settings' },
+  { id: 'terms', icon: 'document-text-outline', label: 'Terms & Conditions', route: 'Terms' },
+  { id: 'privacy', icon: 'shield-checkmark-outline', label: 'Privacy Policy', route: 'Privacy' },
+  { id: 'help', icon: 'help-circle-outline', label: 'Help Center', route: 'HelpCenter' },
+  { id: 'logout', icon: 'log-out-outline', label: 'Log out', danger: true },
+];
 
 export default function ProfileScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const [username, setUsername] = useState(chef.name);
-  const [email, setEmail] = useState(chef.email);
-  const [dietary, setDietary] = useState(chef.dietary);
+  const insets = useSafeAreaInsets();
+  const { logout } = useAuth();
+  const [viewerOpen, setViewerOpen] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      const stored = await loadJSON(STORAGE_KEY, null);
-      if (stored) {
-        setUsername(stored.username);
-        setEmail(stored.email);
-        setDietary(stored.dietary);
-      }
-    })();
-  }, []);
+  const handleLogout = () => {
+    Alert.alert('Log Out', 'Are you sure you want to log out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Log Out',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
+        },
+      },
+    ]);
+  };
 
-  const removeChip = (item) => setDietary((prev) => prev.filter((d) => d !== item));
-
-  const saveChanges = async () => {
-    await saveJSON(STORAGE_KEY, { username, email, dietary });
-    navigation.goBack();
+  const pressItem = (item) => {
+    if (item.id === 'logout') handleLogout();
+    else if (item.route) navigation.navigate(item.route);
   };
 
   return (
     <View style={styles.root}>
-      <TopBar
-        mode="back"
-        title=""
-        onBack={() => navigation.goBack()}
-        onRightPress={() => navigation.navigate('Settings')}
-        rightIcon="settings-outline"
-      />
+      <TopBar mode="brand" />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Profile Settings</Text>
-        <Text style={styles.subtitle}>Manage your culinary identity</Text>
-
-        <View style={styles.avatarSection}>
-          <Image source={{ uri: chef.avatar }} style={styles.avatar} />
-          <Text style={styles.chefName}>{username}</Text>
-          <Badge label={chef.title.toUpperCase()} tone="sage" />
-        </View>
-
-        <Input label="Username" icon="person-outline" value={username} onChangeText={setUsername} />
-        <Input
-          label="Email"
-          icon="mail-outline"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
-        <Input
-          label="Password"
-          icon="lock-closed-outline"
-          value="••••••••••"
-          secureTextEntry
-          editable={false}
-          rightAction="Change Password"
-          onRightActionPress={() => navigation.navigate('Security')}
-        />
-
-        <Text style={styles.label}>Dietary Preferences</Text>
-        <View style={styles.chipRow}>
-          {dietary.map((item) => (
-            <Pressable key={item} style={styles.chip} onPress={() => removeChip(item)}>
-              <Text style={styles.chipText}>{item}</Text>
-              <Ionicons name="close" size={13} color={colors.sageDeep} />
-            </Pressable>
-          ))}
-          <Pressable style={styles.chipAdd}>
-            <Ionicons name="add" size={16} color={colors.inkSoft} />
+        <View style={styles.header}>
+          <Pressable onPress={() => setViewerOpen(true)}>
+            <Image source={{ uri: chef.avatar }} style={styles.avatar} />
           </Pressable>
+          <View>
+            <Text style={styles.chefName}>{chef.name}</Text>
+            <Text style={styles.chefSub}>{chef.email}</Text>
+          </View>
         </View>
+        <View style={styles.headerDivider} />
 
-        <Button
-          title="Save Changes"
-          variant="primary"
-          onPress={saveChanges}
-          style={{ marginTop: spacing.xxl }}
-        />
+        {ITEMS.map((item, i) => (
+          <Pressable
+            key={item.id}
+            style={[styles.row, i < ITEMS.length - 1 && styles.rowBorder]}
+            onPress={() => pressItem(item)}
+          >
+            <View style={[styles.iconWrap, item.danger && styles.iconWrapDanger]}>
+              <Ionicons
+                name={item.icon}
+                size={17}
+                color={item.danger ? colors.error : colors.sageDeep}
+              />
+            </View>
+            <Text style={[styles.rowLabel, item.danger && { color: colors.error }]}>
+              {item.label}
+            </Text>
+            <Ionicons name="chevron-forward" size={17} color={colors.inkFaint} />
+          </Pressable>
+        ))}
       </ScrollView>
+
+      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
+        <Pressable style={styles.viewerBackdrop} onPress={() => setViewerOpen(false)}>
+          <Pressable
+            style={[styles.viewerClose, { top: insets.top + spacing.md }]}
+            onPress={() => setViewerOpen(false)}
+            hitSlop={10}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </Pressable>
+          <Image source={{ uri: chef.avatar }} style={styles.viewerImage} resizeMode="cover" />
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -111,56 +101,73 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-    title: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 26,
-      color: colors.ink,
-      marginBottom: 4,
-    },
-    subtitle: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkSoft,
-      marginBottom: spacing.xl,
-    },
-    avatarSection: { alignItems: 'center', marginBottom: spacing.xxl, gap: spacing.sm },
-    avatar: { width: 84, height: 84, borderRadius: 42, borderWidth: 3, borderColor: colors.paper },
-    chefName: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 19,
-      color: colors.ink,
-      marginTop: spacing.xs,
-    },
-    label: {
-      fontFamily: typography.body.medium,
-      fontSize: typography.sizes.sm,
-      color: colors.inkSoft,
-      marginBottom: spacing.sm,
-    },
-    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
-    chip: {
+    header: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 6,
-      backgroundColor: colors.sagePale,
-      borderRadius: radius.pill,
-      paddingHorizontal: spacing.md,
-      paddingVertical: 8,
+      gap: spacing.md,
+      marginBottom: spacing.lg,
     },
-    chipText: {
-      fontFamily: typography.body.medium,
+    avatar: { width: 56, height: 56, borderRadius: 28, borderWidth: 2, borderColor: colors.paper },
+    chefName: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.lg,
+      color: colors.ink,
+    },
+    chefSub: {
+      fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
-      color: colors.sageDeep,
+      color: colors.inkFaint,
+      marginTop: 2,
     },
-    chipAdd: {
-      width: 32,
-      height: 32,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderStyle: 'dashed',
+    headerDivider: {
+      height: 1,
+      backgroundColor: colors.hairline,
+      marginBottom: spacing.sm,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingVertical: spacing.md,
+    },
+    rowBorder: { borderBottomWidth: 1, borderBottomColor: colors.hairline },
+    iconWrap: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.sagePale,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    iconWrapDanger: { backgroundColor: colors.errorBg },
+    rowLabel: {
+      flex: 1,
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    viewerBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.92)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    viewerClose: {
+      position: 'absolute',
+      right: spacing.lg,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: 'rgba(255,255,255,0.15)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    viewerImage: {
+      width: 280,
+      height: 280,
+      borderRadius: 140,
+      borderWidth: 4,
+      borderColor: 'rgba(255,255,255,0.15)',
     },
   });
 }
