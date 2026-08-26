@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+ import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -77,6 +77,12 @@ export default function ShoppingListScreen({ navigation }) {
     return Array.from(groups.entries());
   }, [list.recipeItems]);
 
+  const isEmpty =
+    recipeGroups.length === 0 &&
+    list.produce.length === 0 &&
+    list.pantry.length === 0 &&
+    list.dairy.length === 0;
+
   return (
     <View style={styles.root}>
       <TopBar mode="back" title="Shopping List" onBack={() => navigation.goBack()} />
@@ -86,6 +92,11 @@ export default function ShoppingListScreen({ navigation }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+          {isEmpty && (
+            <Text style={styles.emptyText}>
+              Your shopping list is empty. Add ingredients from a recipe or use the bar below.
+            </Text>
+          )}
           {recipeGroups.map(([recipeName, items]) => (
             <Section
               key={recipeName}
@@ -95,24 +106,30 @@ export default function ShoppingListScreen({ navigation }) {
               onRemove={(id) => remove('recipeItems', id)}
             />
           ))}
-          <Section
-            title="Produce"
-            items={list.produce}
-            onToggle={(id) => toggle('produce', id)}
-            onRemove={(id) => remove('produce', id)}
-          />
-          <Section
-            title="Pantry"
-            items={list.pantry}
-            onToggle={(id) => toggle('pantry', id)}
-            onRemove={(id) => remove('pantry', id)}
-          />
-          <Section
-            title="Dairy"
-            items={list.dairy}
-            onToggle={(id) => toggle('dairy', id)}
-            onRemove={(id) => remove('dairy', id)}
-          />
+          {list.produce.length > 0 && (
+            <Section
+              title="Produce"
+              items={list.produce}
+              onToggle={(id) => toggle('produce', id)}
+              onRemove={(id) => remove('produce', id)}
+            />
+          )}
+          {list.pantry.length > 0 && (
+            <Section
+              title="Pantry"
+              items={list.pantry}
+              onToggle={(id) => toggle('pantry', id)}
+              onRemove={(id) => remove('pantry', id)}
+            />
+          )}
+          {list.dairy.length > 0 && (
+            <Section
+              title="Dairy"
+              items={list.dairy}
+              onToggle={(id) => toggle('dairy', id)}
+              onRemove={(id) => remove('dairy', id)}
+            />
+          )}
         </ScrollView>
 
         <View style={styles.addBar}>
