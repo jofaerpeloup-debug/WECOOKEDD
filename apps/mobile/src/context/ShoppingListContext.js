@@ -6,6 +6,13 @@ const STORAGE_KEY = 'wecooked:shoppingList';
 
 const ShoppingListContext = createContext(null);
 
+// A counter (not just Date.now()) guarantees unique ids even when several
+// items are created within the same millisecond — e.g. two recipes' worth
+// of ingredients added back to back. Colliding ids would make remove()
+// delete an item from one recipe and a same-id item from another at once.
+let nextId = 0;
+const genId = (prefix) => `${prefix}-${Date.now()}-${nextId++}`;
+
 export function ShoppingListProvider({ children }) {
   const [list, setList] = useState(initialList);
   const hydrated = useRef(false);
@@ -44,7 +51,7 @@ export function ShoppingListProvider({ children }) {
       ...prev,
       [category]: [
         ...prev[category],
-        { id: `custom-${Date.now()}`, name, checked: false },
+        { id: genId('custom'), name, checked: false },
       ],
     }));
   };
@@ -58,8 +65,8 @@ export function ShoppingListProvider({ children }) {
       );
       const newItems = ingredients
         .filter((ing) => !existing.has(ing.toLowerCase()))
-        .map((ing, i) => ({
-          id: `recipe-${Date.now()}-${i}`,
+        .map((ing) => ({
+          id: genId('recipe'),
           name: ing,
           checked: false,
           source: recipeName,
