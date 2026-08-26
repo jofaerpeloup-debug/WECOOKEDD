@@ -4,6 +4,7 @@ const authRoutes = require('../modules/auth/auth.routes');
 const userRoutes = require('../modules/users/user.routes');
 const ingredientRoutes = require('../modules/ingredients/ingredient.routes');
 const substitutionRoutes = require('../modules/substitutions/substitution.routes');
+const recipeRoutes = require('../modules/recipes/recipe.routes');
 
 const router = Router();
 
@@ -12,5 +13,6 @@ router.use('/auth', authRoutes);
 router.use('/users', userRoutes);
 router.use('/ingredients', ingredientRoutes);
 router.use('/substitutions', substitutionRoutes);
+router.use('/recipes', recipeRoutes);
 
 module.exports = router;
