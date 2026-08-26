@@ -6,6 +6,7 @@ import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Button from '../components/Button';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
+import { imageSource } from '../utils/image';
 
 export default function SavedScreen({ navigation }) {
   const { colors, shadow } = useTheme();
@@ -15,16 +16,16 @@ export default function SavedScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
+      <TopBar mode="brand" />
 
       {!featured ? (
         <View style={styles.emptyWrap}>
           <View style={styles.emptyIcon}>
-            <Ionicons name="bookmark-outline" size={26} color={colors.sageDeep} />
+            <Ionicons name="heart-outline" size={26} color={colors.sageDeep} />
           </View>
           <Text style={styles.emptyTitle}>No saved recipes yet</Text>
           <Text style={styles.emptySub}>
-            Tap the bookmark icon on any recipe to save it here.
+            Tap the heart icon on any recipe to save it here.
           </Text>
           <Button
             title="Discover Recipes"
@@ -39,13 +40,13 @@ export default function SavedScreen({ navigation }) {
             style={styles.featuredCard}
             onPress={() => navigation.navigate('RecipeDetail', { recipe: featured })}
           >
-            <Image source={{ uri: featured.image }} style={styles.featuredImage} />
+            <Image source={imageSource(featured.image)} style={styles.featuredImage} />
             <Pressable
               style={styles.saveIconFeatured}
               hitSlop={8}
               onPress={() => toggleSaved(featured.id)}
             >
-              <Ionicons name="bookmark" size={16} color={colors.sageDeep} />
+              <Ionicons name="heart" size={16} color={colors.sageDeep} />
             </Pressable>
             <View style={styles.featuredTextWrap}>
               <Text style={styles.featuredTitle}>{featured.title}</Text>
@@ -65,13 +66,13 @@ export default function SavedScreen({ navigation }) {
                 style={styles.gridCard}
                 onPress={() => navigation.navigate('RecipeDetail', { recipe })}
               >
-                <Image source={{ uri: recipe.image }} style={styles.gridImage} />
+                <Image source={imageSource(recipe.image)} style={styles.gridImage} />
                 <Pressable
                   style={styles.saveIconGrid}
                   hitSlop={8}
                   onPress={() => toggleSaved(recipe.id)}
                 >
-                  <Ionicons name="bookmark" size={13} color={colors.sageDeep} />
+                  <Ionicons name="heart" size={13} color={colors.sageDeep} />
                 </Pressable>
                 <View style={styles.gridTextWrap}>
                   <Text style={styles.gridTitle} numberOfLines={1}>
