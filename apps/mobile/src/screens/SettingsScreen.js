@@ -8,16 +8,22 @@ import { settingsGroups } from '../data/mockData';
 import { useAuth } from '../context/AuthContext';
 
 const ROUTES = {
-  personal: 'Profile',
+  personal: 'AccountDetails',
   security: 'Security',
   notifications: 'Notifications',
-  dietary: 'Profile',
+  dietary: 'AccountDetails',
   help: 'HelpCenter',
   about: 'About',
 };
 
+const APPEARANCE_OPTIONS = [
+  { id: 'light', label: 'Light', icon: 'sunny-outline' },
+  { id: 'dark', label: 'Dark', icon: 'moon-outline' },
+  { id: 'system', label: 'System', icon: 'phone-portrait-outline' },
+];
+
 export default function SettingsScreen({ navigation }) {
-  const { colors } = useTheme();
+  const { colors, mode, setMode } = useTheme();
   const styles = makeStyles(colors);
   const { logout } = useAuth();
 
@@ -44,6 +50,31 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.subtitle}>
           Manage your account preferences and culinary profile.
         </Text>
+
+        <View style={styles.group}>
+          <Text style={styles.groupTitle}>APPEARANCE</Text>
+          <View style={styles.segmentRow}>
+            {APPEARANCE_OPTIONS.map((opt) => {
+              const active = mode === opt.id;
+              return (
+                <Pressable
+                  key={opt.id}
+                  style={[styles.segment, active && styles.segmentActive]}
+                  onPress={() => setMode(opt.id)}
+                >
+                  <Ionicons
+                    name={opt.icon}
+                    size={16}
+                    color={active ? colors.onAccent : colors.inkSoft}
+                  />
+                  <Text style={[styles.segmentLabel, active && styles.segmentLabelActive]}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
 
         {settingsGroups.map((group) => (
           <View key={group.title} style={styles.group}>
@@ -114,6 +145,31 @@ function makeStyles(colors) {
       borderColor: colors.hairline,
       overflow: 'hidden',
     },
+    segmentRow: {
+      flexDirection: 'row',
+      backgroundColor: colors.paper,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      padding: 4,
+      gap: 4,
+    },
+    segment: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.md,
+    },
+    segmentActive: { backgroundColor: colors.sageDeep },
+    segmentLabel: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+    },
+    segmentLabelActive: { color: colors.onAccent },
     row: {
       flexDirection: 'row',
       alignItems: 'center',
