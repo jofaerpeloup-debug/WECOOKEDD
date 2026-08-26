@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { recipes } from '../../data/mockData';
+import { imageSource } from '../../utils/image';
 import { SectionHeading, MiniFrame, Bar, previewStyles as p, pageTextStyles as pt } from './shared';
 
 const featured = recipes[0];
@@ -31,7 +32,7 @@ export default function DiscoverPage() {
 
           <View style={p.card}>
             <View style={p.cardImageWrap}>
-              <Image source={{ uri: featured.image }} style={p.cardImage} />
+              <Image source={imageSource(featured.image)} style={p.cardImage} />
               <View style={p.heartDot}>
                 <Ionicons name="heart-outline" size={11} color="#fff" />
               </View>
@@ -50,7 +51,7 @@ export default function DiscoverPage() {
           <View style={p.cardRow}>
             {cards.map((r) => (
               <View key={r.id} style={p.cardHalf}>
-                <Image source={{ uri: r.image }} style={p.cardImageSmall} />
+                <Image source={imageSource(r.image)} style={p.cardImageSmall} />
                 <Text style={p.cardTitle} numberOfLines={1}>
                   {r.title}
                 </Text>
