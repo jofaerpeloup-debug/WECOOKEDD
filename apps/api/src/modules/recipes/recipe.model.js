@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { UNITS, validateQuantityForUnit } = require('../../shared/constants/measurement-units');
 
 const CUISINES = [
   'filipino',
@@ -18,24 +19,6 @@ const CUISINES = [
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 
-const UNITS = [
-  'g',
-  'kg',
-  'ml',
-  'l',
-  'tsp',
-  'tbsp',
-  'cup',
-  'piece',
-  'clove',
-  'slice',
-  'can',
-  'pack',
-  'bunch',
-  'pinch',
-  'toTaste',
-];
-
 const DIETARY_TAGS = ['vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree'];
 
 const MAX_TITLE_LENGTH = 150;
@@ -48,10 +31,6 @@ const MAX_INSTRUCTIONS = 50;
 const MAX_INSTRUCTION_LENGTH = 1000;
 const MAX_INGREDIENT_NOTE_LENGTH = 200;
 const MAX_IMAGE_URL_LENGTH = 2000;
-
-function isPositiveFiniteNumber(value) {
-  return Number.isFinite(value) && value > 0;
-}
 
 // One entry per (ingredientId, use) pair — the same canonical Ingredient may
 // legitimately appear twice in the same recipe (e.g. garlic for a marinade
@@ -89,22 +68,10 @@ const recipeIngredientSchema = new mongoose.Schema(
 // and must be absent for unit "toTaste" (e.g. "salt to taste"). A
 // pre('validate') hook on the subdocument schema runs for every array
 // element, unlike a per-path custom validator which Mongoose may skip when
-// the value itself is undefined. Mongoose 9 middleware is promise-based —
-// no `next` callback — so the hook just returns.
-recipeIngredientSchema.pre('validate', function () {
-  const hasQuantity = this.quantity !== undefined && this.quantity !== null;
-  if (this.unit === 'toTaste') {
-    if (hasQuantity) {
-      this.invalidate('quantity', 'quantity must be omitted when unit is "toTaste".', this.quantity);
-    }
-  } else if (!hasQuantity || !isPositiveFiniteNumber(this.quantity)) {
-    this.invalidate(
-      'quantity',
-      'quantity is required and must be a finite number greater than zero unless unit is "toTaste".',
-      this.quantity
-    );
-  }
-});
+// the value itself is undefined. Shared with ShoppingList.items, which
+// pairs the same quantity/unit semantics — see
+// shared/constants/measurement-units.js.
+recipeIngredientSchema.pre('validate', validateQuantityForUnit);
 
 function isNonEmptyStepArray(arr) {
   return (

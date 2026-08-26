@@ -171,6 +171,43 @@ async function getRecipeById(id, { isAdmin } = {}) {
   return isAdmin ? recipe : toNonAdminView(recipe);
 }
 
+// A plain, stable { id, name } ingredient summary for one usage entry —
+// deliberately decoupled from Recipe's internal populated-ref field name
+// (ingredients[].ingredientId). Cross-module callers (ShoppingListService)
+// must depend on this explicit contract, never on how Recipe happens to
+// represent a populated Ingredient reference internally. Only called for
+// entries that already survived toNonAdminView's filter below, so
+// entry.ingredientId is guaranteed to be a populated, active Ingredient.
+function toUsageSummary(entry) {
+  const ingredient = entry.ingredientId;
+  return {
+    ingredient: { id: String(ingredient._id), name: ingredient.name },
+    quantity: entry.quantity,
+    unit: entry.unit,
+    optional: entry.optional,
+  };
+}
+
+// Cross-module lookup for other modules (Favorites, ShoppingList) that need
+// to check whether a Recipe is currently usable for an ordinary (non-admin)
+// user, without importing the Recipe model/repository directly — the
+// cross-module rule in docs/architecture/backend.md. Returns null when the
+// recipe doesn't exist or isn't currently usable; never throws (a genuine
+// repository/database failure is left to propagate as-is, same as every
+// other lookup in this service). Unlike getRecipeById, `ingredients` here
+// uses the decoupled toUsageSummary shape above rather than Recipe's raw
+// internal field name, so callers never depend on Recipe persistence
+// internals — archived optional ingredient usages are already dropped by
+// the same non-admin filtering getRecipeById uses.
+async function findUsableRecipeById(id) {
+  const recipe = await recipeRepository.findByIdWithIngredients(id);
+  if (!recipe || !isUsableForNonAdmin(recipe)) {
+    return null;
+  }
+  const view = toNonAdminView(recipe);
+  return { ...view, ingredients: view.ingredients.map(toUsageSummary) };
+}
+
 async function listRecipes({
   search,
   cuisine,
@@ -284,6 +321,7 @@ async function archiveRecipe(id) {
 module.exports = {
   createRecipe,
   findRecipeById,
+  findUsableRecipeById,
   getRecipeById,
   listRecipes,
   updateRecipe,
