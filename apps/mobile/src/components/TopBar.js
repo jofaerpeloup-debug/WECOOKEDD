@@ -1,15 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions, Switch } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
-import { typography, spacing } from '../theme/theme';
+import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import { useAuth } from '../context/AuthContext';
+import { notificationSettings } from '../data/mockData';
 
-const PANEL_WIDTH = Math.min(300, Dimensions.get('window').width * 0.8);
-
-const MENU_ITEMS = [{ label: 'Settings', icon: 'settings-outline', route: 'Settings' }];
+const DROPDOWN_WIDTH = Math.min(280, Dimensions.get('window').width * 0.78);
 
 function Wordmark({ style }) {
   const { colors } = useTheme();
@@ -21,28 +19,26 @@ function Wordmark({ style }) {
   );
 }
 
-function MenuDrawer({ visible, onClose }) {
+function NotificationDropdown({ visible, onClose, topOffset }) {
   const { colors, shadow } = useTheme();
-  const styles = makeDrawerStyles(colors, shadow);
-  const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
-  const slide = useRef(new Animated.Value(0)).current;
-  const { logout } = useAuth();
+  const styles = makeDropdownStyles(colors, shadow);
+  const anim = useRef(new Animated.Value(0)).current;
+  const [values, setValues] = useState(
+    Object.fromEntries(notificationSettings.map((item) => [item.id, item.value]))
+  );
 
   useEffect(() => {
-    Animated.timing(slide, {
+    Animated.timing(anim, {
       toValue: visible ? 1 : 0,
-      duration: 220,
+      duration: 180,
       useNativeDriver: true,
     }).start();
   }, [visible]);
 
-  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [-PANEL_WIDTH, 0] });
+  const toggle = (id) => setValues((prev) => ({ ...prev, [id]: !prev[id] }));
 
-  const go = (route) => {
-    onClose();
-    navigation.navigate(route);
-  };
+  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+  const opacity = anim;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -50,53 +46,47 @@ function MenuDrawer({ visible, onClose }) {
       <Animated.View
         style={[
           styles.panel,
-          { width: PANEL_WIDTH, paddingTop: insets.top + spacing.lg, transform: [{ translateX }] },
+          { top: topOffset, opacity, transform: [{ scale }] },
         ]}
       >
-        <View style={styles.panelHeader}>
-          <View style={styles.logoMark}>
-            <MaterialCommunityIcons name="chef-hat" size={14} color={colors.onAccent} />
-          </View>
-          <Wordmark style={styles.brand} />
+        <View style={styles.caret} />
+        <View style={styles.header}>
+          <Text style={styles.headerText}>Notifications</Text>
         </View>
 
-        {MENU_ITEMS.map((item) => (
-          <Pressable
-            key={item.route}
-            style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
-            onPress={() => go(item.route)}
+        {notificationSettings.map((item, i) => (
+          <View
+            key={item.id}
+            style={[
+              styles.row,
+              i < notificationSettings.length - 1 && styles.rowBorder,
+              i === notificationSettings.length - 1 && styles.rowLast,
+            ]}
           >
-            <Ionicons name={item.icon} size={19} color={colors.inkSoft} />
-            <Text style={styles.menuLabel}>{item.label}</Text>
-          </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>{item.label}</Text>
+              <Text style={styles.rowSub}>{item.sub}</Text>
+            </View>
+            <Switch
+              value={values[item.id]}
+              onValueChange={() => toggle(item.id)}
+              trackColor={{ false: colors.hairline, true: colors.sageDeep }}
+              thumbColor={colors.onAccent}
+            />
+          </View>
         ))}
-
-        <View style={styles.divider} />
-
-        <Pressable
-          style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
-          onPress={async () => {
-            onClose();
-            await logout();
-            navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
-          }}
-        >
-          <Ionicons name="log-out-outline" size={19} color={colors.error} />
-          <Text style={[styles.menuLabel, { color: colors.error }]}>Log out</Text>
-        </Pressable>
       </Animated.View>
     </Modal>
   );
 }
 
 /**
- * mode: 'brand' (menu · wordmark · notification bell) | 'back' (back arrow · title · action)
+ * mode: 'brand' (wordmark · substitute finder · notification bell) | 'back' (back arrow · title · action)
  */
 export default function TopBar({
   mode = 'brand',
   title,
   onBack,
-  onMenuPress,
   onBellPress,
   rightIcon,
   onRightPress,
@@ -106,17 +96,12 @@ export default function TopBar({
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
-  const [menuVisible, setMenuVisible] = useState(false);
   const navigation = useNavigation();
-
-  const openMenu = () => {
-    setMenuVisible(true);
-    onMenuPress?.();
-  };
+  const [notifVisible, setNotifVisible] = useState(false);
 
   const pressBell = () => {
     if (onBellPress) onBellPress();
-    else navigation.navigate('Notifications');
+    else setNotifVisible(true);
   };
 
   return (
@@ -129,20 +114,31 @@ export default function TopBar({
     >
       {mode === 'brand' ? (
         <>
-          <Pressable onPress={openMenu} hitSlop={10} style={styles.side}>
-            <Ionicons name="menu-outline" size={24} color={colors.ink} />
-          </Pressable>
+          <View style={styles.edgeSpacer} />
           <View style={styles.brandRow}>
             <Wordmark style={styles.brand} />
           </View>
-          <Pressable onPress={pressBell} hitSlop={10} style={styles.side}>
-            <View>
-              <Ionicons name="notifications-outline" size={22} color={colors.ink} />
-              {showBellDot && <View style={styles.bellDot} />}
-            </View>
-          </Pressable>
+          <View style={styles.bellCluster}>
+            <Pressable
+              onPress={() => navigation.navigate('IngredientStudio')}
+              hitSlop={10}
+              style={styles.substituteBtn}
+            >
+              <Ionicons name="swap-horizontal" size={18} color={colors.ink} />
+            </Pressable>
+            <Pressable onPress={pressBell} hitSlop={10}>
+              <View>
+                <Ionicons name="notifications-outline" size={22} color={colors.ink} />
+                {showBellDot && <View style={styles.bellDot} />}
+              </View>
+            </Pressable>
+          </View>
 
-          <MenuDrawer visible={menuVisible} onClose={() => setMenuVisible(false)} />
+          <NotificationDropdown
+            visible={notifVisible}
+            onClose={() => setNotifVisible(false)}
+            topOffset={insets.top + spacing.sm + 40}
+          />
         </>
       ) : (
         <>
@@ -179,7 +175,17 @@ function makeStyles(colors) {
       borderBottomColor: colors.hairline,
     },
     side: { width: 34, alignItems: 'center' },
-    brandRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    edgeSpacer: { width: 60 },
+    bellCluster: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    substituteBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.sagePale,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    brandRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     brand: {
       fontFamily: typography.display.fontFamily,
       fontSize: 19,
@@ -206,53 +212,61 @@ function makeStyles(colors) {
   });
 }
 
-function makeDrawerStyles(colors, shadow) {
+function makeDropdownStyles(colors, shadow) {
   return StyleSheet.create({
     backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
     panel: {
       position: 'absolute',
-      left: 0,
-      top: 0,
-      bottom: 0,
-      backgroundColor: colors.cream,
-      paddingHorizontal: spacing.lg,
+      right: spacing.lg,
+      width: DROPDOWN_WIDTH,
+      backgroundColor: colors.paper,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      overflow: 'hidden',
       ...shadow.card,
     },
-    panelHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
-      marginBottom: spacing.xl,
+    caret: {
+      position: 'absolute',
+      top: -6,
+      right: 16,
+      width: 12,
+      height: 12,
+      backgroundColor: colors.paper,
+      borderTopWidth: 1,
+      borderLeftWidth: 1,
+      borderColor: colors.hairline,
+      transform: [{ rotate: '45deg' }],
     },
-    logoMark: {
-      width: 20,
-      height: 20,
-      borderRadius: 6,
-      backgroundColor: colors.sageDeep,
-      alignItems: 'center',
-      justifyContent: 'center',
+    header: {
+      paddingHorizontal: spacing.md,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
     },
-    brand: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 17,
-      color: colors.ink,
-    },
-    menuItem: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.md,
-      paddingVertical: spacing.md,
-    },
-    menuItemPressed: { opacity: 0.6 },
-    menuLabel: {
-      fontFamily: typography.body.medium,
+    headerText: {
+      fontFamily: typography.body.semibold,
       fontSize: typography.sizes.md,
       color: colors.ink,
     },
-    divider: {
-      height: 1,
-      backgroundColor: colors.hairline,
-      marginVertical: spacing.md,
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+    },
+    rowBorder: { borderTopWidth: 1, borderTopColor: colors.hairline },
+    rowLast: { paddingBottom: spacing.md },
+    rowLabel: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+    },
+    rowSub: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: 1,
     },
   });
 }
