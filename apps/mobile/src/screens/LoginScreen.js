@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS, HeartIcon } from '../theme/brandKit';
 import useGoogleSignIn from '../hooks/useGoogleSignIn';
 import { useAuth } from '../context/AuthContext';
+import { getAuthErrorMessage } from '../api/errorMessages';
 
 const LOGIN_BG = require('../assets/landing/login-bg.jpg');
 
@@ -135,19 +136,33 @@ export default function LoginScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const inFlightRef = useRef(false);
   const google = useGoogleSignIn();
-  const { login: markLoggedIn } = useAuth();
+  const { signIn } = useAuth();
 
   const login = async () => {
-    await markLoggedIn();
-    navigation.replace('MainTabs');
-  };
-
-  useEffect(() => {
-    if (google.profile) {
-      markLoggedIn().then(() => navigation.replace('MainTabs'));
+    if (inFlightRef.current) return; // guard against rapid duplicate submissions
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      setError('Enter your email and password to continue.');
+      return;
     }
-  }, [google.profile]);
+    inFlightRef.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await signIn({ email: trimmedEmail, password });
+      // On success the auth state flips and RootNavigator swaps to the
+      // authenticated stack — no manual navigation needed here.
+    } catch (err) {
+      setError(getAuthErrorMessage(err));
+    } finally {
+      inFlightRef.current = false;
+      setSubmitting(false);
+    }
+  };
 
   return (
     <View style={styles.root}>
@@ -209,8 +224,22 @@ export default function LoginScreen({ navigation }) {
               <Text style={styles.forgot}>Forgot password?</Text>
             </Pressable>
 
-            <Pressable onPress={login} style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}>
-              <Text style={styles.ctaText}>Log in</Text>
+            {error && <Text style={styles.formError}>{error}</Text>}
+
+            <Pressable
+              onPress={login}
+              disabled={submitting}
+              style={({ pressed }) => [
+                styles.cta,
+                pressed && styles.ctaPressed,
+                submitting && styles.ctaDisabled,
+              ]}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.ctaText}>Log in</Text>
+              )}
             </Pressable>
 
             <View style={styles.dividerRow}>
@@ -263,7 +292,7 @@ export default function LoginScreen({ navigation }) {
 
             <View style={styles.signupRow}>
               <Text style={styles.signupText}>Don't have an account? </Text>
-              <Pressable onPress={() => navigation.navigate('Landing')} hitSlop={8}>
+              <Pressable onPress={() => navigation.navigate('Register')} hitSlop={8}>
                 <Text style={styles.signupLink}>Sign up</Text>
               </Pressable>
             </View>
@@ -323,7 +352,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   ctaPressed: { backgroundColor: COLORS.greenChef },
+  ctaDisabled: { opacity: 0.6 },
   ctaText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+
+  formError: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#F0544E',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
 
   dividerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
   divider: { flex: 1, height: 1, backgroundColor: COLORS.hairline },

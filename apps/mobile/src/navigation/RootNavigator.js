@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 
 import LandingScreen from '../screens/LandingScreen';
 import LoginScreen from '../screens/LoginScreen';
+import RegisterScreen from '../screens/RegisterScreen';
 import MainTabs from './MainTabs';
 import IngredientStudioScreen from '../screens/IngredientStudioScreen';
 import SwapDetailScreen from '../screens/SwapDetailScreen';
@@ -46,37 +47,47 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer theme={navTheme}>
-      <Stack.Navigator
-        initialRouteName={isLoggedIn ? 'MainTabs' : 'Landing'}
-        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
-      >
-        <Stack.Screen name="Landing" component={LandingScreen} />
-        <Stack.Screen name="Login" component={LoginScreen} />
-        <Stack.Screen name="MainTabs" component={MainTabs} />
-        <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />
-        <Stack.Screen
-          name="SwapDetail"
-          component={SwapDetailScreen}
-          options={{ animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
-        <Stack.Screen
-          name="CookMode"
-          component={CookModeScreen}
-          options={{ animation: 'slide_from_bottom' }}
-        />
-        <Stack.Screen name="List" component={ShoppingListScreen} />
-        <Stack.Screen name="Profile" component={ProfileScreen} />
-        <Stack.Screen name="AccountDetails" component={AccountDetailsScreen} />
-        <Stack.Screen name="Community" component={CommunityScreen} />
-        <Stack.Screen name="Settings" component={SettingsScreen} />
-        <Stack.Screen name="Security" component={SecurityScreen} />
-        <Stack.Screen name="Notifications" component={NotificationsScreen} />
-        <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
-        <Stack.Screen name="About" component={AboutScreen} />
-        <Stack.Screen name="Terms" component={TermsScreen} />
-        <Stack.Screen name="Privacy" component={PrivacyScreen} />
-        <Stack.Screen name="Licenses" component={LicensesScreen} />
+      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+        {isLoggedIn ? (
+          // --- authenticated stack ---
+          // React Navigation swaps the whole screen set when `isLoggedIn`
+          // flips, so login/register/logout need no imperative navigation —
+          // the correct stack simply renders.
+          <>
+            <Stack.Screen name="MainTabs" component={MainTabs} />
+            <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />
+            <Stack.Screen
+              name="SwapDetail"
+              component={SwapDetailScreen}
+              options={{ animation: 'slide_from_bottom' }}
+            />
+            <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
+            <Stack.Screen
+              name="CookMode"
+              component={CookModeScreen}
+              options={{ animation: 'slide_from_bottom' }}
+            />
+            <Stack.Screen name="List" component={ShoppingListScreen} />
+            <Stack.Screen name="Profile" component={ProfileScreen} />
+            <Stack.Screen name="AccountDetails" component={AccountDetailsScreen} />
+            <Stack.Screen name="Community" component={CommunityScreen} />
+            <Stack.Screen name="Settings" component={SettingsScreen} />
+            <Stack.Screen name="Security" component={SecurityScreen} />
+            <Stack.Screen name="Notifications" component={NotificationsScreen} />
+            <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
+            <Stack.Screen name="About" component={AboutScreen} />
+            <Stack.Screen name="Terms" component={TermsScreen} />
+            <Stack.Screen name="Privacy" component={PrivacyScreen} />
+            <Stack.Screen name="Licenses" component={LicensesScreen} />
+          </>
+        ) : (
+          // --- unauthenticated stack ---
+          <>
+            <Stack.Screen name="Landing" component={LandingScreen} />
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Register" component={RegisterScreen} />
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
