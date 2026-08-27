@@ -302,6 +302,16 @@ Access token is in memory. Refresh token is in `sessionStorage` (not
 unchanged and the ingredient service for the name-based source/substitute
 pickers. See [admin-substitutions-integration.md](./admin-substitutions-integration.md).
 
-After that, **Recipes**, then **Users / admin-management** (needs new backend
-endpoints — design first), then **auth hardening** (HttpOnly refresh cookie),
-each removing another piece of Firebase.
+**Recipes REST migration** (`feat/admin-recipes-integration`) — **done.**
+Rewrote the Recipes tab as `RecipesTab.jsx` with `recipeApi.js` +
+`recipeOptions.js` + a standalone `IngredientPicker.jsx`, wired to
+`/api/v1/recipes`, reusing `apiClient` / `backendAuth` unchanged. The Firestore
+`recipes` subscription and its seed/save/delete helpers were deleted from
+`firestore.js`, and the Overview tab's recipe widgets now read from the REST API
+too — zero Firestore reads/writes for recipe data. See
+[admin-recipes-integration.md](./admin-recipes-integration.md).
+
+After that, **Users / admin-management** (needs new backend endpoints — design
+first), then **auth hardening** (HttpOnly refresh cookie), each removing another
+piece of Firebase. The Firestore `users` collection and the Firebase-Auth-only
+account flows are what remain.
