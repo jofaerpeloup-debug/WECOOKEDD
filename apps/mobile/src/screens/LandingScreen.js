@@ -37,6 +37,7 @@ export default function LandingScreen({ navigation }) {
   const [page, setPage] = useState(0);
   const [ctaHeight, setCtaHeight] = useState(0);
 
+  const goRegister = () => navigation.navigate('Register');
   const goLogin = () => navigation.navigate('Login');
 
   const goToPage = (i) => {
@@ -98,7 +99,7 @@ export default function LandingScreen({ navigation }) {
         >
           {page === 0 && (
             <>
-              <Pressable onPress={goLogin} style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}>
+              <Pressable onPress={goRegister} style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}>
                 <Text style={styles.ctaText}>Get Started</Text>
                 <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
                   <Path
@@ -120,7 +121,7 @@ export default function LandingScreen({ navigation }) {
           )}
 
           {page === PAGE_COUNT - 1 && (
-            <Pressable onPress={goLogin} style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}>
+            <Pressable onPress={goRegister} style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}>
               <Text style={styles.ctaText}>Let's Cook!</Text>
               <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
                 <Path

@@ -22,7 +22,7 @@ export default function ProfileScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
-  const { logout } = useAuth();
+  const { signOut } = useAuth();
   const [viewerOpen, setViewerOpen] = useState(false);
 
   const handleLogout = () => {
@@ -31,10 +31,9 @@ export default function ProfileScreen({ navigation }) {
       {
         text: 'Log Out',
         style: 'destructive',
-        onPress: async () => {
-          await logout();
-          navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
-        },
+        // signOut() revokes the backend session, clears the tokens, and flips
+        // auth state — RootNavigator then swaps back to the Landing stack.
+        onPress: () => signOut(),
       },
     ]);
   };

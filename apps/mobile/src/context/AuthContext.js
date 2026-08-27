@@ -1,37 +1,109 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { loadJSON, saveJSON, removeItem } from '../utils/storage';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import * as authService from '../api/authService';
 
-const AUTH_KEY = 'wecooked:isLoggedIn';
+// Single source of truth for auth/session state. Three states:
+//   'restoring'      — app just launched, trying to rebuild a session
+//   'authenticated'  — backend session is live, `user` is the /users/me payload
+//   'unauthenticated'— no session (never had one, signed out, or session ended)
+//
+// The access token lives in memory in authService; the refresh token lives in
+// SecureStore. This context holds none of that — only the derived state and
+// the authoritative backend `user` object.
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [isReady, setIsReady] = useState(false);
+  const [status, setStatus] = useState('restoring');
+  const [user, setUser] = useState(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
+
+    // A refresh rejected mid-session (expired/revoked) flips us to signed-out.
+    authService.setOnSessionExpired(() => {
+      if (!mountedRef.current) return;
+      setUser(null);
+      setStatus('unauthenticated');
+    });
+
     (async () => {
-      const stored = await loadJSON(AUTH_KEY, false);
-      setIsLoggedIn(!!stored);
-      setIsReady(true);
+      try {
+        const restored = await authService.restoreSession();
+        if (!mountedRef.current) return;
+        if (restored) {
+          setUser(restored);
+          setStatus('authenticated');
+        } else {
+          setUser(null);
+          setStatus('unauthenticated');
+        }
+      } catch {
+        if (!mountedRef.current) return;
+        setUser(null);
+        setStatus('unauthenticated');
+      }
     })();
+
+    return () => {
+      mountedRef.current = false;
+      authService.setOnSessionExpired(null);
+    };
   }, []);
 
-  const login = async () => {
-    setIsLoggedIn(true);
-    await saveJSON(AUTH_KEY, true);
+  const signIn = useCallback(async ({ email, password }) => {
+    const u = await authService.login({ email, password });
+    if (mountedRef.current) {
+      setUser(u);
+      setStatus('authenticated');
+    }
+    return u;
+  }, []);
+
+  const signUp = useCallback(async ({ name, email, password }) => {
+    const u = await authService.register({ name, email, password });
+    if (mountedRef.current) {
+      setUser(u);
+      setStatus('authenticated');
+    }
+    return u;
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await authService.logout();
+    if (mountedRef.current) {
+      setUser(null);
+      setStatus('unauthenticated');
+    }
+  }, []);
+
+  const signOutEverywhere = useCallback(async () => {
+    await authService.logoutAll();
+    if (mountedRef.current) {
+      setUser(null);
+      setStatus('unauthenticated');
+    }
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const u = await authService.fetchCurrentUser();
+    if (mountedRef.current) setUser(u);
+    return u;
+  }, []);
+
+  const value = {
+    status,
+    user,
+    isReady: status !== 'restoring',
+    isLoggedIn: status === 'authenticated',
+    signIn,
+    signUp,
+    signOut,
+    signOutEverywhere,
+    refreshUser,
   };
 
-  const logout = async () => {
-    setIsLoggedIn(false);
-    await removeItem(AUTH_KEY);
-  };
-
-  return (
-    <AuthContext.Provider value={{ isLoggedIn, isReady, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

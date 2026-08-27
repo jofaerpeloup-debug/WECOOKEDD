@@ -25,7 +25,7 @@ const APPEARANCE_OPTIONS = [
 export default function SettingsScreen({ navigation }) {
   const { colors, mode, setMode } = useTheme();
   const styles = makeStyles(colors);
-  const { logout } = useAuth();
+  const { signOut } = useAuth();
 
   const handleLogout = () => {
     Alert.alert('Log Out', 'Are you sure you want to log out?', [
@@ -33,10 +33,9 @@ export default function SettingsScreen({ navigation }) {
       {
         text: 'Log Out',
         style: 'destructive',
-        onPress: async () => {
-          await logout();
-          navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
-        },
+        // signOut() revokes the backend session, clears the tokens, and flips
+        // auth state — RootNavigator then swaps back to the Landing stack.
+        onPress: () => signOut(),
       },
     ]);
   };
