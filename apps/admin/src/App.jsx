@@ -16,40 +16,23 @@ import {
   requestPasswordReset, verifyResetCode, confirmReset,
 } from './auth.js';
 import {
-  subscribeRecipes, subscribeUsers, saveRecipeDoc, deleteRecipeDoc,
-  saveUserDoc, deleteUserDoc, submitReportDoc, seedCollection,
+  subscribeUsers, saveUserDoc, deleteUserDoc, submitReportDoc, seedCollection,
 } from './firestore.js';
 import { useBackendAuth } from './backendAuth.js';
+import { listRecipes } from './recipeApi.js';
+import { CUISINE_LABELS, CUISINE_COLORS } from './recipeOptions.js';
 import IngredientsTab from './IngredientsTab.jsx';
 import SubstitutionsTab from './SubstitutionsTab.jsx';
+import RecipesTab from './RecipesTab.jsx';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 
-const CATEGORIES = ['Breakfast', 'Lunch', 'Dinner', 'Dessert', 'Snack'];
-const DIFFICULTIES = ['Easy', 'Medium', 'Hard'];
+// Dietary-tag options for the still-Firestore Users tab only. The Recipes tab
+// uses the backend's own dietary-tag enum (see recipeOptions.js).
 const DIET_TAGS = [
   'Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free',
   'Nut-Free', 'Low-FODMAP', 'Pescatarian', 'Low-Sodium',
 ];
-
-const seedRecipes = [
-  { id: 'r1', title: 'Miso-Glazed Black Cod', category: 'Dinner', cookTime: 35, difficulty: 'Medium', servings: 4, saves: 18, dateAdded: '2026-03-02' },
-  { id: 'r2', title: 'Charred Cauliflower Steaks', category: 'Dinner', cookTime: 40, difficulty: 'Easy', servings: 2, saves: 12, dateAdded: '2026-03-18' },
-  { id: 'r3', title: 'Brown Butter Sage Gnocchi', category: 'Dinner', cookTime: 30, difficulty: 'Medium', servings: 4, saves: 24, dateAdded: '2026-04-05' },
-  { id: 'r4', title: 'Roasted Beet & Walnut Salad', category: 'Lunch', cookTime: 25, difficulty: 'Easy', servings: 2, saves: 9, dateAdded: '2026-04-22' },
-  { id: 'r5', title: 'Saffron Risotto with Charred Leeks', category: 'Dinner', cookTime: 45, difficulty: 'Hard', servings: 4, saves: 32, dateAdded: '2026-05-11' },
-  { id: 'r6', title: 'Almond Flour Olive Oil Cake', category: 'Dessert', cookTime: 55, difficulty: 'Medium', servings: 8, saves: 15, dateAdded: '2026-06-01' },
-  { id: 'r7', title: 'Smoky Chickpea Shakshuka', category: 'Breakfast', cookTime: 20, difficulty: 'Easy', servings: 3, saves: 27, dateAdded: '2026-07-09' },
-  { id: 'r8', title: 'Grilled Peach & Burrata Toast', category: 'Breakfast', cookTime: 15, difficulty: 'Easy', servings: 2, saves: 21, dateAdded: '2026-08-02' },
-];
-
-const CATEGORY_COLORS = {
-  Breakfast: '#4A5D4E',
-  Lunch: '#6B8069',
-  Dinner: '#C9962E',
-  Dessert: '#B15A3E',
-  Snack: '#8C8577',
-};
 
 const seedUsers = [
   { id: 'u1', name: 'Mara Whitfield', email: 'mara.w@example.com', joinedDate: '2026-01-14', tags: ['Vegetarian', 'Low-FODMAP'], recipesSaved: 14, status: 'Active' },
@@ -123,13 +106,21 @@ async function safeDelete(key, shared = false) {
 function WeCookedAdminApp() {
   // Backend local auth is the authoritative gate for this dashboard and for
   // every WeCooked REST API call. Firebase auth is kept alongside it, best
-  // effort, only so the not-yet-migrated Firestore tabs (Overview / Recipes /
-  // Users) keep working — see docs/architecture/admin-api-integration.md.
+  // effort, only so the not-yet-migrated Firestore surface (Users tab + the
+  // Overview user widgets) keeps working — see
+  // docs/architecture/admin-api-integration.md.
   const backend = useBackendAuth();
 
   const [tab, setTab] = useState('overview');
-  const [recipes, setRecipes] = useState([]);
   const [users, setUsers] = useState([]);
+  // Recipes are fully REST-backed now (zero Firestore). The Overview tab still
+  // shows a couple of recipe widgets, so it pulls a lightweight, best-effort
+  // summary from the same REST API the Recipes tab uses. `sampleSize` is how
+  // many recipes the cuisine breakdown was actually computed from (≤100), so
+  // the widget can say so when it isn't the whole catalog.
+  const [recipeStats, setRecipeStats] = useState({
+    total: 0, latest: [], byCuisine: [], sampleSize: 0,
+  });
 
   const [account, setAccount] = useState(null);
   const [authenticated, setAuthenticated] = useState(false);
@@ -143,13 +134,10 @@ function WeCookedAdminApp() {
   const [displayPrefs, setDisplayPrefs] = useState({ theme: 'light', reduceMotion: false });
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
-  const [recipeSearch, setRecipeSearch] = useState('');
   const [userSearch, setUserSearch] = useState('');
 
-  const [recipeModal, setRecipeModal] = useState(null); // null | 'new' | recipe object
   const [userModal, setUserModal] = useState(null); // null | 'new' | user object
 
-  const [confirmDeleteRecipe, setConfirmDeleteRecipe] = useState(null);
   const [confirmDeleteUser, setConfirmDeleteUser] = useState(null);
 
   const [resetOobCode, setResetOobCode] = useState(() => {
@@ -177,16 +165,50 @@ function WeCookedAdminApp() {
   }, []);
 
   useEffect(() => {
-    // Firestore-backed tabs (Overview / Recipes / Users) still need a Firebase
-    // session. Without one (a backend-only admin) skip the subscriptions — those
-    // tabs then render their existing empty states. This deliberately never
-    // gates the dashboard render: a slow or unavailable Firestore must not block
-    // the REST-backed Ingredients tab.
+    // The still-Firestore Users tab (and the Overview user widgets) need a
+    // Firebase session. Without one (a backend-only admin) skip the
+    // subscription — that tab then renders its existing empty state. This
+    // deliberately never gates the dashboard render: a slow or unavailable
+    // Firestore must not block the REST-backed tabs.
     if (!authenticated) return undefined;
-    const unsubRecipes = subscribeRecipes(setRecipes);
     const unsubUsers = subscribeUsers(setUsers);
-    return () => { unsubRecipes(); unsubUsers(); };
+    return () => { unsubUsers(); };
   }, [authenticated]);
+
+  useEffect(() => {
+    // Recipe stats for the Overview tab, straight from the REST API — no
+    // Firestore. Best-effort: a failure just leaves the widgets at zero/empty.
+    if (backend.status !== 'authenticated' || backend.user?.role !== 'admin') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { recipes, pagination } = await listRecipes({
+          status: 'all', sort: 'newest', page: 1, limit: 100,
+        });
+        if (cancelled) return;
+        const counts = {};
+        recipes.forEach((r) => { counts[r.cuisine] = (counts[r.cuisine] || 0) + 1; });
+        const sampled = recipes.length || 1;
+        const byCuisine = Object.entries(counts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([cuisine, count], i) => ({
+            name: CUISINE_LABELS[cuisine] || cuisine,
+            count,
+            pct: Math.round((count / sampled) * 100),
+            color: CUISINE_COLORS[i % CUISINE_COLORS.length],
+          }));
+        setRecipeStats({
+          total: pagination?.total ?? recipes.length,
+          latest: recipes.slice(0, 4),
+          byCuisine,
+          sampleSize: recipes.length,
+        });
+      } catch {
+        if (!cancelled) setRecipeStats({ total: 0, latest: [], byCuisine: [], sampleSize: 0 });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [backend.status, backend.user?.role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,14 +230,6 @@ function WeCookedAdminApp() {
     safeSet(DISPLAY_PREFS_KEY, JSON.stringify(displayPrefs), false);
   }, [displayPrefs, prefsLoaded]);
 
-  const filteredRecipes = useMemo(() => {
-    const q = recipeSearch.trim().toLowerCase();
-    if (!q) return recipes;
-    return recipes.filter(r =>
-      r.title.toLowerCase().includes(q) || r.category.toLowerCase().includes(q)
-    );
-  }, [recipes, recipeSearch]);
-
   const filteredUsers = useMemo(() => {
     const q = userSearch.trim().toLowerCase();
     if (!q) return users;
@@ -230,32 +244,12 @@ function WeCookedAdminApp() {
       ? Math.round(users.reduce((sum, u) => sum + (u.recipesSaved || 0), 0) / users.length)
       : 0;
     return {
-      totalRecipes: recipes.length,
+      totalRecipes: recipeStats.total,
       totalUsers: users.length,
       activeUsers,
       avgSaved,
     };
-  }, [recipes, users]);
-
-  const topRecipes = useMemo(() => {
-    return [...recipes].sort((a, b) => (b.saves || 0) - (a.saves || 0)).slice(0, 4);
-  }, [recipes]);
-
-  const categoryBreakdown = useMemo(() => {
-    const total = recipes.length;
-    if (!total) return [];
-    const counts = {};
-    recipes.forEach((r) => { counts[r.category] = (counts[r.category] || 0) + 1; });
-    return CATEGORIES
-      .map((cat) => ({ name: cat, count: counts[cat] || 0 }))
-      .filter((c) => c.count > 0)
-      .map((c) => ({ ...c, pct: Math.round((c.count / total) * 100) }));
-  }, [recipes]);
-
-  async function saveRecipe(data) {
-    await saveRecipeDoc(data.id ? data : { ...data, dateAdded: todayISO() });
-    setRecipeModal(null);
-  }
+  }, [recipeStats.total, users]);
 
   async function saveUser(data) {
     await saveUserDoc(data.id ? data : { ...data, joinedDate: todayISO() });
@@ -263,7 +257,8 @@ function WeCookedAdminApp() {
   }
 
   async function resetSampleData() {
-    await seedCollection('recipes', seedRecipes);
+    // Users only — recipes are REST-backed now and are never seeded into
+    // Firestore. Recipe sample data belongs in the backend, if anywhere.
     await seedCollection('users', seedUsers);
   }
 
@@ -1088,9 +1083,9 @@ function WeCookedAdminApp() {
                 onOpenReport={() => { setReportOpen(true); setProfileMenuOpen(false); }}
                 onOpenDisplay={() => { setDisplayOpen(true); setProfileMenuOpen(false); }}
               />
-              {account && recipes.length === 0 && users.length === 0 && (
+              {account && users.length === 0 && (
                 <button className="wc-reset-btn" onClick={resetSampleData}>
-                  Load sample data
+                  Load sample users
                 </button>
               )}
               {account && (
@@ -1106,26 +1101,13 @@ function WeCookedAdminApp() {
               <OverviewTab
                 metrics={metrics}
                 dark={displayPrefs.theme === 'dark'}
-                topRecipes={topRecipes}
-                categoryBreakdown={categoryBreakdown}
+                latestRecipes={recipeStats.latest}
+                cuisineBreakdown={recipeStats.byCuisine}
+                cuisineSampleSize={recipeStats.sampleSize}
               />
             )}
 
-            {tab === 'recipes' && (
-              <RecipesTab
-                recipes={filteredRecipes}
-                search={recipeSearch}
-                setSearch={setRecipeSearch}
-                onAdd={() => setRecipeModal('new')}
-                onEdit={(r) => setRecipeModal(r)}
-                confirmDeleteRecipe={confirmDeleteRecipe}
-                setConfirmDeleteRecipe={setConfirmDeleteRecipe}
-                onDelete={async (id) => {
-                  await deleteRecipeDoc(id);
-                  setConfirmDeleteRecipe(null);
-                }}
-              />
-            )}
+            {tab === 'recipes' && <RecipesTab />}
 
             {tab === 'ingredients' && <IngredientsTab />}
 
@@ -1148,13 +1130,6 @@ function WeCookedAdminApp() {
             )}
           </main>
 
-          {recipeModal && (
-            <RecipeModal
-              recipe={recipeModal === 'new' ? null : recipeModal}
-              onClose={() => setRecipeModal(null)}
-              onSave={saveRecipe}
-            />
-          )}
           {userModal && (
             <UserModal
               user={userModal === 'new' ? null : userModal}
@@ -1434,7 +1409,7 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
 const HELP_FAQS = [
   {
     q: 'Where is my data stored?',
-    a: 'Recipes, users, and admin accounts are stored in Firebase (Firestore for data, Firebase Authentication for admin accounts), so they’re shared across every admin and every device — not tied to one browser.',
+    a: 'Ingredients, substitutions, and recipes live in the WeCooked backend (REST API + MongoDB); users and admin accounts are still in Firebase for now (Firestore, plus Firebase Authentication for admin sign-in) and migrate next. Everything is shared across every admin and device — not tied to one browser.',
   },
   {
     q: 'How do I add another admin?',
@@ -1446,7 +1421,7 @@ const HELP_FAQS = [
   },
   {
     q: 'How do I load the sample data?',
-    a: '“Load sample data” appears at the bottom of the sidebar when there are no recipes or users yet, and seeds the original demo data. Once recipes or users exist, it’s hidden to avoid overwriting real data.',
+    a: '“Load sample users” appears at the bottom of the sidebar while there are no users yet, and seeds the original demo users into Firebase. Once any user exists it’s hidden, to avoid overwriting real data. Recipes and ingredients are managed through the backend and are not seeded from here.',
   },
 ];
 
@@ -1667,9 +1642,12 @@ function LogoutConfirmModal({ onCancel, onConfirm }) {
   );
 }
 
-function OverviewTab({ metrics, dark, topRecipes, categoryBreakdown }) {
+function OverviewTab({ metrics, dark, latestRecipes, cuisineBreakdown, cuisineSampleSize }) {
   const gridStroke = dark ? '#3A392F' : '#DAD3C4';
   const tickFill = dark ? '#A39C8C' : '#8C8577';
+  // The cuisine breakdown is computed from at most the 100 most recent recipes;
+  // only claim it's the whole catalog when it actually is.
+  const cuisinePartial = cuisineSampleSize > 0 && metrics.totalRecipes > cuisineSampleSize;
   return (
     <div>
       <div className="wc-topbar">
@@ -1740,15 +1718,15 @@ function OverviewTab({ metrics, dark, topRecipes, categoryBreakdown }) {
 
       <div className="wc-panels wc-panels-secondary">
         <div className="wc-card">
-          <h2>Top recipes</h2>
-          {topRecipes.length === 0 ? (
+          <h2>Latest recipes</h2>
+          {latestRecipes.length === 0 ? (
             <div className="wc-empty-inline">No recipes yet.</div>
           ) : (
             <ul className="wc-toprecipe-list">
-              {topRecipes.map((r) => (
+              {latestRecipes.map((r) => (
                 <li key={r.id}>
                   <span className="wc-toprecipe-title">{r.title}</span>
-                  <span className="wc-toprecipe-saves">{r.saves || 0} saves</span>
+                  <span className="wc-toprecipe-saves">{CUISINE_LABELS[r.cuisine] || r.cuisine}</span>
                 </li>
               ))}
             </ul>
@@ -1756,25 +1734,30 @@ function OverviewTab({ metrics, dark, topRecipes, categoryBreakdown }) {
         </div>
 
         <div className="wc-card">
-          <h2>Recipe categories</h2>
-          {categoryBreakdown.length === 0 ? (
+          <h2>Cuisines</h2>
+          {cuisineBreakdown.length === 0 ? (
             <div className="wc-empty-inline">No recipes yet.</div>
           ) : (
             <>
+              {cuisinePartial && (
+                <div className="wc-empty-inline" style={{ paddingTop: 0, marginBottom: 4 }}>
+                  Based on the {cuisineSampleSize} most recent recipes.
+                </div>
+              )}
               <div className="wc-donut-wrap">
                 <ResponsiveContainer width="100%" height={180}>
                   <PieChart>
                     <Pie
-                      data={categoryBreakdown}
+                      data={cuisineBreakdown}
                       dataKey="count"
                       nameKey="name"
                       innerRadius={52}
                       outerRadius={78}
-                      paddingAngle={categoryBreakdown.length > 1 ? 2 : 0}
+                      paddingAngle={cuisineBreakdown.length > 1 ? 2 : 0}
                       stroke="none"
                     >
-                      {categoryBreakdown.map((entry) => (
-                        <Cell key={entry.name} fill={CATEGORY_COLORS[entry.name]} />
+                      {cuisineBreakdown.map((entry) => (
+                        <Cell key={entry.name} fill={entry.color} />
                       ))}
                     </Pie>
                     <Tooltip
@@ -1785,9 +1768,9 @@ function OverviewTab({ metrics, dark, topRecipes, categoryBreakdown }) {
                 </ResponsiveContainer>
               </div>
               <div className="wc-donut-legend">
-                {categoryBreakdown.map((entry) => (
+                {cuisineBreakdown.map((entry) => (
                   <div className="wc-donut-legend-item" key={entry.name}>
-                    <span className="wc-donut-dot" style={{ background: CATEGORY_COLORS[entry.name] }} />
+                    <span className="wc-donut-dot" style={{ background: entry.color }} />
                     {entry.name} {entry.pct}%
                   </div>
                 ))}
@@ -1795,82 +1778,6 @@ function OverviewTab({ metrics, dark, topRecipes, categoryBreakdown }) {
             </>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function RecipesTab({ recipes, search, setSearch, onAdd, onEdit, confirmDeleteRecipe, setConfirmDeleteRecipe, onDelete }) {
-  return (
-    <div>
-      <div className="wc-topbar">
-        <h1>Recipes</h1>
-        <div className="wc-topbar-actions">
-          <div className="wc-search">
-            <Search size={15} />
-            <input
-              placeholder="Search recipes…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <button className="wc-btn-primary" onClick={onAdd}>
-            <Plus size={16} /> Add recipe
-          </button>
-        </div>
-      </div>
-
-      <div className="wc-table-wrap">
-        {recipes.length === 0 ? (
-          <div className="wc-empty">
-            <ChefHat size={28} />
-            <div>No recipes match yet. Add one to get the list started.</div>
-          </div>
-        ) : (
-          <table className="wc-table">
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Category</th>
-                <th>Cook time</th>
-                <th>Difficulty</th>
-                <th>Servings</th>
-                <th>Added</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {recipes.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.title}</td>
-                  <td>{r.category}</td>
-                  <td>{r.cookTime} min</td>
-                  <td><span className={`wc-pill ${r.difficulty.toLowerCase()}`}>{r.difficulty}</span></td>
-                  <td>{r.servings}</td>
-                  <td>{formatDate(r.dateAdded)}</td>
-                  <td>
-                    {confirmDeleteRecipe === r.id ? (
-                      <div className="wc-confirm-row">
-                        <span>Delete?</span>
-                        <button className="wc-confirm-yes" onClick={() => onDelete(r.id)}>Yes</button>
-                        <button className="wc-confirm-no" onClick={() => setConfirmDeleteRecipe(null)}>No</button>
-                      </div>
-                    ) : (
-                      <div className="wc-row-actions">
-                        <button className="wc-icon-btn" onClick={() => onEdit(r)} aria-label="Edit recipe">
-                          <Pencil size={15} />
-                        </button>
-                        <button className="wc-icon-btn danger" onClick={() => setConfirmDeleteRecipe(r.id)} aria-label="Delete recipe">
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
     </div>
   );
@@ -1951,84 +1858,6 @@ function UsersTab({ users, search, setSearch, onAdd, onEdit, confirmDeleteUser, 
             </tbody>
           </table>
         )}
-      </div>
-    </div>
-  );
-}
-
-function RecipeModal({ recipe, onClose, onSave }) {
-  const [form, setForm] = useState(recipe || {
-    title: '', category: 'Dinner', cookTime: 30, difficulty: 'Easy', servings: 2, saves: 0,
-  });
-
-  function submit(e) {
-    e.preventDefault();
-    if (!form.title.trim()) return;
-    onSave({ ...form, cookTime: Number(form.cookTime), servings: Number(form.servings), saves: Number(form.saves) || 0 });
-  }
-
-  return (
-    <div className="wc-modal-overlay" onClick={onClose}>
-      <div className="wc-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wc-modal-header">
-          <h2 className="wc-serif">{recipe ? 'Edit recipe' : 'Add recipe'}</h2>
-          <button className="wc-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
-        </div>
-        <form onSubmit={submit}>
-          <div className="wc-field">
-            <label>Title</label>
-            <input
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="e.g. Charred Cauliflower Steaks"
-              required
-            />
-          </div>
-          <div className="wc-field-row">
-            <div className="wc-field">
-              <label>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div className="wc-field">
-              <label>Difficulty</label>
-              <select value={form.difficulty} onChange={(e) => setForm({ ...form, difficulty: e.target.value })}>
-                {DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-          </div>
-          <div className="wc-field-row">
-            <div className="wc-field">
-              <label>Cook time (min)</label>
-              <input
-                type="number" min="1"
-                value={form.cookTime}
-                onChange={(e) => setForm({ ...form, cookTime: e.target.value })}
-              />
-            </div>
-            <div className="wc-field">
-              <label>Servings</label>
-              <input
-                type="number" min="1"
-                value={form.servings}
-                onChange={(e) => setForm({ ...form, servings: e.target.value })}
-              />
-            </div>
-          </div>
-          <div className="wc-field">
-            <label>Saves</label>
-            <input
-              type="number" min="0"
-              value={form.saves || 0}
-              onChange={(e) => setForm({ ...form, saves: e.target.value })}
-            />
-          </div>
-          <div className="wc-modal-actions">
-            <button type="button" className="wc-btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="wc-btn-primary"><Check size={15} /> Save recipe</button>
-          </div>
-        </form>
       </div>
     </div>
   );
