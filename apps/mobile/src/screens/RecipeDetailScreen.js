@@ -244,7 +244,7 @@ export default function RecipeDetailScreen({ navigation, route }) {
     <View style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
         <View style={styles.imageWrap}>
-          <Image source={{ uri: recipe.image }} style={styles.image} />
+          <Image source={imageSource(recipe.image)} style={styles.image} />
           <Pressable
             style={[styles.iconBtn, styles.backBtn, { top: insets.top + spacing.sm }]}
             onPress={() => navigation.goBack()}
