@@ -293,12 +293,15 @@ Access token is in memory. Refresh token is in `sessionStorage` (not
    signed-up user with no backend admin account). Not redesigned — they are
    owned by later slices.
 
-## Recommended next admin slice
+## Next admin slices
 
-**Substitutions REST migration** (`feat/admin-substitutions-integration`):
-add a Substitutions tab using the same client + a new `substitutionApi.js`, wired
-to `/api/v1/substitutions`. It reuses this slice's auth and client unchanged, and
-the ingredient service is already there for the source/substitute pickers. After
-that, **Recipes**, then **Users / admin-management** (needs new backend
+**Substitutions REST migration** (`feat/admin-substitutions-integration`) —
+**done.** Added a Substitutions tab with `substitutionApi.js` +
+`substitutionOptions.js` + `SubstitutionsTab.jsx`, wired to
+`/api/v1/substitutions`, reusing this slice's `apiClient` / `backendAuth`
+unchanged and the ingredient service for the name-based source/substitute
+pickers. See [admin-substitutions-integration.md](./admin-substitutions-integration.md).
+
+After that, **Recipes**, then **Users / admin-management** (needs new backend
 endpoints — design first), then **auth hardening** (HttpOnly refresh cookie),
 each removing another piece of Firebase.

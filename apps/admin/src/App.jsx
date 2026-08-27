@@ -3,7 +3,7 @@ import {
   LayoutDashboard, ChefHat, Users, Search, Plus, Pencil, Trash2, X,
   Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle, Flag,
-  Accessibility, ChevronDown, Carrot, ShieldAlert,
+  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -21,6 +21,7 @@ import {
 } from './firestore.js';
 import { useBackendAuth } from './backendAuth.js';
 import IngredientsTab from './IngredientsTab.jsx';
+import SubstitutionsTab from './SubstitutionsTab.jsx';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 
@@ -1063,6 +1064,12 @@ function WeCookedAdminApp() {
                 <Carrot size={17} /> Ingredients
               </button>
               <button
+                className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
+                onClick={() => setTab('substitutions')}
+              >
+                <Replace size={17} /> Substitutions
+              </button>
+              <button
                 className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
                 onClick={() => setTab('users')}
               >
@@ -1121,6 +1128,8 @@ function WeCookedAdminApp() {
             )}
 
             {tab === 'ingredients' && <IngredientsTab />}
+
+            {tab === 'substitutions' && <SubstitutionsTab />}
 
             {tab === 'users' && (
               <UsersTab
