@@ -1,6 +1,12 @@
 // Mock data layer — swap this module out for real API calls later.
 // Every screen imports from here so the app is fully click-through/demoable.
 
+// Local stand-in for recipe photography that isn't in the repo yet. Several
+// recipes below were written to require ./assets/recipe-*.{jpg,webp,png} files
+// that were never committed; until real assets land they point here so the
+// bundle resolves. Recipes that already use a remote image URL are untouched.
+const RECIPE_IMAGE_PLACEHOLDER = require('../../assets/leaf-deco.jpg');
+
 export const chef = {
   name: 'Chef Ninong Ry',
   email: 'ninong.ry.culinary@gmail.com',
@@ -16,7 +22,7 @@ export const recipes = [
     time: '45 min',
     score: 'A',
     tags: ['Main', 'Dinner'],
-    image: require('../../assets/recipe-chicken-adobo.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-chicken-adobo.jpg
     description:
       'The Filipino classic — chicken braised low and slow in soy sauce, vinegar, garlic, and bay leaf.',
     ingredients: [
@@ -77,7 +83,7 @@ export const recipes = [
     time: '40 min',
     score: 'B',
     tags: ['Main', 'High-Protein'],
-    image: require('../../assets/recipe-sisig.webp'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-sisig.webp
     description: 'Sizzling chopped pork seasoned with calamansi and chili, finished with a fried egg.',
     ingredients: [
       '1 1/2 lbs pork belly, boiled and chopped',
@@ -106,7 +112,7 @@ export const recipes = [
     time: '90 min',
     score: 'B',
     tags: ['Main', 'Dinner'],
-    image: require('../../assets/recipe-kare-kare.webp'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-kare-kare.webp
     description: 'Oxtail and vegetables simmered in a rich, nutty peanut sauce, served with bagoong.',
     ingredients: [
       '2 lbs oxtail, cut into pieces',
@@ -197,7 +203,7 @@ export const recipes = [
     time: '15 min',
     score: 'A',
     tags: ['Dessert', 'Quick'],
-    image: require('../../assets/recipe-halo-halo.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-halo-halo.jpg
     description:
       'A colorful layered dessert of shaved ice, sweet beans, and fruits, topped with ube ice cream.',
     ingredients: [
@@ -255,7 +261,7 @@ export const recipes = [
     time: '40 min',
     score: 'A',
     tags: ['Dinner', 'Lunch'],
-    image: require('../../assets/recipe-tinolang-manok.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-tinolang-manok.jpg
     description: 'Ginger-infused chicken soup with green papaya and chili leaves in a light broth.',
     ingredients: [
       '2 lbs chicken, cut into pieces',
@@ -284,7 +290,7 @@ export const recipes = [
     time: '35 min',
     score: 'A',
     tags: ['Main', 'Dinner'],
-    image: require('../../assets/recipe-bicol-express.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-bicol-express.jpg
     description: 'Spicy pork simmered in coconut milk with shrimp paste and green chilies.',
     ingredients: [
       '1 1/2 lbs pork belly, sliced',
@@ -313,7 +319,7 @@ export const recipes = [
     time: '30 min',
     score: 'A',
     tags: ['Vegan', 'Vegetarian', 'Quick'],
-    image: require('../../assets/recipe-pinakbet.png'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-pinakbet.png
     description: 'A vibrant medley of native vegetables — squash, okra, and eggplant — simmered together.',
     ingredients: [
       '2 cups squash, cubed',
@@ -399,7 +405,7 @@ export const recipes = [
     time: '25 min',
     score: 'A',
     tags: ['Vegan', 'Vegetarian', 'Quick'],
-    image: require('../../assets/recipe-ginataang-gulay.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-ginataang-gulay.jpg
     description: 'Squash and string beans simmered in creamy coconut milk with garlic and ginger.',
     ingredients: [
       '2 cups squash, cubed',
@@ -513,7 +519,7 @@ export const recipes = [
     time: '90 min',
     score: 'B',
     tags: ['Main', 'Dinner'],
-    image: require('../../assets/recipe-beef-caldereta.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-beef-caldereta.jpg
     description: 'A rich beef stew simmered in tomato sauce with liver spread, potatoes, carrots, and olives.',
     ingredients: [
       '2 lbs beef chuck, cubed',
@@ -689,7 +695,7 @@ export const recipes = [
     time: '25 min',
     score: 'A',
     tags: ['Dessert', 'Quick'],
-    image: require('../../assets/recipe-turon.jpg'),
+    image: RECIPE_IMAGE_PLACEHOLDER, // TODO: add assets/recipe-turon.jpg
     description: 'Crispy fried banana spring rolls coated in caramelized brown sugar.',
     ingredients: [
       '6 saba bananas, halved lengthwise',

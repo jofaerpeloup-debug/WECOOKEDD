@@ -13,7 +13,7 @@ import RecipeDetailScreen from '../screens/RecipeDetailScreen';
 import CookModeScreen from '../screens/CookModeScreen';
 import ShoppingListScreen from '../screens/ShoppingListScreen';
 import ProfileScreen from '../screens/ProfileScreen';
-import AccountDetailsScreen from '../screens/AccountDetailsScreen';
+import AccountDetailsScreen from '../screens/AccountDetailScreen';
 import CommunityScreen from '../screens/CommunityScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SecurityScreen from '../screens/SecurityScreen';
