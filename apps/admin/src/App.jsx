@@ -3,7 +3,7 @@ import {
   LayoutDashboard, ChefHat, Users, Search, Plus, Pencil, Trash2, X,
   Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle, Flag,
-  Accessibility, ChevronDown,
+  Accessibility, ChevronDown, Carrot, ShieldAlert,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -19,6 +19,8 @@ import {
   subscribeRecipes, subscribeUsers, saveRecipeDoc, deleteRecipeDoc,
   saveUserDoc, deleteUserDoc, submitReportDoc, seedCollection,
 } from './firestore.js';
+import { useBackendAuth } from './backendAuth.js';
+import IngredientsTab from './IngredientsTab.jsx';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 
@@ -118,13 +120,17 @@ async function safeDelete(key, shared = false) {
 }
 
 function WeCookedAdminApp() {
-  const [loading, setLoading] = useState(true);
+  // Backend local auth is the authoritative gate for this dashboard and for
+  // every WeCooked REST API call. Firebase auth is kept alongside it, best
+  // effort, only so the not-yet-migrated Firestore tabs (Overview / Recipes /
+  // Users) keep working — see docs/architecture/admin-api-integration.md.
+  const backend = useBackendAuth();
+
   const [tab, setTab] = useState('overview');
   const [recipes, setRecipes] = useState([]);
   const [users, setUsers] = useState([]);
 
   const [account, setAccount] = useState(null);
-  const [authChecked, setAuthChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -160,36 +166,26 @@ function WeCookedAdminApp() {
   }
 
   useEffect(() => {
+    // Firebase auth runs in the background purely for the legacy Firestore
+    // tabs; the dashboard gate itself is driven by backend auth, not this.
     const unsub = auth.onAuthStateChanged((user) => {
       setAccount(toAccount(user));
       setAuthenticated(!!user);
-      setAuthChecked(true);
     });
     return unsub;
   }, []);
 
   useEffect(() => {
-    if (!authenticated || !account || !account.emailVerified) {
-      setLoading(true);
-      return;
-    }
-    let recipesLoaded = false;
-    let usersLoaded = false;
-    const checkLoaded = () => {
-      if (recipesLoaded && usersLoaded) setLoading(false);
-    };
-    const unsubRecipes = subscribeRecipes((list) => {
-      setRecipes(list);
-      recipesLoaded = true;
-      checkLoaded();
-    });
-    const unsubUsers = subscribeUsers((list) => {
-      setUsers(list);
-      usersLoaded = true;
-      checkLoaded();
-    });
+    // Firestore-backed tabs (Overview / Recipes / Users) still need a Firebase
+    // session. Without one (a backend-only admin) skip the subscriptions — those
+    // tabs then render their existing empty states. This deliberately never
+    // gates the dashboard render: a slow or unavailable Firestore must not block
+    // the REST-backed Ingredients tab.
+    if (!authenticated) return undefined;
+    const unsubRecipes = subscribeRecipes(setRecipes);
+    const unsubUsers = subscribeUsers(setUsers);
     return () => { unsubRecipes(); unsubUsers(); };
-  }, [authenticated, account]);
+  }, [authenticated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -271,11 +267,26 @@ function WeCookedAdminApp() {
   }
 
   async function createAccount({ name, email, password }) {
+    // Sign-up remains a Firebase-only flow for now. Backend user provisioning
+    // (and promotion to the "admin" role) is a deferred, out-of-scope slice —
+    // an account created here cannot reach the dashboard until it exists in
+    // the backend with role "admin".
     await signUp(name, email, password);
   }
 
   async function signIn({ email, password }) {
-    await logIn(email, password);
+    // Backend login is authoritative — it throws on bad credentials, a
+    // suspended account, or the API being unreachable, and the sign-in form
+    // surfaces that message.
+    await backend.login(email, password);
+    // Best effort: mirror the sign-in to Firebase so the legacy Firestore
+    // tabs keep working for admins whose credentials also exist there. A
+    // failure here is expected for backend-only admins and must not block.
+    try {
+      await logIn(email, password);
+    } catch (err) {
+      console.warn('Firebase sign-in unavailable (legacy tabs will be read-only):', err?.code || err);
+    }
     return true;
   }
 
@@ -284,7 +295,12 @@ function WeCookedAdminApp() {
   }
 
   async function signOut() {
-    await logOutUser();
+    await backend.logout();
+    try {
+      await logOutUser();
+    } catch {
+      // No Firebase session to end — fine.
+    }
     setProfileMenuOpen(false);
   }
 
@@ -312,7 +328,7 @@ function WeCookedAdminApp() {
   async function submitReport({ description, includeContact }) {
     await submitReportDoc({
       description,
-      contactEmail: includeContact ? account.email : null,
+      contactEmail: includeContact ? (identity?.email ?? null) : null,
       submittedAt: new Date().toISOString(),
     });
   }
@@ -320,6 +336,16 @@ function WeCookedAdminApp() {
   function updateDisplayPrefs(patch) {
     setDisplayPrefs((prev) => ({ ...prev, ...patch }));
   }
+
+  // Identity shown in the sidebar / menus. Prefer the Firebase account object
+  // (it carries the fields those Firebase-specific modals still expect); fall
+  // back to the backend user so a backend-only admin still gets a profile menu
+  // and a working "Log out".
+  const identity =
+    account ||
+    (backend.user
+      ? { name: backend.user.name, email: backend.user.email, emailVerified: true }
+      : null);
 
   return (
     <div className={`wc-admin ${displayPrefs.theme === 'dark' ? 'wc-dark' : ''} ${displayPrefs.reduceMotion ? 'wc-reduce-motion' : ''}`}>
@@ -996,25 +1022,15 @@ function WeCookedAdminApp() {
 
       {resetOobCode ? (
         <ResetPasswordScreen oobCode={resetOobCode} onDone={clearResetLink} />
-      ) : !authChecked ? (
+      ) : backend.status === 'checking' ? (
         <div className="wc-loading">
           <Leaf size={26} />
           <span>Loading dashboard…</span>
         </div>
-      ) : !authenticated ? (
+      ) : backend.status !== 'authenticated' ? (
         <AuthScreen onCreateAccount={createAccount} onSignIn={signIn} onForgotPassword={forgotPassword} />
-      ) : !account.emailVerified ? (
-        <VerifyEmailScreen
-          account={account}
-          onResend={resendVerificationEmail}
-          onCheckAgain={checkEmailVerified}
-          onSignOut={signOut}
-        />
-      ) : loading ? (
-        <div className="wc-loading">
-          <Leaf size={26} />
-          <span>Loading dashboard…</span>
-        </div>
+      ) : backend.user?.role !== 'admin' ? (
+        <AccessDeniedScreen user={backend.user} onSignOut={signOut} />
       ) : (
         <>
           <aside className="wc-sidebar">
@@ -1041,6 +1057,12 @@ function WeCookedAdminApp() {
                 <ChefHat size={17} /> Recipes
               </button>
               <button
+                className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
+                onClick={() => setTab('ingredients')}
+              >
+                <Carrot size={17} /> Ingredients
+              </button>
+              <button
                 className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
                 onClick={() => setTab('users')}
               >
@@ -1049,7 +1071,7 @@ function WeCookedAdminApp() {
             </nav>
             <div className="wc-sidebar-footer">
               <ProfileMenu
-                account={account}
+                account={identity}
                 open={profileMenuOpen}
                 onToggle={() => setProfileMenuOpen((o) => !o)}
                 onClose={() => setProfileMenuOpen(false)}
@@ -1059,14 +1081,16 @@ function WeCookedAdminApp() {
                 onOpenReport={() => { setReportOpen(true); setProfileMenuOpen(false); }}
                 onOpenDisplay={() => { setDisplayOpen(true); setProfileMenuOpen(false); }}
               />
-              {recipes.length === 0 && users.length === 0 && (
+              {account && recipes.length === 0 && users.length === 0 && (
                 <button className="wc-reset-btn" onClick={resetSampleData}>
                   Load sample data
                 </button>
               )}
-              <button className="wc-reset-btn" onClick={() => setConfirmDeleteAccount(true)}>
-                Delete admin account
-              </button>
+              {account && (
+                <button className="wc-reset-btn" onClick={() => setConfirmDeleteAccount(true)}>
+                  Delete admin account
+                </button>
+              )}
             </div>
           </aside>
 
@@ -1095,6 +1119,8 @@ function WeCookedAdminApp() {
                 }}
               />
             )}
+
+            {tab === 'ingredients' && <IngredientsTab />}
 
             {tab === 'users' && (
               <UsersTab
@@ -1130,7 +1156,7 @@ function WeCookedAdminApp() {
 
           {settingsOpen && (
             <SettingsModal
-              account={account}
+              account={identity}
               onClose={() => setSettingsOpen(false)}
               onUpdateProfile={updateProfile}
               onChangePassword={changePassword}
@@ -1138,7 +1164,7 @@ function WeCookedAdminApp() {
           )}
           {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
           {reportOpen && (
-            <ReportModal account={account} onClose={() => setReportOpen(false)} onSubmit={submitReport} />
+            <ReportModal account={identity} onClose={() => setReportOpen(false)} onSubmit={submitReport} />
           )}
           {displayOpen && (
             <DisplayModal
@@ -2344,6 +2370,35 @@ function AuthScreen({ onCreateAccount, onSignIn, onForgotPassword }) {
           )}
         </div>
 
+      </div>
+    </div>
+  );
+}
+
+// Shown when the backend sign-in succeeded but the account's current DB role
+// is not "admin". Admin access is derived entirely from backend user data —
+// never from a client-supplied value.
+function AccessDeniedScreen({ user, onSignOut }) {
+  return (
+    <div className="wc-auth-wrap">
+      <div className="wc-auth-bg" />
+      <div className="wc-auth-tagline">
+        <div className="wc-auth-visual-title wc-serif">Good food, well organized.</div>
+        <div className="wc-auth-visual-sub">Manage WeCooked&rsquo;s catalog and members from one place.</div>
+      </div>
+      <div className="wc-auth-panel">
+        <div className="wc-auth-badge">
+          <ShieldAlert size={20} color="#4A5D4E" />
+        </div>
+        <div className="wc-auth-title wc-serif">Admin access only</div>
+        <div className="wc-auth-sub">
+          You&rsquo;re signed in as <strong>{user?.email}</strong>, but this dashboard is
+          limited to WeCooked administrators. Ask an existing admin to upgrade this
+          account, then sign in again.
+        </div>
+        <button type="button" className="wc-btn-primary wc-auth-submit" onClick={onSignOut}>
+          Sign out
+        </button>
       </div>
     </div>
   );
