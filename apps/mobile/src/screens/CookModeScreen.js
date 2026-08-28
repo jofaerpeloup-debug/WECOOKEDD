@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, TextInput, Alert } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
+import RecipeImage from '../components/RecipeImage';
 import { loadJSON, saveJSON } from '../utils/storage';
-import { imageSource } from '../utils/image';
+import { instructionsToSteps } from '../utils/recipe';
 
 const TABS = [
   { key: 'ingredients', label: 'Ingredients' },
@@ -14,7 +15,11 @@ const TABS = [
 ];
 
 export default function CookModeScreen({ navigation, route }) {
-  const { recipe, ingredients, servings } = route.params;
+  const { recipe, ingredients, servings, recipeSource } = route.params;
+  // Backend recipes arrive as PublicRecipe (ordered `instructions: string[]`,
+  // `imageUrl`); legacy mock recipes carry `steps: [{title,description}]` and
+  // `image`. A view adapter bridges the two — no shape is silently mutated.
+  const isApi = recipeSource === 'api';
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
   const [tab, setTab] = useState('steps');
@@ -39,7 +44,11 @@ export default function CookModeScreen({ navigation, route }) {
     saveJSON(storageKey, { notes, cooked });
   }, [notes, cooked, storageKey]);
 
-  const steps = recipe.steps || [];
+  const steps = useMemo(
+    () => (isApi ? instructionsToSteps(recipe.instructions) : recipe.steps || []),
+    [isApi, recipe]
+  );
+  const imageValue = recipe.imageUrl ?? recipe.image;
 
   const markCooked = () => {
     setCooked(true);
@@ -99,7 +108,7 @@ export default function CookModeScreen({ navigation, route }) {
                     </View>
                     {i < steps.length - 1 && <View style={styles.stepLine} />}
                   </View>
-                  <Image source={imageSource(recipe.image)} style={styles.stepThumb} />
+                  <RecipeImage source={imageValue} style={styles.stepThumb} />
                   <View style={styles.stepBody}>
                     <Text style={styles.stepTitle}>{step.title}</Text>
                     <Text style={styles.stepDesc}>{step.description}</Text>

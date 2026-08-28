@@ -1,15 +1,37 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, Share, Alert } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Image,
+  Pressable,
+  Share,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
+import RecipeImage from '../components/RecipeImage';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
 import { imageSource } from '../utils/image';
+import { ApiError } from '../api/client';
+import { getRecipe } from '../api/recipeService';
+import { getRecipeErrorMessage } from '../api/recipeErrors';
+import { difficultyLabel } from '../api/recipeOptions';
+import {
+  formatMinutes,
+  ingredientDisplayText,
+  ingredientNames,
+  recipeBadges,
+  totalTimeMinutes,
+} from '../utils/recipe';
 
 const BASE_SERVINGS = 4;
 const MIN_SERVINGS = 1;
@@ -183,8 +205,350 @@ function difficultyFromScore(score) {
   return 'Hard';
 }
 
+// -------------------------------------------------------------------------
+// Screen dispatcher: an explicit `recipeSource` flag chooses the render path.
+// 'api'    -> a backend PublicRecipe reached from Home / Discover.
+// anything -> a legacy mock recipe object reached from Saved / other deferred
+//             surfaces. Legacy objects are NEVER pushed through the backend
+//             contract and NEVER trigger an API request. This split is
+//             transitional and goes away when Favorites / Community migrate.
+// -------------------------------------------------------------------------
 export default function RecipeDetailScreen({ navigation, route }) {
-  const { recipe } = route.params;
+  const params = route.params || {};
+
+  if (params.recipeSource === 'api') {
+    // `key` forces a full remount if the route's recipeId ever changes in place
+    // (e.g. a future "related recipe" tap or a deep link while already on a
+    // detail screen), so no fetched/notFound/servings state from the previous
+    // recipe can leak into the next one.
+    return (
+      <ApiRecipeDetailContainer
+        key={params.recipeId}
+        navigation={navigation}
+        recipeId={params.recipeId}
+        initialRecipe={params.initialRecipe || null}
+      />
+    );
+  }
+
+  return <LegacyRecipeDetail navigation={navigation} recipe={params.recipe} />;
+}
+
+// ---------------------------- API mode ----------------------------------
+
+function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
+  const { colors, shadow } = useTheme();
+  const styles = makeStyles(colors, shadow);
+  const insets = useSafeAreaInsets();
+
+  const [fetched, setFetched] = useState(null);
+  const [notFound, setNotFound] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
+  const [nonce, setNonce] = useState(0);
+  const genRef = useRef(0);
+
+  // Fetch the authoritative recipe. Guarded against unmount, a stale response,
+  // and a recipe-id change (each firing bumps the generation).
+  useEffect(() => {
+    let cancelled = false;
+    const gen = ++genRef.current;
+    setFetchError(null);
+    setNotFound(false);
+    (async () => {
+      try {
+        const fresh = await getRecipe(recipeId);
+        if (cancelled || gen !== genRef.current) return;
+        setFetched(fresh);
+      } catch (err) {
+        if (cancelled || gen !== genRef.current) return;
+        if (err instanceof ApiError && (err.isNotFound || err.code === 'RECIPE_NOT_FOUND')) {
+          setNotFound(true);
+        } else {
+          setFetchError(getRecipeErrorMessage(err));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recipeId, nonce]);
+
+  const retry = () => setNonce((n) => n + 1);
+  const recipe = fetched || initialRecipe;
+
+  if (notFound) {
+    return (
+      <RecipeDetailNotice
+        navigation={navigation}
+        styles={styles}
+        colors={colors}
+        insets={insets}
+        icon="sad-outline"
+        message="This recipe isn't available anymore."
+      />
+    );
+  }
+
+  if (!recipe) {
+    // Cold entry (no list object to paint) — still loading, or the fetch
+    // failed with nothing to fall back to.
+    if (fetchError) {
+      return (
+        <RecipeDetailNotice
+          navigation={navigation}
+          styles={styles}
+          colors={colors}
+          insets={insets}
+          icon="cloud-offline-outline"
+          message={fetchError}
+          onRetry={retry}
+        />
+      );
+    }
+    return (
+      <View style={[styles.root, styles.centerScreen]}>
+        <ActivityIndicator color={colors.sageDeep} />
+      </View>
+    );
+  }
+
+  return (
+    <ApiRecipeDetail
+      navigation={navigation}
+      recipe={recipe}
+      // Only show the inline "couldn't refresh" banner while we're still on the
+      // list object; once the authoritative copy is in, there's nothing to warn
+      // about.
+      refreshError={fetched ? null : fetchError}
+      onRetryRefresh={retry}
+    />
+  );
+}
+
+function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
+  const { colors, shadow } = useTheme();
+  const styles = makeStyles(colors, shadow);
+  const insets = useSafeAreaInsets();
+  const { addIngredients } = useShoppingList();
+
+  const baseServings = recipe.servings > 0 ? recipe.servings : 1;
+  const maxServings = Math.max(MAX_SERVINGS, baseServings);
+  const [servings, setServings] = useState(baseServings);
+
+  const badges = recipeBadges(recipe);
+  const totalMins = totalTimeMinutes(recipe);
+
+  const ingredientLines = useMemo(
+    () =>
+      (recipe.ingredients || [])
+        .map((entry) =>
+          ingredientDisplayText(entry, { selectedServings: servings, baseServings })
+        )
+        .filter(Boolean),
+    [recipe.ingredients, servings, baseServings]
+  );
+
+  const shoppingNames = useMemo(() => ingredientNames(recipe), [recipe]);
+
+  const stats = [
+    { icon: 'time-outline', value: formatMinutes(totalMins), label: 'Total time' },
+    { icon: 'stats-chart-outline', value: difficultyLabel(recipe.difficulty), label: 'Difficulty' },
+    { icon: 'people-outline', value: String(servings), label: 'Servings' },
+  ];
+
+  const share = () => {
+    Share.share({
+      title: recipe.title,
+      message: `${recipe.title} — ${recipe.description}`,
+    }).catch(() => {});
+  };
+
+  const openMore = () => {
+    Alert.alert(recipe.title, undefined, [
+      { text: 'Share', onPress: share },
+      { text: 'Report Recipe', style: 'destructive' },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const startCooking = () => {
+    navigation.navigate('CookMode', {
+      recipeSource: 'api',
+      recipe,
+      ingredients: ingredientLines,
+      servings,
+    });
+  };
+
+  // Still LOCAL (ShoppingListContext) — Shopping List API is a later slice.
+  // Feeds clean structured names, never the legacy string parser.
+  const addToShoppingList = () => {
+    addIngredients(recipe.title, shoppingNames);
+    navigation.navigate('List');
+  };
+
+  const decrementServings = () => setServings((s) => Math.max(MIN_SERVINGS, s - 1));
+  const incrementServings = () => setServings((s) => Math.min(maxServings, s + 1));
+
+  return (
+    <View style={styles.root}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+        <View style={styles.imageWrap}>
+          <RecipeImage source={recipe.imageUrl} style={styles.image} />
+          <Pressable
+            style={[styles.iconBtn, styles.backBtn, { top: insets.top + spacing.sm }]}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={20} color="#fff" />
+          </Pressable>
+          <View style={[styles.topRightBtns, { top: insets.top + spacing.sm }]}>
+            <Pressable style={styles.iconBtn} onPress={openMore}>
+              <Ionicons name="ellipsis-horizontal" size={18} color="#fff" />
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.body}>
+          {refreshError ? (
+            <Pressable style={styles.inlineBanner} onPress={onRetryRefresh}>
+              <Ionicons name="refresh" size={14} color={colors.error} />
+              <Text style={styles.inlineBannerText}>{refreshError} Tap to retry.</Text>
+            </Pressable>
+          ) : null}
+
+          {badges.length > 0 && (
+            <View style={styles.tagRow}>
+              {badges.map((label) => (
+                <Badge key={label} label={label} tone="sage" />
+              ))}
+            </View>
+          )}
+          <Text style={styles.title}>{recipe.title}</Text>
+          <Text style={styles.description}>{recipe.description}</Text>
+
+          <View style={styles.statsRow}>
+            {stats.map((s, i) => (
+              <React.Fragment key={s.label}>
+                {i > 0 && <View style={styles.statDivider} />}
+                <View style={styles.statItem}>
+                  <View style={styles.statTop}>
+                    <Ionicons name={s.icon} size={14} color={colors.sageDeep} />
+                    <Text style={styles.statValue}>{s.value}</Text>
+                  </View>
+                  <Text style={styles.statLabel}>{s.label}</Text>
+                </View>
+              </React.Fragment>
+            ))}
+          </View>
+          <Text style={styles.subStat}>
+            Prep {formatMinutes(recipe.prepTimeMinutes)} · Cook {formatMinutes(recipe.cookTimeMinutes)}
+          </Text>
+
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionLabel}>Ingredients</Text>
+            <View style={styles.stepper}>
+              <Pressable
+                onPress={decrementServings}
+                hitSlop={8}
+                style={styles.stepperBtn}
+                disabled={servings <= MIN_SERVINGS}
+              >
+                <Ionicons
+                  name="remove"
+                  size={16}
+                  color={servings <= MIN_SERVINGS ? colors.inkFaint : colors.error}
+                />
+              </Pressable>
+              <Text style={styles.stepperValue}>{servings}</Text>
+              <Pressable
+                onPress={incrementServings}
+                hitSlop={8}
+                style={styles.stepperBtn}
+                disabled={servings >= maxServings}
+              >
+                <Ionicons
+                  name="add"
+                  size={16}
+                  color={servings >= maxServings ? colors.inkFaint : colors.error}
+                />
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.ingredientsCard}>
+            {ingredientLines.length === 0 ? (
+              <Text style={styles.mutedText}>No ingredients listed.</Text>
+            ) : (
+              ingredientLines.map((line, i) => (
+                <View key={i} style={styles.ingredientRow}>
+                  <View style={styles.bullet} />
+                  <Text style={styles.ingredientText}>{line}</Text>
+                </View>
+              ))
+            )}
+          </View>
+
+          <Text style={styles.sectionLabel}>Instructions</Text>
+          <View style={styles.instructionsCard}>
+            {(recipe.instructions || []).length === 0 ? (
+              <Text style={styles.mutedText}>No instructions listed.</Text>
+            ) : (
+              recipe.instructions.map((step, i) => (
+                <View key={i} style={styles.instructionRow}>
+                  <View style={styles.instructionIndex}>
+                    <Text style={styles.instructionIndexText}>{i + 1}</Text>
+                  </View>
+                  <Text style={styles.instructionText}>{step}</Text>
+                </View>
+              ))
+            )}
+          </View>
+
+          <View style={styles.ctaRow}>
+            <Button title="Start Cooking" variant="primary" style={{ flex: 1 }} onPress={startCooking} />
+            <Pressable style={styles.shareBtn} onPress={share}>
+              <Ionicons name="share-social-outline" size={19} color={colors.ink} />
+            </Pressable>
+          </View>
+
+          <Button
+            title="Add All to Shopping List"
+            variant="outline"
+            style={{ marginTop: spacing.md }}
+            onPress={addToShoppingList}
+          />
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function RecipeDetailNotice({ navigation, styles, colors, insets, icon, message, onRetry }) {
+  return (
+    <View style={[styles.root, styles.centerScreen]}>
+      <Pressable
+        style={[styles.iconBtn, styles.noticeBackBtn, { top: insets.top + spacing.sm }]}
+        onPress={() => navigation.goBack()}
+      >
+        <Ionicons name="arrow-back" size={20} color={colors.ink} />
+      </Pressable>
+      <Ionicons name={icon} size={40} color={colors.inkFaint} />
+      <Text style={styles.noticeText}>{message}</Text>
+      <View style={styles.noticeActions}>
+        {onRetry ? (
+          <Button title="Try Again" variant="primary" onPress={onRetry} fullWidth={false} />
+        ) : null}
+        <Button title="Go Back" variant="outline" onPress={() => navigation.goBack()} fullWidth={false} />
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------- Legacy mock mode -------------------------------
+// Renders an existing mock recipe object reached from Saved / other deferred
+// screens. Behavior is unchanged from before this slice — do not extend it.
+
+function LegacyRecipeDetail({ navigation, recipe }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
   const insets = useSafeAreaInsets();
@@ -428,6 +792,16 @@ export default function RecipeDetailScreen({ navigation, route }) {
 function makeStyles(colors, shadow) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
+    centerScreen: { alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.md },
+    noticeBackBtn: { position: 'absolute', left: spacing.lg, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.hairline },
+    noticeText: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.md,
+      color: colors.inkSoft,
+      textAlign: 'center',
+      marginTop: spacing.sm,
+    },
+    noticeActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
     imageWrap: { position: 'relative' },
     image: { width: '100%', height: 300 },
     iconBtn: {
@@ -446,7 +820,23 @@ function makeStyles(colors, shadow) {
       gap: spacing.sm,
     },
     body: { padding: spacing.lg },
-    tagRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+    inlineBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.errorBg,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      marginBottom: spacing.md,
+    },
+    inlineBannerText: {
+      flex: 1,
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.xs,
+      color: colors.error,
+    },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
     title: {
       fontFamily: typography.display.fontFamily,
       fontSize: 26,
@@ -468,7 +858,7 @@ function makeStyles(colors, shadow) {
       borderWidth: 1,
       borderColor: colors.hairline,
       paddingVertical: spacing.md,
-      marginBottom: spacing.xxl,
+      marginBottom: spacing.sm,
     },
     statDivider: { width: 1, backgroundColor: colors.hairline, marginVertical: 2 },
     statItem: { flex: 1, alignItems: 'center', gap: 4 },
@@ -482,6 +872,13 @@ function makeStyles(colors, shadow) {
       fontFamily: typography.body.fontFamily,
       fontSize: 10,
       color: colors.inkFaint,
+    },
+    subStat: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginBottom: spacing.xxl,
+      marginTop: spacing.xs,
     },
     sectionHeaderRow: {
       flexDirection: 'row',
@@ -528,8 +925,46 @@ function makeStyles(colors, shadow) {
     ingredientRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 6 },
     bullet: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.sageDeep },
     ingredientText: {
+      flex: 1,
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    mutedText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkFaint,
+    },
+    instructionsCard: {
+      backgroundColor: colors.paper,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      padding: spacing.lg,
+      marginTop: spacing.md,
+      marginBottom: spacing.xxl,
+      gap: spacing.md,
+    },
+    instructionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+    instructionIndex: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 1,
+    },
+    instructionIndexText: {
+      fontFamily: typography.body.bold,
+      fontSize: typography.sizes.xs,
+      color: colors.onAccent,
+    },
+    instructionText: {
+      flex: 1,
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      lineHeight: 21,
       color: colors.ink,
     },
     nutritionCard: {

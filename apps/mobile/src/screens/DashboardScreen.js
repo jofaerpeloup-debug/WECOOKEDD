@@ -1,56 +1,148 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, TextInput } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Pressable,
+  TextInput,
+  ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
-import { recipes } from '../data/mockData';
-import { useSavedRecipes } from '../context/SavedRecipesContext';
-import { imageSource } from '../utils/image';
+import RecipeImage from '../components/RecipeImage';
+import { listRecipes } from '../api/recipeService';
+import { getRecipeErrorMessage } from '../api/recipeErrors';
+import { recipeTimeLabel } from '../utils/recipe';
 
-const CATEGORIES = [
-  { key: 'Breakfast', label: 'Breakfast', icon: 'sunny-outline' },
-  { key: 'Lunch', label: 'Lunch', icon: 'restaurant-outline' },
-  { key: 'Dinner', label: 'Dinner', icon: 'moon-outline' },
-  { key: 'Dessert', label: 'Desserts', icon: 'ice-cream-outline' },
-  { key: 'Vegies', label: 'Vegies', icon: 'leaf-outline' },
+// Each shortcut jumps to Discover with an EXPLICIT backend-supported initial
+// filter. The backend has no meal-type/curation concept, so the old
+// Breakfast/Lunch/Dinner/Dessert/Vegies chips are gone (see
+// docs/architecture/mobile-recipes-integration.md).
+const BROWSE_SHORTCUTS = [
+  { key: 'filipino', label: 'Filipino', icon: 'restaurant-outline' },
+  { key: 'easy', label: 'Easy', icon: 'flash-outline' },
+  { key: 'vegetarian', label: 'Vegetarian', icon: 'leaf-outline' },
+  { key: 'vegan', label: 'Vegan', icon: 'nutrition-outline' },
 ];
 
-const VEGIE_TAGS = ['Vegan', 'Vegetarian'];
+const SEARCH_DEBOUNCE_MS = 300;
+const LATEST_LIMIT = 6;
+const SEARCH_LIMIT = 20;
 
 export default function DashboardScreen({ navigation }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
-  const { isSaved, toggleSaved } = useSavedRecipes();
-  const [category, setCategory] = useState(null);
+
   const [query, setQuery] = useState('');
-  const searching = query.trim().length > 0;
+  const trimmed = query.trim();
+  const searching = trimmed.length > 0;
 
-  const featured = useMemo(() => {
-    if (searching) {
-      const q = query.trim().toLowerCase();
-      return recipes.filter(
-        (r) =>
-          r.title.toLowerCase().includes(q) ||
-          r.ingredients.some((ing) => ing.toLowerCase().includes(q))
-      );
-    }
-    if (!category) return recipes.slice(0, 6);
-    if (category === 'Vegies') {
-      return recipes.filter((r) => r.tags.some((t) => VEGIE_TAGS.includes(t)));
-    }
-    return recipes.filter((r) => r.tags.includes(category));
-  }, [query, searching, category]);
+  const [latest, setLatest] = useState([]);
+  const [latestLoading, setLatestLoading] = useState(true);
+  const [latestError, setLatestError] = useState(null);
 
-  const selectCategory = (key) => {
-    setQuery('');
-    setCategory((prev) => (prev === key ? null : key));
+  const [results, setResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const [searchNonce, setSearchNonce] = useState(0);
+
+  // Monotonic request generations — a slower earlier response is discarded once
+  // a newer request (query change / retry / unmount) supersedes it.
+  const mountedRef = useRef(true);
+  const latestGenRef = useRef(0);
+  const searchGenRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadLatest = useCallback(async () => {
+    const gen = ++latestGenRef.current;
+    setLatestLoading(true);
+    setLatestError(null);
+    try {
+      const { recipes } = await listRecipes({ sort: 'newest', limit: LATEST_LIMIT });
+      if (!mountedRef.current || gen !== latestGenRef.current) return;
+      setLatest(recipes);
+    } catch (err) {
+      if (!mountedRef.current || gen !== latestGenRef.current) return;
+      setLatestError(getRecipeErrorMessage(err));
+    } finally {
+      if (mountedRef.current && gen === latestGenRef.current) setLatestLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLatest();
+  }, [loadLatest]);
+
+  // Debounced search. Backend `search` matches TITLE or DESCRIPTION only — not
+  // ingredients, not tags. The generation guard makes a late response harmless.
+  useEffect(() => {
+    if (!searching) {
+      searchGenRef.current += 1; // abandon any pending/in-flight search
+      setResults([]);
+      setSearchError(null);
+      setSearchLoading(false);
+      return undefined;
+    }
+
+    setSearchLoading(true);
+    setSearchError(null);
+
+    const timer = setTimeout(async () => {
+      const gen = ++searchGenRef.current;
+      try {
+        const { recipes } = await listRecipes({ search: trimmed, page: 1, limit: SEARCH_LIMIT });
+        if (!mountedRef.current || gen !== searchGenRef.current) return;
+        setResults(recipes);
+      } catch (err) {
+        if (!mountedRef.current || gen !== searchGenRef.current) return;
+        setSearchError(getRecipeErrorMessage(err));
+      } finally {
+        if (mountedRef.current && gen === searchGenRef.current) setSearchLoading(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searching, trimmed, searchNonce]);
+
+  const openRecipe = (recipe) => {
+    navigation.navigate('RecipeDetail', {
+      recipeSource: 'api',
+      recipeId: recipe.id,
+      initialRecipe: recipe,
+    });
   };
 
-  const onSearchChange = (text) => {
-    setQuery(text);
-    if (text.trim()) setCategory(null);
-  };
+  const renderCard = (recipe) => (
+    <Pressable key={recipe.id} style={styles.card} onPress={() => openRecipe(recipe)}>
+      <RecipeImage source={recipe.imageUrl} style={styles.cardImage} />
+      <Text style={styles.cardTitle} numberOfLines={2}>
+        {recipe.title}
+      </Text>
+      <View style={styles.cardMeta}>
+        <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
+        <Text style={styles.cardTime}>{recipeTimeLabel(recipe)}</Text>
+      </View>
+    </Pressable>
+  );
+
+  const renderErrorBlock = (message, onRetry) => (
+    <View style={styles.stateBlock}>
+      <Text style={styles.errorText}>{message}</Text>
+      <Pressable style={styles.retryBtn} onPress={onRetry} hitSlop={8}>
+        <Ionicons name="refresh" size={14} color={colors.sageDeep} />
+        <Text style={styles.retryText}>Retry</Text>
+      </Pressable>
+    </View>
+  );
 
   return (
     <View style={styles.root}>
@@ -64,10 +156,10 @@ export default function DashboardScreen({ navigation }) {
             <Ionicons name="search" size={17} color={colors.inkFaint} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search recipes, ingredients..."
+              placeholder="Search recipes by name..."
               placeholderTextColor={colors.inkFaint}
               value={query}
-              onChangeText={onSearchChange}
+              onChangeText={setQuery}
               autoCapitalize="none"
               autoComplete="off"
               returnKeyType="search"
@@ -80,10 +172,36 @@ export default function DashboardScreen({ navigation }) {
           </View>
         </View>
 
-        {!searching && (
+        {searching ? (
           <>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>Categories</Text>
+              <Text style={styles.sectionLabel}>Results for “{trimmed}”</Text>
+              {searchLoading && results.length > 0 && (
+                <ActivityIndicator size="small" color={colors.sageDeep} />
+              )}
+            </View>
+            {searchLoading && results.length === 0 ? (
+              <View style={styles.stateBlock}>
+                <ActivityIndicator color={colors.sageDeep} />
+              </View>
+            ) : searchError ? (
+              renderErrorBlock(searchError, () => setSearchNonce((n) => n + 1))
+            ) : results.length === 0 ? (
+              <Text style={styles.emptyText}>No recipes match “{trimmed}”.</Text>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.cardRow}
+              >
+                {results.map(renderCard)}
+              </ScrollView>
+            )}
+          </>
+        ) : (
+          <>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionLabel}>Browse</Text>
               <Pressable onPress={() => navigation.navigate('Discover')}>
                 <Text style={styles.seeAll}>See all</Text>
               </Pressable>
@@ -91,76 +209,44 @@ export default function DashboardScreen({ navigation }) {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.categoryRow}
+              contentContainerStyle={styles.browseRow}
             >
-              {CATEGORIES.map((c) => {
-                const active = category === c.key;
-                return (
-                  <Pressable
-                    key={c.key}
-                    onPress={() => selectCategory(c.key)}
-                    style={[styles.categoryChip, active && styles.categoryChipActive]}
-                  >
-                    <Ionicons name={c.icon} size={18} color={active ? colors.sageDeep : colors.inkSoft} />
-                    <Text style={[styles.categoryLabel, active && styles.categoryLabelActive]}>
-                      {c.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </>
-        )}
-
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionLabel}>
-            {searching ? `Results for "${query.trim()}"` : 'Featured Recipes'}
-          </Text>
-          {!searching && (
-            <Pressable onPress={() => navigation.navigate('Discover')}>
-              <Text style={styles.seeAll}>See all</Text>
-            </Pressable>
-          )}
-        </View>
-        {featured.length === 0 ? (
-          <Text style={styles.emptyText}>
-            {searching ? `No recipes match "${query.trim()}".` : 'No recipes in this category yet.'}
-          </Text>
-        ) : (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.featuredRow}
-          >
-            {featured.map((recipe) => {
-              const saved = isSaved(recipe.id);
-              return (
+              {BROWSE_SHORTCUTS.map((c) => (
                 <Pressable
-                  key={recipe.id}
-                  style={styles.featuredCard}
-                  onPress={() => navigation.navigate('RecipeDetail', { recipe })}
+                  key={c.key}
+                  onPress={() => navigation.navigate('Discover', { initialFilter: c.key })}
+                  style={styles.browseChip}
                 >
-                  <View style={styles.featuredImageWrap}>
-                    <Image source={imageSource(recipe.image)} style={styles.featuredImage} />
-                    <Pressable style={styles.heartBtn} onPress={() => toggleSaved(recipe.id)} hitSlop={8}>
-                      <Ionicons
-                        name={saved ? 'heart' : 'heart-outline'}
-                        size={15}
-                        color={saved ? colors.sageDeep : colors.onAccent}
-                      />
-                    </Pressable>
-                  </View>
-                  <Text style={styles.featuredTitle} numberOfLines={2}>
-                    {recipe.title}
-                  </Text>
-                  <View style={styles.featuredMeta}>
-                    <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
-                    <Text style={styles.featuredTime}>{recipe.time}</Text>
-                  </View>
+                  <Ionicons name={c.icon} size={18} color={colors.inkSoft} />
+                  <Text style={styles.browseLabel}>{c.label}</Text>
                 </Pressable>
-              );
-            })}
-          </ScrollView>
+              ))}
+            </ScrollView>
+
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionLabel}>Latest Recipes</Text>
+              <Pressable onPress={() => navigation.navigate('Discover')}>
+                <Text style={styles.seeAll}>See all</Text>
+              </Pressable>
+            </View>
+            {latestLoading && latest.length === 0 ? (
+              <View style={styles.stateBlock}>
+                <ActivityIndicator color={colors.sageDeep} />
+              </View>
+            ) : latestError ? (
+              renderErrorBlock(latestError, loadLatest)
+            ) : latest.length === 0 ? (
+              <Text style={styles.emptyText}>No recipes yet.</Text>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.cardRow}
+              >
+                {latest.map(renderCard)}
+              </ScrollView>
+            )}
+          </>
         )}
 
         <View style={styles.toolsGrid}>
@@ -229,8 +315,8 @@ function makeStyles(colors, shadow) {
       fontSize: typography.sizes.xs,
       color: colors.sageDeep,
     },
-    categoryRow: { gap: spacing.sm, paddingBottom: spacing.xl, paddingRight: spacing.md },
-    categoryChip: {
+    browseRow: { gap: spacing.sm, paddingBottom: spacing.xl, paddingRight: spacing.md },
+    browseChip: {
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
@@ -240,46 +326,57 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline,
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.lg,
-      minWidth: 78,
+      minWidth: 82,
     },
-    categoryChipActive: {
-      borderColor: colors.sageDeep,
-      backgroundColor: colors.sagePale,
-    },
-    categoryLabel: {
+    browseLabel: {
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.xs,
       color: colors.inkSoft,
     },
-    categoryLabelActive: { color: colors.sageDeep, fontFamily: typography.body.semibold },
     emptyText: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
       color: colors.inkFaint,
       marginBottom: spacing.xl,
     },
-    featuredRow: { gap: spacing.md, paddingBottom: spacing.xl, paddingRight: spacing.md },
-    featuredCard: {
+    stateBlock: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.md,
+      paddingVertical: spacing.xl,
+      marginBottom: spacing.xl,
+    },
+    errorText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+      textAlign: 'center',
+    },
+    retryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: 8,
+    },
+    retryText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
+    cardRow: { gap: spacing.md, paddingBottom: spacing.xl, paddingRight: spacing.md },
+    card: {
       width: 160,
       backgroundColor: colors.paper,
       borderRadius: radius.lg,
       overflow: 'hidden',
       ...shadow.soft,
     },
-    featuredImageWrap: { position: 'relative' },
-    featuredImage: { width: '100%', height: 110 },
-    heartBtn: {
-      position: 'absolute',
-      top: 8,
-      right: 8,
-      width: 26,
-      height: 26,
-      borderRadius: 13,
-      backgroundColor: 'rgba(0,0,0,0.45)',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    featuredTitle: {
+    cardImage: { width: '100%', height: 110 },
+    cardTitle: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
       color: colors.ink,
@@ -287,7 +384,7 @@ function makeStyles(colors, shadow) {
       marginHorizontal: spacing.sm,
       lineHeight: 16,
     },
-    featuredMeta: {
+    cardMeta: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 4,
@@ -295,7 +392,7 @@ function makeStyles(colors, shadow) {
       marginTop: 4,
       marginBottom: spacing.sm,
     },
-    featuredTime: {
+    cardTime: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
       color: colors.inkFaint,
