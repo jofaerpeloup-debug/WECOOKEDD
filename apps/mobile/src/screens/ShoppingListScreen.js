@@ -1,20 +1,54 @@
- import React, { useMemo, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   Pressable,
-  TextInput,
-  KeyboardAvoidingView,
-  Platform,
+  RefreshControl,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Badge from '../components/Badge';
 import { useShoppingList } from '../context/ShoppingListContext';
+import { ingredientPrimaryLine, formatQuantity } from '../utils/recipe';
+import { unitLabel } from '../api/recipeOptions';
+
+// The Shopping List is backed entirely by the Express Shopping List REST API
+// (via ShoppingListProvider). Items are rendered in BACKEND ARRAY ORDER — there
+// is no produce/pantry/dairy/recipeItems grouping and no `item.source`; those
+// fields do not exist in backend Shopping List data. There is no free-text
+// "Add an item" bar: the backend only accepts canonical ingredients, and a
+// canonical ingredient picker is a later focused slice.
+
+const UNAVAILABLE_LABEL = 'Unavailable ingredient';
+
+// The primary line for one backend shopping-list item. Available items reuse the
+// shared Recipe quantity/unit helper ("1 kg Chicken" / "Black Pepper — to
+// taste"). Unavailable items (archived/deleted ingredient — `ingredient: null`,
+// no historical name in the serializer) get a safe generic label; the raw
+// ingredientId is NEVER shown.
+function itemPrimaryText(item) {
+  if (item.ingredient && item.ingredient.name) {
+    return ingredientPrimaryLine(item) || item.ingredient.name;
+  }
+  return UNAVAILABLE_LABEL;
+}
+
+// A short amount string for the secondary line (only used for unavailable items,
+// which have no name to fold the amount into). No unit conversion.
+function itemAmountText(item) {
+  if (item.unit === 'toTaste') return 'to taste';
+  const qty = formatQuantity(item.quantity);
+  const unit = item.unit ? unitLabel(item.unit) : '';
+  const text = [qty, unit].filter(Boolean).join(' ');
+  return text || null;
+}
 
 function Checkbox({ checked }) {
   const { colors } = useTheme();
@@ -26,31 +60,49 @@ function Checkbox({ checked }) {
   );
 }
 
-function Section({ title, items, onToggle, onRemove }) {
+function ItemRow({ item, disabled, pending, onToggle, onRemove }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
+  const available = !!(item.ingredient && item.ingredient.name);
+  const primary = itemPrimaryText(item);
+  const amount = itemAmountText(item);
+
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {items.map((item) => (
-        <View key={item.id} style={styles.row}>
-          <Pressable style={styles.rowMain} onPress={() => onToggle(item.id)}>
-            <Checkbox checked={item.checked} />
-            <Text style={[styles.itemText, item.checked && styles.itemTextChecked]}>
-              {item.name}
-            </Text>
-            {item.badge && <Badge label={item.badge} tone="warning" />}
-          </Pressable>
-          <Pressable
-            onPress={() => onRemove(item.id)}
-            hitSlop={10}
-            style={({ pressed }) => [styles.removeBtn, pressed && styles.removeBtnPressed]}
+    <View style={styles.row}>
+      <Pressable
+        style={styles.rowMain}
+        onPress={onToggle}
+        disabled={disabled}
+        hitSlop={4}
+      >
+        <Checkbox checked={item.isChecked} />
+        <View style={styles.rowTextWrap}>
+          <Text
+            style={[
+              styles.itemText,
+              item.isChecked && styles.itemTextChecked,
+              !available && styles.itemTextUnavailable,
+            ]}
           >
-            <Ionicons name="trash-outline" size={17} color={colors.error} />
-          </Pressable>
+            {primary}
+          </Text>
+          {!available && amount ? <Text style={styles.itemSub}>{amount}</Text> : null}
         </View>
-      ))}
-      {items.length === 0 && <Text style={styles.emptyText}>No items in this section.</Text>}
+        {!available && <Badge label="Unavailable" tone="warning" />}
+      </Pressable>
+
+      {pending ? (
+        <ActivityIndicator size="small" color={colors.sageDeep} style={styles.rowSpinner} />
+      ) : (
+        <Pressable
+          onPress={onRemove}
+          hitSlop={10}
+          disabled={disabled}
+          style={({ pressed }) => [styles.removeBtn, pressed && styles.removeBtnPressed]}
+        >
+          <Ionicons name="trash-outline" size={17} color={disabled ? colors.inkFaint : colors.error} />
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -58,95 +110,157 @@ function Section({ title, items, onToggle, onRemove }) {
 export default function ShoppingListScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const { list, toggle, remove, addItem } = useShoppingList();
-  const [newItem, setNewItem] = useState('');
+  const {
+    items,
+    status,
+    error,
+    isInitializing,
+    isMutating,
+    isItemPending,
+    reload,
+    setChecked,
+    removeItem,
+    clear,
+  } = useShoppingList();
 
-  const addManualItem = () => {
-    if (!newItem.trim()) return;
-    addItem('produce', newItem.trim());
-    setNewItem('');
-  };
+  const [refreshing, setRefreshing] = useState(false);
 
-  const recipeGroups = useMemo(() => {
-    const groups = new Map();
-    for (const item of list.recipeItems) {
-      const key = item.source || 'From Recipes';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(item);
+  // Reconcile with server truth on focus. `reload` is generation-guarded and
+  // is a no-op while a mutation or another GET is already in flight.
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload])
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await reload();
+    } finally {
+      setRefreshing(false);
     }
-    return Array.from(groups.entries());
-  }, [list.recipeItems]);
+  }, [reload]);
 
-  const isEmpty =
-    recipeGroups.length === 0 &&
-    list.produce.length === 0 &&
-    list.pantry.length === 0 &&
-    list.dairy.length === 0;
+  const onToggle = useCallback(
+    async (item) => {
+      const result = await setChecked(item.id, !item.isChecked);
+      if (!result.ok && result.error) {
+        Alert.alert('Couldn’t update item', result.error);
+      }
+    },
+    [setChecked]
+  );
+
+  const onRemove = useCallback(
+    async (item) => {
+      const result = await removeItem(item.id);
+      if (!result.ok && result.error) {
+        Alert.alert('Couldn’t remove item', result.error);
+      }
+    },
+    [removeItem]
+  );
+
+  const confirmClear = useCallback(() => {
+    if (isMutating || items.length === 0) return;
+    Alert.alert(
+      'Clear shopping list?',
+      'This removes every item from your shopping list.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await clear();
+            if (!result.ok && result.error) {
+              Alert.alert('Couldn’t clear list', result.error);
+            }
+          },
+        },
+      ]
+    );
+  }, [clear, isMutating, items.length]);
+
+  const header = (
+    <TopBar
+      mode="back"
+      title="Shopping List"
+      onBack={() => navigation.goBack()}
+      rightIcon={items.length > 0 ? 'trash-outline' : undefined}
+      onRightPress={confirmClear}
+    />
+  );
+
+  // Initial load — nothing to show yet.
+  if (isInitializing && items.length === 0) {
+    return (
+      <View style={styles.root}>
+        {header}
+        <View style={styles.centerWrap}>
+          <ActivityIndicator color={colors.sageDeep} />
+        </View>
+      </View>
+    );
+  }
+
+  // Initial load failed with nothing to show.
+  if (status === 'error' && items.length === 0) {
+    return (
+      <View style={styles.root}>
+        {header}
+        <View style={styles.centerWrap}>
+          <Ionicons name="cloud-offline-outline" size={28} color={colors.inkFaint} />
+          <Text style={styles.centerText}>{error || 'Couldn’t load your shopping list.'}</Text>
+          <Pressable style={styles.retryBtn} onPress={() => reload()} hitSlop={8}>
+            <Ionicons name="refresh" size={14} color={colors.sageDeep} />
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
-      <TopBar mode="back" title="Shopping List" onBack={() => navigation.goBack()} />
-
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          {isEmpty && (
-            <Text style={styles.emptyText}>
-              Your shopping list is empty. Add ingredients from a recipe or use the bar below.
-            </Text>
-          )}
-          {recipeGroups.map(([recipeName, items]) => (
-            <Section
-              key={recipeName}
-              title={recipeName}
-              items={items}
-              onToggle={(id) => toggle('recipeItems', id)}
-              onRemove={(id) => remove('recipeItems', id)}
-            />
-          ))}
-          {list.produce.length > 0 && (
-            <Section
-              title="Produce"
-              items={list.produce}
-              onToggle={(id) => toggle('produce', id)}
-              onRemove={(id) => remove('produce', id)}
-            />
-          )}
-          {list.pantry.length > 0 && (
-            <Section
-              title="Pantry"
-              items={list.pantry}
-              onToggle={(id) => toggle('pantry', id)}
-              onRemove={(id) => remove('pantry', id)}
-            />
-          )}
-          {list.dairy.length > 0 && (
-            <Section
-              title="Dairy"
-              items={list.dairy}
-              onToggle={(id) => toggle('dairy', id)}
-              onRemove={(id) => remove('dairy', id)}
-            />
-          )}
-        </ScrollView>
-
-        <View style={styles.addBar}>
-          <TextInput
-            style={styles.addInput}
-            placeholder="Add an item... (e.g. '3 Honeycrisp Apples')"
-            placeholderTextColor={colors.inkFaint}
-            value={newItem}
-            onChangeText={setNewItem}
-            onSubmitEditing={addManualItem}
-            returnKeyType="done"
+      {header}
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.sageDeep}
+            colors={[colors.sageDeep]}
           />
-          <Pressable style={styles.addBtn} onPress={addManualItem}>
-            <Ionicons name="add" size={20} color={colors.onAccent} />
+        }
+      >
+        {error && items.length > 0 ? (
+          <Pressable style={styles.inlineBanner} onPress={() => reload()}>
+            <Ionicons name="refresh" size={14} color={colors.error} />
+            <Text style={styles.inlineBannerText}>{error} Tap to retry.</Text>
           </Pressable>
-        </View>
-      </KeyboardAvoidingView>
+        ) : null}
+
+        {items.length === 0 ? (
+          <Text style={styles.emptyText}>
+            Your shopping list is empty. Add ingredients from a recipe.
+          </Text>
+        ) : (
+          items.map((item) => (
+            <ItemRow
+              key={item.id}
+              item={item}
+              disabled={isMutating}
+              pending={isItemPending(item.id)}
+              onToggle={() => onToggle(item)}
+              onRemove={() => onRemove(item)}
+            />
+          ))
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -154,14 +268,50 @@ export default function ShoppingListScreen({ navigation }) {
 function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
-    scroll: { padding: spacing.lg, paddingBottom: spacing.xl },
-    section: { marginBottom: spacing.xl },
-    sectionTitle: {
+    scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    centerWrap: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: spacing.xxl,
+      gap: spacing.md,
+    },
+    centerText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+      textAlign: 'center',
+    },
+    retryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: 8,
+    },
+    retryText: {
       fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
-      letterSpacing: 1,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
+    inlineBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.errorBg,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
       marginBottom: spacing.md,
+    },
+    inlineBannerText: {
+      flex: 1,
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.xs,
+      color: colors.error,
     },
     row: {
       flexDirection: 'row',
@@ -174,6 +324,8 @@ function makeStyles(colors) {
       alignItems: 'center',
       gap: spacing.md,
     },
+    rowTextWrap: { flex: 1 },
+    rowSpinner: { marginLeft: spacing.sm, width: 29, alignItems: 'center' },
     removeBtn: {
       padding: spacing.xs,
       marginLeft: spacing.sm,
@@ -196,7 +348,6 @@ function makeStyles(colors) {
     },
     checkboxChecked: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
     itemText: {
-      flex: 1,
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.md,
       color: colors.ink,
@@ -205,32 +356,15 @@ function makeStyles(colors) {
       color: colors.inkFaint,
       textDecorationLine: 'line-through',
     },
-    addBar: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
-      padding: spacing.lg,
-      borderTopWidth: 1,
-      borderTopColor: colors.hairline,
-      backgroundColor: colors.paper,
+    itemTextUnavailable: {
+      color: colors.inkFaint,
+      fontStyle: 'italic',
     },
-    addInput: {
-      flex: 1,
-      height: 44,
-      borderRadius: radius.pill,
-      backgroundColor: colors.creamDeep,
-      paddingHorizontal: spacing.lg,
+    itemSub: {
       fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.ink,
-    },
-    addBtn: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: colors.sageDeep,
-      alignItems: 'center',
-      justifyContent: 'center',
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: 2,
     },
   });
 }

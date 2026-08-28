@@ -29,7 +29,6 @@ import { difficultyLabel } from '../api/recipeOptions';
 import {
   formatMinutes,
   ingredientDisplayText,
-  ingredientNames,
   recipeBadges,
   totalTimeMinutes,
 } from '../utils/recipe';
@@ -78,43 +77,6 @@ function scaleIngredientText(text, ratio) {
   const scaled = formatQuantity(qty * ratio);
   if (scaled === null) return text;
   return `${scaled}${match[2]}`;
-}
-
-const MEASURE_UNITS = new Set([
-  'cup', 'cups', 'tbsp', 'tbsps', 'tablespoon', 'tablespoons',
-  'tsp', 'tsps', 'teaspoon', 'teaspoons', 'oz', 'ounce', 'ounces',
-  'lb', 'lbs', 'pound', 'pounds', 'g', 'gram', 'grams', 'kg',
-  'kilogram', 'kilograms', 'ml', 'milliliter', 'milliliters',
-  'l', 'liter', 'liters', 'pinch', 'pinches', 'dash', 'dashes',
-  'clove', 'cloves', 'slice', 'slices', 'can', 'cans', 'package',
-  'packages', 'stick', 'sticks', 'bunch', 'bunches', 'head', 'heads',
-  'block', 'blocks', 'thumb', 'thumbs', 'knob', 'knobs',
-  'handful', 'handfuls', 'splash', 'splashes',
-]);
-
-// Drops up to two leading words if they're a unit (optionally after a size
-// descriptor like "whole"), e.g. "whole heads garlic" -> "garlic",
-// "cups sugar" -> "sugar". Leaves plain descriptors like "large eggs" alone.
-function stripLeadingUnitWords(text) {
-  const words = text.split(' ');
-  const clean = (w) => w?.toLowerCase().replace(/[.,]$/, '');
-  if (MEASURE_UNITS.has(clean(words[0]))) {
-    return words.slice(1).join(' ').replace(/^of\s+/i, '');
-  }
-  if (words.length > 1 && MEASURE_UNITS.has(clean(words[1]))) {
-    return words.slice(2).join(' ').replace(/^of\s+/i, '');
-  }
-  return text;
-}
-
-// Strips the leading quantity ("2", "1/4", "1 1/2") and any unit words
-// ("cups", "whole heads", "pinch of") — leaving just the ingredient itself,
-// for a shopping list that doesn't care how much of it to buy.
-function stripMeasurement(text) {
-  const match = text.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d*\.?\d+)\s+(.*)$/);
-  const rest = stripLeadingUnitWords(match ? match[2] : text);
-  if (!rest) return text;
-  return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 // Estimates a scaled cook time the same way calories are scaled — not
@@ -330,7 +292,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
   const insets = useSafeAreaInsets();
-  const { addIngredients } = useShoppingList();
+  const { addRecipe, isMutating, pendingAction } = useShoppingList();
 
   const baseServings = recipe.servings > 0 ? recipe.servings : 1;
   const maxServings = Math.max(MAX_SERVINGS, baseServings);
@@ -348,8 +310,6 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
         .filter(Boolean),
     [recipe.ingredients, servings, baseServings]
   );
-
-  const shoppingNames = useMemo(() => ingredientNames(recipe), [recipe]);
 
   const stats = [
     { icon: 'time-outline', value: formatMinutes(totalMins), label: 'Total time' },
@@ -381,11 +341,21 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
     });
   };
 
-  // Still LOCAL (ShoppingListContext) — Shopping List API is a later slice.
-  // Feeds clean structured names, never the legacy string parser.
-  const addToShoppingList = () => {
-    addIngredients(recipe.title, shoppingNames);
-    navigation.navigate('List');
+  // Backed by the Shopping List REST API. Sends ONLY the recipe id — no body,
+  // no multiplier, no servings. The backend imports the recipe's base-serving
+  // quantities and merges them into the user's one list (see the note under the
+  // button and docs/architecture/mobile-shopping-list-integration.md). Never
+  // dual-writes to any local state.
+  const addingToShoppingList = pendingAction?.type === 'addRecipe';
+  const addToShoppingList = async () => {
+    const result = await addRecipe(recipe.id);
+    if (result.ok) {
+      navigation.navigate('List');
+    } else if (result.error) {
+      Alert.alert('Couldn’t add to shopping list', result.error);
+    }
+    // result.busy (another shopping-list mutation in flight) / result.superseded
+    // (session changed): silently ignored.
   };
 
   const decrementServings = () => setServings((s) => Math.max(MIN_SERVINGS, s - 1));
@@ -521,7 +491,13 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             variant="outline"
             style={{ marginTop: spacing.md }}
             onPress={addToShoppingList}
+            loading={addingToShoppingList}
+            disabled={isMutating}
           />
+          <Text style={styles.addAllNote}>
+            Adds ingredients for {baseServings} {baseServings === 1 ? 'serving' : 'servings'} — the
+            recipe's default. Changing servings above only affects what's shown here.
+          </Text>
         </View>
       </ScrollView>
     </View>
@@ -558,7 +534,6 @@ function LegacyRecipeDetail({ navigation, recipe }) {
   const styles = makeStyles(colors, shadow);
   const insets = useSafeAreaInsets();
   const { isSaved, toggleSaved } = useSavedRecipes();
-  const { addIngredients } = useShoppingList();
   const saved = isSaved(recipe.id);
 
   const ingredients = recipe.ingredients || [];
@@ -593,10 +568,10 @@ function LegacyRecipeDetail({ navigation, recipe }) {
     navigation.navigate('CookMode', { recipe, ingredients: scaledIngredients, servings });
   };
 
-  const addToShoppingList = () => {
-    addIngredients(recipe.title, scaledIngredients.map(stripMeasurement));
-    navigation.navigate('List');
-  };
+  // "Add All to Shopping List" is intentionally NOT offered for legacy/mock
+  // recipes: their ids (r1, r4, …) and free-text ingredient strings cannot be
+  // sent to the authenticated Shopping List REST API, and there is no local
+  // Shopping List state anymore. The Shopping List is API recipes only.
 
   const decrementServings = () => setServings((s) => Math.max(MIN_SERVINGS, s - 1));
   const incrementServings = () => setServings((s) => Math.min(MAX_SERVINGS, s + 1));
@@ -781,13 +756,6 @@ function LegacyRecipeDetail({ navigation, recipe }) {
               <Ionicons name="share-social-outline" size={19} color={colors.ink} />
             </Pressable>
           </View>
-
-          <Button
-            title="Add All to Shopping List"
-            variant="outline"
-            style={{ marginTop: spacing.md }}
-            onPress={addToShoppingList}
-          />
         </View>
       </ScrollView>
     </View>
@@ -1057,6 +1025,14 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    addAllNote: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      textAlign: 'center',
+      lineHeight: 16,
+      marginTop: spacing.sm,
     },
   });
 }
