@@ -13,6 +13,7 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
+import FavoriteHeart from '../components/FavoriteHeart';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { recipeTimeLabel } from '../utils/recipe';
@@ -121,17 +122,23 @@ export default function DashboardScreen({ navigation }) {
     });
   };
 
+  // The heart is a sibling of the card Pressable (not a child) so tapping it
+  // never also triggers card navigation. It talks to the shared Favorites API
+  // state — no SavedRecipesContext, no mock ids.
   const renderCard = (recipe) => (
-    <Pressable key={recipe.id} style={styles.card} onPress={() => openRecipe(recipe)}>
-      <RecipeImage source={recipe.imageUrl} style={styles.cardImage} />
-      <Text style={styles.cardTitle} numberOfLines={2}>
-        {recipe.title}
-      </Text>
-      <View style={styles.cardMeta}>
-        <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
-        <Text style={styles.cardTime}>{recipeTimeLabel(recipe)}</Text>
-      </View>
-    </Pressable>
+    <View key={recipe.id} style={styles.card}>
+      <Pressable onPress={() => openRecipe(recipe)}>
+        <RecipeImage source={recipe.imageUrl} style={styles.cardImage} />
+        <Text style={styles.cardTitle} numberOfLines={2}>
+          {recipe.title}
+        </Text>
+        <View style={styles.cardMeta}>
+          <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
+          <Text style={styles.cardTime}>{recipeTimeLabel(recipe)}</Text>
+        </View>
+      </Pressable>
+      <FavoriteHeart recipe={recipe} size={15} variant="overlay" style={styles.cardHeart} />
+    </View>
   );
 
   const renderErrorBlock = (message, onRetry) => (
@@ -374,6 +381,15 @@ function makeStyles(colors, shadow) {
       borderRadius: radius.lg,
       overflow: 'hidden',
       ...shadow.soft,
+    },
+    cardHeart: {
+      position: 'absolute',
+      top: spacing.sm,
+      right: spacing.sm,
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: 'rgba(255,255,255,0.92)',
     },
     cardImage: { width: '100%', height: 110 },
     cardTitle: {

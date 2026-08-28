@@ -1,89 +1,188 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Pressable,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Button from '../components/Button';
-import { useSavedRecipes } from '../context/SavedRecipesContext';
-import { imageSource } from '../utils/image';
+import RecipeImage from '../components/RecipeImage';
+import FavoriteHeart from '../components/FavoriteHeart';
+import { useFavorites } from '../context/FavoritesContext';
+import { recipeTimeLabel } from '../utils/recipe';
+import { cuisineLabel, difficultyLabel } from '../api/recipeOptions';
+
+// The authenticated Saved tab is backed entirely by the real Favorites REST API
+// (via FavoritesProvider) — no SavedRecipesContext, no mockData, no mock recipe
+// lookup. The favorite's nested recipe is a SUMMARY: only
+// { id, title, cuisine, difficulty, prepTimeMinutes, cookTimeMinutes, imageUrl }
+// are available here — description / servings / ingredients / instructions are
+// NOT, and are never fabricated. Opening a recipe navigates cold to the API
+// Recipe Detail, which performs the authoritative GET /api/v1/recipes/:id.
+
+function metaLabel(recipe) {
+  return cuisineLabel(recipe.cuisine) || difficultyLabel(recipe.difficulty) || 'Recipe';
+}
 
 export default function SavedScreen({ navigation }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
-  const { savedRecipes, toggleSaved } = useSavedRecipes();
-  const [featured, ...rest] = savedRecipes;
+  const { favorites, status, error, reload } = useFavorites();
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Reconcile with server truth whenever the tab regains focus. An add/remove
+  // made on another screen already propagated through the shared provider; this
+  // also picks up a favorite whose recipe was archived server-side. `reload` is
+  // generation-guarded, so a focus that lands during the provider's initial
+  // load simply supersedes it rather than racing it.
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload])
+  );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await reload();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [reload]);
+
+  const openRecipe = (recipe) => {
+    // Cold navigation: pass ONLY the source + id. The summary is not a full
+    // PublicRecipe, so it must not be handed over as `initialRecipe`.
+    navigation.navigate('RecipeDetail', { recipeSource: 'api', recipeId: recipe.id });
+  };
+
+  // Initial load, nothing to show yet.
+  if ((status === 'loading' || status === 'idle') && favorites.length === 0) {
+    return (
+      <View style={styles.root}>
+        <TopBar mode="brand" />
+        <View style={styles.centerWrap}>
+          <ActivityIndicator color={colors.sageDeep} />
+        </View>
+      </View>
+    );
+  }
+
+  // Initial load failed with nothing to show.
+  if (status === 'error' && favorites.length === 0) {
+    return (
+      <View style={styles.root}>
+        <TopBar mode="brand" />
+        <View style={styles.centerWrap}>
+          <Ionicons name="cloud-offline-outline" size={28} color={colors.inkFaint} />
+          <Text style={styles.errorText}>{error || 'Couldn’t load your favorites.'}</Text>
+          <Pressable style={styles.retryBtn} onPress={() => reload()} hitSlop={8}>
+            <Ionicons name="refresh" size={14} color={colors.sageDeep} />
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  const [featured, ...rest] = favorites;
 
   return (
     <View style={styles.root}>
       <TopBar mode="brand" />
 
       {!featured ? (
-        <View style={styles.emptyWrap}>
-          <View style={styles.emptyIcon}>
-            <Ionicons name="heart-outline" size={26} color={colors.sageDeep} />
-          </View>
-          <Text style={styles.emptyTitle}>No saved recipes yet</Text>
-          <Text style={styles.emptySub}>
-            Tap the heart icon on any recipe to save it here.
-          </Text>
-          <Button
-            title="Discover Recipes"
-            variant="primary"
-            onPress={() => navigation.navigate('Discover')}
-            style={{ marginTop: spacing.xl, alignSelf: 'stretch' }}
-          />
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <Pressable
-            style={styles.featuredCard}
-            onPress={() => navigation.navigate('RecipeDetail', { recipe: featured })}
-          >
-            <Image source={imageSource(featured.image)} style={styles.featuredImage} />
-            <Pressable
-              style={styles.saveIconFeatured}
-              hitSlop={8}
-              onPress={() => toggleSaved(featured.id)}
-            >
-              <Ionicons name="heart" size={16} color={colors.sageDeep} />
-            </Pressable>
-            <View style={styles.featuredTextWrap}>
-              <Text style={styles.featuredTitle}>{featured.title}</Text>
-              <View style={styles.metaRow}>
-                <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
-                <Text style={styles.metaText}>{featured.time}</Text>
-                <Text style={styles.metaDot}>·</Text>
-                <Text style={styles.metaText}>{featured.tags[0] || 'Dinner'}</Text>
-              </View>
+        <ScrollView
+          contentContainerStyle={styles.emptyScroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.sageDeep}
+              colors={[colors.sageDeep]}
+            />
+          }
+        >
+          <View style={styles.emptyWrap}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="heart-outline" size={26} color={colors.sageDeep} />
             </View>
-          </Pressable>
+            <Text style={styles.emptyTitle}>No saved recipes yet</Text>
+            <Text style={styles.emptySub}>Tap the heart icon on any recipe to save it here.</Text>
+            <Button
+              title="Discover Recipes"
+              variant="primary"
+              onPress={() => navigation.navigate('Discover')}
+              style={{ marginTop: spacing.xl, alignSelf: 'stretch' }}
+            />
+          </View>
+        </ScrollView>
+      ) : (
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.sageDeep}
+              colors={[colors.sageDeep]}
+            />
+          }
+        >
+          <View style={styles.featuredCard}>
+            <Pressable onPress={() => openRecipe(featured.recipe)}>
+              <RecipeImage source={featured.recipe.imageUrl} style={styles.featuredImage} />
+              <View style={styles.featuredTextWrap}>
+                <Text style={styles.featuredTitle} numberOfLines={2}>
+                  {featured.recipe.title}
+                </Text>
+                <View style={styles.metaRow}>
+                  <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
+                  <Text style={styles.metaText}>{recipeTimeLabel(featured.recipe)}</Text>
+                  <Text style={styles.metaDot}>·</Text>
+                  <Text style={styles.metaText}>{metaLabel(featured.recipe)}</Text>
+                </View>
+              </View>
+            </Pressable>
+            <FavoriteHeart
+              recipe={featured.recipe}
+              size={16}
+              variant="overlay"
+              style={styles.saveIconFeatured}
+            />
+          </View>
 
           <View style={styles.grid}>
-            {rest.map((recipe) => (
-              <Pressable
-                key={recipe.id}
-                style={styles.gridCard}
-                onPress={() => navigation.navigate('RecipeDetail', { recipe })}
-              >
-                <Image source={imageSource(recipe.image)} style={styles.gridImage} />
-                <Pressable
-                  style={styles.saveIconGrid}
-                  hitSlop={8}
-                  onPress={() => toggleSaved(recipe.id)}
-                >
-                  <Ionicons name="heart" size={13} color={colors.sageDeep} />
-                </Pressable>
-                <View style={styles.gridTextWrap}>
-                  <Text style={styles.gridTitle} numberOfLines={1}>
-                    {recipe.title}
-                  </Text>
-                  <View style={styles.metaRow}>
-                    <Ionicons name="time-outline" size={11} color={colors.inkFaint} />
-                    <Text style={styles.metaTextSm}>{recipe.tags[0] || recipe.time}</Text>
+            {rest.map((entry) => (
+              <View key={entry.recipe.id} style={styles.gridCard}>
+                <Pressable onPress={() => openRecipe(entry.recipe)}>
+                  <RecipeImage source={entry.recipe.imageUrl} style={styles.gridImage} />
+                  <View style={styles.gridTextWrap}>
+                    <Text style={styles.gridTitle} numberOfLines={1}>
+                      {entry.recipe.title}
+                    </Text>
+                    <View style={styles.metaRow}>
+                      <Ionicons name="time-outline" size={11} color={colors.inkFaint} />
+                      <Text style={styles.metaTextSm}>{recipeTimeLabel(entry.recipe)}</Text>
+                    </View>
                   </View>
-                </View>
-              </Pressable>
+                </Pressable>
+                <FavoriteHeart
+                  recipe={entry.recipe}
+                  size={13}
+                  variant="overlay"
+                  style={styles.saveIconGrid}
+                />
+              </View>
             ))}
           </View>
         </ScrollView>
@@ -96,6 +195,35 @@ function makeStyles(colors, shadow) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    emptyScroll: { flexGrow: 1 },
+    centerWrap: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: spacing.xxl,
+      gap: spacing.md,
+    },
+    errorText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+      textAlign: 'center',
+    },
+    retryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: 8,
+    },
+    retryText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
     emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl },
     emptyIcon: {
       width: 56,
@@ -136,8 +264,6 @@ function makeStyles(colors, shadow) {
       height: 30,
       borderRadius: 15,
       backgroundColor: 'rgba(255,255,255,0.92)',
-      alignItems: 'center',
-      justifyContent: 'center',
     },
     featuredTextWrap: { padding: spacing.lg },
     featuredTitle: {
@@ -163,8 +289,6 @@ function makeStyles(colors, shadow) {
       height: 24,
       borderRadius: 12,
       backgroundColor: 'rgba(255,255,255,0.92)',
-      alignItems: 'center',
-      justifyContent: 'center',
     },
     gridTextWrap: { padding: spacing.md },
     gridTitle: {

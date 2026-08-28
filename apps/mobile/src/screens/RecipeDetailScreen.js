@@ -17,6 +17,7 @@ import { useTheme } from '../theme/ThemeContext';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import RecipeImage from '../components/RecipeImage';
+import FavoriteHeart from '../components/FavoriteHeart';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
@@ -402,6 +403,10 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
           <View style={[styles.topRightBtns, { top: insets.top + spacing.sm }]}>
+            {/* API mode only — real Favorites API control via the shared
+                FavoritesProvider. LegacyRecipeDetail keeps its own
+                SavedRecipesContext heart, untouched. */}
+            <FavoriteHeart recipe={recipe} size={18} variant="overlay" style={styles.iconBtn} />
             <Pressable style={styles.iconBtn} onPress={openMore}>
               <Ionicons name="ellipsis-horizontal" size={18} color="#fff" />
             </Pressable>

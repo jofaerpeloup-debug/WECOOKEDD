@@ -14,6 +14,7 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
+import FavoriteHeart from '../components/FavoriteHeart';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { DISCOVER_FILTERS, difficultyLabel } from '../api/recipeOptions';
@@ -163,23 +164,29 @@ export default function DiscoverScreen({ navigation, route }) {
     });
   };
 
+  // The heart is a sibling of the card Pressable (not a child) so tapping it
+  // never also triggers Recipe navigation. Shared Favorites API state — one
+  // fetch in the provider, never one per card.
   const renderItem = ({ item }) => (
-    <Pressable style={styles.card} onPress={() => openRecipe(item)}>
-      <RecipeImage source={item.imageUrl} style={styles.cardImage} />
-      <View style={styles.cardBody}>
-        <Text style={styles.cardTitle}>{item.title}</Text>
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Ionicons name="time-outline" size={13} color={colors.inkFaint} />
-            <Text style={styles.metaText}>{recipeTimeLabel(item)}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Ionicons name="stats-chart-outline" size={13} color={colors.inkFaint} />
-            <Text style={styles.metaText}>{difficultyLabel(item.difficulty)}</Text>
+    <View style={styles.card}>
+      <Pressable onPress={() => openRecipe(item)}>
+        <RecipeImage source={item.imageUrl} style={styles.cardImage} />
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle}>{item.title}</Text>
+          <View style={styles.metaRow}>
+            <View style={styles.metaItem}>
+              <Ionicons name="time-outline" size={13} color={colors.inkFaint} />
+              <Text style={styles.metaText}>{recipeTimeLabel(item)}</Text>
+            </View>
+            <View style={styles.metaItem}>
+              <Ionicons name="stats-chart-outline" size={13} color={colors.inkFaint} />
+              <Text style={styles.metaText}>{difficultyLabel(item.difficulty)}</Text>
+            </View>
           </View>
         </View>
-      </View>
-    </Pressable>
+      </Pressable>
+      <FavoriteHeart recipe={item} size={16} variant="overlay" style={styles.cardHeart} />
+    </View>
   );
 
   const renderEmpty = () => {
@@ -316,6 +323,15 @@ function makeStyles(colors, shadow) {
       overflow: 'hidden',
       marginBottom: spacing.xl,
       ...shadow.soft,
+    },
+    cardHeart: {
+      position: 'absolute',
+      top: spacing.md,
+      right: spacing.md,
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: 'rgba(255,255,255,0.92)',
     },
     cardImage: { width: '100%', height: 190 },
     cardBody: { padding: spacing.lg },
