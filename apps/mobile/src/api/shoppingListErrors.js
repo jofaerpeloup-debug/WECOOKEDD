@@ -43,10 +43,10 @@ export function getShoppingListErrorMessage(err, fallback = FALLBACK) {
     case 'INGREDIENT_INACTIVE':
       return 'That ingredient isn’t available anymore.';
     case 'VALIDATION_ERROR':
-      // Fixed message — this slice never sends user-typed content to the API
-      // (PATCH sends only { isChecked }; recipe/item ids come from the
-      // serializer), so a field-level detail string would add no value and is
-      // not surfaced.
+      // Fixed message — manual add validates quantity/unit client-side before
+      // calling the API, so a VALIDATION_ERROR here is unexpected and a
+      // field-level detail string (potentially echoing raw input) adds no
+      // value.
       return 'That request wasn’t valid. Please try again.';
     case 'RATE_LIMIT_EXCEEDED':
       return 'Too many requests. Please wait a moment and try again.';

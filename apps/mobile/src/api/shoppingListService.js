@@ -66,6 +66,32 @@ export function addRecipe(recipeId) {
 }
 
 /**
+ * POST /api/v1/shopping-list/items
+ * Adds ONE canonical ingredient to the caller's list, merged by
+ * `ingredientId` + exact `unit` (same key as recipe import). The ingredient
+ * id MUST come from the canonical Ingredient API — there are no free-text or
+ * local-only items.
+ *
+ * Body contract (createItemSchema, `.strict()`):
+ *   - measurable unit -> `{ ingredientId, unit, quantity }` where `quantity`
+ *     is already a finite JS number > 0 (the backend does NOT coerce strings).
+ *   - `unit: 'toTaste'` -> `{ ingredientId, unit }` — `quantity` is OMITTED
+ *     (never a stale positive value); sending one is a 400.
+ * Never sends userId or shoppingListId.
+ *
+ * @param {{ ingredientId: string, unit: string, quantity?: number }} item
+ * @returns {Promise<object>} the full post-add list. Throws ApiError:
+ *   - INGREDIENT_NOT_FOUND (404) / INGREDIENT_INACTIVE (400) — bad/archived id
+ *   - SHOPPING_LIST_LIMIT_EXCEEDED (400) — post-merge count would exceed 200
+ *   - VALIDATION_ERROR (400) — malformed quantity/unit combination
+ */
+export function addItem({ ingredientId, unit, quantity } = {}) {
+  const body =
+    unit === 'toTaste' ? { ingredientId, unit } : { ingredientId, unit, quantity };
+  return api.post('/shopping-list/items', { body }).then(unwrap);
+}
+
+/**
  * PATCH /api/v1/shopping-list/items/:itemId
  * @param {string} itemId  the shopping-list ITEM id (not an ingredientId).
  * @param {{ isChecked?: boolean, quantity?: number|null, unit?: string }} patch

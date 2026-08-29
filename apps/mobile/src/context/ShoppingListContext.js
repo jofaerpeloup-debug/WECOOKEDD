@@ -81,7 +81,7 @@ export function ShoppingListProvider({ children }) {
   // 'idle' (no session) | 'loading' (initial load) | 'ready' | 'error' (initial load failed, nothing to show)
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState(null);
-  // { type: 'addRecipe' | 'setChecked' | 'removeItem' | 'clear', itemId?: string } | null
+  // { type: 'addItem' | 'addRecipe' | 'setChecked' | 'removeItem' | 'clear', itemId?: string } | null
   const [pendingAction, setPendingAction] = useState(null);
 
   // --- refs: latest values readable inside async closures --------------------
@@ -237,6 +237,21 @@ export function ShoppingListProvider({ children }) {
     [load]
   );
 
+  // Manual add of ONE canonical ingredient. A thin runMutation wrapper — it
+  // inherits the synchronous one-at-a-time lock, session-generation guard,
+  // stale-GET invalidation, and pessimistic full-list replacement unchanged.
+  // The picker MUST call this (never shoppingListService.addItem directly), so
+  // a manual add can never race a check/remove/clear or an in-flight reload.
+  // `quantity` is already a finite number > 0 for measurable units and is
+  // omitted for `toTaste` — the caller parses/validates before calling.
+  const addItem = useCallback(
+    ({ ingredientId, unit, quantity }) =>
+      runMutation({ type: 'addItem' }, () =>
+        shoppingListService.addItem({ ingredientId, unit, quantity })
+      ),
+    [runMutation]
+  );
+
   const addRecipe = useCallback(
     (recipeId) =>
       runMutation({ type: 'addRecipe', recipeId }, () => shoppingListService.addRecipe(recipeId)),
@@ -313,6 +328,7 @@ export function ShoppingListProvider({ children }) {
       pendingAction: trusted ? pendingAction : null,
       isItemPending,
       reload,
+      addItem,
       addRecipe,
       setChecked,
       removeItem,
@@ -328,6 +344,7 @@ export function ShoppingListProvider({ children }) {
       pendingAction,
       isItemPending,
       reload,
+      addItem,
       addRecipe,
       setChecked,
       removeItem,
