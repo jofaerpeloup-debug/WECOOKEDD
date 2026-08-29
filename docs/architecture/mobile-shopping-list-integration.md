@@ -365,8 +365,11 @@ raw backend bodies, stacks, DB internals, or tokens.
 
 ## Intentionally deferred
 
-Canonical Ingredient picker / free-text items, servings-scaled recipe import,
-Community backend, Recommendations, AI, Notifications, profile/preferences
-persistence, Recipe mutations, Admin, any `apps/api` change, deletion of the old
+Manual canonical-ingredient add shipped as a follow-up slice —
+[mobile-shopping-list-manual-add.md](./mobile-shopping-list-manual-add.md).
+Still deferred: free-text / local-only items (never restored), servings-scaled
+recipe import, quantity/unit editing of existing items, Community backend,
+Recommendations, AI, Notifications, profile/preferences persistence, Recipe
+mutations, Admin, any `apps/api` change, deletion of the old
 `wecooked:shoppingList` AsyncStorage key, and removal of the now-unused
 `mockData.shoppingList` seed and the API-vs-legacy navigation shim.

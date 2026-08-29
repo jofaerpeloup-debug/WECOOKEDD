@@ -15,6 +15,7 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Badge from '../components/Badge';
+import IngredientPickerModal from '../components/IngredientPickerModal';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientPrimaryLine, formatQuantity } from '../utils/recipe';
 import { unitLabel } from '../api/recipeOptions';
@@ -22,9 +23,10 @@ import { unitLabel } from '../api/recipeOptions';
 // The Shopping List is backed entirely by the Express Shopping List REST API
 // (via ShoppingListProvider). Items are rendered in BACKEND ARRAY ORDER — there
 // is no produce/pantry/dairy/recipeItems grouping and no `item.source`; those
-// fields do not exist in backend Shopping List data. There is no free-text
-// "Add an item" bar: the backend only accepts canonical ingredients, and a
-// canonical ingredient picker is a later focused slice.
+// fields do not exist in backend Shopping List data. Manual add goes through
+// IngredientPickerModal, which only ever submits CANONICAL backend ingredient
+// ids (GET /api/v1/ingredients) via ShoppingListContext.addItem — there is no
+// free-text / local-only item and no optimistic merge.
 
 const UNAVAILABLE_LABEL = 'Unavailable ingredient';
 
@@ -118,12 +120,17 @@ export default function ShoppingListScreen({ navigation }) {
     isMutating,
     isItemPending,
     reload,
+    addItem,
     setChecked,
     removeItem,
     clear,
   } = useShoppingList();
 
   const [refreshing, setRefreshing] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const openPicker = useCallback(() => setPickerOpen(true), []);
+  const closePicker = useCallback(() => setPickerOpen(false), []);
 
   // Reconcile with server truth on focus. `reload` is generation-guarded and
   // is a no-op while a mutation or another GET is already in flight.
@@ -244,9 +251,26 @@ export default function ShoppingListScreen({ navigation }) {
           </Pressable>
         ) : null}
 
+        <Pressable
+          onPress={openPicker}
+          disabled={isMutating}
+          style={({ pressed }) => [
+            styles.addBtn,
+            pressed && !isMutating && styles.addBtnPressed,
+            isMutating && styles.addBtnDisabled,
+          ]}
+        >
+          <Ionicons
+            name="add-circle-outline"
+            size={18}
+            color={isMutating ? colors.inkFaint : colors.sageDeep}
+          />
+          <Text style={[styles.addBtnText, isMutating && styles.addBtnTextDisabled]}>Add item</Text>
+        </Pressable>
+
         {items.length === 0 ? (
           <Text style={styles.emptyText}>
-            Your shopping list is empty. Add ingredients from a recipe.
+            Your shopping list is empty. Add an ingredient above, or add everything from a recipe.
           </Text>
         ) : (
           items.map((item) => (
@@ -261,6 +285,8 @@ export default function ShoppingListScreen({ navigation }) {
           ))
         )}
       </ScrollView>
+
+      <IngredientPickerModal visible={pickerOpen} onClose={closePicker} onAdd={addItem} />
     </View>
   );
 }
@@ -269,6 +295,26 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    addBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.sm,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: colors.sage,
+      borderRadius: radius.md,
+      paddingVertical: spacing.md,
+      marginBottom: spacing.lg,
+    },
+    addBtnPressed: { opacity: 0.6 },
+    addBtnDisabled: { opacity: 0.5, borderColor: colors.hairline },
+    addBtnText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
+    addBtnTextDisabled: { color: colors.inkFaint },
     centerWrap: {
       flex: 1,
       alignItems: 'center',
