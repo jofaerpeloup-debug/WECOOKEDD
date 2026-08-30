@@ -10,8 +10,26 @@ const assert = require('node:assert/strict');
 
 const userRepository = require('../src/modules/users/user.repository');
 const userService = require('../src/modules/users/user.service');
+const sessionService = require('../src/modules/sessions/session.service');
 const { hashPassword } = require('../src/shared/security/password');
 const { AppError } = require('../src/shared/errors/app-error');
+
+const ACTING_ADMIN_ID = '507f1f77bcf86cd799439001';
+const TARGET_USER_ID = '507f1f77bcf86cd799439002';
+
+function fakeUser(overrides = {}) {
+  return {
+    _id: TARGET_USER_ID,
+    name: 'Target',
+    email: 'target@example.com',
+    role: 'user',
+    status: 'active',
+    emailVerified: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
 
 test('registerUser normalizes the email, hashes the password, and delegates to the repository', async (t) => {
   let capturedArgs;
@@ -101,4 +119,369 @@ test('getUserById delegates to the repository', async (t) => {
   t.mock.method(userRepository, 'findById', async (id) => ({ _id: id }));
   const user = await userService.getUserById('user-1');
   assert.equal(user._id, 'user-1');
+});
+
+// ---------------------------------------------------------------------------
+// listUsers
+// ---------------------------------------------------------------------------
+
+test('listUsers builds the filter field-by-field and regex-escapes the search', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'findMany', async (args) => {
+    captured = args;
+    return [fakeUser()];
+  });
+  t.mock.method(userRepository, 'countByFilter', async () => 1);
+
+  const result = await userService.listUsers({
+    search: 'a.b+c',
+    role: 'admin',
+    status: 'active',
+    sort: 'nameAsc',
+    page: 2,
+    limit: 20,
+  });
+
+  assert.deepEqual(captured.filter.role, 'admin');
+  assert.deepEqual(captured.filter.status, 'active');
+  assert.equal(captured.filter.$or.length, 2);
+  // Metacharacters are escaped — the source is a literal-substring pattern.
+  assert.equal(captured.filter.$or[0].name.source, 'a\\.b\\+c');
+  assert.equal(captured.filter.$or[0].name.flags.includes('i'), true);
+  assert.deepEqual(captured.sort, { name: 1, _id: 1 });
+  assert.equal(captured.skip, 20); // (page 2 - 1) * limit 20
+  assert.equal(captured.limit, 20);
+  assert.equal(result.total, 1);
+  assert.equal(result.items.length, 1);
+});
+
+test('listUsers omits role/status/$or from the filter when not supplied', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'findMany', async (args) => {
+    captured = args;
+    return [];
+  });
+  t.mock.method(userRepository, 'countByFilter', async () => 0);
+
+  await userService.listUsers({ sort: 'newest', page: 1, limit: 20 });
+
+  assert.deepEqual(captured.filter, {});
+  assert.deepEqual(captured.sort, { createdAt: -1, _id: -1 });
+  assert.equal(captured.skip, 0);
+});
+
+// ---------------------------------------------------------------------------
+// adminUpdateUser — target resolution & self-protection
+// ---------------------------------------------------------------------------
+
+test('adminUpdateUser throws USER_NOT_FOUND when the target does not exist', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => null);
+
+  await assert.rejects(
+    () =>
+      userService.adminUpdateUser({
+        actingUserId: ACTING_ADMIN_ID,
+        targetUserId: TARGET_USER_ID,
+        patch: { role: 'admin' },
+      }),
+    (err) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 404);
+      assert.equal(err.code, 'USER_NOT_FOUND');
+      return true;
+    }
+  );
+});
+
+test('adminUpdateUser rejects self-demotion with ADMIN_CANNOT_MODIFY_SELF', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ _id: ACTING_ADMIN_ID, role: 'admin' })
+  );
+  let updated = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return fakeUser();
+  });
+
+  await assert.rejects(
+    () =>
+      userService.adminUpdateUser({
+        actingUserId: ACTING_ADMIN_ID,
+        targetUserId: ACTING_ADMIN_ID,
+        patch: { role: 'user' },
+      }),
+    (err) => {
+      assert.equal(err.statusCode, 403);
+      assert.equal(err.code, 'ADMIN_CANNOT_MODIFY_SELF');
+      return true;
+    }
+  );
+  assert.equal(updated, false);
+});
+
+test('adminUpdateUser rejects self-suspension with ADMIN_CANNOT_MODIFY_SELF', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ _id: ACTING_ADMIN_ID, role: 'admin', status: 'active' })
+  );
+
+  await assert.rejects(
+    () =>
+      userService.adminUpdateUser({
+        actingUserId: ACTING_ADMIN_ID,
+        targetUserId: ACTING_ADMIN_ID,
+        patch: { status: 'suspended' },
+      }),
+    (err) => {
+      assert.equal(err.code, 'ADMIN_CANNOT_MODIFY_SELF');
+      return true;
+    }
+  );
+});
+
+test('adminUpdateUser self-protection is not bypassable by re-casing the target id', async (t) => {
+  // Same ObjectId, upper-cased hex — ObjectId.isValid() accepts it and it
+  // resolves to the same document, but a naive string compare would miss it.
+  const selfUpper = ACTING_ADMIN_ID.toUpperCase();
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ _id: ACTING_ADMIN_ID, role: 'admin', status: 'active' })
+  );
+  let updated = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return fakeUser();
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+
+  for (const patch of [{ role: 'user' }, { status: 'suspended' }]) {
+    await assert.rejects(
+      () =>
+        userService.adminUpdateUser({
+          actingUserId: ACTING_ADMIN_ID,
+          targetUserId: selfUpper,
+          patch,
+        }),
+      (err) => {
+        assert.equal(err.code, 'ADMIN_CANNOT_MODIFY_SELF');
+        return true;
+      }
+    );
+  }
+  assert.equal(updated, false);
+});
+
+test('adminUpdateUser allows a harmless self no-op (role stays admin)', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ _id: ACTING_ADMIN_ID, role: 'admin', status: 'active' })
+  );
+  t.mock.method(userRepository, 'updateById', async (id, update) =>
+    fakeUser({ _id: id, role: update.$set.role || 'admin', status: 'active' })
+  );
+
+  const result = await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: ACTING_ADMIN_ID,
+    patch: { role: 'admin' },
+  });
+  assert.equal(result.role, 'admin');
+});
+
+// ---------------------------------------------------------------------------
+// adminUpdateUser — session / status transition ordering
+// ---------------------------------------------------------------------------
+
+function trackOrder(t, { updateResult = fakeUser(), revoke = async () => 0 } = {}) {
+  const order = [];
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    order.push('update');
+    return { ...updateResult, _id: id, ...update.$set };
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async (userId) => {
+    order.push('revoke');
+    return revoke(userId);
+  });
+  return order;
+}
+
+test('promotion user -> admin does not revoke sessions', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ role: 'user', status: 'active' }));
+  const order = trackOrder(t);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { role: 'admin' },
+  });
+
+  assert.deepEqual(order, ['update']);
+});
+
+test('demotion admin -> user (different target) does not revoke sessions', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ role: 'admin', status: 'active' })
+  );
+  const order = trackOrder(t);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { role: 'user' },
+  });
+
+  assert.deepEqual(order, ['update']);
+});
+
+test('active -> active (no-op status) does not revoke sessions', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
+  const order = trackOrder(t);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'active' },
+  });
+
+  assert.deepEqual(order, ['update']);
+});
+
+test('active -> suspended persists status THEN revokes sessions (order matters)', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
+  const order = trackOrder(t);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'suspended' },
+  });
+
+  assert.deepEqual(order, ['update', 'revoke']);
+});
+
+test('suspended -> active revokes sessions FIRST, THEN persists active (order matters)', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'suspended' }));
+  const order = trackOrder(t);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'active' },
+  });
+
+  assert.deepEqual(order, ['revoke', 'update']);
+});
+
+test('suspended -> active: if revocation fails, the user is NOT reactivated', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'suspended' }));
+  let updateCalled = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updateCalled = true;
+    return fakeUser({ status: 'active' });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    throw new Error('session store unavailable');
+  });
+
+  await assert.rejects(
+    () =>
+      userService.adminUpdateUser({
+        actingUserId: ACTING_ADMIN_ID,
+        targetUserId: TARGET_USER_ID,
+        patch: { status: 'active' },
+      }),
+    /session store unavailable/
+  );
+  assert.equal(updateCalled, false, 'status must not be flipped to active when revocation failed');
+});
+
+test('active -> suspended: if revocation fails, the status update already happened (no rollback)', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
+  let updateCalled = false;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    updateCalled = true;
+    return fakeUser({ _id: id, ...update.$set });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    throw new Error('session store unavailable');
+  });
+
+  await assert.rejects(
+    () =>
+      userService.adminUpdateUser({
+        actingUserId: ACTING_ADMIN_ID,
+        targetUserId: TARGET_USER_ID,
+        patch: { status: 'suspended' },
+      }),
+    /session store unavailable/
+  );
+  assert.equal(updateCalled, true, 'suspension is persisted before the revoke attempt');
+});
+
+test('combined { role, status: suspended } updates once then revokes', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ role: 'admin', status: 'active' })
+  );
+  let capturedUpdate;
+  const order = [];
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    order.push('update');
+    capturedUpdate = update.$set;
+    return fakeUser({ _id: id, ...update.$set });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    order.push('revoke');
+    return 2;
+  });
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { role: 'user', status: 'suspended' },
+  });
+
+  assert.deepEqual(capturedUpdate, { role: 'user', status: 'suspended' });
+  assert.deepEqual(order, ['update', 'revoke']);
+});
+
+test('combined { role, status: active } on a suspended user revokes FIRST then updates once', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ role: 'user', status: 'suspended' })
+  );
+  let capturedUpdate;
+  const order = [];
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    order.push('update');
+    capturedUpdate = update.$set;
+    return fakeUser({ _id: id, ...update.$set });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    order.push('revoke');
+    return 1;
+  });
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { role: 'admin', status: 'active' },
+  });
+
+  assert.deepEqual(capturedUpdate, { role: 'admin', status: 'active' });
+  assert.deepEqual(order, ['revoke', 'update']);
+});
+
+test('adminUpdateUser throws USER_NOT_FOUND when the target is deleted between read and write', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
+  t.mock.method(userRepository, 'updateById', async () => null);
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+
+  await assert.rejects(
+    () =>
+      userService.adminUpdateUser({
+        actingUserId: ACTING_ADMIN_ID,
+        targetUserId: TARGET_USER_ID,
+        patch: { role: 'admin' },
+      }),
+    (err) => {
+      assert.equal(err.code, 'USER_NOT_FOUND');
+      return true;
+    }
+  );
 });
