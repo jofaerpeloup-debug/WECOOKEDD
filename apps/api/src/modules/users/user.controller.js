@@ -1,8 +1,12 @@
 const userService = require('./user.service');
-const { toPublicUser } = require('./user.serializer');
+const { toPublicUser, toAdminUserSummary } = require('./user.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
 const { AppError } = require('../../shared/errors/app-error');
+
+function toPagination({ page, limit, total }) {
+  return { page, limit, total, totalPages: Math.ceil(total / limit) };
+}
 
 const getCurrentUser = asyncHandler(async (req, res) => {
   const user = await userService.getUserById(req.auth.userId);
@@ -15,4 +19,27 @@ const getCurrentUser = asyncHandler(async (req, res) => {
   sendSuccess(res, { user: toPublicUser(user) });
 });
 
-module.exports = { getCurrentUser };
+const listUsers = asyncHandler(async (req, res) => {
+  const { search, role, status, sort, page, limit } = req.validated.query;
+
+  const { items, total } = await userService.listUsers({ search, role, status, sort, page, limit });
+
+  sendSuccess(res, {
+    users: items.map(toAdminUserSummary),
+    pagination: toPagination({ page, limit, total }),
+  });
+});
+
+const updateUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  const updated = await userService.adminUpdateUser({
+    actingUserId: req.auth.userId,
+    targetUserId: userId,
+    patch: req.body,
+  });
+
+  sendSuccess(res, { user: toAdminUserSummary(updated) });
+});
+
+module.exports = { getCurrentUser, listUsers, updateUser };
