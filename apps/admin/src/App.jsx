@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useMemo } from 'react';
 import {
-  LayoutDashboard, ChefHat, Users, Search, Plus, Pencil, Trash2, X,
+  LayoutDashboard, ChefHat, Users, X,
   Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle, Flag,
   Accessibility, ChevronDown, Carrot, ShieldAlert, Replace,
@@ -15,33 +15,17 @@ import {
   refreshEmailVerified, updateUserProfile, changeUserPassword, deleteCurrentAccount,
   requestPasswordReset, verifyResetCode, confirmReset,
 } from './auth.js';
-import {
-  subscribeUsers, saveUserDoc, deleteUserDoc, submitReportDoc, seedCollection,
-} from './firestore.js';
+import { submitReportDoc } from './firestore.js';
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
+import { listUsers } from './userApi.js';
 import { CUISINE_LABELS, CUISINE_COLORS } from './recipeOptions.js';
 import IngredientsTab from './IngredientsTab.jsx';
 import SubstitutionsTab from './SubstitutionsTab.jsx';
 import RecipesTab from './RecipesTab.jsx';
+import UsersTab from './UsersTab.jsx';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
-
-// Dietary-tag options for the still-Firestore Users tab only. The Recipes tab
-// uses the backend's own dietary-tag enum (see recipeOptions.js).
-const DIET_TAGS = [
-  'Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free',
-  'Nut-Free', 'Low-FODMAP', 'Pescatarian', 'Low-Sodium',
-];
-
-const seedUsers = [
-  { id: 'u1', name: 'Mara Whitfield', email: 'mara.w@example.com', joinedDate: '2026-01-14', tags: ['Vegetarian', 'Low-FODMAP'], recipesSaved: 14, status: 'Active' },
-  { id: 'u2', name: 'Julian Ostrowski', email: 'julian.o@example.com', joinedDate: '2025-11-03', tags: ['Gluten-Free'], recipesSaved: 6, status: 'Active' },
-  { id: 'u3', name: 'Priya Nandakumar', email: 'priya.n@example.com', joinedDate: '2026-02-27', tags: ['Vegan', 'Nut-Free'], recipesSaved: 22, status: 'Active' },
-  { id: 'u4', name: 'Desmond Achterberg', email: 'desmond.a@example.com', joinedDate: '2025-08-19', tags: [], recipesSaved: 3, status: 'Inactive' },
-  { id: 'u5', name: 'Lena Fairweather', email: 'lena.f@example.com', joinedDate: '2026-03-30', tags: ['Pescatarian'], recipesSaved: 9, status: 'Active' },
-  { id: 'u6', name: 'Theo Marchetti', email: 'theo.m@example.com', joinedDate: '2025-12-11', tags: ['Dairy-Free', 'Low-Sodium'], recipesSaved: 17, status: 'Active' },
-];
 
 const growthData = [
   { month: 'Mar', users: 340, recipes: 210 },
@@ -58,17 +42,6 @@ const activityFeed = [
   { text: 'Theo Marchetti joined WeCooked', time: '1d ago' },
   { text: 'New recipe added: Smoky Chickpea Shakshuka', time: '2d ago' },
 ];
-
-function formatDate(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso + 'T00:00:00');
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 // Thin wrappers around window.storage that NEVER throw synchronously and never
 // reject -- window.storage itself may be missing in some rendering contexts,
@@ -106,24 +79,23 @@ async function safeDelete(key, shared = false) {
 function WeCookedAdminApp() {
   // Backend local auth is the authoritative gate for this dashboard and for
   // every WeCooked REST API call. Firebase auth is kept alongside it, best
-  // effort, only so the not-yet-migrated Firestore surface (Users tab + the
-  // Overview user widgets) keeps working — see
+  // effort, only so the not-yet-migrated Firebase surface ("Report a problem"
+  // and the Firebase-Auth account flows) keeps working — see
   // docs/architecture/admin-api-integration.md.
   const backend = useBackendAuth();
 
   const [tab, setTab] = useState('overview');
-  const [users, setUsers] = useState([]);
-  // Recipes are fully REST-backed now (zero Firestore). The Overview tab still
-  // shows a couple of recipe widgets, so it pulls a lightweight, best-effort
-  // summary from the same REST API the Recipes tab uses. `sampleSize` is how
-  // many recipes the cuisine breakdown was actually computed from (≤100), so
-  // the widget can say so when it isn't the whole catalog.
+  // Recipes and users are fully REST-backed now (zero Firestore). The Overview
+  // tab shows a few summary widgets, so it pulls lightweight, best-effort
+  // counts from the same REST APIs the Recipes / Users tabs use. `sampleSize`
+  // is how many recipes the cuisine breakdown was actually computed from
+  // (≤100), so the widget can say so when it isn't the whole catalog.
   const [recipeStats, setRecipeStats] = useState({
     total: 0, latest: [], byCuisine: [], sampleSize: 0,
   });
+  const [userCounts, setUserCounts] = useState({ total: 0, active: 0, suspended: 0 });
 
   const [account, setAccount] = useState(null);
-  const [authenticated, setAuthenticated] = useState(false);
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -133,12 +105,6 @@ function WeCookedAdminApp() {
   const [displayOpen, setDisplayOpen] = useState(false);
   const [displayPrefs, setDisplayPrefs] = useState({ theme: 'light', reduceMotion: false });
   const [prefsLoaded, setPrefsLoaded] = useState(false);
-
-  const [userSearch, setUserSearch] = useState('');
-
-  const [userModal, setUserModal] = useState(null); // null | 'new' | user object
-
-  const [confirmDeleteUser, setConfirmDeleteUser] = useState(null);
 
   const [resetOobCode, setResetOobCode] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -155,25 +121,15 @@ function WeCookedAdminApp() {
   }
 
   useEffect(() => {
-    // Firebase auth runs in the background purely for the legacy Firestore
-    // tabs; the dashboard gate itself is driven by backend auth, not this.
+    // Firebase auth runs in the background purely for the remaining Firebase
+    // surface ("Report a problem" and the Firebase-Auth account flows); the
+    // dashboard gate itself is driven by backend auth, not this. `account`
+    // feeds the profile menu / Settings / Report identity.
     const unsub = auth.onAuthStateChanged((user) => {
       setAccount(toAccount(user));
-      setAuthenticated(!!user);
     });
     return unsub;
   }, []);
-
-  useEffect(() => {
-    // The still-Firestore Users tab (and the Overview user widgets) need a
-    // Firebase session. Without one (a backend-only admin) skip the
-    // subscription — that tab then renders its existing empty state. This
-    // deliberately never gates the dashboard render: a slow or unavailable
-    // Firestore must not block the REST-backed tabs.
-    if (!authenticated) return undefined;
-    const unsubUsers = subscribeUsers(setUsers);
-    return () => { unsubUsers(); };
-  }, [authenticated]);
 
   useEffect(() => {
     // Recipe stats for the Overview tab, straight from the REST API — no
@@ -211,6 +167,35 @@ function WeCookedAdminApp() {
   }, [backend.status, backend.user?.role]);
 
   useEffect(() => {
+    // User counts for the Overview tab, straight from the REST API — no
+    // Firestore. Refetched whenever the admin lands on Overview so a suspend /
+    // reactivate done on the Users tab is reflected. Only pagination.total is
+    // read (limit: 1 keeps the payload tiny). Best-effort: a failure just
+    // leaves the cards at zero.
+    if (tab !== 'overview') return undefined;
+    if (backend.status !== 'authenticated' || backend.user?.role !== 'admin') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [all, active, suspended] = await Promise.all([
+          listUsers({ limit: 1 }),
+          listUsers({ limit: 1, status: 'active' }),
+          listUsers({ limit: 1, status: 'suspended' }),
+        ]);
+        if (cancelled) return;
+        setUserCounts({
+          total: all.pagination?.total ?? 0,
+          active: active.pagination?.total ?? 0,
+          suspended: suspended.pagination?.total ?? 0,
+        });
+      } catch {
+        if (!cancelled) setUserCounts({ total: 0, active: 0, suspended: 0 });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tab, backend.status, backend.user?.role]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       const p = await safeGet(DISPLAY_PREFS_KEY, false);
@@ -230,37 +215,12 @@ function WeCookedAdminApp() {
     safeSet(DISPLAY_PREFS_KEY, JSON.stringify(displayPrefs), false);
   }, [displayPrefs, prefsLoaded]);
 
-  const filteredUsers = useMemo(() => {
-    const q = userSearch.trim().toLowerCase();
-    if (!q) return users;
-    return users.filter(u =>
-      u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
-    );
-  }, [users, userSearch]);
-
-  const metrics = useMemo(() => {
-    const activeUsers = users.filter(u => u.status === 'Active').length;
-    const avgSaved = users.length
-      ? Math.round(users.reduce((sum, u) => sum + (u.recipesSaved || 0), 0) / users.length)
-      : 0;
-    return {
-      totalRecipes: recipeStats.total,
-      totalUsers: users.length,
-      activeUsers,
-      avgSaved,
-    };
-  }, [recipeStats.total, users]);
-
-  async function saveUser(data) {
-    await saveUserDoc(data.id ? data : { ...data, joinedDate: todayISO() });
-    setUserModal(null);
-  }
-
-  async function resetSampleData() {
-    // Users only — recipes are REST-backed now and are never seeded into
-    // Firestore. Recipe sample data belongs in the backend, if anywhere.
-    await seedCollection('users', seedUsers);
-  }
+  const metrics = useMemo(() => ({
+    totalRecipes: recipeStats.total,
+    totalUsers: userCounts.total,
+    activeUsers: userCounts.active,
+    suspendedUsers: userCounts.suspended,
+  }), [recipeStats.total, userCounts]);
 
   async function createAccount({ name, email, password }) {
     // Sign-up remains a Firebase-only flow for now. Backend user provisioning
@@ -275,13 +235,14 @@ function WeCookedAdminApp() {
     // suspended account, or the API being unreachable, and the sign-in form
     // surfaces that message.
     await backend.login(email, password);
-    // Best effort: mirror the sign-in to Firebase so the legacy Firestore
-    // tabs keep working for admins whose credentials also exist there. A
-    // failure here is expected for backend-only admins and must not block.
+    // Best effort: mirror the sign-in to Firebase so the remaining Firebase
+    // surface ("Report a problem" and the Firebase-Auth account flows) keeps
+    // working for admins whose credentials also exist there. A failure here is
+    // expected for backend-only admins and must not block.
     try {
       await logIn(email, password);
     } catch (err) {
-      console.warn('Firebase sign-in unavailable (legacy tabs will be read-only):', err?.code || err);
+      console.warn('Firebase sign-in unavailable (Report / account flows will be limited):', err?.code || err);
     }
     return true;
   }
@@ -1083,11 +1044,6 @@ function WeCookedAdminApp() {
                 onOpenReport={() => { setReportOpen(true); setProfileMenuOpen(false); }}
                 onOpenDisplay={() => { setDisplayOpen(true); setProfileMenuOpen(false); }}
               />
-              {account && users.length === 0 && (
-                <button className="wc-reset-btn" onClick={resetSampleData}>
-                  Load sample users
-                </button>
-              )}
               {account && (
                 <button className="wc-reset-btn" onClick={() => setConfirmDeleteAccount(true)}>
                   Delete admin account
@@ -1115,28 +1071,11 @@ function WeCookedAdminApp() {
 
             {tab === 'users' && (
               <UsersTab
-                users={filteredUsers}
-                search={userSearch}
-                setSearch={setUserSearch}
-                onAdd={() => setUserModal('new')}
-                onEdit={(u) => setUserModal(u)}
-                confirmDeleteUser={confirmDeleteUser}
-                setConfirmDeleteUser={setConfirmDeleteUser}
-                onDelete={async (id) => {
-                  await deleteUserDoc(id);
-                  setConfirmDeleteUser(null);
-                }}
+                currentUserId={backend.user?.id}
+                onAuthorityLost={() => backend.refreshUser().catch(() => {})}
               />
             )}
           </main>
-
-          {userModal && (
-            <UserModal
-              user={userModal === 'new' ? null : userModal}
-              onClose={() => setUserModal(null)}
-              onSave={saveUser}
-            />
-          )}
 
           {settingsOpen && (
             <SettingsModal
@@ -1409,19 +1348,15 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
 const HELP_FAQS = [
   {
     q: 'Where is my data stored?',
-    a: 'Ingredients, substitutions, and recipes live in the WeCooked backend (REST API + MongoDB); users and admin accounts are still in Firebase for now (Firestore, plus Firebase Authentication for admin sign-in) and migrate next. Everything is shared across every admin and device — not tied to one browser.',
+    a: 'Ingredients, substitutions, recipes, and users all live in the WeCooked backend (REST API + MongoDB) and are shared across every admin and device — not tied to one browser. Firebase Authentication still participates in admin sign-in and the account flows (password reset, profile and password changes, email verification, account deletion).',
   },
   {
     q: 'How do I add another admin?',
-    a: 'Sign out, then choose “Sign Up” on the sign-in screen to create another admin account. All admins share the same recipe and user data.',
+    a: 'Sign out and choose “Sign Up” on the sign-in screen to create the account. New accounts are created as regular users. Granting admin access is managed outside the Admin Users screen (directly in MongoDB) — there is no in-app admin-promotion flow.',
   },
   {
     q: 'I lost my password — now what?',
     a: 'Click “Forgot password?” on the sign-in screen and follow the reset link sent to your email.',
-  },
-  {
-    q: 'How do I load the sample data?',
-    a: '“Load sample users” appears at the bottom of the sidebar while there are no users yet, and seeds the original demo users into Firebase. Once any user exists it’s hidden, to avoid overwriting real data. Recipes and ingredients are managed through the backend and are not seeded from here.',
   },
 ];
 
@@ -1671,9 +1606,9 @@ function OverviewTab({ metrics, dark, latestRecipes, cuisineBreakdown, cuisineSa
           <div className="wc-metric-delta"><TrendingUp size={13} /> steady</div>
         </div>
         <div className="wc-metric-card">
-          <div className="wc-metric-label">Avg. Recipes Saved</div>
-          <div className="wc-metric-value wc-serif">{metrics.avgSaved}</div>
-          <div className="wc-metric-delta"><Clock size={13} /> per user</div>
+          <div className="wc-metric-label">Suspended Users</div>
+          <div className="wc-metric-value wc-serif">{metrics.suspendedUsers}</div>
+          <div className="wc-metric-delta"><Clock size={13} /> as of last check</div>
         </div>
       </div>
 
@@ -1778,185 +1713,6 @@ function OverviewTab({ metrics, dark, latestRecipes, cuisineBreakdown, cuisineSa
             </>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function UsersTab({ users, search, setSearch, onAdd, onEdit, confirmDeleteUser, setConfirmDeleteUser, onDelete }) {
-  return (
-    <div>
-      <div className="wc-topbar">
-        <h1>Users</h1>
-        <div className="wc-topbar-actions">
-          <div className="wc-search">
-            <Search size={15} />
-            <input
-              placeholder="Search users…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <button className="wc-btn-primary" onClick={onAdd}>
-            <Plus size={16} /> Add user
-          </button>
-        </div>
-      </div>
-
-      <div className="wc-table-wrap">
-        {users.length === 0 ? (
-          <div className="wc-empty">
-            <Users size={28} />
-            <div>No users match yet. Add one to get the list started.</div>
-          </div>
-        ) : (
-          <table className="wc-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Joined</th>
-                <th>Dietary tags</th>
-                <th>Saved</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id}>
-                  <td>{u.name}</td>
-                  <td>{u.email}</td>
-                  <td>{formatDate(u.joinedDate)}</td>
-                  <td>
-                    {u.tags.length === 0 ? '—' : u.tags.map((t) => (
-                      <span className="wc-tag" key={t}>{t}</span>
-                    ))}
-                  </td>
-                  <td>{u.recipesSaved}</td>
-                  <td><span className={`wc-pill ${u.status.toLowerCase()}`}>{u.status}</span></td>
-                  <td>
-                    {confirmDeleteUser === u.id ? (
-                      <div className="wc-confirm-row">
-                        <span>Delete?</span>
-                        <button className="wc-confirm-yes" onClick={() => onDelete(u.id)}>Yes</button>
-                        <button className="wc-confirm-no" onClick={() => setConfirmDeleteUser(null)}>No</button>
-                      </div>
-                    ) : (
-                      <div className="wc-row-actions">
-                        <button className="wc-icon-btn" onClick={() => onEdit(u)} aria-label="Edit user">
-                          <Pencil size={15} />
-                        </button>
-                        <button className="wc-icon-btn danger" onClick={() => setConfirmDeleteUser(u.id)} aria-label="Delete user">
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function UserModal({ user, onClose, onSave }) {
-  const [form, setForm] = useState(user || {
-    name: '', email: '', tags: [], recipesSaved: 0, status: 'Active',
-  });
-
-  function toggleTag(tag) {
-    setForm((f) => ({
-      ...f,
-      tags: f.tags.includes(tag) ? f.tags.filter((t) => t !== tag) : [...f.tags, tag],
-    }));
-  }
-
-  function submit(e) {
-    e.preventDefault();
-    if (!form.name.trim() || !form.email.trim()) return;
-    onSave({ ...form, recipesSaved: Number(form.recipesSaved) });
-  }
-
-  return (
-    <div className="wc-modal-overlay" onClick={onClose}>
-      <div className="wc-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wc-modal-header">
-          <h2 className="wc-serif">{user ? 'Edit user' : 'Add user'}</h2>
-          <button className="wc-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
-        </div>
-        <form onSubmit={submit}>
-          <div className="wc-field">
-            <label>Name</label>
-            <input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="Full name"
-              required
-            />
-          </div>
-          <div className="wc-field">
-            <label>Email</label>
-            <input
-              type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="name@example.com"
-              required
-            />
-          </div>
-          <div className="wc-field">
-            <label>Dietary tags</label>
-            <div className="wc-chip-group">
-              {DIET_TAGS.map((tag) => (
-                <button
-                  type="button"
-                  key={tag}
-                  className={`wc-chip ${form.tags.includes(tag) ? 'selected' : ''}`}
-                  onClick={() => toggleTag(tag)}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="wc-field-row">
-            <div className="wc-field">
-              <label>Recipes saved</label>
-              <input
-                type="number" min="0"
-                value={form.recipesSaved}
-                onChange={(e) => setForm({ ...form, recipesSaved: e.target.value })}
-              />
-            </div>
-            <div className="wc-field">
-              <label>Status</label>
-              <div className="wc-status-toggle">
-                <button
-                  type="button"
-                  className={`${form.status === 'Active' ? 'selected active-opt' : ''}`}
-                  onClick={() => setForm({ ...form, status: 'Active' })}
-                >
-                  Active
-                </button>
-                <button
-                  type="button"
-                  className={`${form.status === 'Inactive' ? 'selected inactive-opt' : ''}`}
-                  onClick={() => setForm({ ...form, status: 'Inactive' })}
-                >
-                  Inactive
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="wc-modal-actions">
-            <button type="button" className="wc-btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="wc-btn-primary"><Check size={15} /> Save user</button>
-          </div>
-        </form>
       </div>
     </div>
   );

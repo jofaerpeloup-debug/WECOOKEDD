@@ -26,12 +26,12 @@ Admin React  ->  frontend service layer  ->  Express REST API  ->  MongoDB
 
 **Explicitly out (left exactly as they were, reported as deferred):**
 
-- Substitutions REST migration, Recipes REST migration.
-- The Overview / Recipes / Users tabs (still Firestore).
-- Admin user management, profile editing, email verification, password
-  reset/change, Google sign-in — these need backend capabilities that do not
-  exist yet. Their existing Firebase behavior is untouched; no mock/substitute
-  backend was added for them.
+- Substitutions REST migration, Recipes REST migration, Users REST migration —
+  each shipped in its own later slice (see "Next admin slices").
+- Profile editing, email verification, password reset/change, Google sign-in —
+  these need backend capabilities that do not exist yet. Their existing
+  Firebase behavior is untouched; no mock/substitute backend was added for
+  them.
 - Mobile integration, Community, Recommendations, AI.
 - HttpOnly-cookie refresh auth (later auth-hardening task).
 
@@ -223,20 +223,28 @@ ingredients (the admin had no ingredient UI), so the Ingredients tab is
 REST-only from day one — there is no dual path (`component -> Firestore` **and**
 `component -> REST`) for ingredients.
 
+Later slices moved substitutions, recipes, and **users** off Firestore too. As
+of the Users slice ([admin-users-integration.md](./admin-users-integration.md))
+**no admin tab reads or writes Firestore for business data** — the Firestore
+`users` collection, the `subscribeUsers` subscription, and the demo-seed
+helpers are gone. Overview user counts now come from `GET /api/v1/users`
+(`pagination.total`, `limit: 1`).
+
 **Firebase still in use (TEMPORARY technical debt, to be removed in later
 integration slices):**
 
 | Area | Firebase use | Removal slice |
 | --- | --- | --- |
-| Overview / Recipes / Users tabs | Firestore collections `recipes`, `users` (mock/seed shapes) | Recipes slice, Users/admin-management slice |
 | "Report a problem" | Firestore `reports` collection | later |
 | Sign-up, forgot/reset password, profile edit, password change, email verification, delete account | Firebase Auth | auth-hardening slice(s) |
-| Legacy session for the Firestore tabs | best-effort `signInWithEmailAndPassword` during login | when the last Firestore tab migrates |
+| Profile-menu identity | `auth.onAuthStateChanged` populates the sidebar/Settings/Report identity | when the account flows move to the backend |
+| Legacy session mirror | best-effort `signInWithEmailAndPassword` during login, so Report + the account flows work for admins who also exist in Firebase | when the account flows move to the backend |
 
-No new Firebase/Firestore dependencies or business logic were added. `firebase.js`,
-`auth.js`, `firestore.js` are unchanged. `VerifyEmailScreen` and the
-email-verification handlers remain in `App.jsx` but are no longer on the render
-path (backend auth is the gate now).
+No new Firebase/Firestore dependencies or business logic were added.
+`firebase.js` and `auth.js` are unchanged; `firestore.js` now contains only
+`submitReportDoc`. `VerifyEmailScreen` and the email-verification handlers
+remain in `App.jsx` but are no longer on the render path (backend auth is the
+gate now).
 
 **Consequences of backend auth becoming the gate (all deferred, not fixed here):**
 
@@ -311,7 +319,20 @@ Rewrote the Recipes tab as `RecipesTab.jsx` with `recipeApi.js` +
 too — zero Firestore reads/writes for recipe data. See
 [admin-recipes-integration.md](./admin-recipes-integration.md).
 
-After that, **Users / admin-management** (needs new backend endpoints — design
-first), then **auth hardening** (HttpOnly refresh cookie), each removing another
-piece of Firebase. The Firestore `users` collection and the Firebase-Auth-only
-account flows are what remain.
+**Users / admin-management REST migration** (`feat/admin-users-rest-integration`)
+— **done.** Backend endpoints landed first
+([admin-users-backend-api.md](./admin-users-backend-api.md), Phase A); the
+frontend half added `userApi.js` + `userOptions.js` + `UsersTab.jsx` wired to
+`GET`/`PATCH /api/v1/users`, removed the Firestore `users` subscription and the
+seed helpers from `firestore.js`, and switched the Overview user counts to
+REST. **Account status only** (Suspend / Reactivate). Role is displayed and
+filterable but is **not** mutated from the Admin Users UI — `PATCH
+/api/v1/users/:userId` still technically accepts `role` (Phase A), but the
+frontend deliberately exposes status transitions only. No create / delete /
+name / email / password editing. See
+[admin-users-integration.md](./admin-users-integration.md).
+
+After that, **auth hardening** (HttpOnly refresh cookie) remains, plus moving
+the Firebase-Auth-only account flows (sign-up, password reset/change, profile
+edit, email verification, delete account) and "Report a problem" onto the
+backend. Those are the last Firebase users in the admin app.
