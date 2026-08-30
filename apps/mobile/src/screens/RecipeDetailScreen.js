@@ -18,6 +18,7 @@ import Badge from '../components/Badge';
 import Button from '../components/Button';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
+import SubstitutionsSheet from '../components/SubstitutionsSheet';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
@@ -301,15 +302,51 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
 
-  const ingredientLines = useMemo(
+  // Structured rows: each surviving ingredient usage paired with its display
+  // line and, when the entry resolves to a canonical backend Ingredient, the
+  // { id, name } needed for a substitutes lookup. `ingredient` is null for a
+  // usage with no canonical identity (defensive — a non-admin never receives
+  // one), and such a row never gets a substitutes affordance or request.
+  const ingredientRows = useMemo(
     () =>
       (recipe.ingredients || [])
-        .map((entry) =>
-          ingredientDisplayText(entry, { selectedServings: servings, baseServings })
-        )
+        .map((entry) => {
+          const line = ingredientDisplayText(entry, {
+            selectedServings: servings,
+            baseServings,
+          });
+          if (!line) return null;
+          const id =
+            entry && entry.ingredient && entry.ingredient.id
+              ? String(entry.ingredient.id)
+              : null;
+          const name = entry && entry.ingredient ? entry.ingredient.name : null;
+          return { line, ingredient: id && name ? { id, name } : null };
+        })
         .filter(Boolean),
     [recipe.ingredients, servings, baseServings]
   );
+
+  // Unchanged contract for Cook Mode: the same ordered, filtered array of
+  // display strings this screen has always handed to CookMode.
+  const ingredientLines = useMemo(
+    () => ingredientRows.map((row) => row.line),
+    [ingredientRows]
+  );
+
+  // Lazy, on-demand ingredient-substitutes lookup. No prefetch: a request is
+  // made only when the user opens the sheet for a specific row, and only for a
+  // canonical backend Ingredient id. Results are cached for this screen visit,
+  // keyed by canonical ingredient id; the cache dies with the screen (the
+  // container remounts on recipeId change via `key`).
+  const substitutesCacheRef = useRef(new Map());
+  const [swapIngredient, setSwapIngredient] = useState(null);
+
+  const openSubstitutes = (ing) => {
+    if (!ing || !ing.id) return; // hard guard: no canonical id -> no sheet, no request
+    setSwapIngredient(ing);
+  };
+  const closeSubstitutes = () => setSwapIngredient(null);
 
   const stats = [
     { icon: 'time-outline', value: formatMinutes(totalMins), label: 'Total time' },
@@ -451,13 +488,23 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           </View>
 
           <View style={styles.ingredientsCard}>
-            {ingredientLines.length === 0 ? (
+            {ingredientRows.length === 0 ? (
               <Text style={styles.mutedText}>No ingredients listed.</Text>
             ) : (
-              ingredientLines.map((line, i) => (
+              ingredientRows.map((row, i) => (
                 <View key={i} style={styles.ingredientRow}>
                   <View style={styles.bullet} />
-                  <Text style={styles.ingredientText}>{line}</Text>
+                  <Text style={styles.ingredientText}>{row.line}</Text>
+                  {row.ingredient ? (
+                    <Pressable
+                      onPress={() => openSubstitutes(row.ingredient)}
+                      hitSlop={6}
+                      style={styles.substituteChip}
+                    >
+                      <Ionicons name="swap-horizontal" size={13} color={colors.sageDeep} />
+                      <Text style={styles.substituteChipText}>Substitutes</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ))
             )}
@@ -500,6 +547,13 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           </Text>
         </View>
       </ScrollView>
+
+      <SubstitutionsSheet
+        visible={!!swapIngredient}
+        ingredient={swapIngredient}
+        cacheRef={substitutesCacheRef}
+        onClose={closeSubstitutes}
+      />
     </View>
   );
 }
@@ -902,6 +956,20 @@ function makeStyles(colors, shadow) {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.base,
       color: colors.ink,
+    },
+    substituteChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 4,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sagePale,
+    },
+    substituteChipText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 10,
+      color: colors.sageDeep,
     },
     mutedText: {
       fontFamily: typography.body.fontFamily,
