@@ -91,6 +91,17 @@ export function AuthProvider({ children }) {
     return u;
   }, []);
 
+  // Reconcile the context with a server-authoritative public-user payload that
+  // a self-mutation already returned (PATCH /users/me responds with the same
+  // `toPublicUser` shape as GET /users/me — no follow-up read is needed). This
+  // is NOT a general-purpose setter: the functional update only installs the
+  // payload when it belongs to the SAME still-authenticated user, so a profile
+  // write that resolves after a sign-out or a user switch is ignored.
+  const syncUser = useCallback((nextUser) => {
+    if (!mountedRef.current) return;
+    setUser((prev) => (prev && nextUser && prev.id === nextUser.id ? nextUser : prev));
+  }, []);
+
   const value = {
     status,
     user,
@@ -101,6 +112,7 @@ export function AuthProvider({ children }) {
     signOut,
     signOutEverywhere,
     refreshUser,
+    syncUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

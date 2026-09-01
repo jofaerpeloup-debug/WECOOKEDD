@@ -1,11 +1,9 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, Alert, Modal } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
-import { chef } from '../data/mockData';
 import { useAuth } from '../context/AuthContext';
 
 const ITEMS = [
@@ -21,9 +19,7 @@ const ITEMS = [
 export default function ProfileScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const insets = useSafeAreaInsets();
-  const { signOut } = useAuth();
-  const [viewerOpen, setViewerOpen] = useState(false);
+  const { user, signOut } = useAuth();
 
   const handleLogout = () => {
     Alert.alert('Log Out', 'Are you sure you want to log out?', [
@@ -49,12 +45,14 @@ export default function ProfileScreen({ navigation }) {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Pressable onPress={() => setViewerOpen(true)}>
-            <Image source={{ uri: chef.avatar }} style={styles.avatar} />
-          </Pressable>
+          {/* Backend has no avatar field — a neutral glyph, not a photo or an
+              editable affordance. */}
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={26} color={colors.sageDeep} />
+          </View>
           <View>
-            <Text style={styles.chefName}>{chef.name}</Text>
-            <Text style={styles.chefSub}>{chef.email}</Text>
+            <Text style={styles.chefName}>{user?.name}</Text>
+            <Text style={styles.chefSub}>{user?.email}</Text>
           </View>
         </View>
         <View style={styles.headerDivider} />
@@ -79,19 +77,6 @@ export default function ProfileScreen({ navigation }) {
           </Pressable>
         ))}
       </ScrollView>
-
-      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
-        <Pressable style={styles.viewerBackdrop} onPress={() => setViewerOpen(false)}>
-          <Pressable
-            style={[styles.viewerClose, { top: insets.top + spacing.md }]}
-            onPress={() => setViewerOpen(false)}
-            hitSlop={10}
-          >
-            <Ionicons name="close" size={24} color="#fff" />
-          </Pressable>
-          <Image source={{ uri: chef.avatar }} style={styles.viewerImage} resizeMode="cover" />
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -106,7 +91,16 @@ function makeStyles(colors) {
       gap: spacing.md,
       marginBottom: spacing.lg,
     },
-    avatar: { width: 56, height: 56, borderRadius: 28, borderWidth: 2, borderColor: colors.paper },
+    avatar: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: colors.sagePale,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: colors.paper,
+    },
     chefName: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.lg,
@@ -144,29 +138,6 @@ function makeStyles(colors) {
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.base,
       color: colors.ink,
-    },
-    viewerBackdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.92)',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    viewerClose: {
-      position: 'absolute',
-      right: spacing.lg,
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: 'rgba(255,255,255,0.15)',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    viewerImage: {
-      width: 280,
-      height: 280,
-      borderRadius: 140,
-      borderWidth: 4,
-      borderColor: 'rgba(255,255,255,0.15)',
     },
   });
 }

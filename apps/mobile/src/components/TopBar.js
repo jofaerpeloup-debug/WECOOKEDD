@@ -1,11 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions, Switch } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import { notificationSettings } from '../data/mockData';
 
 const DROPDOWN_WIDTH = Math.min(280, Dimensions.get('window').width * 0.78);
 
@@ -23,9 +22,6 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
   const { colors, shadow } = useTheme();
   const styles = makeDropdownStyles(colors, shadow);
   const anim = useRef(new Animated.Value(0)).current;
-  const [values, setValues] = useState(
-    Object.fromEntries(notificationSettings.map((item) => [item.id, item.value]))
-  );
 
   useEffect(() => {
     Animated.timing(anim, {
@@ -34,8 +30,6 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
       useNativeDriver: true,
     }).start();
   }, [visible]);
-
-  const toggle = (id) => setValues((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
   const opacity = anim;
@@ -53,28 +47,9 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
         <View style={styles.header}>
           <Text style={styles.headerText}>Notifications</Text>
         </View>
-
-        {notificationSettings.map((item, i) => (
-          <View
-            key={item.id}
-            style={[
-              styles.row,
-              i < notificationSettings.length - 1 && styles.rowBorder,
-              i === notificationSettings.length - 1 && styles.rowLast,
-            ]}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>{item.label}</Text>
-              <Text style={styles.rowSub}>{item.sub}</Text>
-            </View>
-            <Switch
-              value={values[item.id]}
-              onValueChange={() => toggle(item.id)}
-              trackColor={{ false: colors.hairline, true: colors.sageDeep }}
-              thumbColor={colors.onAccent}
-            />
-          </View>
-        ))}
+        <View style={styles.emptyRow}>
+          <Text style={styles.emptyText}>You're all caught up.</Text>
+        </View>
       </Animated.View>
     </Modal>
   );
@@ -248,25 +223,14 @@ function makeDropdownStyles(colors, shadow) {
       fontSize: typography.sizes.md,
       color: colors.ink,
     },
-    row: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.md,
+    emptyRow: {
       paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
+      paddingBottom: spacing.md,
     },
-    rowBorder: { borderTopWidth: 1, borderTopColor: colors.hairline },
-    rowLast: { paddingBottom: spacing.md },
-    rowLabel: {
-      fontFamily: typography.body.medium,
-      fontSize: typography.sizes.sm,
-      color: colors.ink,
-    },
-    rowSub: {
+    emptyText: {
       fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.xs,
+      fontSize: typography.sizes.sm,
       color: colors.inkFaint,
-      marginTop: 1,
     },
   });
 }
