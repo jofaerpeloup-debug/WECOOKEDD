@@ -19,6 +19,23 @@ function findByEmailWithPassword(email) {
   return User.findOne({ email }).select('+passwordHash');
 }
 
+// By-id counterpart of findByEmailWithPassword, used by authenticated
+// self-service credential operations (change-password). The caller's identity
+// is the DB-verified req.auth.userId, so there is no need to route through
+// email. Still the only other place that opts back into the select:false hash.
+function findByIdWithPassword(id) {
+  return User.findById(id).select('+passwordHash');
+}
+
+// Dedicated single-field write for the security-sensitive passwordHash. Kept
+// separate from the generic updateById (which returns the whole document and
+// runs broad validators) so a credential rotation only ever $sets this one
+// select:false field and returns nothing but the write result. The caller
+// checks matchedCount to detect a user deleted mid-request.
+function updatePasswordHashById(id, passwordHash) {
+  return User.updateOne({ _id: id }, { $set: { passwordHash } });
+}
+
 // Admin user-management list. Pure query mechanics — the caller (service)
 // owns the filter/sort/skip/limit values and every policy decision. The
 // model's `select: false` on passwordHash means the digest is never in the
@@ -43,7 +60,9 @@ module.exports = {
   findById,
   findByEmail,
   findByEmailWithPassword,
+  findByIdWithPassword,
   findMany,
   countByFilter,
   updateById,
+  updatePasswordHashById,
 };

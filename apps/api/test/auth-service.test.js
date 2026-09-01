@@ -225,3 +225,103 @@ test("logoutAll revokes all of the user's sessions and reports the count", async
   const result = await authService.logoutAll('user-1');
   assert.equal(result.revokedCount, 4);
 });
+
+// ---------------------------------------------------------------------------
+// changePassword — orchestration (persist first, THEN revoke every session)
+// ---------------------------------------------------------------------------
+
+test('changePassword persists the new password FIRST, then revokes every session (order matters)', async (t) => {
+  const calls = [];
+  t.mock.method(userService, 'changePassword', async () => {
+    calls.push('userService.changePassword');
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    calls.push('sessionService.revokeAllSessionsForUser');
+    return 3;
+  });
+
+  const result = await authService.changePassword({
+    userId: 'user-1',
+    currentPassword: 'old',
+    newPassword: 'a-new-password',
+  });
+
+  assert.deepEqual(calls, ['userService.changePassword', 'sessionService.revokeAllSessionsForUser']);
+  assert.deepEqual(result, { passwordChanged: true });
+});
+
+test('changePassword revokes sessions for the authenticated user id', async (t) => {
+  t.mock.method(userService, 'changePassword', async () => {});
+  let revokedFor;
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async (userId) => {
+    revokedFor = userId;
+    return 1;
+  });
+
+  await authService.changePassword({
+    userId: 'user-42',
+    currentPassword: 'old',
+    newPassword: 'a-new-password',
+  });
+
+  assert.equal(revokedFor, 'user-42');
+});
+
+test('changePassword does NOT revoke sessions when the credential change fails', async (t) => {
+  t.mock.method(userService, 'changePassword', async () => {
+    throw new AppError('Current password is incorrect.', {
+      statusCode: 400,
+      code: 'AUTH_CURRENT_PASSWORD_INVALID',
+    });
+  });
+  let revokeCalled = false;
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    revokeCalled = true;
+    return 0;
+  });
+
+  await assert.rejects(
+    () =>
+      authService.changePassword({
+        userId: 'user-1',
+        currentPassword: 'wrong',
+        newPassword: 'a-new-password',
+      }),
+    (err) => {
+      assert.equal(err.code, 'AUTH_CURRENT_PASSWORD_INVALID');
+      return true;
+    }
+  );
+  assert.equal(revokeCalled, false);
+});
+
+test('changePassword propagates a session-revocation failure unchanged (password already persisted — no rollback)', async (t) => {
+  t.mock.method(userService, 'changePassword', async () => {});
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    throw new Error('session store unavailable');
+  });
+
+  await assert.rejects(
+    () =>
+      authService.changePassword({
+        userId: 'user-1',
+        currentPassword: 'old',
+        newPassword: 'a-new-password',
+      }),
+    /session store unavailable/
+  );
+});
+
+test('changePassword returns exactly { passwordChanged: true } and issues no tokens', async (t) => {
+  t.mock.method(userService, 'changePassword', async () => {});
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 2);
+
+  const result = await authService.changePassword({
+    userId: 'user-1',
+    currentPassword: 'old',
+    newPassword: 'a-new-password',
+  });
+
+  assert.deepEqual(Object.keys(result), ['passwordChanged']);
+  assert.equal(result.passwordChanged, true);
+});

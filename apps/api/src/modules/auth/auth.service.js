@@ -84,6 +84,28 @@ async function refresh(rawRefreshToken) {
   return { accessToken, refreshToken: rotated.refreshToken };
 }
 
+/**
+ * Authenticated self-service password change. Orchestration only — credential
+ * policy lives in UserService.changePassword, session handling in
+ * SessionService, matching the module-boundary rule (AuthService never touches
+ * a repository directly).
+ *
+ * Order is LOCKED: persist the new hash FIRST (via userService.changePassword),
+ * THEN revoke every session for the user, the current one included. Persisting
+ * first kills the old password before the sweep, so a concurrent login racing
+ * with the old credentials cannot mint a session that outlives the change. If
+ * the revoke throws afterwards, the new password still stands (no rollback) and
+ * the failure surfaces as a 500 — the caller can re-login and logout-all.
+ *
+ * No replacement session is created and no tokens are issued: the caller must
+ * sign in again.
+ */
+async function changePassword({ userId, currentPassword, newPassword }) {
+  await userService.changePassword({ userId, currentPassword, newPassword });
+  await sessionService.revokeAllSessionsForUser(userId);
+  return { passwordChanged: true };
+}
+
 async function logout(sessionId) {
   await sessionService.revokeSession(sessionId);
 }
@@ -93,4 +115,4 @@ async function logoutAll(userId) {
   return { revokedCount };
 }
 
-module.exports = { register, login, refresh, logout, logoutAll };
+module.exports = { register, login, refresh, logout, logoutAll, changePassword };
