@@ -34,8 +34,8 @@ function userNotFoundError() {
 }
 
 // A single stable code for every prohibited self-administration attempt (an
-// admin demoting or suspending their own account). 403 — it is an
-// authorization-policy denial, same family as authorize()'s FORBIDDEN.
+// admin suspending their own account). 403 — it is an authorization-policy
+// denial, same family as authorize()'s FORBIDDEN.
 function selfAdministrationError(message) {
   return new AppError(message, { statusCode: 403, code: 'ADMIN_CANNOT_MODIFY_SELF' });
 }
@@ -127,8 +127,14 @@ async function listUsers({ search, role, status, sort, page, limit }) {
 }
 
 /**
- * Admin mutation of another user's role and/or status. This is the only
- * place role/status policy lives — the controller does no rule evaluation.
+ * Admin mutation of another user's account status. This is the only place
+ * status policy lives — the controller does no rule evaluation.
+ *
+ * `role` is NOT mutable here (or anywhere in the runtime application): there is
+ * no generic promote/demote capability, so a second admin is never created
+ * through the API. `updateUserSchema` rejects a `role` key at the HTTP boundary;
+ * this function additionally builds a status-only `$set` (below) so a direct
+ * in-process caller cannot forward `role` (or any other field) either.
  *
  * `actingUserId` is the authenticated admin (from req.auth, DB-verified by
  * authenticate). `targetUserId` is the validated :userId path param — target
@@ -149,10 +155,7 @@ async function listUsers({ search, role, status, sort, page, limit }) {
  *     throws, the error propagates but the user stays suspended (User.status
  *     is authoritative for authenticate/refresh regardless) — no rollback.
  *
- *   active -> active / role-only : no session action. A role change is
- *     effective on the target's next request anyway, because authenticate
- *     reloads role from MongoDB every call — the stale JWT claim is never
- *     trusted.
+ *   active -> active : no session action.
  *
  * Cross-module revocation goes through SessionService only; this module
  * never imports the Session model or repository.
@@ -172,25 +175,39 @@ async function adminUpdateUser({ actingUserId, targetUserId, patch }) {
     throw userNotFoundError();
   }
 
-  if (String(actingUserId) === targetId) {
-    if (patch.role !== undefined && patch.role !== 'admin') {
-      throw selfAdministrationError('You cannot change your own role.');
-    }
-    if (patch.status !== undefined && patch.status !== 'active') {
-      throw selfAdministrationError('You cannot change your own status.');
-    }
+  // Writable-field allow-list. `status` is the only administrative field this
+  // endpoint mutates; the update object is assembled explicitly (never
+  // `{ $set: patch }`) so nothing else in `patch` — a `role` key most of all —
+  // can ever reach MongoDB, even from an internal caller that skipped the route
+  // schema. Enum validation is not repeated here: `updateUserSchema` owns the
+  // HTTP boundary and the Mongoose `status` enum (runValidators) owns the write.
+  const update = {};
+  if (patch.status !== undefined) {
+    update.status = patch.status;
+  }
+  if (Object.keys(update).length === 0) {
+    // Unreachable over HTTP (updateUserSchema requires `status`). A direct
+    // caller passed nothing this endpoint can act on.
+    throw new AppError('At least one supported field must be provided.', {
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+    });
   }
 
-  const reactivating = patch.status === 'active' && target.status === 'suspended';
+  if (String(actingUserId) === targetId && update.status !== 'active') {
+    throw selfAdministrationError('You cannot change your own status.');
+  }
+
+  const reactivating = update.status === 'active' && target.status === 'suspended';
   // Fires on active->suspended and on a suspended->suspended retry (a cheap,
   // idempotent mop-up if an earlier suspension's revoke call had failed).
-  const suspending = patch.status === 'suspended';
+  const suspending = update.status === 'suspended';
 
   if (reactivating) {
     await sessionService.revokeAllSessionsForUser(targetId);
   }
 
-  const updated = await userRepository.updateById(targetId, { $set: patch });
+  const updated = await userRepository.updateById(targetId, { $set: update });
   if (!updated) {
     // Deleted between the read above and this write.
     throw userNotFoundError();

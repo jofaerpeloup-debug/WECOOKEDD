@@ -216,7 +216,9 @@ test('GET /api/v1/users never serializes passwordHash or other private fields', 
 // ===========================================================================
 
 test('PATCH /api/v1/users/:userId without a token is rejected', async () => {
-  const res = await request(app).patch(`/api/v1/users/${TARGET_USER_ID}`).send({ role: 'admin' });
+  const res = await request(app)
+    .patch(`/api/v1/users/${TARGET_USER_ID}`)
+    .send({ status: 'suspended' });
   assert.equal(res.status, 401);
   assert.equal(res.body.error.code, 'AUTH_TOKEN_MISSING');
 });
@@ -226,7 +228,7 @@ test('PATCH /api/v1/users/:userId is forbidden for a normal user', async (t) => 
   const res = await request(app)
     .patch(`/api/v1/users/${TARGET_USER_ID}`)
     .set('Authorization', `Bearer ${userToken()}`)
-    .send({ role: 'admin' });
+    .send({ status: 'suspended' });
   assert.equal(res.status, 403);
   assert.equal(res.body.error.code, 'FORBIDDEN');
 });
@@ -236,7 +238,7 @@ test('PATCH /api/v1/users/:userId rejects a malformed ObjectId', async (t) => {
   const res = await request(app)
     .patch('/api/v1/users/not-an-id')
     .set('Authorization', `Bearer ${adminToken()}`)
-    .send({ role: 'admin' });
+    .send({ status: 'active' });
   assert.equal(res.status, 400);
   assert.equal(res.body.error.code, 'VALIDATION_ERROR');
 });
@@ -246,7 +248,7 @@ test('PATCH /api/v1/users/:userId returns USER_NOT_FOUND for a valid but missing
   const res = await request(app)
     .patch(`/api/v1/users/${MISSING_ID}`)
     .set('Authorization', `Bearer ${adminToken()}`)
-    .send({ role: 'admin' });
+    .send({ status: 'active' });
   assert.equal(res.status, 404);
   assert.equal(res.body.error.code, 'USER_NOT_FOUND');
 });
@@ -272,6 +274,8 @@ test('PATCH /api/v1/users/:userId rejects unknown / profile body fields', async 
     { preferences: {} },
     { allergies: [] },
     { authProviders: ['google'] },
+    { foo: 1 },
+    { status: 'active', foo: 1 },
     { role: 'admin', createdAt: '2020-01-01' },
   ]) {
     const res = await request(app)
@@ -283,54 +287,61 @@ test('PATCH /api/v1/users/:userId rejects unknown / profile body fields', async 
   }
 });
 
-test('PATCH /api/v1/users/:userId promotes a user to admin (no session revocation)', async (t) => {
+// Role is no longer part of the PATCH contract for anyone — a `role` key is a
+// 400 VALIDATION_ERROR (an unrecognized field), never a 403. There is no
+// runtime promote/demote capability.
+test('PATCH /api/v1/users/:userId rejects a role-only body with 400 and never writes', async (t) => {
   mockContext(t, {
     caller: adminDoc(),
     directory: { [TARGET_USER_ID]: userDoc({ role: 'user', status: 'active' }) },
   });
+  let updated = false;
   let revoked = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return userDoc();
+  });
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
     revoked = true;
     return 0;
   });
-  t.mock.method(userRepository, 'updateById', async (id, update) =>
-    userDoc({ id, role: update.$set.role, status: 'active' })
-  );
+
+  for (const body of [{ role: 'admin' }, { role: 'user' }]) {
+    const res = await request(app)
+      .patch(`/api/v1/users/${TARGET_USER_ID}`)
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send(body);
+    assert.equal(res.status, 400, `expected ${JSON.stringify(body)} -> 400`);
+    assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+  }
+  assert.equal(updated, false, 'no write on a rejected role body');
+  assert.equal(revoked, false);
+});
+
+test('PATCH /api/v1/users/:userId rejects a combined role + status body atomically (status not applied)', async (t) => {
+  mockContext(t, {
+    caller: adminDoc(),
+    directory: { [TARGET_USER_ID]: userDoc({ role: 'user', status: 'active' }) },
+  });
+  let updated = false;
+  let revoked = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return userDoc({ status: 'suspended' });
+  });
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+    revoked = true;
+    return 0;
+  });
 
   const res = await request(app)
     .patch(`/api/v1/users/${TARGET_USER_ID}`)
     .set('Authorization', `Bearer ${adminToken()}`)
-    .send({ role: 'admin' });
+    .send({ role: 'admin', status: 'suspended' });
 
-  assert.equal(res.status, 200);
-  assert.equal(res.body.data.user.role, 'admin');
-  assert.equal(res.body.data.user.id, TARGET_USER_ID);
-  assert.equal(revoked, false);
-  assert.equal(JSON.stringify(res.body).includes('passwordHash'), false);
-  assert.equal(JSON.stringify(res.body).includes('preferences'), false);
-});
-
-test('PATCH /api/v1/users/:userId demotes another admin to user (no session revocation)', async (t) => {
-  mockContext(t, {
-    caller: adminDoc(),
-    directory: { [TARGET_ADMIN_ID]: userDoc({ id: TARGET_ADMIN_ID, role: 'admin', status: 'active' }) },
-  });
-  let revoked = false;
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
-    revoked = true;
-    return 0;
-  });
-  t.mock.method(userRepository, 'updateById', async (id, update) =>
-    userDoc({ id, role: update.$set.role, status: 'active' })
-  );
-
-  const res = await request(app)
-    .patch(`/api/v1/users/${TARGET_ADMIN_ID}`)
-    .set('Authorization', `Bearer ${adminToken()}`)
-    .send({ role: 'user' });
-
-  assert.equal(res.status, 200);
-  assert.equal(res.body.data.user.role, 'user');
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(updated, false, 'the status change must NOT be applied when role is present');
   assert.equal(revoked, false);
 });
 
@@ -358,6 +369,8 @@ test('PATCH /api/v1/users/:userId suspending an active user persists status THEN
 
   assert.equal(res.status, 200);
   assert.equal(res.body.data.user.status, 'suspended');
+  // Role is still serialized in the admin response (read-only — never mutated here).
+  assert.equal(res.body.data.user.role, 'user');
   assert.deepEqual(order, ['update', 'revoke']);
   assert.equal(revokedFor, TARGET_USER_ID);
 });
@@ -412,7 +425,7 @@ test('PATCH /api/v1/users/:userId reactivation is aborted (user stays suspended)
   assert.equal(updateCalled, false);
 });
 
-test('PATCH /api/v1/users/:userId applies a combined role + status change', async (t) => {
+test('PATCH /api/v1/users/:userId applies a status-only change and $sets nothing but status', async (t) => {
   mockContext(t, {
     caller: adminDoc(),
     directory: { [TARGET_ADMIN_ID]: userDoc({ id: TARGET_ADMIN_ID, role: 'admin', status: 'active' }) },
@@ -420,18 +433,19 @@ test('PATCH /api/v1/users/:userId applies a combined role + status change', asyn
   let capturedSet;
   t.mock.method(userRepository, 'updateById', async (id, update) => {
     capturedSet = update.$set;
-    return userDoc({ id, role: update.$set.role, status: update.$set.status });
+    return userDoc({ id, role: 'admin', status: update.$set.status });
   });
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
 
   const res = await request(app)
     .patch(`/api/v1/users/${TARGET_ADMIN_ID}`)
     .set('Authorization', `Bearer ${adminToken()}`)
-    .send({ role: 'user', status: 'suspended' });
+    .send({ status: 'suspended' });
 
   assert.equal(res.status, 200);
-  assert.deepEqual(capturedSet, { role: 'user', status: 'suspended' });
-  assert.equal(res.body.data.user.role, 'user');
+  assert.deepEqual(capturedSet, { status: 'suspended' });
+  // The target's role is untouched — it is not a field this endpoint can write.
+  assert.equal(res.body.data.user.role, 'admin');
   assert.equal(res.body.data.user.status, 'suspended');
 });
 
@@ -458,14 +472,22 @@ test('PATCH /api/v1/users/:userId active -> active is a no-op with no session re
   assert.equal(revoked, false);
 });
 
-test('PATCH /api/v1/users/:userId rejects an admin demoting themselves', async (t) => {
+test('PATCH /api/v1/users/:userId rejects an admin trying to change their own role with 400 (role is not a field)', async (t) => {
   mockContext(t, { caller: adminDoc() });
+  let updated = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return adminDoc({ role: 'user' });
+  });
   const res = await request(app)
     .patch(`/api/v1/users/${ADMIN_ID}`)
     .set('Authorization', `Bearer ${adminToken()}`)
     .send({ role: 'user' });
-  assert.equal(res.status, 403);
-  assert.equal(res.body.error.code, 'ADMIN_CANNOT_MODIFY_SELF');
+  // Not 403 ADMIN_CANNOT_MODIFY_SELF — role is not part of the contract for
+  // anyone, so it fails validation before the self-check is ever reached.
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(updated, false);
 });
 
 test('PATCH /api/v1/users/:userId rejects an admin suspending themselves', async (t) => {
@@ -504,16 +526,16 @@ test('PATCH /api/v1/users/:userId still works when a different target id is uppe
   });
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
   t.mock.method(userRepository, 'updateById', async (id, update) =>
-    userDoc({ id: String(id), role: update.$set.role, status: 'active' })
+    userDoc({ id: String(id), status: update.$set.status })
   );
 
   const res = await request(app)
     .patch(`/api/v1/users/${TARGET_USER_ID.toUpperCase()}`)
     .set('Authorization', `Bearer ${adminToken()}`)
-    .send({ role: 'admin' });
+    .send({ status: 'suspended' });
 
   assert.equal(res.status, 200);
-  assert.equal(res.body.data.user.role, 'admin');
+  assert.equal(res.body.data.user.status, 'suspended');
   assert.equal(res.body.data.user.id, TARGET_USER_ID); // canonical lower-case in the response
 });
 

@@ -90,34 +90,43 @@ test('listUsersSchema rejects an empty (whitespace-only) search', () => {
 // updateUserSchema
 // ---------------------------------------------------------------------------
 
-test('updateUserSchema accepts a role-only body', () => {
-  const result = parsePatch(VALID_ID, { role: 'admin' });
+test('updateUserSchema accepts a status-only active body', () => {
+  const result = parsePatch(VALID_ID, { status: 'active' });
   assert.equal(result.success, true);
-  assert.deepEqual(result.data.body, { role: 'admin' });
+  assert.deepEqual(result.data.body, { status: 'active' });
 });
 
-test('updateUserSchema accepts a status-only body', () => {
+test('updateUserSchema accepts a status-only suspended body and parses to status only', () => {
   const result = parsePatch(VALID_ID, { status: 'suspended' });
   assert.equal(result.success, true);
+  assert.deepEqual(Object.keys(result.data.body), ['status']);
+  assert.deepEqual(result.data.body, { status: 'suspended' });
 });
 
-test('updateUserSchema accepts a combined role + status body', () => {
-  const result = parsePatch(VALID_ID, { role: 'user', status: 'active' });
-  assert.equal(result.success, true);
+test('updateUserSchema rejects a role-only body (role is not a writable field)', () => {
+  assert.equal(parsePatch(VALID_ID, { role: 'admin' }).success, false);
+  assert.equal(parsePatch(VALID_ID, { role: 'user' }).success, false);
 });
 
-test('updateUserSchema rejects an empty body', () => {
+test('updateUserSchema rejects a combined role + status body (role key fails .strict())', () => {
+  const result = parsePatch(VALID_ID, { role: 'admin', status: 'suspended' });
+  assert.equal(result.success, false);
+});
+
+test('updateUserSchema rejects an empty body (status is required)', () => {
   const result = parsePatch(VALID_ID, {});
   assert.equal(result.success, false);
 });
 
 test('updateUserSchema rejects a malformed ObjectId path param', () => {
-  const result = parsePatch('not-an-object-id', { role: 'admin' });
+  const result = parsePatch('not-an-object-id', { status: 'active' });
   assert.equal(result.success, false);
 });
 
 test('updateUserSchema rejects every non-allowed body field', () => {
   for (const body of [
+    { role: 'admin' },
+    { role: 'user' },
     { name: 'Mallory' },
     { email: 'mallory@example.com' },
     { password: 'hunter2hunter2' },
@@ -130,16 +139,17 @@ test('updateUserSchema rejects every non-allowed body field', () => {
     { updatedAt: '2020-01-01' },
     { _id: VALID_ID },
     { id: VALID_ID },
-    { role: 'admin', extra: 1 },
+    { status: 'active', extra: 1 },
+    { status: 'suspended', role: 'admin' },
   ]) {
     const result = parsePatch(VALID_ID, body);
     assert.equal(result.success, false, `expected ${JSON.stringify(body)} to be rejected`);
   }
 });
 
-test('updateUserSchema rejects a role/status value outside the enum', () => {
-  assert.equal(parsePatch(VALID_ID, { role: 'root' }).success, false);
+test('updateUserSchema rejects a status value outside the enum', () => {
   assert.equal(parsePatch(VALID_ID, { status: 'deleted' }).success, false);
+  assert.equal(parsePatch(VALID_ID, { status: 'inactive' }).success, false);
 });
 // ---------------------------------------------------------------------------
 // updateCurrentUserSchema  (PATCH /api/v1/users/me — self-profile)

@@ -4,6 +4,13 @@ Backend-only slice: adds admin user-management endpoints to `apps/api`. It is
 the prerequisite for the separate Phase B work that migrates the admin app's
 Users tab off Firestore. **No frontend was touched in this slice.**
 
+> **B1 update (sole-admin role immutability).** `PATCH /api/v1/users/:userId`
+> no longer accepts `role` — the writable body is now `{ status }` only. `role`
+> stays fully readable (in every response, and as a `GET /api/v1/users` filter)
+> but is not mutable by any runtime application API. See
+> [§ Role is read-only](#role-is-read-only-b1) below; the sections further down
+> are annotated where B1 changed them.
+
 See [backend.md](./backend.md) for the layered request-flow conventions and
 [authentication-security.md](./authentication-security.md) for the
 auth/session model this builds on. Prior analysis: the read-only audit, the
@@ -130,23 +137,54 @@ profile data.
 `:userId` — strict `ObjectId` validation (`shared/validation/object-id.js`).
 Malformed → `400 VALIDATION_ERROR`.
 
-### Body (strict Zod schema — `user.validation.js#updateUserSchema`)
+### Body (strict Zod schema — `user.validation.js#updateUserSchema`) — B1
 
 ```
-{ role?: 'user' | 'admin', status?: 'active' | 'suspended' }
+{ status: 'active' | 'suspended' }
 ```
 
-- `.strict()` + at-least-one-field. Every other field is a
-  `400 VALIDATION_ERROR`, explicitly including `name`, `email`, `password`,
-  `passwordHash`, `emailVerified`, `preferences`, `allergies`,
-  `authProviders`, `createdAt`, `updatedAt`, `_id`, `id`.
+- `.strict()`, and `status` is **required**. Every other field is a
+  `400 VALIDATION_ERROR` — explicitly including `role` (see below), and
+  `name`, `email`, `password`, `passwordHash`, `emailVerified`, `preferences`,
+  `allergies`, `authProviders`, `createdAt`, `updatedAt`, `_id`, `id`.
+- A body that carries `role` (with or without a valid `status`) is rejected
+  **before the controller runs** — the `status` change in such a request is
+  never applied.
 - **No admin profile editing in this slice.** Name moderation, if ever
   required, is a separate, separately-justified change.
+
+<a id="role-is-read-only-b1"></a>
+
+### Role is read-only (B1)
+
+`role` (`user | admin`) is a valid `User` field and is:
+
+- **returned** in every admin user response (`toAdminUserSummary` — unchanged),
+- **usable as a filter**: `GET /api/v1/users?role=user|admin` (`listUsersSchema`
+  keeps `role`).
+
+It is **not writable** by any runtime application API:
+
+- Registration hard-defaults `role: 'user'` and its body is `.strict()` — a
+  client cannot set `role` (unchanged since Phase A).
+- `PATCH /api/v1/users/me` never accepted `role`.
+- `PATCH /api/v1/users/:userId` no longer accepts `role` (B1).
+- `adminUpdateUser` additionally builds a **status-only `$set`** — it never
+  forwards `patch` verbatim — so a direct in-process caller that passes a
+  `role` key still cannot write it (defense in depth; the `role` key is
+  silently dropped, and a patch with no writable field is a
+  `400 VALIDATION_ERROR`).
+
+There is therefore **no generic promote/demote capability** and no runtime path
+that can create a second admin. Role mutation is not supported by any runtime
+application API; any exceptional maintenance is outside the application
+workflow. A future dedicated "transfer admin ownership" feature is a separate,
+out-of-scope design.
 
 ### Response
 
 `200 { success: true, data: { user: toAdminUserSummary(updated) } }` — same
-safe projection as the list.
+safe projection as the list (still carries `role`).
 
 ## Self-protection
 
@@ -155,32 +193,40 @@ Enforced in the service (frontend disabled controls are not sufficient). When
 
 | Attempt | Result |
 | --- | --- |
-| `role` → anything other than `admin` | `403` `ADMIN_CANNOT_MODIFY_SELF` |
 | `status` → anything other than `active` | `403` `ADMIN_CANNOT_MODIFY_SELF` |
-| `role: 'admin'` / `status: 'active'` on self (harmless no-op) | allowed |
+| `status: 'active'` on self (harmless no-op) | allowed |
 
-One stable code (`ADMIN_CANNOT_MODIFY_SELF`, `403` — the `FORBIDDEN` family)
-covers both the self-demotion and the self-suspension case.
+`ADMIN_CANNOT_MODIFY_SELF` (`403` — the `FORBIDDEN` family) now covers only the
+self-suspension case. Self-demotion is no longer a case at all: **B1** removed
+`role` from the writable body, so an admin cannot change anyone's role,
+themselves included, and a `role` key is a `400 VALIDATION_ERROR` before the
+self-check is reached.
 
 ### Last active admin
 
-**Not implemented.** The senior review concluded a `LAST_ADMIN` guard adds
-test/code surface for near-zero real protection:
+**Not implemented, and no longer needed for the demotion case.**
 
-- Self-protection already keeps ≥ 1 active admin in every non-concurrent
-  sequence — any PATCH by admin *X* on admin *Y* requires *X* to still be an
-  active admin (re-checked from the DB by `authenticate`/`authorize` on that
-  request), and *X* cannot remove *X*.
-- The only residual path to zero active admins is two admins **concurrently**
-  demoting/suspending each other. A count-before-update check is two
-  non-atomic operations and does **not** close that race, and this deployment
-  is standalone MongoDB (no multi-document transactions).
+- **B1** removed the only runtime role-mutation path: there is no promote or
+  demote through the application, so no runtime flow can reduce the admin
+  count. The "two admins concurrently demoting each other → zero active admins"
+  race that Phase A documented **no longer exists** — there is no demote
+  operation to race.
+- Self-suspension protection still keeps ≥ 1 *active* admin in every
+  non-concurrent sequence: a PATCH by admin *X* suspending admin *Y* requires
+  *X* to still be an active admin (re-checked from the DB by
+  `authenticate`/`authorize`), and *X* cannot suspend *X*.
+- The only residual path to zero *active* admins is two admins **concurrently
+  suspending each other**. A count-before-update check is two non-atomic
+  operations and does not close that race; this deployment is standalone
+  MongoDB (no multi-document transactions). No `LAST_ADMIN` guard,
+  transactions, locks, or Mongo unique-index trick were introduced — the
+  senior review concluded the surface is not worth the near-zero real
+  protection.
 
-Residual limitation, documented rather than papered over: concurrent mutual
-demotion of the last two admins can leave zero active admins. Recovery is a
-direct database update — the same channel that provisions admins in the first
-place (there is no admin-provisioning endpoint). No transactions / locks /
-Redis were introduced.
+Recovery from that residual (or from a lost sole admin) is an exceptional
+maintenance operation outside the normal application workflow — there is no
+admin-provisioning or ownership-transfer endpoint. A future dedicated
+"transfer admin ownership" feature is a separate, out-of-scope design.
 
 ## Session ↔ status transition ordering (security-critical)
 
@@ -194,8 +240,9 @@ needed.
 | **active → suspended** | 1. persist `status: 'suspended'` &nbsp; 2. revoke all sessions | Once `suspended` is committed, `login` throws `AUTH_ACCOUNT_SUSPENDED` and `refresh` refuses to rotate, so the sweep is race-free. If revocation throws, the error propagates but the user **stays suspended** (current `User.status` is authoritative for `authenticate`/`refresh` regardless) — **no rollback**. |
 | **suspended → active** | 1. revoke all sessions &nbsp; 2. only then persist `status: 'active'` | A user must never regain a session that an earlier failed suspension (or a login race) left unrevoked. This runs while the user is still `suspended`, so nothing can mint a session in parallel. If revocation throws, the error propagates and the user is **NOT reactivated** (stays `suspended`). |
 | **active → active** | no session action | Harmless no-op; a healthy user keeps their session. |
-| **role-only change** | no session action | Effective on the next request via `authenticate`'s live DB read. |
-| **combined role + status** | same rules, keyed on the previous status and the target status; role and status are written in one `$set` | Ordering stays correct whether the status is going up or down. |
+
+(Pre-B1 this table also had `role-only` and `combined role + status` rows.
+Since B1, `status` is the only writable field, so those cases no longer exist.)
 
 A `status: 'suspended'` PATCH on an already-suspended user also re-runs the
 revoke — a cheap, idempotent mop-up if an earlier suspension's revoke had
@@ -215,11 +262,12 @@ within one request cycle.
 | Client-supplied ownership field | ❌ none accepted (`.strict()` body) |
 | Malformed target id | `400 VALIDATION_ERROR` |
 | Valid but missing target id | `404 USER_NOT_FOUND` |
-| Self-promotion without admin authorization | ❌ registration is `.strict()` and hard-codes `role:"user"`; there is no `PATCH /users/me`; `PATCH /users/:userId` requires `authorize('admin')` |
+| Self-promotion / any promotion | ❌ registration is `.strict()` and hard-codes `role:"user"`; `PATCH /users/me` never accepted `role`; `PATCH /users/:userId` no longer accepts `role` (B1) and the service writes a status-only `$set` |
 | Existing auth middleware weakened | ❌ not touched |
 
 **Verdict: no IDOR/BOLA, no privilege-escalation path.** The one residual risk
-(concurrent mutual admin demotion → availability only) is documented above.
+(concurrent mutual admin *suspension* → availability only) is documented above.
+Since B1 there is no runtime role-mutation path at all.
 
 ## Error codes
 
@@ -236,9 +284,9 @@ surfaces as the generic `500 INTERNAL_SERVER_ERROR`.
 | Layer | File | Responsibility |
 | --- | --- | --- |
 | Route | `user.routes.js` | verb+path → `authenticate` → `authorize('admin')` → `validate` → controller |
-| Validation | `user.validation.js` | strict query & body/param schemas; sort allow-list |
+| Validation | `user.validation.js` | strict query & body/param schemas; sort allow-list; `status`-only writable PATCH body (B1) |
 | Controller | `user.controller.js` | HTTP in/out + pagination envelope only — no rules |
-| Service | `user.service.js` | self-protection, status-transition logic, `SessionService` orchestration, filter/sort/skip construction, `USER_NOT_FOUND` |
+| Service | `user.service.js` | self-protection, writable-field allow-list (status-only `$set`), status-transition logic, `SessionService` orchestration, filter/sort/skip construction, `USER_NOT_FOUND` |
 | Repository | `user.repository.js` | `findMany` / `countByFilter` / `updateById` — query mechanics only |
 | Serializer | `user.serializer.js` | `toAdminUserSummary` — explicit safe projection |
 

@@ -11,9 +11,10 @@
 // admin backend user (enforced by the API — authorize('admin') on the route).
 // The serializer returns `id` (never `_id`) and a deliberately narrow shape:
 // { id, name, email, role, status, emailVerified, createdAt, updatedAt } — no
-// preferences / allergies (user-private, not relevant to role/status
-// management). PATCH accepts ONLY { role?, status? }; every other field is a
-// 400 VALIDATION_ERROR. There is no create, no delete, and no GET-by-id.
+// preferences / allergies (user-private, not relevant to account-status
+// management). PATCH accepts ONLY { status }; role is read-only (returned in the
+// response and usable as a GET filter, but not writable) and every other field
+// is a 400 VALIDATION_ERROR. There is no create, no delete, and no GET-by-id.
 //
 // Contract reference: docs/architecture/admin-users-backend-api.md and
 // docs/architecture/admin-users-integration.md. There is ZERO Firestore
@@ -69,11 +70,12 @@ export function listUsers(params = {}) {
 /**
  * PATCH /api/v1/users/:userId (admin only)
  * @param {string} userId
- * @param {{ role?: 'user' | 'admin', status?: 'active' | 'suspended' }} patch
- *   Strict body — at least one of role / status, nothing else. The backend owns
- *   every policy decision: self-demotion / self-suspension is
- *   403 ADMIN_CANNOT_MODIFY_SELF, and suspend / reactivate session revocation
- *   ordering is handled server-side.
+ * @param {{ status: 'active' | 'suspended' }} patch
+ *   Strict body — `status` only, nothing else (a `role` key, like any other
+ *   field, is a 400 VALIDATION_ERROR: role is not mutable through the API).
+ *   The backend owns every policy decision: an admin changing their own status
+ *   is 403 ADMIN_CANNOT_MODIFY_SELF, and suspend / reactivate session
+ *   revocation ordering is handled server-side.
  * @returns {Promise<object>} the updated user summary
  */
 export function updateUser(userId, patch) {
@@ -82,9 +84,8 @@ export function updateUser(userId, patch) {
     .then((data) => data.user);
 }
 
-// Convenience wrappers over updateUser. Account status only — Admin Users V1
-// deliberately does not expose role mutation, so no promote/demote wrapper
-// exists here even though `updateUser` (and the backend PATCH) still accept
-// `role`.
+// Convenience wrappers over updateUser. Account status is the only thing the
+// PATCH endpoint accepts — there is no role mutation on the backend and no
+// promote/demote wrapper here.
 export const suspendUser = (userId) => updateUser(userId, { status: 'suspended' });
 export const reactivateUser = (userId) => updateUser(userId, { status: 'active' });
