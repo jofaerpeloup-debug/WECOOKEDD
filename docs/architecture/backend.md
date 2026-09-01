@@ -101,12 +101,13 @@ only, with neither frontend ever connecting to MongoDB directly and MongoDB
 credentials living only in the API's environment configuration. This is the
 target end state, not yet the current state of every frontend.
 
-`apps/admin` currently still carries its inherited Firebase
-Authentication/Firestore compatibility layer as temporary legacy
-infrastructure from the pre-monorepo migration (see
-[docs/architecture/monorepo.md](./monorepo.md)) — it does not yet talk to
-`apps/api`. Migrating `apps/admin` off Firebase and onto `apps/api`/MongoDB
-is future work; it is not performed as part of the backend foundation.
+`apps/admin` talks to `apps/api` over REST for all business data
+(ingredients, substitutions, recipes, users); it no longer reads or writes
+Firestore. It still carries an inherited Firebase **Authentication**
+compatibility layer as temporary legacy infrastructure from the pre-monorepo
+migration (see [docs/architecture/monorepo.md](./monorepo.md)). Moving the
+Firebase-Auth-backed admin account flows onto `apps/api` is future work; it is
+not performed as part of the backend foundation.
 
 The end state remains: neither frontend connects to MongoDB directly, and
 all backend/domain data access goes through `apps/api`.

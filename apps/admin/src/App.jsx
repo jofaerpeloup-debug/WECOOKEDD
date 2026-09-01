@@ -2,7 +2,7 @@
 import {
   LayoutDashboard, ChefHat, Users, X,
   Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
-  AlertCircle, ArrowRight, User, Settings, HelpCircle, Flag,
+  AlertCircle, ArrowRight, User, Settings, HelpCircle,
   Accessibility, ChevronDown, Carrot, ShieldAlert, Replace,
 } from 'lucide-react';
 import {
@@ -15,7 +15,6 @@ import {
   refreshEmailVerified, updateUserProfile, changeUserPassword, deleteCurrentAccount,
   requestPasswordReset, verifyResetCode, confirmReset,
 } from './auth.js';
-import { submitReportDoc } from './firestore.js';
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
 import { listUsers } from './userApi.js';
@@ -79,8 +78,8 @@ async function safeDelete(key, shared = false) {
 function WeCookedAdminApp() {
   // Backend local auth is the authoritative gate for this dashboard and for
   // every WeCooked REST API call. Firebase auth is kept alongside it, best
-  // effort, only so the not-yet-migrated Firebase surface ("Report a problem"
-  // and the Firebase-Auth account flows) keeps working — see
+  // effort, only so the Firebase-Auth-backed admin account flows (profile,
+  // password, email, verification, delete-account) keep working — see
   // docs/architecture/admin-api-integration.md.
   const backend = useBackendAuth();
 
@@ -101,7 +100,6 @@ function WeCookedAdminApp() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
   const [displayOpen, setDisplayOpen] = useState(false);
   const [displayPrefs, setDisplayPrefs] = useState({ theme: 'light', reduceMotion: false });
   const [prefsLoaded, setPrefsLoaded] = useState(false);
@@ -121,10 +119,10 @@ function WeCookedAdminApp() {
   }
 
   useEffect(() => {
-    // Firebase auth runs in the background purely for the remaining Firebase
-    // surface ("Report a problem" and the Firebase-Auth account flows); the
-    // dashboard gate itself is driven by backend auth, not this. `account`
-    // feeds the profile menu / Settings / Report identity.
+    // Firebase auth runs in the background purely for the Firebase-Auth-backed
+    // admin account flows (profile, password, email, verification,
+    // delete-account); the dashboard gate itself is driven by backend auth, not
+    // this. `account` feeds the profile menu / Settings identity.
     const unsub = auth.onAuthStateChanged((user) => {
       setAccount(toAccount(user));
     });
@@ -235,14 +233,14 @@ function WeCookedAdminApp() {
     // suspended account, or the API being unreachable, and the sign-in form
     // surfaces that message.
     await backend.login(email, password);
-    // Best effort: mirror the sign-in to Firebase so the remaining Firebase
-    // surface ("Report a problem" and the Firebase-Auth account flows) keeps
-    // working for admins whose credentials also exist there. A failure here is
-    // expected for backend-only admins and must not block.
+    // Best effort: mirror the sign-in to Firebase so the Firebase-Auth-backed
+    // admin account flows keep working for admins whose credentials also exist
+    // there. A failure here is expected for backend-only admins and must not
+    // block.
     try {
       await logIn(email, password);
     } catch (err) {
-      console.warn('Firebase sign-in unavailable (Report / account flows will be limited):', err?.code || err);
+      console.warn('Firebase sign-in unavailable (account flows will be limited):', err?.code || err);
     }
     return true;
   }
@@ -280,14 +278,6 @@ function WeCookedAdminApp() {
     const verified = await refreshEmailVerified();
     if (verified) setAccount((prev) => (prev ? { ...prev, emailVerified: true } : prev));
     return verified;
-  }
-
-  async function submitReport({ description, includeContact }) {
-    await submitReportDoc({
-      description,
-      contactEmail: includeContact ? (identity?.email ?? null) : null,
-      submittedAt: new Date().toISOString(),
-    });
   }
 
   function updateDisplayPrefs(patch) {
@@ -820,17 +810,6 @@ function WeCookedAdminApp() {
           font-size: 14px;
           resize: vertical;
         }
-        .wc-checkbox-row {
-          display: flex; align-items: center; gap: 8px;
-          font-size: 12.5px; color: var(--ink); margin: 4px 0 14px;
-        }
-        .wc-checkbox-row input { width: auto; }
-        .wc-report-note { font-size: 11.5px; color: var(--stone); margin-bottom: 14px; line-height: 1.4; }
-        .wc-report-done {
-          display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px;
-          padding: 26px 8px 10px; color: var(--sage-deep); font-size: 14px; font-weight: 600;
-        }
-        .wc-report-done svg { color: var(--sage-deep); }
 
         .wc-display-row {
           display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -1041,7 +1020,6 @@ function WeCookedAdminApp() {
                 onSignOut={() => { setConfirmLogout(true); setProfileMenuOpen(false); }}
                 onOpenSettings={() => { setSettingsOpen(true); setProfileMenuOpen(false); }}
                 onOpenHelp={() => { setHelpOpen(true); setProfileMenuOpen(false); }}
-                onOpenReport={() => { setReportOpen(true); setProfileMenuOpen(false); }}
                 onOpenDisplay={() => { setDisplayOpen(true); setProfileMenuOpen(false); }}
               />
               {account && (
@@ -1086,9 +1064,6 @@ function WeCookedAdminApp() {
             />
           )}
           {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
-          {reportOpen && (
-            <ReportModal account={identity} onClose={() => setReportOpen(false)} onSubmit={submitReport} />
-          )}
           {displayOpen && (
             <DisplayModal
               prefs={displayPrefs}
@@ -1126,7 +1101,7 @@ function initials(name, email) {
 
 function ProfileMenu({
   account, open, onToggle, onClose, onSignOut,
-  onOpenSettings, onOpenHelp, onOpenReport, onOpenDisplay,
+  onOpenSettings, onOpenHelp, onOpenDisplay,
 }) {
   if (!account) return null;
 
@@ -1150,9 +1125,6 @@ function ProfileMenu({
             </button>
             <button className="wc-dropdown-item" onClick={onOpenHelp}>
               <HelpCircle size={15} /> Help &amp; support
-            </button>
-            <button className="wc-dropdown-item" onClick={onOpenReport}>
-              <Flag size={15} /> Report a problem
             </button>
             <button className="wc-dropdown-item" onClick={onOpenDisplay}>
               <Accessibility size={15} /> Display &amp; accessibility
@@ -1379,84 +1351,6 @@ function HelpModal({ onClose }) {
         <div className="wc-modal-actions">
           <button type="button" className="wc-btn-primary" onClick={onClose}>Got it</button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function ReportModal({ account, onClose, onSubmit }) {
-  const [description, setDescription] = useState('');
-  const [includeContact, setIncludeContact] = useState(true);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  async function submit(e) {
-    e.preventDefault();
-    setError('');
-    if (!description.trim()) {
-      setError('Describe the problem before submitting.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await onSubmit({ description: description.trim(), includeContact });
-      setSubmitted(true);
-    } catch (err) {
-      setError(err && err.message ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <div className="wc-modal-overlay" onClick={onClose}>
-      <div className="wc-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wc-modal-header">
-          <h2 className="wc-serif">Report a problem</h2>
-          <button className="wc-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
-        </div>
-
-        {submitted ? (
-          <div className="wc-report-done">
-            <Check size={22} />
-            <div>Thanks — your report has been submitted.</div>
-          </div>
-        ) : (
-          <form onSubmit={submit}>
-            <div className="wc-field">
-              <label>What went wrong?</label>
-              <textarea
-                className="wc-textarea"
-                rows={5}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Describe what you were doing and what happened…"
-                required
-              />
-            </div>
-            <label className="wc-checkbox-row">
-              <input
-                type="checkbox"
-                checked={includeContact}
-                onChange={(e) => setIncludeContact(e.target.checked)}
-              />
-              Include my email ({account.email}) with this report
-            </label>
-            {error && (
-              <div className="wc-auth-error"><AlertCircle size={14} /> {error}</div>
-            )}
-            <div className="wc-report-note">
-              Reports are saved to the shared reports log for the team to review.
-            </div>
-            <div className="wc-modal-actions">
-              <button type="button" className="wc-btn-secondary" onClick={onClose}>Cancel</button>
-              <button type="submit" className="wc-btn-primary" disabled={submitting}>
-                {submitting ? 'Submitting…' : 'Submit report'}
-              </button>
-            </div>
-          </form>
-        )}
       </div>
     </div>
   );

@@ -230,21 +230,37 @@ of the Users slice ([admin-users-integration.md](./admin-users-integration.md))
 helpers are gone. Overview user counts now come from `GET /api/v1/users`
 (`pagination.total`, `limit: 1`).
 
-**Firebase still in use (TEMPORARY technical debt, to be removed in later
-integration slices):**
+The legacy Admin-only "Report a problem" feature — the last remaining Firestore
+code path — was removed in
+[admin-remove-legacy-reporting.md](./admin-remove-legacy-reporting.md).
+`src/firestore.js` has been **deleted**, and `src/firebase.js` **no longer
+exports `db`** (`getFirestore` is not imported anywhere). **Admin source now
+has zero Firestore reads or writes.** The checked-in `firestore.rules` is
+deny-all (`allow read, write: if false`); live enforcement on the Firebase
+project requires the owner to deploy it — until then the deployed rules are
+unchanged.
+
+Admin business data end state:
+
+| Domain | Backing |
+| --- | --- |
+| Ingredients / Substitutions / Recipes / Users | REST (`/api/v1/*`) |
+| Overview widgets | REST-derived (`listRecipes` / `listUsers`) |
+| Firestore business data | none — feature and code path removed |
+
+**Firebase still in use (Auth only — TEMPORARY technical debt, to be removed in
+later integration slices):**
 
 | Area | Firebase use | Removal slice |
 | --- | --- | --- |
-| "Report a problem" | Firestore `reports` collection | later |
 | Sign-up, forgot/reset password, profile edit, password change, email verification, delete account | Firebase Auth | auth-hardening slice(s) |
-| Profile-menu identity | `auth.onAuthStateChanged` populates the sidebar/Settings/Report identity | when the account flows move to the backend |
-| Legacy session mirror | best-effort `signInWithEmailAndPassword` during login, so Report + the account flows work for admins who also exist in Firebase | when the account flows move to the backend |
+| Profile-menu identity | `auth.onAuthStateChanged` populates the sidebar/Settings identity | when the account flows move to the backend |
+| Legacy session mirror | best-effort `signInWithEmailAndPassword` during login, so the account flows work for admins who also exist in Firebase | when the account flows move to the backend |
 
-No new Firebase/Firestore dependencies or business logic were added.
-`firebase.js` and `auth.js` are unchanged; `firestore.js` now contains only
-`submitReportDoc`. `VerifyEmailScreen` and the email-verification handlers
-remain in `App.jsx` but are no longer on the render path (backend auth is the
-gate now).
+No Firebase/Firestore dependencies were added or removed; `firebase` stays for
+Firebase Auth. `auth.js` is unchanged. `VerifyEmailScreen` and the
+email-verification handlers remain in `App.jsx` but are no longer on the render
+path (backend auth is the gate now).
 
 **Consequences of backend auth becoming the gate (all deferred, not fixed here):**
 
@@ -332,7 +348,14 @@ frontend deliberately exposes status transitions only. No create / delete /
 name / email / password editing. See
 [admin-users-integration.md](./admin-users-integration.md).
 
+**Legacy "Report a problem" removal** (`chore/admin-retire-firestore-business-data`)
+— **done.** The write-only Admin-only reporting feature was removed outright (no
+backend Reports API); `src/firestore.js` deleted, `db` export dropped from
+`src/firebase.js`, `firestore.rules` set to deny-all. This retires the last
+Admin Firestore code path. See
+[admin-remove-legacy-reporting.md](./admin-remove-legacy-reporting.md).
+
 After that, **auth hardening** (HttpOnly refresh cookie) remains, plus moving
 the Firebase-Auth-only account flows (sign-up, password reset/change, profile
-edit, email verification, delete account) and "Report a problem" onto the
-backend. Those are the last Firebase users in the admin app.
+edit, email verification, delete account) onto the backend. Those are the last
+Firebase users in the admin app.
