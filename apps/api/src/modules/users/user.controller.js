@@ -42,4 +42,13 @@ const updateUser = asyncHandler(async (req, res) => {
   sendSuccess(res, { user: toAdminUserSummary(updated) });
 });
 
-module.exports = { getCurrentUser, listUsers, updateUser };
+const updateCurrentUser = asyncHandler(async (req, res) => {
+  const updated = await userService.updateOwnProfile({
+    userId: req.auth.userId,
+    patch: req.body,
+  });
+
+  sendSuccess(res, { user: toPublicUser(updated) });
+});
+
+module.exports = { getCurrentUser, listUsers, updateUser, updateCurrentUser };

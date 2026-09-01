@@ -203,10 +203,63 @@ async function adminUpdateUser({ actingUserId, targetUserId, patch }) {
   return updated;
 }
 
+// The authenticated principal was deleted between authenticate (which loaded
+// them, active, moments ago) and this write. Same semantic as
+// user.controller.getCurrentUser: the session no longer maps to a live user.
+function sessionInvalidError() {
+  return new AppError('Session is no longer valid.', {
+    statusCode: 401,
+    code: 'AUTH_SESSION_INVALID',
+  });
+}
+
+/**
+ * Updates the authenticated user's OWN profile. Deliberately separate from
+ * adminUpdateUser: no acting/target split (the caller can only ever be the
+ * subject), no role/status policy, and no session revocation — name and
+ * preferences carry zero authorization authority (they are not JWT claims, and
+ * authenticate reloads role/status from MongoDB every request regardless).
+ *
+ * `patch` is the strict-validated body: { name?, preferences?: {
+ * dietaryPreferences?, allergies?, notifications?: { enabled } } }. The Mongo
+ * update is assembled here field-by-field with dot-path $set keys — never
+ * `{ $set: patch }` or `{ $set: patch.preferences }`, which would replace the
+ * whole `preferences` subdocument and wipe the sibling keys the request never
+ * mentioned. A supplied array (including []) replaces that array wholesale; an
+ * omitted key is simply never added to $set. Duplicates are stored as sent.
+ */
+async function updateOwnProfile({ userId, patch }) {
+  const update = {};
+
+  if (patch.name !== undefined) {
+    update.name = patch.name;
+  }
+
+  const { preferences } = patch;
+  if (preferences) {
+    if (preferences.dietaryPreferences !== undefined) {
+      update['preferences.dietaryPreferences'] = preferences.dietaryPreferences;
+    }
+    if (preferences.allergies !== undefined) {
+      update['preferences.allergies'] = preferences.allergies;
+    }
+    if (preferences.notifications && preferences.notifications.enabled !== undefined) {
+      update['preferences.notifications.enabled'] = preferences.notifications.enabled;
+    }
+  }
+
+  const updated = await userRepository.updateById(userId, { $set: update });
+  if (!updated) {
+    throw sessionInvalidError();
+  }
+  return updated;
+}
+
 module.exports = {
   registerUser,
   verifyCredentials,
   getUserById,
   listUsers,
   adminUpdateUser,
+  updateOwnProfile,
 };

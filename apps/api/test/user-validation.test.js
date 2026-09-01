@@ -8,7 +8,11 @@ process.env.BCRYPT_ROUNDS = '10';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { listUsersSchema, updateUserSchema } = require('../src/modules/users/user.validation');
+const {
+  listUsersSchema,
+  updateUserSchema,
+  updateCurrentUserSchema,
+} = require('../src/modules/users/user.validation');
 
 const VALID_ID = '507f1f77bcf86cd799439011';
 
@@ -137,3 +141,140 @@ test('updateUserSchema rejects a role/status value outside the enum', () => {
   assert.equal(parsePatch(VALID_ID, { role: 'root' }).success, false);
   assert.equal(parsePatch(VALID_ID, { status: 'deleted' }).success, false);
 });
+// ---------------------------------------------------------------------------
+// updateCurrentUserSchema  (PATCH /api/v1/users/me — self-profile)
+// ---------------------------------------------------------------------------
+
+function parseSelf(body) {
+  // The validate middleware always hands the schema { body, params, query }.
+  return updateCurrentUserSchema.safeParse({ body, params: {}, query: {} });
+}
+
+test('updateCurrentUserSchema accepts a name-only body and trims it', () => {
+  const result = parseSelf({ name: '  Ada Lovelace  ' });
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.body, { name: 'Ada Lovelace' });
+});
+
+test('updateCurrentUserSchema preserves internal whitespace in name', () => {
+  const result = parseSelf({ name: 'Mary  Jane' });
+  assert.equal(result.success, true);
+  assert.equal(result.data.body.name, 'Mary  Jane');
+});
+
+test('updateCurrentUserSchema rejects empty / whitespace / oversized / non-string name', () => {
+  assert.equal(parseSelf({ name: '' }).success, false);
+  assert.equal(parseSelf({ name: '   ' }).success, false);
+  assert.equal(parseSelf({ name: 'x'.repeat(101) }).success, false);
+  assert.equal(parseSelf({ name: 123 }).success, false);
+  assert.equal(parseSelf({ name: ['Ada'] }).success, false);
+  assert.equal(parseSelf({ name: null }).success, false);
+});
+
+test('updateCurrentUserSchema accepts a name of exactly 100 characters', () => {
+  assert.equal(parseSelf({ name: 'x'.repeat(100) }).success, true);
+});
+
+test('updateCurrentUserSchema accepts each preferences field individually', () => {
+  assert.equal(parseSelf({ preferences: { dietaryPreferences: ['Vegan'] } }).success, true);
+  assert.equal(parseSelf({ preferences: { allergies: ['Peanuts'] } }).success, true);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: true } } }).success, true);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: false } } }).success, true);
+});
+
+test('updateCurrentUserSchema accepts a combined name + full preferences body', () => {
+  const result = parseSelf({
+    name: 'Ada',
+    preferences: {
+      dietaryPreferences: ['Vegetarian'],
+      allergies: ['Shellfish'],
+      notifications: { enabled: false },
+    },
+  });
+  assert.equal(result.success, true);
+});
+
+test('updateCurrentUserSchema trims preference entries', () => {
+  const result = parseSelf({ preferences: { allergies: ['  Peanuts  '] } });
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.body.preferences.allergies, ['Peanuts']);
+});
+
+test('updateCurrentUserSchema keeps duplicate preference entries as-is (no dedupe)', () => {
+  const result = parseSelf({ preferences: { dietaryPreferences: ['Vegan', 'Vegan', 'vegan'] } });
+  assert.equal(result.success, true);
+  assert.deepEqual(result.data.body.preferences.dietaryPreferences, ['Vegan', 'Vegan', 'vegan']);
+});
+
+test('updateCurrentUserSchema accepts empty preference arrays (clear semantics)', () => {
+  assert.equal(parseSelf({ preferences: { allergies: [] } }).success, true);
+  assert.equal(parseSelf({ preferences: { dietaryPreferences: [] } }).success, true);
+});
+
+test('updateCurrentUserSchema enforces the 20-entry array cap', () => {
+  assert.equal(parseSelf({ preferences: { allergies: Array(20).fill('x') } }).success, true);
+  assert.equal(parseSelf({ preferences: { allergies: Array(21).fill('x') } }).success, false);
+  assert.equal(parseSelf({ preferences: { dietaryPreferences: Array(21).fill('x') } }).success, false);
+});
+
+test('updateCurrentUserSchema enforces the 50-character entry cap', () => {
+  assert.equal(parseSelf({ preferences: { allergies: ['x'.repeat(50)] } }).success, true);
+  assert.equal(parseSelf({ preferences: { allergies: ['x'.repeat(51)] } }).success, false);
+});
+
+test('updateCurrentUserSchema rejects empty / whitespace-only preference entries', () => {
+  assert.equal(parseSelf({ preferences: { allergies: [''] } }).success, false);
+  assert.equal(parseSelf({ preferences: { allergies: ['   '] } }).success, false);
+  assert.equal(parseSelf({ preferences: { allergies: ['ok', ''] } }).success, false);
+});
+
+test('updateCurrentUserSchema rejects non-string preference entries', () => {
+  assert.equal(parseSelf({ preferences: { allergies: [1, 2] } }).success, false);
+  assert.equal(parseSelf({ preferences: { dietaryPreferences: [{}] } }).success, false);
+});
+
+test('updateCurrentUserSchema rejects structural no-op bodies', () => {
+  assert.equal(parseSelf({}).success, false);
+  assert.equal(parseSelf({ preferences: {} }).success, false);
+  assert.equal(parseSelf({ preferences: { notifications: {} } }).success, false);
+});
+
+test('updateCurrentUserSchema requires notifications.enabled to be a boolean when present', () => {
+  assert.equal(parseSelf({ preferences: { notifications: {} } }).success, false);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: 'yes' } } }).success, false);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: 1 } } }).success, false);
+});
+
+test('updateCurrentUserSchema rejects every non-allowed / admin-managed field', () => {
+  for (const body of [
+    { role: 'admin' },
+    { status: 'active' },
+    { email: 'x@example.com' },
+    { emailVerified: true },
+    { passwordHash: '$2b$10$x' },
+    { password: 'hunter2hunter2' },
+    { authProviders: ['google'] },
+    { _id: VALID_ID },
+    { id: VALID_ID },
+    { createdAt: '2020-01-01' },
+    { updatedAt: '2020-01-01' },
+    { name: 'Ada', extra: 1 },
+  ]) {
+    assert.equal(parseSelf(body).success, false, `expected ${JSON.stringify(body)} rejected`);
+  }
+});
+
+test('updateCurrentUserSchema rejects unknown nested preference / notifications keys', () => {
+  assert.equal(parseSelf({ preferences: { theme: 'dark' } }).success, false);
+  assert.equal(parseSelf({ preferences: { dietaryPreferences: ['x'], foo: 1 } }).success, false);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: true, push: true } } }).success, false);
+});
+
+test('updateCurrentUserSchema rejects Mongo-operator and prototype-pollution shapes', () => {
+  assert.equal(parseSelf({ $set: { role: 'admin' } }).success, false);
+  assert.equal(parseSelf({ preferences: { $set: {} } }).success, false);
+  assert.equal(parseSelf({ preferences: { notifications: { $set: true } } }).success, false);
+  assert.equal(parseSelf({ name: { $ne: null } }).success, false);
+  assert.equal(parseSelf(JSON.parse('{"__proto__":{"role":"admin"}}')).success, false);
+});
+

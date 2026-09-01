@@ -485,3 +485,181 @@ test('adminUpdateUser throws USER_NOT_FOUND when the target is deleted between r
     }
   );
 });
+// ---------------------------------------------------------------------------
+// updateOwnProfile  (self-profile, PATCH /api/v1/users/me)
+// ---------------------------------------------------------------------------
+
+const SELF_ID = '507f1f77bcf86cd799439077';
+
+test('updateOwnProfile passes the exact caller id to the repository and returns its result', async (t) => {
+  let capturedId;
+  const doc = fakeUser({ _id: SELF_ID, name: 'Updated' });
+  t.mock.method(userRepository, 'updateById', async (id) => {
+    capturedId = id;
+    return doc;
+  });
+
+  const result = await userService.updateOwnProfile({ userId: SELF_ID, patch: { name: 'Updated' } });
+
+  assert.equal(capturedId, SELF_ID);
+  assert.equal(result, doc);
+});
+
+test('updateOwnProfile name-only patch sets ONLY name in $set', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({ userId: SELF_ID, patch: { name: 'Solo' } });
+
+  assert.deepEqual(capturedUpdate, { $set: { name: 'Solo' } });
+});
+
+test('updateOwnProfile allergies-only patch sets ONLY preferences.allergies (dot path, siblings untouched)', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { preferences: { allergies: ['Peanuts'] } },
+  });
+
+  assert.deepEqual(capturedUpdate, { $set: { 'preferences.allergies': ['Peanuts'] } });
+  assert.equal('preferences' in capturedUpdate.$set, false);
+  assert.equal('preferences.dietaryPreferences' in capturedUpdate.$set, false);
+  assert.equal('preferences.notifications.enabled' in capturedUpdate.$set, false);
+});
+
+test('updateOwnProfile dietaryPreferences-only patch sets ONLY preferences.dietaryPreferences', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { preferences: { dietaryPreferences: ['Vegan', 'Vegan'] } },
+  });
+
+  assert.deepEqual(capturedUpdate, {
+    $set: { 'preferences.dietaryPreferences': ['Vegan', 'Vegan'] },
+  });
+});
+
+test('updateOwnProfile notifications-only patch sets ONLY preferences.notifications.enabled (false preserved)', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { preferences: { notifications: { enabled: false } } },
+  });
+
+  assert.deepEqual(capturedUpdate, { $set: { 'preferences.notifications.enabled': false } });
+});
+
+test('updateOwnProfile passes an empty allergies array through as [] (clear)', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { preferences: { allergies: [] } },
+  });
+
+  assert.deepEqual(capturedUpdate, { $set: { 'preferences.allergies': [] } });
+});
+
+test('updateOwnProfile combined patch emits every supplied dot-path and nothing else', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: {
+      name: 'Full',
+      preferences: {
+        dietaryPreferences: ['Halal'],
+        allergies: ['Soy'],
+        notifications: { enabled: true },
+      },
+    },
+  });
+
+  assert.deepEqual(capturedUpdate, {
+    $set: {
+      name: 'Full',
+      'preferences.dietaryPreferences': ['Halal'],
+      'preferences.allergies': ['Soy'],
+      'preferences.notifications.enabled': true,
+    },
+  });
+});
+
+test('updateOwnProfile keeps duplicate preference entries (no dedupe at the service layer)', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id });
+  });
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { preferences: { dietaryPreferences: ['Vegan', 'Vegan', 'vegan'] } },
+  });
+
+  assert.deepEqual(capturedUpdate.$set['preferences.dietaryPreferences'], ['Vegan', 'Vegan', 'vegan']);
+});
+
+test('updateOwnProfile throws 401 AUTH_SESSION_INVALID when the user no longer exists', async (t) => {
+  t.mock.method(userRepository, 'updateById', async () => null);
+
+  await assert.rejects(
+    () => userService.updateOwnProfile({ userId: SELF_ID, patch: { name: 'Ghost' } }),
+    (err) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 401);
+      assert.equal(err.code, 'AUTH_SESSION_INVALID');
+      return true;
+    }
+  );
+});
+
+test('updateOwnProfile propagates an unexpected repository error unchanged', async (t) => {
+  t.mock.method(userRepository, 'updateById', async () => {
+    throw new Error('db exploded');
+  });
+
+  await assert.rejects(
+    () => userService.updateOwnProfile({ userId: SELF_ID, patch: { name: 'x' } }),
+    /db exploded/
+  );
+});
+
+test('updateOwnProfile never calls the session service', async (t) => {
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(userRepository, 'updateById', async (id) => fakeUser({ _id: id }));
+
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { name: 'Quiet', preferences: { notifications: { enabled: false } } },
+  });
+
+  assert.equal(revoke.mock.callCount(), 0);
+});
+
