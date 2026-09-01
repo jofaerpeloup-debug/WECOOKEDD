@@ -25,30 +25,29 @@ const listUsersSchema = z.object({
     .strict(),
 });
 
-// PATCH is a pure administrative-authority endpoint: the only writable fields
-// are role and status, both admin-only concepts. .strict() means every other
-// field — name, email, password, passwordHash, emailVerified, preferences,
-// allergies, authProviders, createdAt, updatedAt, _id/id — is a
-// 400 VALIDATION_ERROR, not a silently-dropped key. At least one of role/status
-// must be present.
+// PATCH is a pure administrative-authority endpoint. `status` (active |
+// suspended) is the ONLY writable field — it is required. `role` is deliberately
+// NOT accepted: there is no generic runtime promote/demote capability (a second
+// admin is never created through the application). A `role` key — like `name`,
+// `email`, `password`, `passwordHash`, `emailVerified`, `preferences`,
+// `allergies`, `authProviders`, `createdAt`, `updatedAt`, `_id`/`id`, or any
+// other field — is rejected by `.strict()` as a 400 VALIDATION_ERROR, never a
+// silently-dropped key. `ROLES` is still imported above because `listUsersSchema`
+// keeps `role` as a read-only GET filter.
 const updateUserSchema = z.object({
   params: z.object({ userId: objectIdSchema }).strict(),
   body: z
     .object({
-      role: z.enum(ROLES, 'Invalid role.').optional(),
-      status: z.enum(STATUSES, 'Invalid status.').optional(),
+      status: z.enum(STATUSES, 'Invalid status.'),
     })
-    .strict()
-    .refine((body) => Object.keys(body).length > 0, {
-      message: 'At least one of role or status must be provided.',
-    }),
+    .strict(),
 });
 
 // ---------------------------------------------------------------------------
 // PATCH /api/v1/users/me — self-profile mutation
 // ---------------------------------------------------------------------------
 // A pure self-profile endpoint: the ONLY writable fields are `name` and the
-// three preference leaves. Distinct from updateUserSchema (admin role/status).
+// three preference leaves. Distinct from updateUserSchema (admin-only status).
 // Preference entries stay free-form strings — no controlled vocabulary. The
 // caps below are an API-boundary policy only; the User schema itself remains a
 // permissive [String] store, so the constants live here rather than in
