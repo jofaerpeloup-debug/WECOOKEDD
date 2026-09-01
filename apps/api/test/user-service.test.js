@@ -12,6 +12,7 @@ const userRepository = require('../src/modules/users/user.repository');
 const userService = require('../src/modules/users/user.service');
 const sessionService = require('../src/modules/sessions/session.service');
 const { hashPassword, comparePassword } = require('../src/shared/security/password');
+const { hashPasswordResetToken } = require('../src/shared/security/password-reset-token');
 const { AppError } = require('../src/shared/errors/app-error');
 
 const ACTING_ADMIN_ID = '507f1f77bcf86cd799439001';
@@ -684,7 +685,7 @@ test('changePassword: happy path — loads by authenticated id, verifies current
     return fakePasswordUser('current-secret');
   });
   let writeArgs;
-  t.mock.method(userRepository, 'updatePasswordHashById', async (id, passwordHash) => {
+  t.mock.method(userRepository, 'replacePasswordById', async (id, passwordHash) => {
     writeArgs = { id, passwordHash };
     return { matchedCount: 1, modifiedCount: 1 };
   });
@@ -706,7 +707,7 @@ test('changePassword: happy path — loads by authenticated id, verifies current
 test('changePassword: the repository write receives exactly (id, passwordHash) and no plaintext field', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
   let allArgs;
-  t.mock.method(userRepository, 'updatePasswordHashById', async (...args) => {
+  t.mock.method(userRepository, 'replacePasswordById', async (...args) => {
     allArgs = args;
     return { matchedCount: 1 };
   });
@@ -727,7 +728,7 @@ test('changePassword: the repository write receives exactly (id, passwordHash) a
 test('changePassword: wrong current password → 400 AUTH_CURRENT_PASSWORD_INVALID, nothing persisted', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
   let written = false;
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => {
+  t.mock.method(userRepository, 'replacePasswordById', async () => {
     written = true;
     return { matchedCount: 1 };
   });
@@ -752,7 +753,7 @@ test('changePassword: wrong current password → 400 AUTH_CURRENT_PASSWORD_INVAL
 test('changePassword: new password equal to current → 400 NEW_PASSWORD_SAME_AS_CURRENT, nothing persisted', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
   let written = false;
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => {
+  t.mock.method(userRepository, 'replacePasswordById', async () => {
     written = true;
     return { matchedCount: 1 };
   });
@@ -838,9 +839,9 @@ test('changePassword: local account with a missing hash → 400 AUTH_PASSWORD_CH
   );
 });
 
-test('changePassword: updatePasswordHashById matches no document (deleted mid-request) → 401 AUTH_SESSION_INVALID', async (t) => {
+test('changePassword: replacePasswordById matches no document (deleted mid-request) → 401 AUTH_SESSION_INVALID', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 0, modifiedCount: 0 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 0, modifiedCount: 0 }));
 
   await assert.rejects(
     () =>
@@ -859,7 +860,7 @@ test('changePassword: updatePasswordHashById matches no document (deleted mid-re
 
 test('changePassword: an unexpected repository persistence error propagates unchanged', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => {
+  t.mock.method(userRepository, 'replacePasswordById', async () => {
     throw new Error('db exploded');
   });
 
@@ -876,7 +877,7 @@ test('changePassword: an unexpected repository persistence error propagates unch
 
 test('changePassword: returns nothing (no user object, no hash) on success', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
 
   const result = await userService.changePassword({
     userId: PW_USER_ID,
@@ -889,7 +890,7 @@ test('changePassword: returns nothing (no user object, no hash) on success', asy
 
 test('changePassword: does not revoke sessions itself (AuthService orchestrates that)', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
   const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
 
   await userService.changePassword({
@@ -899,5 +900,197 @@ test('changePassword: does not revoke sessions itself (AuthService orchestrates 
   });
 
   assert.equal(revoke.mock.callCount(), 0);
+});
+
+test('preparePasswordReset stores a digest only for an eligible normalized local account', async (t) => {
+  const user = await fakePasswordUser('current-secret', { email: 'ada@example.com' });
+  let lookupEmail;
+  let stored;
+  t.mock.method(userRepository, 'findByEmailWithPassword', async (email) => {
+    lookupEmail = email;
+    return user;
+  });
+  t.mock.method(
+    userRepository,
+    'setPasswordResetTokenForEligibleUser',
+    async (userId, tokenHash, expiresAt) => {
+      stored = { userId, tokenHash, expiresAt };
+      return { matchedCount: 1 };
+    }
+  );
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+  const result = await userService.preparePasswordReset({
+    email: '  ADA@EXAMPLE.COM ',
+    tokenHash: 'stored-digest',
+    expiresAt,
+  });
+
+  assert.equal(lookupEmail, 'ada@example.com');
+  assert.deepEqual(stored, { userId: PW_USER_ID, tokenHash: 'stored-digest', expiresAt });
+  assert.deepEqual(result, { userId: PW_USER_ID, email: 'ada@example.com' });
+});
+
+test('preparePasswordReset returns the same null result for nonexistent, suspended, and social-only accounts', async (t) => {
+  const candidates = [
+    null,
+    await fakePasswordUser('current-secret', { status: 'suspended' }),
+    { ...(await fakePasswordUser('current-secret')), authProviders: ['google'], passwordHash: undefined },
+  ];
+  let index = 0;
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => candidates[index++]);
+  const store = t.mock.method(
+    userRepository,
+    'setPasswordResetTokenForEligibleUser',
+    async () => ({ matchedCount: 1 })
+  );
+
+  for (const ignored of candidates) {
+    void ignored;
+    const result = await userService.preparePasswordReset({
+      email: 'ada@example.com',
+      tokenHash: 'digest',
+      expiresAt: new Date(),
+    });
+    assert.equal(result, null);
+  }
+  assert.equal(store.mock.callCount(), 0);
+});
+
+test('resetPasswordWithToken persists only a bcrypt hash and returns the matched user id', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'resetPasswordByTokenHash', async (args) => {
+    captured = args;
+    return { _id: PW_USER_ID };
+  });
+  const rawToken = 'A'.repeat(43);
+
+  const result = await userService.resetPasswordWithToken({
+    rawToken,
+    newPassword: 'brand-new-secret',
+  });
+
+  assert.equal(captured.tokenHash, hashPasswordResetToken(rawToken));
+  assert.notEqual(captured.passwordHash, 'brand-new-secret');
+  assert.equal(await comparePassword('brand-new-secret', captured.passwordHash), true);
+  assert.ok(captured.now instanceof Date);
+  assert.deepEqual(result, { userId: PW_USER_ID });
+});
+
+test('resetPasswordWithToken gives one safe error when the atomic token match loses', async (t) => {
+  t.mock.method(userRepository, 'resetPasswordByTokenHash', async () => null);
+
+  await assert.rejects(
+    () =>
+      userService.resetPasswordWithToken({
+        rawToken: 'B'.repeat(43),
+        newPassword: 'brand-new-secret',
+      }),
+    (error) => {
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, 'AUTH_PASSWORD_RESET_TOKEN_INVALID');
+      return true;
+    }
+  );
+});
+
+test('adminUpdateUser atomically clears reset credentials whenever status is suspended', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id, status: 'suspended' });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'suspended' },
+  });
+
+  assert.deepEqual(capturedUpdate.$set, { status: 'suspended' });
+  assert.deepEqual(capturedUpdate.$unset, {
+    passwordResetTokenHash: 1,
+    passwordResetExpiresAt: 1,
+  });
+  assert.equal('role' in capturedUpdate.$set, false);
+});
+
+test('adminUpdateUser suspended-to-suspended retry also clears reset credentials', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'suspended' }));
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id, status: 'suspended' });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'suspended' },
+  });
+
+  assert.deepEqual(capturedUpdate.$unset, {
+    passwordResetTokenHash: 1,
+    passwordResetExpiresAt: 1,
+  });
+});
+
+test('a reset credential cleared by suspension cannot revive after reactivation', async (t) => {
+  let status = 'active';
+  let resetCredentialActive = true;
+  const order = [];
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status }));
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    order.push(`update:${update.$set.status}`);
+    status = update.$set.status;
+    if (update.$unset?.passwordResetTokenHash) {
+      resetCredentialActive = false;
+    }
+    return fakeUser({ _id: id, status });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    order.push(`revoke:${status}`);
+    return 1;
+  });
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'suspended' },
+  });
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'active' },
+  });
+
+  assert.equal(resetCredentialActive, false);
+  assert.deepEqual(order, [
+    'update:suspended',
+    'revoke:suspended',
+    'revoke:suspended',
+    'update:active',
+  ]);
+});
+
+test('adminUpdateUser active-to-active does not clear reset credentials', async (t) => {
+  t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return fakeUser({ _id: id, status: 'active' });
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+
+  await userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'active' },
+  });
+
+  assert.deepEqual(capturedUpdate, { $set: { status: 'active' } });
 });
 

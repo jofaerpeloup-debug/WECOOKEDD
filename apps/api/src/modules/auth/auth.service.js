@@ -1,7 +1,40 @@
 const userService = require('../users/user.service');
 const sessionService = require('../sessions/session.service');
 const { signAccessToken } = require('../../shared/security/access-token');
+const {
+  generatePasswordResetToken,
+  hashPasswordResetToken,
+} = require('../../shared/security/password-reset-token');
+const emailService = require('../../shared/email/email.service');
+const { loadEnv } = require('../../config/env');
 const { AppError } = require('../../shared/errors/app-error');
+
+const FORGOT_PASSWORD_MIN_RESPONSE_MS = 750;
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function passwordResetUrl(baseUrl, rawToken) {
+  const url = new URL(baseUrl);
+  url.hash = new URLSearchParams({ token: rawToken }).toString();
+  return url.toString();
+}
+
+function logForgotPasswordFailure(stage, error) {
+  const details = {
+    event: 'forgot_password_processing_failed',
+    stage,
+    errorName: error?.name || 'Error',
+  };
+  if (Number.isInteger(error?.providerStatus)) {
+    details.providerStatus = error.providerStatus;
+  }
+  if (typeof error?.providerRequestId === 'string') {
+    details.providerRequestId = error.providerRequestId;
+  }
+  console.error('[auth] forgot-password processing failed', details);
+}
 
 async function issueTokensForUser(user) {
   const { session, refreshToken } = await sessionService.createSession(user._id);
@@ -90,12 +123,13 @@ async function refresh(rawRefreshToken) {
  * SessionService, matching the module-boundary rule (AuthService never touches
  * a repository directly).
  *
- * Order is LOCKED: persist the new hash FIRST (via userService.changePassword),
- * THEN revoke every session for the user, the current one included. Persisting
- * first kills the old password before the sweep, so a concurrent login racing
- * with the old credentials cannot mint a session that outlives the change. If
- * the revoke throws afterwards, the new password still stands (no rollback) and
- * the failure surfaces as a 500 — the caller can re-login and logout-all.
+ * Order is LOCKED: atomically persist the new hash and invalidate outstanding
+ * password-reset credentials FIRST (via userService.changePassword), THEN
+ * revoke every session for the user, the current one included. Persisting first
+ * kills the old password before the sweep, so a concurrent login racing with
+ * the old credentials cannot mint a session that outlives the change. If the
+ * revoke throws afterwards, the new password and reset-token invalidation still
+ * stand (no rollback) and the failure surfaces as a 500.
  *
  * No replacement session is created and no tokens are issued: the caller must
  * sign in again.
@@ -104,6 +138,46 @@ async function changePassword({ userId, currentPassword, newPassword }) {
   await userService.changePassword({ userId, currentPassword, newPassword });
   await sessionService.revokeAllSessionsForUser(userId);
   return { passwordChanged: true };
+}
+
+async function forgotPassword(email) {
+  const startedAt = Date.now();
+  let stage = 'prepare';
+
+  try {
+    const { passwordResetTtlMinutes, passwordResetUrl: resetUrlBase } = loadEnv();
+    const rawToken = generatePasswordResetToken();
+    const tokenHash = hashPasswordResetToken(rawToken);
+    const expiresAt = new Date(Date.now() + passwordResetTtlMinutes * 60 * 1000);
+    const eligible = await userService.preparePasswordReset({ email, tokenHash, expiresAt });
+
+    if (eligible) {
+      stage = 'email';
+      await emailService.sendPasswordResetEmail({
+        to: eligible.email,
+        resetUrl: passwordResetUrl(resetUrlBase, rawToken),
+        expiresInMinutes: passwordResetTtlMinutes,
+      });
+    }
+  } catch (error) {
+    // Forgot-password never exposes account eligibility or provider/storage
+    // failures. The reset credential is intentionally retained after an
+    // ambiguous delivery failure: a timeout may still have delivered it.
+    logForgotPasswordFailure(stage, error);
+  }
+
+  const remainingDelay = FORGOT_PASSWORD_MIN_RESPONSE_MS - (Date.now() - startedAt);
+  if (remainingDelay > 0) {
+    await delay(remainingDelay);
+  }
+
+  return { passwordResetRequested: true };
+}
+
+async function resetPassword({ rawToken, newPassword }) {
+  const { userId } = await userService.resetPasswordWithToken({ rawToken, newPassword });
+  await sessionService.revokeAllSessionsForUser(userId);
+  return { passwordReset: true };
 }
 
 async function logout(sessionId) {
@@ -115,4 +189,13 @@ async function logoutAll(userId) {
   return { revokedCount };
 }
 
-module.exports = { register, login, refresh, logout, logoutAll, changePassword };
+module.exports = {
+  register,
+  login,
+  refresh,
+  logout,
+  logoutAll,
+  changePassword,
+  forgotPassword,
+  resetPassword,
+};

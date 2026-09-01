@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const userRepository = require('./user.repository');
 const sessionService = require('../sessions/session.service');
 const { hashPassword, comparePassword } = require('../../shared/security/password');
+const { hashPasswordResetToken } = require('../../shared/security/password-reset-token');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
@@ -207,7 +208,17 @@ async function adminUpdateUser({ actingUserId, targetUserId, patch }) {
     await sessionService.revokeAllSessionsForUser(targetId);
   }
 
-  const updated = await userRepository.updateById(targetId, { $set: update });
+  const databaseUpdate = { $set: update };
+  if (suspending) {
+    // A pre-suspension reset credential must not spring back to life after
+    // reactivation. Clear it atomically with the authoritative status write.
+    databaseUpdate.$unset = {
+      passwordResetTokenHash: 1,
+      passwordResetExpiresAt: 1,
+    };
+  }
+
+  const updated = await userRepository.updateById(targetId, databaseUpdate);
   if (!updated) {
     // Deleted between the read above and this write.
     throw userNotFoundError();
@@ -279,7 +290,8 @@ async function updateOwnProfile({ userId, patch }) {
  *
  * This function owns credential policy only: load the hash, verify the current
  * password, reject a same-password no-op, hash the new password, and persist it
- * through the dedicated single-field write. It does NOT revoke sessions —
+ * through a credential-replacement write that atomically invalidates every
+ * outstanding password-reset token. It does NOT revoke sessions —
  * `AuthService.changePassword` orchestrates that AFTER this resolves, so the
  * new hash is always persisted before the all-sessions sweep (persist first;
  * if the later revoke throws, the password change still stands — documented
@@ -327,11 +339,60 @@ async function changePassword({ userId, currentPassword, newPassword }) {
   }
 
   const newPasswordHash = await hashPassword(newPassword);
-  const result = await userRepository.updatePasswordHashById(userId, newPasswordHash);
+  const result = await userRepository.replacePasswordById(userId, newPasswordHash);
   if (!result || result.matchedCount === 0) {
     // Deleted between the lookup above and this write.
     throw sessionInvalidError();
   }
+}
+
+/**
+ * Starts a reset only for an active account that currently supports local
+ * password authentication. The repository repeats the eligibility predicates
+ * so a concurrent suspension/provider change cannot receive a reset token.
+ */
+async function preparePasswordReset({ email, tokenHash, expiresAt }) {
+  const normalizedEmail = normalizeEmail(email);
+  const user = await userRepository.findByEmailWithPassword(normalizedEmail);
+
+  if (
+    !user ||
+    user.status !== 'active' ||
+    !user.authProviders?.includes('local') ||
+    !user.passwordHash
+  ) {
+    return null;
+  }
+
+  const result = await userRepository.setPasswordResetTokenForEligibleUser(
+    user._id,
+    tokenHash,
+    expiresAt
+  );
+  if (!result || result.matchedCount === 0) {
+    return null;
+  }
+
+  return { userId: String(user._id), email: user.email };
+}
+
+async function resetPasswordWithToken({ rawToken, newPassword }) {
+  const tokenHash = hashPasswordResetToken(rawToken);
+  const passwordHash = await hashPassword(newPassword);
+  const user = await userRepository.resetPasswordByTokenHash({
+    tokenHash,
+    passwordHash,
+    now: new Date(),
+  });
+
+  if (!user) {
+    throw new AppError('Password reset token is invalid or expired.', {
+      statusCode: 400,
+      code: 'AUTH_PASSWORD_RESET_TOKEN_INVALID',
+    });
+  }
+
+  return { userId: String(user._id) };
 }
 
 module.exports = {
@@ -342,4 +403,6 @@ module.exports = {
   adminUpdateUser,
   updateOwnProfile,
   changePassword,
+  preparePasswordReset,
+  resetPasswordWithToken,
 };

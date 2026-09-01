@@ -237,16 +237,17 @@ needed.
 
 | Transition | Order | Rationale |
 | --- | --- | --- |
-| **active → suspended** | 1. persist `status: 'suspended'` &nbsp; 2. revoke all sessions | Once `suspended` is committed, `login` throws `AUTH_ACCOUNT_SUSPENDED` and `refresh` refuses to rotate, so the sweep is race-free. If revocation throws, the error propagates but the user **stays suspended** (current `User.status` is authoritative for `authenticate`/`refresh` regardless) — **no rollback**. |
+| **active → suspended** | 1. atomically persist `status: 'suspended'` and clear B3 reset credentials &nbsp; 2. revoke all sessions | Once `suspended` is committed, `login` throws `AUTH_ACCOUNT_SUSPENDED`, `refresh` refuses to rotate, and a pre-suspension reset token cannot spring back after reactivation. If revocation throws, the error propagates but the user **stays suspended** with the reset credential cleared — **no rollback**. |
 | **suspended → active** | 1. revoke all sessions &nbsp; 2. only then persist `status: 'active'` | A user must never regain a session that an earlier failed suspension (or a login race) left unrevoked. This runs while the user is still `suspended`, so nothing can mint a session in parallel. If revocation throws, the error propagates and the user is **NOT reactivated** (stays `suspended`). |
 | **active → active** | no session action | Harmless no-op; a healthy user keeps their session. |
 
 (Pre-B1 this table also had `role-only` and `combined role + status` rows.
 Since B1, `status` is the only writable field, so those cases no longer exist.)
 
-A `status: 'suspended'` PATCH on an already-suspended user also re-runs the
-revoke — a cheap, idempotent mop-up if an earlier suspension's revoke had
-failed.
+A `status: 'suspended'` PATCH on an already-suspended user also clears reset
+credentials and re-runs the revoke—a cheap, idempotent mop-up if an earlier
+suspension's session sweep had failed. The `$unset` is server-owned; the strict
+B1 request body remains `{ status }`, and role immutability is unchanged.
 
 Access tokens need no separate blocklist: once a session's `revokedAt` is
 set, any outstanding JWT for that session fails `authenticate` on its next use

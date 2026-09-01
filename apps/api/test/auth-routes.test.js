@@ -17,7 +17,8 @@ const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
 const { hashPassword } = require('../src/shared/security/password');
 const { signAccessToken } = require('../src/shared/security/access-token');
-const { authRateLimiter } = require('../src/modules/auth/auth.routes');
+const emailService = require('../src/shared/email/email.service');
+const { authRateLimiter, forgotPasswordRateLimiter } = require('../src/modules/auth/auth.routes');
 
 const app = createApp();
 
@@ -28,6 +29,10 @@ const app = createApp();
 // connection normalises to the key '127.0.0.1'.
 function resetAuthLimiter() {
   return authRateLimiter.resetKey('127.0.0.1');
+}
+
+function resetForgotPasswordLimiter() {
+  return forgotPasswordRateLimiter.resetKey('127.0.0.1');
 }
 
 // Authenticated routes (GET /users/me, /auth/logout, /auth/logout-all) go
@@ -370,7 +375,7 @@ async function mockChangePassword(t, { userStatus = 'active', onRevokeAll } = {}
   );
 
   const persisted = [];
-  t.mock.method(userRepository, 'updatePasswordHashById', async (id, passwordHash) => {
+  t.mock.method(userRepository, 'replacePasswordById', async (id, passwordHash) => {
     persisted.push({ id, passwordHash });
     return { matchedCount: 1, modifiedCount: 1 };
   });
@@ -503,7 +508,7 @@ test('after a successful change-password, the same access token fails the next a
   t.mock.method(userRepository, 'findByIdWithPassword', async () =>
     fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
   );
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
     sessionsRevoked = true;
     return 1;
@@ -534,7 +539,7 @@ test('after a successful change-password, the pre-change refresh token can no lo
   t.mock.method(userRepository, 'findByIdWithPassword', async () =>
     fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
   );
-  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
   // A revoked session no longer matches the active-by-hash filter.
   t.mock.method(sessionRepository, 'findActiveByHash', async () => (sessionsRevoked ? null : { _id: AUTH_SESSION_ID, userId: AUTH_USER_ID }));
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
@@ -555,4 +560,174 @@ test('after a successful change-password, the pre-change refresh token can no lo
     .send({ refreshToken: 'the-pre-change-refresh-token' });
   assert.equal(refreshed.status, 401);
   assert.equal(refreshed.body.error.code, 'AUTH_REFRESH_TOKEN_INVALID');
+});
+
+test('POST /api/v1/auth/forgot-password returns generic success and emails only an eligible account', async (t) => {
+  await resetForgotPasswordLimiter();
+  const passwordHash = await hashPassword('current-secret');
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, email: 'ada@example.com', passwordHash })
+  );
+  let stored;
+  t.mock.method(
+    userRepository,
+    'setPasswordResetTokenForEligibleUser',
+    async (userId, tokenHash, expiresAt) => {
+      stored = { userId, tokenHash, expiresAt };
+      return { matchedCount: 1 };
+    }
+  );
+  let email;
+  t.mock.method(emailService, 'sendPasswordResetEmail', async (args) => {
+    email = args;
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/forgot-password')
+    .send({ email: '  ADA@EXAMPLE.COM ' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    success: true,
+    data: { passwordResetRequested: true },
+  });
+  assert.equal(stored.userId, AUTH_USER_ID);
+  assert.match(stored.tokenHash, /^[a-f0-9]{64}$/);
+  assert.ok(stored.expiresAt instanceof Date);
+  assert.equal(email.to, 'ada@example.com');
+  assert.match(new URL(email.resetUrl).hash, /^#token=[A-Za-z0-9_-]{43}$/);
+});
+
+test('POST /api/v1/auth/forgot-password gives an unknown email the identical response and sends nothing', async (t) => {
+  await resetForgotPasswordLimiter();
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => null);
+  const send = t.mock.method(emailService, 'sendPasswordResetEmail', async () => {});
+
+  const response = await request(app)
+    .post('/api/v1/auth/forgot-password')
+    .send({ email: 'unknown@example.com' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    success: true,
+    data: { passwordResetRequested: true },
+  });
+  assert.equal(send.mock.callCount(), 0);
+});
+
+test('POST /api/v1/auth/forgot-password rejects malformed and extra fields', async () => {
+  await resetForgotPasswordLimiter();
+  const malformed = await request(app)
+    .post('/api/v1/auth/forgot-password')
+    .send({ email: 'not-an-email' });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error.code, 'VALIDATION_ERROR');
+
+  const extra = await request(app)
+    .post('/api/v1/auth/forgot-password')
+    .send({ email: 'ada@example.com', client: 'admin' });
+  assert.equal(extra.status, 400);
+  assert.equal(extra.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/auth/reset-password atomically resets and revokes all sessions without issuing tokens', async (t) => {
+  await resetAuthLimiter();
+  let resetArgs;
+  t.mock.method(userRepository, 'resetPasswordByTokenHash', async (args) => {
+    resetArgs = args;
+    return { _id: AUTH_USER_ID };
+  });
+  const revokedFor = [];
+  t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
+    revokedFor.push(String(userId));
+    return 2;
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/reset-password')
+    .send({ token: 'A'.repeat(43), newPassword: 'brand-new-secret' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { success: true, data: { passwordReset: true } });
+  assert.match(resetArgs.tokenHash, /^[a-f0-9]{64}$/);
+  assert.notEqual(resetArgs.passwordHash, 'brand-new-secret');
+  assert.deepEqual(revokedFor, [AUTH_USER_ID]);
+  assert.equal('accessToken' in response.body.data, false);
+  assert.equal('refreshToken' in response.body.data, false);
+});
+
+test('POST /api/v1/auth/reset-password rejects invalid, expired, or replayed tokens identically', async (t) => {
+  await resetAuthLimiter();
+  t.mock.method(userRepository, 'resetPasswordByTokenHash', async () => null);
+  const revoke = t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
+
+  for (const token of ['B'.repeat(43), 'C'.repeat(43)]) {
+    const response = await request(app)
+      .post('/api/v1/auth/reset-password')
+      .send({ token, newPassword: 'brand-new-secret' });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'AUTH_PASSWORD_RESET_TOKEN_INVALID');
+    assert.equal(response.body.error.message, 'Password reset token is invalid or expired.');
+  }
+  assert.equal(revoke.mock.callCount(), 0);
+});
+
+test('an outstanding reset token cannot overwrite a password changed through authenticated B2', async (t) => {
+  await resetAuthLimiter();
+  let resetCredentialActive = true;
+  let replacementHash;
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: AUTH_SESSION_ID,
+    userId: AUTH_USER_ID,
+    revokedAt: null,
+    expiresAt: new Date(Date.now() + 60_000),
+  }));
+  t.mock.method(userRepository, 'findById', async () => fakeUserDoc({ id: AUTH_USER_ID }));
+  const currentHash = await hashPassword(CP_CURRENT);
+  t.mock.method(userRepository, 'findByIdWithPassword', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
+  );
+  t.mock.method(userRepository, 'replacePasswordById', async (id, passwordHash) => {
+    assert.equal(id, AUTH_USER_ID);
+    replacementHash = passwordHash;
+    resetCredentialActive = false;
+    return { matchedCount: 1 };
+  });
+  t.mock.method(userRepository, 'resetPasswordByTokenHash', async () =>
+    resetCredentialActive ? { _id: AUTH_USER_ID } : null
+  );
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
+  const accessToken = signAccessToken({
+    userId: AUTH_USER_ID,
+    role: 'admin',
+    sessionId: AUTH_SESSION_ID,
+  });
+
+  const changed = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${accessToken}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: 'legitimate-new-secret' });
+  assert.equal(changed.status, 200);
+  assert.equal(await require('../src/shared/security/password').comparePassword('legitimate-new-secret', replacementHash), true);
+
+  const reset = await request(app)
+    .post('/api/v1/auth/reset-password')
+    .send({ token: 'D'.repeat(43), newPassword: 'attacker-password' });
+  assert.equal(reset.status, 400);
+  assert.equal(reset.body.error.code, 'AUTH_PASSWORD_RESET_TOKEN_INVALID');
+});
+
+test('forgot-password uses its dedicated five-request limiter', async () => {
+  await resetForgotPasswordLimiter();
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const response = await request(app)
+      .post('/api/v1/auth/forgot-password')
+      .send({ email: 'not-an-email' });
+    assert.equal(response.status, 400);
+  }
+  const limited = await request(app)
+    .post('/api/v1/auth/forgot-password')
+    .send({ email: 'not-an-email' });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
 });

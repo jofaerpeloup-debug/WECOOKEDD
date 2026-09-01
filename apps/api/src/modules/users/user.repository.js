@@ -27,13 +27,54 @@ function findByIdWithPassword(id) {
   return User.findById(id).select('+passwordHash');
 }
 
-// Dedicated single-field write for the security-sensitive passwordHash. Kept
-// separate from the generic updateById (which returns the whole document and
-// runs broad validators) so a credential rotation only ever $sets this one
-// select:false field and returns nothing but the write result. The caller
-// checks matchedCount to detect a user deleted mid-request.
-function updatePasswordHashById(id, passwordHash) {
-  return User.updateOne({ _id: id }, { $set: { passwordHash } });
+// Every password replacement invalidates every outstanding password-reset
+// credential in the SAME document write. Keeping this shape private and shared
+// prevents authenticated change-password and token reset from drifting.
+function buildPasswordReplacementUpdate(passwordHash) {
+  return {
+    $set: { passwordHash },
+    $unset: {
+      passwordResetTokenHash: 1,
+      passwordResetExpiresAt: 1,
+    },
+  };
+}
+
+function replacePasswordById(id, passwordHash) {
+  return User.updateOne({ _id: id }, buildPasswordReplacementUpdate(passwordHash));
+}
+
+function setPasswordResetTokenForEligibleUser(id, tokenHash, expiresAt) {
+  return User.updateOne(
+    {
+      _id: id,
+      status: 'active',
+      authProviders: 'local',
+      passwordHash: { $exists: true, $type: 'string' },
+    },
+    {
+      $set: {
+        passwordResetTokenHash: tokenHash,
+        passwordResetExpiresAt: expiresAt,
+      },
+    }
+  );
+}
+
+// Atomically verifies and consumes a reset credential while replacing the
+// password. Only one concurrent request presenting a digest can match.
+function resetPasswordByTokenHash({ tokenHash, passwordHash, now }) {
+  return User.findOneAndUpdate(
+    {
+      passwordResetTokenHash: tokenHash,
+      passwordResetExpiresAt: { $gt: now },
+      status: 'active',
+      authProviders: 'local',
+      passwordHash: { $exists: true, $type: 'string' },
+    },
+    buildPasswordReplacementUpdate(passwordHash),
+    { new: true, projection: { _id: 1 } }
+  );
 }
 
 // Admin user-management list. Pure query mechanics — the caller (service)
@@ -64,5 +105,7 @@ module.exports = {
   findMany,
   countByFilter,
   updateById,
-  updatePasswordHashById,
+  replacePasswordById,
+  setPasswordResetTokenForEligibleUser,
+  resetPasswordByTokenHash,
 };
