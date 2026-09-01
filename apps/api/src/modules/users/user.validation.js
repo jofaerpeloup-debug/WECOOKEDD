@@ -30,7 +30,8 @@ const listUsersSchema = z.object({
 // NOT accepted: there is no generic runtime promote/demote capability (a second
 // admin is never created through the application). A `role` key — like `name`,
 // `email`, `password`, `passwordHash`, `emailVerified`, `preferences`,
-// `allergies`, `authProviders`, `createdAt`, `updatedAt`, `_id`/`id`, or any
+// `allergies`, `authIdentities`, legacy `authProviders`, `createdAt`,
+// `updatedAt`, `_id`/`id`, or any
 // other field — is rejected by `.strict()` as a 400 VALIDATION_ERROR, never a
 // silently-dropped key. `ROLES` is still imported above because `listUsersSchema`
 // keeps `role` as a read-only GET filter.
@@ -104,7 +105,8 @@ const preferencesPatchSchema = z
   });
 
 // .strict() on the body makes role, status, email, emailVerified, passwordHash,
-// authProviders, _id/id, createdAt/updatedAt — and every other key, including
+// authIdentities, legacy authProviders, _id/id, createdAt/updatedAt — and every
+// other key, including
 // `$set` / `__proto__` — a 400 VALIDATION_ERROR rather than a silently-dropped
 // key or a mass-assignment vector. The outer wrapper is deliberately NOT
 // .strict(): the validate middleware always hands the schema { body, params,

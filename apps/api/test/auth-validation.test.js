@@ -26,18 +26,23 @@ test('registerSchema rejects a caller-supplied role field', () => {
   assert.equal(result.success, false);
 });
 
-test('registerSchema rejects caller-supplied status/passwordHash/authProviders fields', () => {
-  const result = registerSchema.safeParse({
-    body: {
-      name: 'Ada',
-      email: 'ada@example.com',
-      password: 'a-good-password',
-      status: 'active',
-      passwordHash: 'fake',
-      authProviders: ['local'],
-    },
-  });
-  assert.equal(result.success, false);
+test('registerSchema rejects caller-supplied auth internals including legacy authProviders', () => {
+  for (const extra of [
+    { status: 'active' },
+    { passwordHash: 'fake' },
+    { authIdentities: [{ provider: 'google', subject: 'attacker-controlled' }] },
+    { authProviders: ['local'] },
+  ]) {
+    const result = registerSchema.safeParse({
+      body: {
+        name: 'Ada',
+        email: 'ada@example.com',
+        password: 'a-good-password',
+        ...extra,
+      },
+    });
+    assert.equal(result.success, false, `expected ${JSON.stringify(extra)} to be rejected`);
+  }
 });
 
 test('registerSchema rejects a password shorter than 8 characters', () => {

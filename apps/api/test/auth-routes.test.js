@@ -58,7 +58,7 @@ function fakeUserDoc({
     passwordHash,
     role,
     status,
-    authProviders: ['local'],
+    authIdentities: [],
     preferences: { dietaryPreferences: [], allergies: [], notifications: { enabled: true } },
     emailVerified: false,
     createdAt: new Date(),

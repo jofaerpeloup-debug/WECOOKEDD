@@ -78,7 +78,8 @@ returns `401 AUTH_SESSION_INVALID` first (`user.status !== 'active'`).
 The `body`, `preferences`, and `notifications` objects are all Zod `.strict()`.
 Any other key is a `400 VALIDATION_ERROR`, not a silently-dropped field. This
 blocks self-mutation of `role`, `status`, `email`, `emailVerified`,
-`passwordHash`, `authProviders`, `_id`, `id`, `createdAt`, `updatedAt`, and
+`passwordHash`, `authIdentities`, legacy `authProviders`, `_id`, `id`,
+`createdAt`, `updatedAt`, and
 rejects operator/prototype shapes (`$set`, `__proto__`, `{ "$ne": null }`, …).
 
 The outer wrapper (`z.object({ body })`) is deliberately **not** `.strict()` —
@@ -173,7 +174,7 @@ document.
 ```
 
 Same serializer and envelope as `GET /users/me`. `toPublicUser` returns the
-updated `preferences` and never exposes `passwordHash`, `authProviders`, `__v`,
+updated `preferences` and never exposes `passwordHash`, `authIdentities`, `__v`,
 session data, or tokens. `user.serializer.js` is not modified.
 
 Same-value patches are accepted and return `200` with the authoritative user

@@ -20,7 +20,7 @@ requests per 15 minutes. Every well-formed request returns the same response:
 { "success": true, "data": { "passwordResetRequested": true } }
 ```
 
-Only active accounts with a local auth provider and password hash receive a
+Only active accounts with a present, nonempty password hash receive a
 token/email. Missing, suspended, and social-only users—and storage or provider
 failures—remain indistinguishable at the HTTP boundary. Responses have a 750 ms
 minimum duration. Internal failure logging contains no email, token, reset URL,
@@ -72,8 +72,9 @@ inert and are overwritten by a later forgot request or removed by a password
 replacement.
 
 The reset repository operation uses one `findOneAndUpdate` that matches the
-digest, future expiry, active status, local provider, and existing password
-hash. That same update sets the new bcrypt hash and unsets both reset fields.
+digest, future expiry, active status, and an existing nonempty string password
+hash. It does not consult `authIdentities`. That same update sets the new bcrypt
+hash and unsets both reset fields.
 MongoDB document atomicity means only one concurrent request can consume a
 given token.
 

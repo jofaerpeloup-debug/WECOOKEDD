@@ -1,8 +1,30 @@
 const mongoose = require('mongoose');
 
-const AUTH_PROVIDERS = ['local', 'google'];
+const SOCIAL_AUTH_PROVIDERS = ['google', 'apple', 'facebook'];
 const ROLES = ['user', 'admin'];
 const STATUSES = ['active', 'suspended'];
+
+const authIdentitySchema = new mongoose.Schema(
+  {
+    provider: {
+      type: String,
+      enum: SOCIAL_AUTH_PROVIDERS,
+      required: true,
+    },
+    subject: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 255,
+    },
+    linkedAt: {
+      type: Date,
+      required: true,
+      default: Date.now,
+    },
+  },
+  { _id: false }
+);
 
 const preferencesSchema = new mongoose.Schema(
   {
@@ -32,18 +54,25 @@ const userSchema = new mongoose.Schema(
     },
     // select: false keeps the hash out of normal queries; auth code must
     // opt in with .select('+passwordHash') via an explicit repository path.
-    // Only required for local-auth users — a future Google-only account
-    // (authProviders without "local") has no password to hash. Google
-    // login itself is not implemented yet; this only keeps the schema from
-    // blocking that account shape later.
+    // A new account must have at least one usable authentication method. This
+    // check is new-document-only because hydrated local users normally omit
+    // this select:false field and must remain valid on unrelated writes.
     passwordHash: {
       type: String,
       required: [
         function () {
-          return this.authProviders.includes('local');
+          const hasAuthIdentities =
+            Array.isArray(this.authIdentities) && this.authIdentities.length > 0;
+          return this.isNew && !hasAuthIdentities;
         },
-        'passwordHash is required for local-auth users.',
+        'A new user requires a passwordHash or an authIdentity.',
       ],
+      validate: {
+        validator(value) {
+          return value == null || (typeof value === 'string' && value.trim().length > 0);
+        },
+        message: 'passwordHash must be a nonempty string when provided.',
+      },
       select: false,
     },
     // Password-reset credentials are opaque, one-time secrets. Only the
@@ -58,10 +87,19 @@ const userSchema = new mongoose.Schema(
       type: Date,
       select: false,
     },
-    authProviders: {
-      type: [String],
-      enum: AUTH_PROVIDERS,
-      default: ['local'],
+    authIdentities: {
+      type: [authIdentitySchema],
+      default: [],
+      validate: {
+        validator(identities) {
+          if (!Array.isArray(identities)) {
+            return false;
+          }
+          const providers = identities.map((identity) => identity.provider);
+          return new Set(providers).size === providers.length;
+        },
+        message: 'A user may have at most one identity for each social provider.',
+      },
     },
     role: {
       type: String,
@@ -90,6 +128,6 @@ userSchema.index({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;
-module.exports.AUTH_PROVIDERS = AUTH_PROVIDERS;
+module.exports.SOCIAL_AUTH_PROVIDERS = SOCIAL_AUTH_PROVIDERS;
 module.exports.ROLES = ROLES;
 module.exports.STATUSES = STATUSES;

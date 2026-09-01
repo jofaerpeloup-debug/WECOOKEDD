@@ -118,7 +118,7 @@ therefore gets `403 FORBIDDEN` before any query/body parsing.
 
 - **Never serialized:** `passwordHash` (model `select: false`; no admin-users
   query opts back in — the digest is not even in the result set),
-  `authProviders`, `preferences` / `allergies` / `dietaryPreferences` (user-
+  `authIdentities`, `preferences` / `allergies` / `dietaryPreferences` (user-
   private, no bearing on role/status management — data minimisation), `__v`,
   `_id`.
 - The projection is built field-by-field, so a raw Mongoose document with
@@ -146,7 +146,8 @@ Malformed → `400 VALIDATION_ERROR`.
 - `.strict()`, and `status` is **required**. Every other field is a
   `400 VALIDATION_ERROR` — explicitly including `role` (see below), and
   `name`, `email`, `password`, `passwordHash`, `emailVerified`, `preferences`,
-  `allergies`, `authProviders`, `createdAt`, `updatedAt`, `_id`, `id`.
+  `allergies`, `authIdentities`, legacy `authProviders`, `createdAt`,
+  `updatedAt`, `_id`, `id`.
 - A body that carries `role` (with or without a valid `status`) is rejected
   **before the controller runs** — the `status` change in such a request is
   never applied.

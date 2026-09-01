@@ -304,11 +304,9 @@ async function changePassword({ userId, currentPassword, newPassword }) {
     throw sessionInvalidError();
   }
 
-  // Local password auth must be available. A future Google-only account
-  // (`authProviders` without "local", conditional `required` on the hash) has
-  // no password to change — reject cleanly rather than let bcrypt.compare
-  // choke on an undefined hash.
-  if (!user.authProviders?.includes('local') || !user.passwordHash) {
+  // Local password capability is the actual presence of a nonempty stored
+  // hash. Social identities never imply that a local password exists.
+  if (typeof user.passwordHash !== 'string' || user.passwordHash.trim().length === 0) {
     throw new AppError('Password change is not available for this account.', {
       statusCode: 400,
       code: 'AUTH_PASSWORD_CHANGE_UNAVAILABLE',
@@ -358,8 +356,8 @@ async function preparePasswordReset({ email, tokenHash, expiresAt }) {
   if (
     !user ||
     user.status !== 'active' ||
-    !user.authProviders?.includes('local') ||
-    !user.passwordHash
+    typeof user.passwordHash !== 'string' ||
+    user.passwordHash.trim().length === 0
   ) {
     return null;
   }
