@@ -45,4 +45,26 @@ const changePassword = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
-module.exports = { register, login, refresh, logout, logoutAll, changePassword };
+const forgotPassword = asyncHandler(async (req, res) => {
+  const result = await authService.forgotPassword(req.body.email);
+  sendSuccess(res, result);
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  const result = await authService.resetPassword({
+    rawToken: req.body.token,
+    newPassword: req.body.newPassword,
+  });
+  sendSuccess(res, result);
+});
+
+module.exports = {
+  register,
+  login,
+  refresh,
+  logout,
+  logoutAll,
+  changePassword,
+  forgotPassword,
+  resetPassword,
+};

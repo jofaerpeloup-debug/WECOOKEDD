@@ -21,6 +21,20 @@ test('passwordHash is excluded from the default query projection', () => {
   assert.equal(path.options.select, false);
 });
 
+test('password reset credentials are hidden and the digest has a unique sparse index without TTL', () => {
+  assert.equal(User.schema.path('passwordResetTokenHash').options.select, false);
+  assert.equal(User.schema.path('passwordResetExpiresAt').options.select, false);
+
+  const indexes = User.schema.indexes();
+  const digestIndex = indexes.find(([spec]) => spec.passwordResetTokenHash === 1);
+  assert.ok(digestIndex);
+  assert.equal(digestIndex[1].unique, true);
+  assert.equal(digestIndex[1].sparse, true);
+
+  const expiryIndex = indexes.find(([spec]) => spec.passwordResetExpiresAt === 1);
+  assert.equal(expiryIndex, undefined, 'reset expiry must never be a TTL index on User');
+});
+
 test('passwordHash is required for a local-auth user (default authProviders)', async () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com' });
   await assert.rejects(() => user.validate(), (err) => {

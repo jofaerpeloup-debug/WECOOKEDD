@@ -6,6 +6,8 @@ const {
   loginSchema,
   refreshSchema,
   changePasswordSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } = require('../src/modules/auth/auth.validation');
 
 test('registerSchema accepts a well-formed registration payload', () => {
@@ -209,4 +211,35 @@ test('changePasswordSchema does not trim either password and preserves a padded 
   assert.equal(result.success, true);
   assert.equal(result.data.body.currentPassword, '  old  ');
   assert.equal(result.data.body.newPassword, '  padded value  ');
+});
+
+test('forgotPasswordSchema normalizes email and rejects malformed/extra fields', () => {
+  const valid = forgotPasswordSchema.safeParse({ body: { email: '  Ada@Example.com ' } });
+  assert.equal(valid.success, true);
+  assert.equal(valid.data.body.email, 'ada@example.com');
+  assert.equal(forgotPasswordSchema.safeParse({ body: { email: 'not-email' } }).success, false);
+  assert.equal(forgotPasswordSchema.safeParse({ body: {} }).success, false);
+  assert.equal(
+    forgotPasswordSchema.safeParse({ body: { email: 'ada@example.com', client: 'admin' } }).success,
+    false
+  );
+});
+
+test('resetPasswordSchema enforces token shape, shared password policy, and a strict body', () => {
+  const token = 'A'.repeat(43);
+  const valid = resetPasswordSchema.safeParse({ body: { token, newPassword: 'a-new-password' } });
+  assert.equal(valid.success, true);
+  assert.equal(resetPasswordSchema.safeParse({ body: { token: 'short', newPassword: 'a-new-password' } }).success, false);
+  assert.equal(resetPasswordSchema.safeParse({ body: { token, newPassword: '1234567' } }).success, false);
+  assert.equal(resetPasswordSchema.safeParse({ body: { token, newPassword: 'a'.repeat(73) } }).success, false);
+  assert.equal(
+    resetPasswordSchema.safeParse({ body: { token, newPassword: '  padded password  ' } }).data.body.newPassword,
+    '  padded password  '
+  );
+  assert.equal(
+    resetPasswordSchema.safeParse({
+      body: { token, newPassword: 'a-new-password', confirmPassword: 'a-new-password' },
+    }).success,
+    false
+  );
 });

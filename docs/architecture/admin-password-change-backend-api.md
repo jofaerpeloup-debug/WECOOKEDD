@@ -112,10 +112,12 @@ migration story.
      bcrypt compare, and there is no password-history system.
    - `hashPassword(newPassword)` — the **existing** primitive
      (`BCRYPT_ROUNDS`, default 12).
-   - `userRepository.updatePasswordHashById(userId, newHash)` — a dedicated
-     single-field write (`updateOne` + `$set: { passwordHash }`), **not** the
-     generic `updateById` (which returns the whole document and runs broad
-     validators). `matchedCount === 0` → `401 AUTH_SESSION_INVALID`
+   - `userRepository.replacePasswordById(userId, newHash)` — a dedicated
+     credential write that atomically `$set`s `passwordHash` and `$unset`s the
+     B3 reset-token digest/expiry, **not** the generic `updateById` (which
+     returns the whole document and runs broad validators). This guarantees a
+     reset token issued before change-password can never overwrite the newly
+     changed password. `matchedCount === 0` → `401 AUTH_SESSION_INVALID`
      (deleted between the lookup and the write).
 4. `authService.changePassword` then calls
    `sessionService.revokeAllSessionsForUser(userId)` — the **existing** method,
@@ -124,14 +126,16 @@ migration story.
 
 ### Persist before revoke (locked)
 
-The new hash is persisted **before** the all-sessions sweep. Persisting first
-kills the old password, so a concurrent login racing with the old credentials
-cannot mint a session that outlives the change. This matches the dominant
+The new hash and B3 reset-token invalidation are persisted atomically **before**
+the all-sessions sweep. Persisting first kills the old password, so a concurrent
+login racing with the old credentials cannot mint a session that outlives the
+change. Clearing reset credentials in that same write prevents a previously
+issued reset token from restoring attacker control. This matches the dominant
 codebase precedent (`adminUpdateUser` active → suspended persists status, then
 revokes).
 
 **Residual, documented:** if `revokeAllSessionsForUser` throws *after* the hash
-is persisted, the password change still stands (no rollback) and the failure
+and reset-token invalidation are persisted, both still stand (no rollback) and the failure
 surfaces as `500 INTERNAL_SERVER_ERROR`. `revokeAllForUser` is a single
 `updateMany`, so a failure there means the session store is unreachable — a
 monitored operational event, not a silent security hole. Recovery: the user
@@ -196,7 +200,7 @@ is login's) lets a future frontend flag the current-password field.
 | Function | Purpose |
 |---|---|
 | `findByIdWithPassword(id)` | `User.findById(id).select('+passwordHash')` — by-id credential lookup for authenticated self-service. `findByEmailWithPassword` (login's only path) is unchanged. |
-| `updatePasswordHashById(id, passwordHash)` | `User.updateOne({ _id: id }, { $set: { passwordHash } })` — writes **only** `passwordHash`, returns only the write result. Never used for anything else. |
+| `replacePasswordById(id, passwordHash)` | One `User.updateOne` that sets `passwordHash` and unsets `passwordResetTokenHash` / `passwordResetExpiresAt`; returns only the write result. Every password replacement invalidates outstanding reset credentials. |
 
 `user.model.js` is **not** modified — the `passwordHash` field and its
 `select: false` / conditional `required` already exist.

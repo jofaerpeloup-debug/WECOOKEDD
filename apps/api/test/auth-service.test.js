@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const userService = require('../src/modules/users/user.service');
 const sessionService = require('../src/modules/sessions/session.service');
 const authService = require('../src/modules/auth/auth.service');
+const emailService = require('../src/shared/email/email.service');
 const { verifyAccessToken } = require('../src/shared/security/access-token');
 const { AppError } = require('../src/shared/errors/app-error');
 
@@ -324,4 +325,104 @@ test('changePassword returns exactly { passwordChanged: true } and issues no tok
 
   assert.deepEqual(Object.keys(result), ['passwordChanged']);
   assert.equal(result.passwordChanged, true);
+});
+
+test('forgotPassword stores a reset credential, emails a fragment link, and enforces the response floor', async (t) => {
+  let prepared;
+  let emailed;
+  t.mock.method(userService, 'preparePasswordReset', async (args) => {
+    prepared = args;
+    return { userId: 'user-1', email: 'ada@example.com' };
+  });
+  t.mock.method(emailService, 'sendPasswordResetEmail', async (args) => {
+    emailed = args;
+  });
+  const startedAt = Date.now();
+
+  const result = await authService.forgotPassword('ada@example.com');
+
+  assert.deepEqual(result, { passwordResetRequested: true });
+  assert.match(prepared.tokenHash, /^[a-f0-9]{64}$/);
+  assert.ok(prepared.expiresAt instanceof Date);
+  const url = new URL(emailed.resetUrl);
+  assert.equal(url.search, '');
+  assert.match(url.hash, /^#token=[A-Za-z0-9_-]{43}$/);
+  assert.equal(emailed.to, 'ada@example.com');
+  assert.ok(Date.now() - startedAt >= 700);
+});
+
+test('forgotPassword returns the identical generic result for an unknown account and sends nothing', async (t) => {
+  t.mock.method(userService, 'preparePasswordReset', async () => null);
+  const send = t.mock.method(emailService, 'sendPasswordResetEmail', async () => {});
+
+  const result = await authService.forgotPassword('unknown@example.com');
+
+  assert.deepEqual(result, { passwordResetRequested: true });
+  assert.equal(send.mock.callCount(), 0);
+});
+
+test('forgotPassword hides email delivery failure and logs no recipient, token, or reset URL', async (t) => {
+  t.mock.method(userService, 'preparePasswordReset', async () => ({
+    userId: 'user-1',
+    email: 'ada@example.com',
+  }));
+  t.mock.method(emailService, 'sendPasswordResetEmail', async () => {
+    const error = new Error('provider failed');
+    error.name = 'EmailDeliveryError';
+    error.providerStatus = 503;
+    throw error;
+  });
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args));
+
+  const result = await authService.forgotPassword('ada@example.com');
+
+  assert.deepEqual(result, { passwordResetRequested: true });
+  const serialized = JSON.stringify(logged);
+  assert.equal(serialized.includes('ada@example.com'), false);
+  assert.equal(serialized.includes('#token='), false);
+  assert.equal(serialized.includes('provider failed'), false);
+  assert.ok(serialized.includes('503'));
+});
+
+test('resetPassword replaces credentials FIRST, then revokes every session, and issues no tokens', async (t) => {
+  const calls = [];
+  t.mock.method(userService, 'resetPasswordWithToken', async () => {
+    calls.push('resetPasswordWithToken');
+    return { userId: 'user-1' };
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+    calls.push('revokeAllSessionsForUser');
+    return 2;
+  });
+
+  const result = await authService.resetPassword({
+    rawToken: 'A'.repeat(43),
+    newPassword: 'brand-new-secret',
+  });
+
+  assert.deepEqual(calls, ['resetPasswordWithToken', 'revokeAllSessionsForUser']);
+  assert.deepEqual(result, { passwordReset: true });
+  assert.equal('accessToken' in result, false);
+  assert.equal('refreshToken' in result, false);
+});
+
+test('resetPassword does not revoke sessions when token consumption fails', async (t) => {
+  t.mock.method(userService, 'resetPasswordWithToken', async () => {
+    throw new AppError('Password reset token is invalid or expired.', {
+      statusCode: 400,
+      code: 'AUTH_PASSWORD_RESET_TOKEN_INVALID',
+    });
+  });
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+
+  await assert.rejects(
+    () =>
+      authService.resetPassword({
+        rawToken: 'A'.repeat(43),
+        newPassword: 'brand-new-secret',
+      }),
+    { code: 'AUTH_PASSWORD_RESET_TOKEN_INVALID' }
+  );
+  assert.equal(revoke.mock.callCount(), 0);
 });

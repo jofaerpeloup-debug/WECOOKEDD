@@ -134,7 +134,8 @@ the security-relevant points:
   `findByEmailWithPassword`) using the existing `comparePassword`.
 - `newPassword` reuses the registration policy unchanged (min 8, ≤ 72 bytes,
   no complexity). A `newPassword` equal to `currentPassword` is rejected.
-- The new hash is persisted **before** all of the user's sessions are revoked
+- The new hash and invalidation of every outstanding password-reset credential
+  are persisted atomically **before** all of the user's sessions are revoked
   (`SessionService.revokeAllSessionsForUser`) — the current session
   included, so the caller must sign in again. Persist-before-revoke keeps a
   concurrent login with the old password from minting a surviving session;
@@ -144,6 +145,22 @@ the security-relevant points:
   new tokens, no `passwordHash`. A wrong current password is `400
   AUTH_CURRENT_PASSWORD_INVALID` (not `401`, which the admin client would
   transparently refresh-retry).
+
+## Password reset
+
+`POST /api/v1/auth/forgot-password` and `POST /api/v1/auth/reset-password`
+implement the B3 backend reset flow. Reset tokens are 32-byte opaque secrets;
+only SHA-256 digests and absolute expiries are stored on `User`. Forgot-password
+returns one generic response for every eligible/ineligible email and uses a
+dedicated 5-per-15-minute IP limiter plus a minimum response floor.
+
+Reset-password conditionally matches an active, unexpired digest and atomically
+sets the new bcrypt hash while unsetting the digest/expiry. Every successful
+password replacement—including authenticated change-password—uses that same
+set-password/unset-reset-fields update invariant, then revokes all sessions.
+Suspension also clears reset credentials in the same status write, preventing a
+pre-suspension token from reviving after reactivation. Full contract:
+[password-reset-backend-api.md](./password-reset-backend-api.md).
 
 ## Authentication middleware
 
@@ -231,8 +248,8 @@ sufficiently strong one configured.
   `"google"` as a schema value so the field doesn't need a breaking change
   later, but no Google OAuth flow, account linking, or verification exists
   yet.
-- Email verification delivery and password **reset** (the forgot-password
-  flow: reset tokens, email delivery) remain out of scope for Phase 2.
+- Email verification delivery remains out of scope. Password **reset** was out
+  of scope for Phase 2 and is now implemented by Phase B3 as documented above.
   Password **change** for an authenticated user is now implemented — see
   [§ Password change](#password-change) above (Phase B2). Admin-only
   endpoints were added later (see

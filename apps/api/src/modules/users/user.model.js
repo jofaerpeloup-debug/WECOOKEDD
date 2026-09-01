@@ -46,6 +46,18 @@ const userSchema = new mongoose.Schema(
       ],
       select: false,
     },
+    // Password-reset credentials are opaque, one-time secrets. Only the
+    // SHA-256 digest is persisted, and neither reset field is selected by
+    // ordinary user queries. Never add a TTL index here: MongoDB would delete
+    // the entire User document when the timestamp expires.
+    passwordResetTokenHash: {
+      type: String,
+      select: false,
+    },
+    passwordResetExpiresAt: {
+      type: Date,
+      select: false,
+    },
     authProviders: {
       type: [String],
       enum: AUTH_PROVIDERS,
@@ -72,6 +84,8 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+userSchema.index({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
 
 const User = mongoose.model('User', userSchema);
 

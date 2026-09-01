@@ -8,6 +8,8 @@ const {
   loginSchema,
   refreshSchema,
   changePasswordSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } = require('./auth.validation');
 
 const router = Router();
@@ -19,9 +21,26 @@ const authRateLimiter = createRateLimiter({
   limit: 20,
 });
 
+const forgotPasswordRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+});
+
 router.post('/register', authRateLimiter, validate(registerSchema), authController.register);
 router.post('/login', authRateLimiter, validate(loginSchema), authController.login);
 router.post('/refresh', authRateLimiter, validate(refreshSchema), authController.refresh);
+router.post(
+  '/forgot-password',
+  forgotPasswordRateLimiter,
+  validate(forgotPasswordSchema),
+  authController.forgotPassword
+);
+router.post(
+  '/reset-password',
+  authRateLimiter,
+  validate(resetPasswordSchema),
+  authController.resetPassword
+);
 router.post('/logout', authenticate, authController.logout);
 router.post('/logout-all', authenticate, authController.logoutAll);
 
@@ -42,3 +61,4 @@ module.exports = router;
 // reset the shared limiter's per-IP counter between cases. Not used by app code
 // (v1.routes.js consumes the default router export).
 module.exports.authRateLimiter = authRateLimiter;
+module.exports.forgotPasswordRateLimiter = forgotPasswordRateLimiter;

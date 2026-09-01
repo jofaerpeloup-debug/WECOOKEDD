@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const { MAX_PASSWORD_BYTES } = require('../../shared/security/password');
+const { PASSWORD_RESET_TOKEN_PATTERN } = require('../../shared/security/password-reset-token');
 
 const emailSchema = z.string().trim().toLowerCase().email('Invalid email address.');
 
@@ -71,4 +72,26 @@ const changePasswordSchema = z.object({
     .strict(),
 });
 
-module.exports = { registerSchema, loginSchema, refreshSchema, changePasswordSchema };
+const forgotPasswordSchema = z.object({
+  body: z.object({ email: emailSchema }).strict(),
+});
+
+const resetPasswordSchema = z.object({
+  body: z
+    .object({
+      token: z.string().regex(PASSWORD_RESET_TOKEN_PATTERN, 'Invalid password reset token.'),
+      newPassword: newPasswordSchema,
+    })
+    .strict(),
+});
+
+module.exports = {
+  registerSchema,
+  loginSchema,
+  refreshSchema,
+  changePasswordSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  emailSchema,
+  newPasswordSchema,
+};
