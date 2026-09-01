@@ -56,17 +56,32 @@ merged into this repository — `wecooked` begins with a clean history.
 
 ## Firebase (admin app) — temporary legacy infrastructure
 
-`apps/admin` currently talks to Firebase (Firebase Authentication + Firestore)
-for its data and admin-account management, inherited as-is from
-`ingredient-hub`. This is temporary legacy infrastructure. It is expected to
-be replaced by the Express/MongoDB API in a later phase; that migration has
-not started.
+`apps/admin` was inherited from `ingredient-hub` talking to Firebase (Firebase
+Authentication + Firestore) for all of its data and admin-account management.
+The Firestore business-data migration onto the Express/MongoDB API is
+**substantially complete**: ingredients, substitutions, recipes, and users all
+run over REST, and the last Firestore code path (the legacy "Report a problem"
+feature) was removed
+([admin-remove-legacy-reporting.md](./admin-remove-legacy-reporting.md)).
 
-> The legacy Firebase rules authorize all authenticated users broadly and are
-> not suitable as the final WeCooked authorization model. The future Express
-> backend must enforce user/admin authorization server-side.
+Admin business data now flows:
 
-The existing `firestore.rules` (`allow read, write: if request.auth != null`)
-grants any authenticated user full read/write access to every collection —
-there is no admin-role check. This rule set was preserved as-is for reference
-during migration and was not deployed or modified as part of this task.
+```
+React Admin → shared REST modules (apiClient / feature *Api.js) → Express → MongoDB
+```
+
+Firebase remains **only** for Firebase-Authentication-backed admin account
+flows (sign-in, sign-up, password reset/change, profile/email edit, email
+verification, account deletion). Moving those onto the backend is a later
+auth-hardening phase.
+
+> The legacy Firebase rules authorized all authenticated users broadly and are
+> not suitable as the final WeCooked authorization model. Business-data
+> authorization is now enforced server-side by the Express API.
+
+The checked-in `firestore.rules` has been set to **deny-all**
+(`allow read, write: if false`) now that no code needs Firestore. This is a
+source change only — live enforcement on the Firebase project requires the
+project owner to deploy it (`firebase deploy --only firestore:rules` from
+`apps/admin`); until then the previously deployed rules
+(`allow read, write: if request.auth != null`) remain in effect.
