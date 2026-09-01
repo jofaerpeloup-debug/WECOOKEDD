@@ -17,8 +17,18 @@ const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
 const { hashPassword } = require('../src/shared/security/password');
 const { signAccessToken } = require('../src/shared/security/access-token');
+const { authRateLimiter } = require('../src/modules/auth/auth.routes');
 
 const app = createApp();
+
+// The change-password suite below exercises many authenticated attempts through
+// the shared authRateLimiter (limit 20 / 15min / IP). Reset its per-IP counter
+// before each of those tests so they never bleed into the shared budget the
+// login/register/refresh tests above also draw from. supertest's loopback
+// connection normalises to the key '127.0.0.1'.
+function resetAuthLimiter() {
+  return authRateLimiter.resetKey('127.0.0.1');
+}
 
 // Authenticated routes (GET /users/me, /auth/logout, /auth/logout-all) go
 // through authenticate.middleware.js, which now validates that the JWT's
@@ -333,4 +343,216 @@ test("POST /api/v1/auth/logout-all revokes all of the user's sessions", async (t
   assert.equal(response.status, 200);
   assert.equal(response.body.data.revokedCount, 3);
   assert.equal(capturedUserId, AUTH_USER_ID);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/auth/change-password
+// ---------------------------------------------------------------------------
+
+const CP_CURRENT = 'current-admin-secret';
+
+// Wires the authenticate middleware (session + user lookup) and the
+// service-layer repository calls for a happy change-password. Returns handles
+// to assert on. `onRevokeAll` lets a caller flip stateful mocks.
+async function mockChangePassword(t, { userStatus = 'active', onRevokeAll } = {}) {
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: AUTH_SESSION_ID,
+    userId: AUTH_USER_ID,
+    revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, status: userStatus })
+  );
+
+  const currentHash = await hashPassword(CP_CURRENT);
+  t.mock.method(userRepository, 'findByIdWithPassword', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
+  );
+
+  const persisted = [];
+  t.mock.method(userRepository, 'updatePasswordHashById', async (id, passwordHash) => {
+    persisted.push({ id, passwordHash });
+    return { matchedCount: 1, modifiedCount: 1 };
+  });
+
+  const revokedFor = [];
+  t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
+    revokedFor.push(userId);
+    if (onRevokeAll) onRevokeAll();
+    return 2;
+  });
+
+  const token = signAccessToken({ userId: AUTH_USER_ID, role: 'admin', sessionId: AUTH_SESSION_ID });
+  return { token, persisted, revokedFor };
+}
+
+test('POST /api/v1/auth/change-password without a token is rejected 401 AUTH_TOKEN_MISSING', async () => {
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .send({ currentPassword: 'x', newPassword: 'a-new-password' });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
+});
+
+test('POST /api/v1/auth/change-password succeeds and returns exactly { passwordChanged: true }', async (t) => {
+  await resetAuthLimiter();
+  const { token, persisted, revokedFor } = await mockChangePassword(t);
+
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { success: true, data: { passwordChanged: true } });
+  // no user object, no token fields, no hash anywhere in the response
+  assert.equal('user' in response.body.data, false);
+  assert.equal('accessToken' in response.body.data, false);
+  assert.equal('refreshToken' in response.body.data, false);
+  assert.equal(JSON.stringify(response.body).includes('passwordHash'), false);
+  assert.equal(JSON.stringify(response.body).includes('$2'), false);
+  // persisted a bcrypt hash, not the plaintext
+  assert.equal(persisted.length, 1);
+  assert.match(persisted[0].passwordHash, /^\$2[aby]\$/);
+  assert.notEqual(persisted[0].passwordHash, 'a-brand-new-secret');
+  // every session revoked, for the authenticated user
+  assert.deepEqual(revokedFor, [AUTH_USER_ID]);
+});
+
+test('POST /api/v1/auth/change-password with a wrong current password → 400 AUTH_CURRENT_PASSWORD_INVALID (not 401)', async (t) => {
+  await resetAuthLimiter();
+  const { token, persisted, revokedFor } = await mockChangePassword(t);
+
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: 'wrong-current', newPassword: 'a-brand-new-secret' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'AUTH_CURRENT_PASSWORD_INVALID');
+  assert.equal(persisted.length, 0);
+  assert.equal(revokedFor.length, 0);
+});
+
+test('POST /api/v1/auth/change-password with a newPassword shorter than 8 chars → 400 VALIDATION_ERROR', async (t) => {
+  await resetAuthLimiter();
+  const { token } = await mockChangePassword(t);
+
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: '1234567' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  assert.ok(Array.isArray(response.body.error.details));
+});
+
+test('POST /api/v1/auth/change-password with an extra field → 400 VALIDATION_ERROR', async (t) => {
+  await resetAuthLimiter();
+  const { token } = await mockChangePassword(t);
+
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret', confirmPassword: 'a-brand-new-secret' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/auth/change-password where newPassword equals currentPassword → 400 NEW_PASSWORD_SAME_AS_CURRENT', async (t) => {
+  await resetAuthLimiter();
+  const { token, persisted, revokedFor } = await mockChangePassword(t);
+
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_CURRENT });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'NEW_PASSWORD_SAME_AS_CURRENT');
+  assert.equal(persisted.length, 0);
+  assert.equal(revokedFor.length, 0);
+});
+
+test('POST /api/v1/auth/change-password for a suspended user is rejected by authenticate (401 AUTH_SESSION_INVALID) before the limiter/validation', async (t) => {
+  await resetAuthLimiter();
+  const { token, persisted } = await mockChangePassword(t, { userStatus: 'suspended' });
+
+  const response = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_SESSION_INVALID');
+  assert.equal(persisted.length, 0);
+});
+
+test('after a successful change-password, the same access token fails the next authenticated request (401 AUTH_SESSION_INVALID)', async (t) => {
+  await resetAuthLimiter();
+
+  let sessionsRevoked = false;
+  t.mock.method(sessionRepository, 'findActiveById', async () =>
+    sessionsRevoked ? null : { _id: AUTH_SESSION_ID, userId: AUTH_USER_ID, revokedAt: null }
+  );
+  t.mock.method(userRepository, 'findById', async () => fakeUserDoc({ id: AUTH_USER_ID }));
+  const currentHash = await hashPassword(CP_CURRENT);
+  t.mock.method(userRepository, 'findByIdWithPassword', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
+  );
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+    sessionsRevoked = true;
+    return 1;
+  });
+
+  const token = signAccessToken({ userId: AUTH_USER_ID, role: 'admin', sessionId: AUTH_SESSION_ID });
+
+  const changed = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+  assert.equal(changed.status, 200);
+
+  const after = await request(app).get('/api/v1/users/me').set('Authorization', `Bearer ${token}`);
+  assert.equal(after.status, 401);
+  assert.equal(after.body.error.code, 'AUTH_SESSION_INVALID');
+});
+
+test('after a successful change-password, the pre-change refresh token can no longer refresh (401 AUTH_REFRESH_TOKEN_INVALID)', async (t) => {
+  await resetAuthLimiter();
+
+  let sessionsRevoked = false;
+  t.mock.method(sessionRepository, 'findActiveById', async () =>
+    sessionsRevoked ? null : { _id: AUTH_SESSION_ID, userId: AUTH_USER_ID, revokedAt: null }
+  );
+  t.mock.method(userRepository, 'findById', async () => fakeUserDoc({ id: AUTH_USER_ID }));
+  const currentHash = await hashPassword(CP_CURRENT);
+  t.mock.method(userRepository, 'findByIdWithPassword', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
+  );
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  // A revoked session no longer matches the active-by-hash filter.
+  t.mock.method(sessionRepository, 'findActiveByHash', async () => (sessionsRevoked ? null : { _id: AUTH_SESSION_ID, userId: AUTH_USER_ID }));
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+    sessionsRevoked = true;
+    return 1;
+  });
+
+  const token = signAccessToken({ userId: AUTH_USER_ID, role: 'admin', sessionId: AUTH_SESSION_ID });
+
+  const changed = await request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+  assert.equal(changed.status, 200);
+
+  const refreshed = await request(app)
+    .post('/api/v1/auth/refresh')
+    .send({ refreshToken: 'the-pre-change-refresh-token' });
+  assert.equal(refreshed.status, 401);
+  assert.equal(refreshed.body.error.code, 'AUTH_REFRESH_TOKEN_INVALID');
 });

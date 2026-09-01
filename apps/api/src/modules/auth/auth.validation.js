@@ -54,4 +54,21 @@ const refreshSchema = z.object({
     .strict(),
 });
 
-module.exports = { registerSchema, loginSchema, refreshSchema };
+// Authenticated self-service password change (POST /api/v1/auth/change-password).
+// `currentPassword` reuses loginPasswordSchema: an existing password may predate
+// the 8-character minimum, so only the byte cap is enforced — but it must never
+// pass more than bcrypt's 72-byte limit through to comparePassword.
+// `newPassword` reuses newPasswordSchema, so register / change / any future
+// reset all share ONE policy (min 8, max 72 bytes, no complexity, no trim).
+// .strict() rejects confirmPassword, email, userId, role, and every other extra
+// key as a 400 VALIDATION_ERROR rather than silently dropping it.
+const changePasswordSchema = z.object({
+  body: z
+    .object({
+      currentPassword: loginPasswordSchema,
+      newPassword: newPasswordSchema,
+    })
+    .strict(),
+});
+
+module.exports = { registerSchema, loginSchema, refreshSchema, changePasswordSchema };

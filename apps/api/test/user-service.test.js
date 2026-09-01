@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const userRepository = require('../src/modules/users/user.repository');
 const userService = require('../src/modules/users/user.service');
 const sessionService = require('../src/modules/sessions/session.service');
-const { hashPassword } = require('../src/shared/security/password');
+const { hashPassword, comparePassword } = require('../src/shared/security/password');
 const { AppError } = require('../src/shared/errors/app-error');
 
 const ACTING_ADMIN_ID = '507f1f77bcf86cd799439001';
@@ -654,6 +654,248 @@ test('updateOwnProfile never calls the session service', async (t) => {
   await userService.updateOwnProfile({
     userId: SELF_ID,
     patch: { name: 'Quiet', preferences: { notifications: { enabled: false } } },
+  });
+
+  assert.equal(revoke.mock.callCount(), 0);
+});
+
+// ---------------------------------------------------------------------------
+// changePassword  (self-service, POST /api/v1/auth/change-password)
+// ---------------------------------------------------------------------------
+
+const PW_USER_ID = '507f1f77bcf86cd799439088';
+
+async function fakePasswordUser(currentPassword, overrides = {}) {
+  return {
+    _id: PW_USER_ID,
+    email: 'admin@example.com',
+    role: 'admin',
+    status: 'active',
+    authProviders: ['local'],
+    passwordHash: await hashPassword(currentPassword),
+    ...overrides,
+  };
+}
+
+test('changePassword: happy path — loads by authenticated id, verifies current, persists a bcrypt hash of the new password', async (t) => {
+  let lookupId;
+  t.mock.method(userRepository, 'findByIdWithPassword', async (id) => {
+    lookupId = id;
+    return fakePasswordUser('current-secret');
+  });
+  let writeArgs;
+  t.mock.method(userRepository, 'updatePasswordHashById', async (id, passwordHash) => {
+    writeArgs = { id, passwordHash };
+    return { matchedCount: 1, modifiedCount: 1 };
+  });
+
+  await userService.changePassword({
+    userId: PW_USER_ID,
+    currentPassword: 'current-secret',
+    newPassword: 'brand-new-secret',
+  });
+
+  assert.equal(lookupId, PW_USER_ID);
+  assert.equal(writeArgs.id, PW_USER_ID);
+  // Repository receives a bcrypt hash, never the plaintext.
+  assert.notEqual(writeArgs.passwordHash, 'brand-new-secret');
+  assert.match(writeArgs.passwordHash, /^\$2[aby]\$/);
+  assert.equal(await comparePassword('brand-new-secret', writeArgs.passwordHash), true);
+});
+
+test('changePassword: the repository write receives exactly (id, passwordHash) and no plaintext field', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  let allArgs;
+  t.mock.method(userRepository, 'updatePasswordHashById', async (...args) => {
+    allArgs = args;
+    return { matchedCount: 1 };
+  });
+
+  await userService.changePassword({
+    userId: PW_USER_ID,
+    currentPassword: 'current-secret',
+    newPassword: 'brand-new-secret',
+  });
+
+  assert.equal(allArgs.length, 2);
+  assert.equal(allArgs[0], PW_USER_ID);
+  assert.equal(typeof allArgs[1], 'string');
+  assert.equal(allArgs.includes('brand-new-secret'), false);
+  assert.equal(allArgs.includes('current-secret'), false);
+});
+
+test('changePassword: wrong current password → 400 AUTH_CURRENT_PASSWORD_INVALID, nothing persisted', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  let written = false;
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => {
+    written = true;
+    return { matchedCount: 1 };
+  });
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'not-the-current-password',
+        newPassword: 'brand-new-secret',
+      }),
+    (err) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 400);
+      assert.equal(err.code, 'AUTH_CURRENT_PASSWORD_INVALID');
+      return true;
+    }
+  );
+  assert.equal(written, false);
+});
+
+test('changePassword: new password equal to current → 400 NEW_PASSWORD_SAME_AS_CURRENT, nothing persisted', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  let written = false;
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => {
+    written = true;
+    return { matchedCount: 1 };
+  });
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'current-secret',
+        newPassword: 'current-secret',
+      }),
+    (err) => {
+      assert.equal(err.statusCode, 400);
+      assert.equal(err.code, 'NEW_PASSWORD_SAME_AS_CURRENT');
+      return true;
+    }
+  );
+  assert.equal(written, false);
+});
+
+test('changePassword: user no longer exists → 401 AUTH_SESSION_INVALID', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => null);
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'current-secret',
+        newPassword: 'brand-new-secret',
+      }),
+    (err) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 401);
+      assert.equal(err.code, 'AUTH_SESSION_INVALID');
+      return true;
+    }
+  );
+});
+
+test('changePassword: non-local account (no "local" provider) → 400 AUTH_PASSWORD_CHANGE_UNAVAILABLE', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => ({
+    _id: PW_USER_ID,
+    email: 'admin@example.com',
+    role: 'admin',
+    status: 'active',
+    authProviders: ['google'],
+    passwordHash: undefined,
+  }));
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'whatever',
+        newPassword: 'brand-new-secret',
+      }),
+    (err) => {
+      assert.equal(err.statusCode, 400);
+      assert.equal(err.code, 'AUTH_PASSWORD_CHANGE_UNAVAILABLE');
+      return true;
+    }
+  );
+});
+
+test('changePassword: local account with a missing hash → 400 AUTH_PASSWORD_CHANGE_UNAVAILABLE', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => ({
+    _id: PW_USER_ID,
+    authProviders: ['local'],
+    passwordHash: null,
+  }));
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'whatever',
+        newPassword: 'brand-new-secret',
+      }),
+    (err) => {
+      assert.equal(err.code, 'AUTH_PASSWORD_CHANGE_UNAVAILABLE');
+      return true;
+    }
+  );
+});
+
+test('changePassword: updatePasswordHashById matches no document (deleted mid-request) → 401 AUTH_SESSION_INVALID', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 0, modifiedCount: 0 }));
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'current-secret',
+        newPassword: 'brand-new-secret',
+      }),
+    (err) => {
+      assert.equal(err.statusCode, 401);
+      assert.equal(err.code, 'AUTH_SESSION_INVALID');
+      return true;
+    }
+  );
+});
+
+test('changePassword: an unexpected repository persistence error propagates unchanged', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => {
+    throw new Error('db exploded');
+  });
+
+  await assert.rejects(
+    () =>
+      userService.changePassword({
+        userId: PW_USER_ID,
+        currentPassword: 'current-secret',
+        newPassword: 'brand-new-secret',
+      }),
+    /db exploded/
+  );
+});
+
+test('changePassword: returns nothing (no user object, no hash) on success', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+
+  const result = await userService.changePassword({
+    userId: PW_USER_ID,
+    currentPassword: 'current-secret',
+    newPassword: 'brand-new-secret',
+  });
+
+  assert.equal(result, undefined);
+});
+
+test('changePassword: does not revoke sessions itself (AuthService orchestrates that)', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
+  t.mock.method(userRepository, 'updatePasswordHashById', async () => ({ matchedCount: 1 }));
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+
+  await userService.changePassword({
+    userId: PW_USER_ID,
+    currentPassword: 'current-secret',
+    newPassword: 'brand-new-secret',
   });
 
   assert.equal(revoke.mock.callCount(), 0);

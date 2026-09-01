@@ -272,6 +272,68 @@ async function updateOwnProfile({ userId, patch }) {
   return updated;
 }
 
+/**
+ * Changes the authenticated user's OWN password. Identity is the caller's
+ * DB-verified id (`req.auth.userId`) — never an email, a token claim, or a body
+ * field, so there is no IDOR surface.
+ *
+ * This function owns credential policy only: load the hash, verify the current
+ * password, reject a same-password no-op, hash the new password, and persist it
+ * through the dedicated single-field write. It does NOT revoke sessions —
+ * `AuthService.changePassword` orchestrates that AFTER this resolves, so the
+ * new hash is always persisted before the all-sessions sweep (persist first;
+ * if the later revoke throws, the password change still stands — documented
+ * residual, same "no rollback" stance as `adminUpdateUser` active->suspended).
+ */
+async function changePassword({ userId, currentPassword, newPassword }) {
+  const user = await userRepository.findByIdWithPassword(userId);
+  if (!user) {
+    // Deleted between `authenticate` (moments ago, active) and this read.
+    throw sessionInvalidError();
+  }
+
+  // Local password auth must be available. A future Google-only account
+  // (`authProviders` without "local", conditional `required` on the hash) has
+  // no password to change — reject cleanly rather than let bcrypt.compare
+  // choke on an undefined hash.
+  if (!user.authProviders?.includes('local') || !user.passwordHash) {
+    throw new AppError('Password change is not available for this account.', {
+      statusCode: 400,
+      code: 'AUTH_PASSWORD_CHANGE_UNAVAILABLE',
+    });
+  }
+
+  const currentValid = await comparePassword(currentPassword, user.passwordHash);
+  if (!currentValid) {
+    // 400, deliberately NOT 401: the admin API client transparently
+    // refresh-retries any 401, which would replay a wrong-password attempt and
+    // rotate a refresh token on every typo. A distinct code (not
+    // AUTH_INVALID_CREDENTIALS, which is login's) lets the frontend flag the
+    // current-password field.
+    throw new AppError('Current password is incorrect.', {
+      statusCode: 400,
+      code: 'AUTH_CURRENT_PASSWORD_INVALID',
+    });
+  }
+
+  // The current password is now confirmed to match the stored hash, so a
+  // plaintext equality check is an exact same-password test — no second bcrypt
+  // compare, and there is no password-history system to consult.
+  if (newPassword === currentPassword) {
+    throw new AppError('New password must be different from your current password.', {
+      statusCode: 400,
+      code: 'NEW_PASSWORD_SAME_AS_CURRENT',
+    });
+  }
+
+  const newPasswordHash = await hashPassword(newPassword);
+  const result = await userRepository.updatePasswordHashById(userId, newPasswordHash);
+  if (!result || result.matchedCount === 0) {
+    // Deleted between the lookup above and this write.
+    throw sessionInvalidError();
+  }
+}
+
 module.exports = {
   registerUser,
   verifyCredentials,
@@ -279,4 +341,5 @@ module.exports = {
   listUsers,
   adminUpdateUser,
   updateOwnProfile,
+  changePassword,
 };

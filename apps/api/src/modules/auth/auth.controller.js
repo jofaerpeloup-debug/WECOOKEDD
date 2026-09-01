@@ -31,4 +31,18 @@ const logoutAll = asyncHandler(async (req, res) => {
   sendSuccess(res, { revokedCount });
 });
 
-module.exports = { register, login, refresh, logout, logoutAll };
+// Identity is the authenticated, DB-verified req.auth.userId only — never an
+// email or a body field. On success every session (this one included) is
+// revoked, so no user object and no fresh token are returned: the caller must
+// sign in again.
+const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const result = await authService.changePassword({
+    userId: req.auth.userId,
+    currentPassword,
+    newPassword,
+  });
+  sendSuccess(res, result);
+});
+
+module.exports = { register, login, refresh, logout, logoutAll, changePassword };

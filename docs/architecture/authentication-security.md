@@ -115,6 +115,36 @@ detection if needed.
   both the refresh-rotation filter and the authentication-middleware check
   below — no waiting for token expiry.
 
+## Password change
+
+`POST /api/v1/auth/change-password` (Phase B2 —
+`feat/api-auth-change-password`) lets an authenticated local-auth user change
+their own password through `apps/api`, with no Firebase involvement. Full
+detail in
+[docs/architecture/admin-password-change-backend-api.md](./admin-password-change-backend-api.md);
+the security-relevant points:
+
+- Middleware order is `authenticate` → `authRateLimiter` (the existing shared
+  auth limiter) → `validate(changePasswordSchema)` → controller. Auth runs
+  before the limiter so an invalid session never consumes the budget.
+- The subject is `req.auth.userId` only — never an email or a body field.
+  `currentPassword` is verified against the authoritative
+  `User.passwordHash` (loaded by the new
+  `UserRepository.findByIdWithPassword`, the by-id counterpart of
+  `findByEmailWithPassword`) using the existing `comparePassword`.
+- `newPassword` reuses the registration policy unchanged (min 8, ≤ 72 bytes,
+  no complexity). A `newPassword` equal to `currentPassword` is rejected.
+- The new hash is persisted **before** all of the user's sessions are revoked
+  (`SessionService.revokeAllSessionsForUser`) — the current session
+  included, so the caller must sign in again. Persist-before-revoke keeps a
+  concurrent login with the old password from minting a surviving session;
+  if the revoke fails after the persist, the password change stands (no
+  rollback) and surfaces as `500`.
+- The success response is `{ passwordChanged: true }` — no user object, no
+  new tokens, no `passwordHash`. A wrong current password is `400
+  AUTH_CURRENT_PASSWORD_INVALID` (not `401`, which the admin client would
+  transparently refresh-retry).
+
 ## Authentication middleware
 
 `src/middleware/authenticate.middleware.js` expects `Authorization: Bearer
@@ -201,5 +231,9 @@ sufficiently strong one configured.
   `"google"` as a schema value so the field doesn't need a breaking change
   later, but no Google OAuth flow, account linking, or verification exists
   yet.
-- Email verification delivery, password reset/change, and admin-only
-  endpoints are also out of scope for Phase 2 (see the project's phase plan).
+- Email verification delivery and password **reset** (the forgot-password
+  flow: reset tokens, email delivery) remain out of scope for Phase 2.
+  Password **change** for an authenticated user is now implemented — see
+  [§ Password change](#password-change) above (Phase B2). Admin-only
+  endpoints were added later (see
+  [admin-users-backend-api.md](./admin-users-backend-api.md)).

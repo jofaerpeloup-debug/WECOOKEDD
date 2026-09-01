@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { registerSchema, loginSchema, refreshSchema } = require('../src/modules/auth/auth.validation');
+const {
+  registerSchema,
+  loginSchema,
+  refreshSchema,
+  changePasswordSchema,
+} = require('../src/modules/auth/auth.validation');
 
 test('registerSchema accepts a well-formed registration payload', () => {
   const result = registerSchema.safeParse({
@@ -96,4 +101,112 @@ test('refreshSchema requires a non-empty refreshToken', () => {
 
   const invalid = refreshSchema.safeParse({ body: {} });
   assert.equal(invalid.success, false);
+});
+
+// ---------------------------------------------------------------------------
+// changePasswordSchema — POST /api/v1/auth/change-password
+// ---------------------------------------------------------------------------
+
+const changePassword = (body) => changePasswordSchema.safeParse({ body });
+
+test('changePasswordSchema accepts a well-formed { currentPassword, newPassword }', () => {
+  const result = changePassword({ currentPassword: 'old-password', newPassword: 'a-new-password' });
+  assert.equal(result.success, true);
+});
+
+test('changePasswordSchema rejects a missing currentPassword', () => {
+  assert.equal(changePassword({ newPassword: 'a-new-password' }).success, false);
+});
+
+test('changePasswordSchema rejects a missing newPassword', () => {
+  assert.equal(changePassword({ currentPassword: 'old-password' }).success, false);
+});
+
+test('changePasswordSchema rejects an empty body', () => {
+  assert.equal(changePassword({}).success, false);
+});
+
+test('changePasswordSchema rejects an extra confirmPassword field', () => {
+  const result = changePassword({
+    currentPassword: 'old-password',
+    newPassword: 'a-new-password',
+    confirmPassword: 'a-new-password',
+  });
+  assert.equal(result.success, false);
+});
+
+test('changePasswordSchema rejects an extra email field', () => {
+  const result = changePassword({
+    currentPassword: 'old-password',
+    newPassword: 'a-new-password',
+    email: 'admin@example.com',
+  });
+  assert.equal(result.success, false);
+});
+
+test('changePasswordSchema rejects an extra userId field', () => {
+  const result = changePassword({
+    currentPassword: 'old-password',
+    newPassword: 'a-new-password',
+    userId: '507f1f77bcf86cd799439011',
+  });
+  assert.equal(result.success, false);
+});
+
+test('changePasswordSchema rejects an extra role field', () => {
+  const result = changePassword({
+    currentPassword: 'old-password',
+    newPassword: 'a-new-password',
+    role: 'admin',
+  });
+  assert.equal(result.success, false);
+});
+
+test('changePasswordSchema rejects an empty currentPassword', () => {
+  assert.equal(
+    changePassword({ currentPassword: '', newPassword: 'a-new-password' }).success,
+    false
+  );
+});
+
+test('changePasswordSchema rejects a currentPassword over 72 UTF-8 bytes', () => {
+  assert.equal(
+    changePassword({ currentPassword: 'a'.repeat(73), newPassword: 'a-new-password' }).success,
+    false
+  );
+});
+
+test('changePasswordSchema accepts a currentPassword shorter than 8 chars (existing passwords may predate the minimum)', () => {
+  assert.equal(
+    changePassword({ currentPassword: 'short', newPassword: 'a-new-password' }).success,
+    true
+  );
+});
+
+test('changePasswordSchema rejects a newPassword shorter than 8 characters', () => {
+  assert.equal(
+    changePassword({ currentPassword: 'old-password', newPassword: '1234567' }).success,
+    false
+  );
+});
+
+test('changePasswordSchema rejects a newPassword over 72 UTF-8 bytes', () => {
+  assert.equal(
+    changePassword({ currentPassword: 'old-password', newPassword: 'a'.repeat(73) }).success,
+    false
+  );
+});
+
+test('changePasswordSchema accepts a newPassword exactly at the 72-byte boundary', () => {
+  assert.equal(
+    changePassword({ currentPassword: 'old-password', newPassword: 'a'.repeat(72) }).success,
+    true
+  );
+});
+
+test('changePasswordSchema does not trim either password and preserves a padded value', () => {
+  const result = changePassword({ currentPassword: '  old  ', newPassword: '  padded value  ' });
+  assert.equal(result.success, true);
+  assert.equal(result.data.body.currentPassword, '  old  ');
+  assert.equal(result.data.body.newPassword, '  padded value  ');
 });
