@@ -35,7 +35,15 @@ test('password reset credentials are hidden and the digest has a unique sparse i
   assert.equal(expiryIndex, undefined, 'reset expiry must never be a TTL index on User');
 });
 
-test('passwordHash is required for a local-auth user (default authProviders)', async () => {
+test('authProviders is removed and authIdentities defaults to an empty array', () => {
+  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
+
+  assert.equal(User.schema.path('authProviders'), undefined);
+  assert.equal(User.AUTH_PROVIDERS, undefined);
+  assert.deepEqual(user.authIdentities, []);
+});
+
+test('a new user with neither a usable passwordHash nor an authIdentity is rejected', async () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com' });
   await assert.rejects(() => user.validate(), (err) => {
     assert.ok(err.errors.passwordHash, 'expected a passwordHash validation error');
@@ -43,23 +51,139 @@ test('passwordHash is required for a local-auth user (default authProviders)', a
   });
 });
 
-test('passwordHash is required for an explicitly local-auth user', async () => {
-  const user = new User({ name: 'Ada', email: 'ada@example.com', authProviders: ['local'] });
-  await assert.rejects(() => user.validate());
-});
-
-test('passwordHash may be omitted for a Google-only user', async () => {
-  const user = new User({ name: 'Ada', email: 'ada@example.com', authProviders: ['google'] });
-  await assert.doesNotReject(() => user.validate());
-});
-
-test('a local-auth user with a passwordHash passes validation (unchanged registration behavior)', async () => {
+test('a new user with null authIdentities fails validation without throwing a TypeError', async () => {
   const user = new User({
     name: 'Ada',
     email: 'ada@example.com',
-    authProviders: ['local'],
+    authIdentities: null,
+  });
+
+  await assert.rejects(() => user.validate(), (err) => {
+    assert.equal(err.name, 'ValidationError');
+    assert.equal(err instanceof TypeError, false);
+    assert.ok(err.errors.passwordHash, 'expected the missing authentication method to be rejected');
+    return true;
+  });
+});
+
+test('a local passwordHash-bearing user passes validation', async () => {
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
     passwordHash: 'a-bcrypt-hash',
   });
+  await assert.doesNotReject(() => user.validate());
+});
+
+test('a social-only user may omit passwordHash and no password is synthesized', async () => {
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    authIdentities: [{ provider: 'google', subject: 'google-subject' }],
+  });
+
+  await assert.doesNotReject(() => user.validate());
+  assert.equal(user.passwordHash, undefined);
+  assert.equal(user.authIdentities[0].linkedAt instanceof Date, true);
+});
+
+test('a whitespace-only passwordHash is not a usable local capability', async () => {
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    passwordHash: '   ',
+  });
+
+  await assert.rejects(() => user.validate(), (err) => {
+    assert.ok(err.errors.passwordHash);
+    return true;
+  });
+});
+
+test('auth identity provider is restricted to google, apple, and facebook', async () => {
+  for (const provider of ['local', 'github']) {
+    const user = new User({
+      name: 'Ada',
+      email: `${provider}@example.com`,
+      authIdentities: [{ provider, subject: 'subject' }],
+    });
+    await assert.rejects(() => user.validate(), (err) => {
+      assert.ok(err.errors['authIdentities.0.provider']);
+      return true;
+    });
+  }
+});
+
+test('auth identity subject is required, trimmed, nonempty, and capped at 255 characters', async () => {
+  for (const subject of [undefined, '', '   ', 'x'.repeat(256)]) {
+    const user = new User({
+      name: 'Ada',
+      email: 'ada@example.com',
+      authIdentities: [{ provider: 'google', subject }],
+    });
+    await assert.rejects(() => user.validate());
+  }
+
+  const valid = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    authIdentities: [{ provider: 'google', subject: '  stable-subject  ' }],
+  });
+  await valid.validate();
+  assert.equal(valid.authIdentities[0].subject, 'stable-subject');
+});
+
+test('one User cannot contain the same provider twice, even with different subjects', async () => {
+  for (const subjects of [
+    ['same', 'same'],
+    ['first', 'second'],
+  ]) {
+    const user = new User({
+      name: 'Ada',
+      email: 'ada@example.com',
+      authIdentities: subjects.map((subject) => ({ provider: 'google', subject })),
+    });
+    await assert.rejects(() => user.validate(), (err) => {
+      assert.ok(err.errors.authIdentities);
+      return true;
+    });
+  }
+});
+
+test('one User may contain identities from different providers', async () => {
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    authIdentities: [
+      { provider: 'google', subject: 'google-subject' },
+      { provider: 'apple', subject: 'apple-subject' },
+    ],
+  });
+  await assert.doesNotReject(() => user.validate());
+});
+
+test('the User schema does not declare the migration-owned auth identity index', () => {
+  const indexes = User.schema.indexes();
+  const namedIdentityIndex = indexes.find(
+    ([, options]) => options.name === 'uniq_auth_identity_provider_subject'
+  );
+  const compoundIdentityIndex = indexes.find(([spec]) => {
+    return spec['authIdentities.provider'] === 1 && spec['authIdentities.subject'] === 1;
+  });
+
+  assert.equal(namedIdentityIndex, undefined);
+  assert.equal(compoundIdentityIndex, undefined);
+});
+
+test('a hydrated legacy local user is not invalid merely because passwordHash was not selected', async () => {
+  const user = User.hydrate({
+    _id: new User()._id,
+    name: 'Ada',
+    email: 'ada@example.com',
+    authProviders: ['local'],
+  });
+
+  assert.equal(user.isNew, false);
   await assert.doesNotReject(() => user.validate());
 });
 
@@ -71,11 +195,6 @@ test('role defaults to "user" — public registration can never self-assign admi
 test('status defaults to "active"', () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
   assert.equal(user.status, 'active');
-});
-
-test('authProviders defaults to ["local"]', () => {
-  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
-  assert.deepEqual(user.authProviders, ['local']);
 });
 
 test('preferences default to empty arrays with notifications enabled', () => {
@@ -90,14 +209,20 @@ test('emailVerified defaults to false', () => {
   assert.equal(user.emailVerified, false);
 });
 
-test('toPublicUser exposes id (not _id) and hides passwordHash/__v', () => {
-  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'super-secret-hash' });
+test('toPublicUser exposes id and hides passwordHash/authIdentities/__v', () => {
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    passwordHash: 'super-secret-hash',
+    authIdentities: [{ provider: 'google', subject: 'private-subject' }],
+  });
   const publicUser = toPublicUser(user);
 
   assert.equal(publicUser.id, String(user._id));
   assert.equal(publicUser.name, 'Ada');
   assert.equal(publicUser.email, 'ada@example.com');
   assert.equal('passwordHash' in publicUser, false);
+  assert.equal('authIdentities' in publicUser, false);
   assert.equal('_id' in publicUser, false);
   assert.equal('__v' in publicUser, false);
   assert.equal(JSON.stringify(publicUser).includes('super-secret-hash'), false);

@@ -672,7 +672,6 @@ async function fakePasswordUser(currentPassword, overrides = {}) {
     email: 'admin@example.com',
     role: 'admin',
     status: 'active',
-    authProviders: ['local'],
     passwordHash: await hashPassword(currentPassword),
     ...overrides,
   };
@@ -702,6 +701,25 @@ test('changePassword: happy path — loads by authenticated id, verifies current
   assert.notEqual(writeArgs.passwordHash, 'brand-new-secret');
   assert.match(writeArgs.passwordHash, /^\$2[aby]\$/);
   assert.equal(await comparePassword('brand-new-secret', writeArgs.passwordHash), true);
+});
+
+test('changePassword: a local-plus-social user remains eligible because the hash exists', async (t) => {
+  t.mock.method(userRepository, 'findByIdWithPassword', async () =>
+    fakePasswordUser('current-secret', {
+      authIdentities: [{ provider: 'google', subject: 'stable-subject' }],
+    })
+  );
+  const write = t.mock.method(userRepository, 'replacePasswordById', async () => ({
+    matchedCount: 1,
+  }));
+
+  await userService.changePassword({
+    userId: PW_USER_ID,
+    currentPassword: 'current-secret',
+    newPassword: 'brand-new-secret',
+  });
+
+  assert.equal(write.mock.callCount(), 1);
 });
 
 test('changePassword: the repository write receives exactly (id, passwordHash) and no plaintext field', async (t) => {
@@ -793,13 +811,13 @@ test('changePassword: user no longer exists → 401 AUTH_SESSION_INVALID', async
   );
 });
 
-test('changePassword: non-local account (no "local" provider) → 400 AUTH_PASSWORD_CHANGE_UNAVAILABLE', async (t) => {
+test('changePassword: social-only account without a hash → 400 AUTH_PASSWORD_CHANGE_UNAVAILABLE', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => ({
     _id: PW_USER_ID,
     email: 'admin@example.com',
     role: 'admin',
     status: 'active',
-    authProviders: ['google'],
+    authIdentities: [{ provider: 'google', subject: 'stable-subject' }],
     passwordHash: undefined,
   }));
 
@@ -818,11 +836,11 @@ test('changePassword: non-local account (no "local" provider) → 400 AUTH_PASSW
   );
 });
 
-test('changePassword: local account with a missing hash → 400 AUTH_PASSWORD_CHANGE_UNAVAILABLE', async (t) => {
+test('changePassword: account with an empty hash → 400 AUTH_PASSWORD_CHANGE_UNAVAILABLE', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => ({
     _id: PW_USER_ID,
-    authProviders: ['local'],
-    passwordHash: null,
+    authIdentities: [],
+    passwordHash: '   ',
   }));
 
   await assert.rejects(
@@ -935,7 +953,11 @@ test('preparePasswordReset returns the same null result for nonexistent, suspend
   const candidates = [
     null,
     await fakePasswordUser('current-secret', { status: 'suspended' }),
-    { ...(await fakePasswordUser('current-secret')), authProviders: ['google'], passwordHash: undefined },
+    {
+      ...(await fakePasswordUser('current-secret')),
+      authIdentities: [{ provider: 'google', subject: 'stable-subject' }],
+      passwordHash: undefined,
+    },
   ];
   let index = 0;
   t.mock.method(userRepository, 'findByEmailWithPassword', async () => candidates[index++]);
@@ -955,6 +977,52 @@ test('preparePasswordReset returns the same null result for nonexistent, suspend
     assert.equal(result, null);
   }
   assert.equal(store.mock.callCount(), 0);
+});
+
+test('preparePasswordReset treats an empty hash as generically ineligible', async (t) => {
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => ({
+    _id: PW_USER_ID,
+    email: 'ada@example.com',
+    status: 'active',
+    authIdentities: [{ provider: 'google', subject: 'stable-subject' }],
+    passwordHash: '   ',
+  }));
+  const store = t.mock.method(
+    userRepository,
+    'setPasswordResetTokenForEligibleUser',
+    async () => ({ matchedCount: 1 })
+  );
+
+  const result = await userService.preparePasswordReset({
+    email: 'ada@example.com',
+    tokenHash: 'digest',
+    expiresAt: new Date(),
+  });
+
+  assert.equal(result, null);
+  assert.equal(store.mock.callCount(), 0);
+});
+
+test('preparePasswordReset keeps local-plus-social users eligible when a hash exists', async (t) => {
+  const user = await fakePasswordUser('current-secret', {
+    email: 'ada@example.com',
+    authIdentities: [{ provider: 'google', subject: 'stable-subject' }],
+  });
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => user);
+  const store = t.mock.method(
+    userRepository,
+    'setPasswordResetTokenForEligibleUser',
+    async () => ({ matchedCount: 1 })
+  );
+
+  const result = await userService.preparePasswordReset({
+    email: 'ada@example.com',
+    tokenHash: 'digest',
+    expiresAt: new Date(),
+  });
+
+  assert.deepEqual(result, { userId: PW_USER_ID, email: 'ada@example.com' });
+  assert.equal(store.mock.callCount(), 1);
 });
 
 test('resetPasswordWithToken persists only a bcrypt hash and returns the matched user id', async (t) => {

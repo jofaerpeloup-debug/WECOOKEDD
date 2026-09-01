@@ -26,9 +26,9 @@ the layered request-flow/module conventions this feature follows.
 - The work factor is `BCRYPT_ROUNDS` (env-configured, default `12`), read in
   one place rather than hard-coded per call site.
 - Only the resulting hash is ever persisted, in `User.passwordHash`, which
-  is declared `select: false` so it is excluded from normal queries. The
-  only code path that loads it is `UserRepository.findByEmailWithPassword`,
-  used exclusively by login/credential verification.
+  is declared `select: false` so it is excluded from normal queries. Only the
+  explicit credential repository paths opt it back in: email lookup for login
+  and forgot-password, and id lookup for authenticated change-password.
 - Passwords and password hashes are never logged.
 - bcrypt only considers the first 72 bytes of its input; anything beyond
   that is silently ignored by the algorithm itself. Both registration and
@@ -37,11 +37,14 @@ the layered request-flow/module conventions this feature follows.
   `false` without calling bcrypt) any input over that limit as a defensive
   second check — so an over-limit password can never be silently truncated
   into matching a shorter one it isn't equal to. Passwords are not trimmed.
-- `User.passwordHash` is required only when `authProviders` includes
-  `"local"` (Mongoose conditional `required`), so the schema does not block
-  a future Google-only account from existing without a password. Local
-  registration is unaffected — it always sets `authProviders: ["local"]`
-  and always provides a hash. Google login itself is not implemented.
+- **Local password capability is the actual presence of a nonempty
+  `User.passwordHash`.** It is never inferred from social identities. A new
+  User with neither a usable hash nor an `authIdentities` entry fails model
+  validation, while the check is new-document-only so a hydrated local User
+  does not fail merely because the default-excluded hash was not selected.
+  Local registration always hashes the validated plaintext before calling the
+  repository, whose local-only `createUser` also rejects a missing/empty hash.
+  Social-only Users have identities and no generated or placeholder password.
 
 ## Access tokens (JWT)
 
@@ -132,6 +135,8 @@ the security-relevant points:
   `User.passwordHash` (loaded by the new
   `UserRepository.findByIdWithPassword`, the by-id counterpart of
   `findByEmailWithPassword`) using the existing `comparePassword`.
+- Change-password availability depends only on that selected hash being a
+  nonempty string. `authIdentities` are not consulted.
 - `newPassword` reuses the registration policy unchanged (min 8, ≤ 72 bytes,
   no complexity). A `newPassword` equal to `currentPassword` is rejected.
 - The new hash and invalidation of every outstanding password-reset credential
@@ -155,7 +160,8 @@ returns one generic response for every eligible/ineligible email and uses a
 dedicated 5-per-15-minute IP limiter plus a minimum response floor.
 
 Reset-password conditionally matches an active, unexpired digest and atomically
-sets the new bcrypt hash while unsetting the digest/expiry. Every successful
+requires an existing nonempty password hash, then sets the new bcrypt hash
+while unsetting the digest/expiry. Every successful
 password replacement—including authenticated change-password—uses that same
 set-password/unset-reset-fields update invariant, then revokes all sessions.
 Suspension also clears reset credentials in the same status write, preventing a
@@ -244,10 +250,11 @@ sufficiently strong one configured.
   independent of the HTTP transport, specifically so that change can be made
   without redesigning session logic — only the controller/route layer
   should need to change.
-- **Google authentication is not implemented.** `User.authProviders` allows
-  `"google"` as a schema value so the field doesn't need a breaking change
-  later, but no Google OAuth flow, account linking, or verification exists
-  yet.
+- **Social authentication is not implemented.** B4.0 adds only the
+  provider-neutral `User.authIdentities` storage/index/repository foundation.
+  There is no Google, Apple, or Facebook credential verification, route,
+  linking API, challenge, or session issuance path. See
+  [social-authentication.md](./social-authentication.md).
 - Email verification delivery remains out of scope. Password **reset** was out
   of scope for Phase 2 and is now implemented by Phase B3 as documented above.
   Password **change** for an authenticated user is now implemented — see

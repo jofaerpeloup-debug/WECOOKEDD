@@ -1,7 +1,42 @@
 const User = require('./user.model');
 
 function createUser({ name, email, passwordHash }) {
+  if (typeof passwordHash !== 'string' || passwordHash.trim().length === 0) {
+    throw new TypeError('createUser requires a nonempty passwordHash.');
+  }
   return User.create({ name, email, passwordHash });
+}
+
+function findByAuthIdentity(provider, subject) {
+  return User.findOne({
+    authIdentities: {
+      $elemMatch: { provider, subject },
+    },
+  });
+}
+
+function createSocialUser({ name, email, emailVerified, authIdentity }) {
+  return User.create({
+    name,
+    email,
+    emailVerified,
+    authIdentities: [authIdentity],
+    role: 'user',
+    status: 'active',
+  });
+}
+
+function linkAuthIdentity(userId, authIdentity) {
+  return User.findOneAndUpdate(
+    {
+      _id: userId,
+      role: 'user',
+      status: 'active',
+      'authIdentities.provider': { $ne: authIdentity.provider },
+    },
+    { $push: { authIdentities: authIdentity } },
+    { new: true, runValidators: true }
+  );
 }
 
 function findById(id) {
@@ -49,8 +84,7 @@ function setPasswordResetTokenForEligibleUser(id, tokenHash, expiresAt) {
     {
       _id: id,
       status: 'active',
-      authProviders: 'local',
-      passwordHash: { $exists: true, $type: 'string' },
+      passwordHash: { $exists: true, $type: 'string', $ne: '' },
     },
     {
       $set: {
@@ -69,8 +103,7 @@ function resetPasswordByTokenHash({ tokenHash, passwordHash, now }) {
       passwordResetTokenHash: tokenHash,
       passwordResetExpiresAt: { $gt: now },
       status: 'active',
-      authProviders: 'local',
-      passwordHash: { $exists: true, $type: 'string' },
+      passwordHash: { $exists: true, $type: 'string', $ne: '' },
     },
     buildPasswordReplacementUpdate(passwordHash),
     { new: true, projection: { _id: 1 } }
@@ -98,6 +131,9 @@ function updateById(id, update) {
 
 module.exports = {
   createUser,
+  findByAuthIdentity,
+  createSocialUser,
+  linkAuthIdentity,
   findById,
   findByEmail,
   findByEmailWithPassword,

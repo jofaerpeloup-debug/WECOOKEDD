@@ -100,10 +100,10 @@ migration story.
      `findByEmailWithPassword`, the only other path that opts back into the
      `select: false` `passwordHash`. `null` → `401 AUTH_SESSION_INVALID`
      (deleted between `authenticate` and this read).
-   - Local-auth guard: `authProviders` must include `"local"` **and**
-     `passwordHash` must be present, else `400 AUTH_PASSWORD_CHANGE_UNAVAILABLE`
-     (a future Google-only account has no password to change; also stops
-     `bcrypt.compare` choking on an undefined hash).
+   - Local-password guard: `passwordHash` must be a present, nonempty string,
+     else `400 AUTH_PASSWORD_CHANGE_UNAVAILABLE`. B4.0 removes stored
+     `authProviders`; social identities are never consulted to infer password
+     capability. This also prevents `bcrypt.compare` receiving an absent hash.
    - `comparePassword(currentPassword, user.passwordHash)` — the **existing**
      primitive, not re-implemented. `false` → `400 AUTH_CURRENT_PASSWORD_INVALID`.
    - Same-password guard: `newPassword === currentPassword` → `400
@@ -202,8 +202,10 @@ is login's) lets a future frontend flag the current-password field.
 | `findByIdWithPassword(id)` | `User.findById(id).select('+passwordHash')` — by-id credential lookup for authenticated self-service. `findByEmailWithPassword` (login's only path) is unchanged. |
 | `replacePasswordById(id, passwordHash)` | One `User.updateOne` that sets `passwordHash` and unsets `passwordResetTokenHash` / `passwordResetExpiresAt`; returns only the write result. Every password replacement invalidates outstanding reset credentials. |
 
-`user.model.js` is **not** modified — the `passwordHash` field and its
-`select: false` / conditional `required` already exist.
+At the time of B2, `user.model.js` was not modified. B4.0 later supersedes the
+old provider-based conditional: `passwordHash` remains `select: false`, local
+capability is determined from the actual hash, and new social-only Users may
+omit it only when they contain a valid `authIdentities` entry.
 
 ## Rate limiting
 

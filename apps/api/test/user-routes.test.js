@@ -41,7 +41,7 @@ function userDoc({
     name,
     email,
     passwordHash: FORBIDDEN_HASH,
-    authProviders: ['local'],
+    authIdentities: [{ provider: 'google', subject: 'private-subject' }],
     role,
     status,
     preferences: {
@@ -194,7 +194,8 @@ test('GET /api/v1/users never serializes passwordHash or other private fields', 
   const raw = JSON.stringify(res.body);
   assert.equal(raw.includes('passwordHash'), false);
   assert.equal(raw.includes(FORBIDDEN_HASH), false);
-  assert.equal(raw.includes('authProviders'), false);
+  assert.equal(raw.includes('authIdentities'), false);
+  assert.equal(raw.includes('private-subject'), false);
   assert.equal(raw.includes('preferences'), false);
   assert.equal(raw.includes('allergies'), false);
   assert.equal(raw.includes('__v'), false);
@@ -273,6 +274,7 @@ test('PATCH /api/v1/users/:userId rejects unknown / profile body fields', async 
     { emailVerified: true },
     { preferences: {} },
     { allergies: [] },
+    { authIdentities: [{ provider: 'google', subject: 'attacker-controlled' }] },
     { authProviders: ['google'] },
     { foo: 1 },
     { status: 'active', foo: 1 },
@@ -659,6 +661,7 @@ test('PATCH /api/v1/users/me rejects an admin-managed / unknown field with 400 (
     { email: 'new@example.com' },
     { emailVerified: true },
     { passwordHash: '$2b$10$x' },
+    { authIdentities: [{ provider: 'google', subject: 'attacker-controlled' }] },
     { authProviders: ['google'] },
     { _id: USER_ID },
     { createdAt: '2020-01-01' },
@@ -697,7 +700,8 @@ test('PATCH /api/v1/users/me updates only the supplied preference leaf and retur
   const raw = JSON.stringify(res.body);
   assert.equal(raw.includes('passwordHash'), false);
   assert.equal(raw.includes(FORBIDDEN_HASH), false);
-  assert.equal(raw.includes('authProviders'), false);
+  assert.equal(raw.includes('authIdentities'), false);
+  assert.equal(raw.includes('private-subject'), false);
   assert.equal(raw.includes('__v'), false);
   assert.ok(res.body.data.user.preferences, 'response carries preferences');
 });
