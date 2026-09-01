@@ -580,3 +580,174 @@ test('GET /api/v1/users/me still returns the current user (regression, includes 
   assert.equal('passwordHash' in res.body.data.user, false);
   assert.ok(res.body.data.user.preferences, 'the self view still carries preferences');
 });
+// ===========================================================================
+// PATCH /api/v1/users/me  (self-profile)
+// ===========================================================================
+
+function selfPatch(token, body) {
+  return request(app)
+    .patch('/api/v1/users/me')
+    .set('Authorization', `Bearer ${token}`)
+    .send(body);
+}
+
+test('PATCH /api/v1/users/me without a token is rejected', async () => {
+  const res = await request(app).patch('/api/v1/users/me').send({ name: 'New' });
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error.code, 'AUTH_TOKEN_MISSING');
+});
+
+test('PATCH /api/v1/users/me succeeds for a normal authenticated user (route not shadowed by /:userId)', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  t.mock.method(userRepository, 'updateById', async (id, update) =>
+    userDoc({ id: String(id), name: update.$set.name ?? 'Person' })
+  );
+
+  const res = await selfPatch(userToken(), { name: 'Renamed Person' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.data.user.name, 'Renamed Person');
+  assert.equal(res.body.data.user.id, USER_ID);
+});
+
+test('PATCH /api/v1/users/me succeeds for an admin editing their own profile', async (t) => {
+  mockContext(t, { caller: adminDoc() });
+  t.mock.method(userRepository, 'updateById', async (id, update) =>
+    adminDoc({ id: String(id), name: update.$set.name })
+  );
+
+  const res = await selfPatch(adminToken(), { name: 'Admin Renamed' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.user.name, 'Admin Renamed');
+});
+
+test('PATCH /api/v1/users/me rejects an admin-managed / unknown field with 400 (never 403)', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  let updated = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return userDoc();
+  });
+
+  for (const body of [
+    { role: 'admin' },
+    { status: 'active' },
+    { email: 'new@example.com' },
+    { emailVerified: true },
+    { passwordHash: '$2b$10$x' },
+    { authProviders: ['google'] },
+    { _id: USER_ID },
+    { createdAt: '2020-01-01' },
+    { nickname: 'x' },
+  ]) {
+    const res = await selfPatch(userToken(), body);
+    assert.equal(res.status, 400, `expected ${JSON.stringify(body)} -> 400`);
+    assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+  }
+  assert.equal(updated, false);
+});
+
+test('PATCH /api/v1/users/me rejects an empty body and structural no-ops', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  for (const body of [{}, { preferences: {} }, { preferences: { notifications: {} } }]) {
+    const res = await selfPatch(userToken(), body);
+    assert.equal(res.status, 400, `expected ${JSON.stringify(body)} -> 400`);
+    assert.equal(res.body.error.code, 'VALIDATION_ERROR');
+  }
+});
+
+test('PATCH /api/v1/users/me updates only the supplied preference leaf and returns the safe serializer', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  let capturedSet;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedSet = update.$set;
+    return userDoc({ id: String(id) });
+  });
+
+  const res = await selfPatch(userToken(), { preferences: { allergies: ['Peanuts', 'Shellfish'] } });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(Object.keys(capturedSet), ['preferences.allergies']);
+  assert.deepEqual(capturedSet['preferences.allergies'], ['Peanuts', 'Shellfish']);
+
+  const raw = JSON.stringify(res.body);
+  assert.equal(raw.includes('passwordHash'), false);
+  assert.equal(raw.includes(FORBIDDEN_HASH), false);
+  assert.equal(raw.includes('authProviders'), false);
+  assert.equal(raw.includes('__v'), false);
+  assert.ok(res.body.data.user.preferences, 'response carries preferences');
+});
+
+test('PATCH /api/v1/users/me accepts notifications.enabled:false (present value, not "missing")', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  let capturedSet;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedSet = update.$set;
+    return userDoc({ id: String(id) });
+  });
+
+  const res = await selfPatch(userToken(), { preferences: { notifications: { enabled: false } } });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(capturedSet, { 'preferences.notifications.enabled': false });
+});
+
+test('PATCH /api/v1/users/me accepts an empty allergies array (clear)', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  let capturedSet;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedSet = update.$set;
+    return userDoc({ id: String(id) });
+  });
+
+  const res = await selfPatch(userToken(), { preferences: { allergies: [] } });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(capturedSet, { 'preferences.allergies': [] });
+});
+
+test('PATCH /api/v1/users/me returns 401 AUTH_SESSION_INVALID when the user vanished before the write', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  t.mock.method(userRepository, 'updateById', async () => null);
+
+  const res = await selfPatch(userToken(), { name: 'Ghost' });
+
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error.code, 'AUTH_SESSION_INVALID');
+});
+
+test('PATCH /api/v1/users/me is rejected for a suspended user (blocked by authenticate)', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user', status: 'suspended' }) });
+  let updated = false;
+  t.mock.method(userRepository, 'updateById', async () => {
+    updated = true;
+    return userDoc();
+  });
+
+  const res = await selfPatch(userToken(), { name: 'Nope' });
+
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error.code, 'AUTH_SESSION_INVALID');
+  assert.equal(updated, false);
+});
+
+test('PATCH /api/v1/users/me never revokes sessions', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  let revoked = false;
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+    revoked = true;
+    return 0;
+  });
+  t.mock.method(userRepository, 'updateById', async (id) => userDoc({ id: String(id) }));
+
+  const res = await selfPatch(userToken(), {
+    name: 'Calm',
+    preferences: { notifications: { enabled: false } },
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(revoked, false);
+});
+

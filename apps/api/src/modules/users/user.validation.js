@@ -44,4 +44,89 @@ const updateUserSchema = z.object({
     }),
 });
 
-module.exports = { listUsersSchema, updateUserSchema, SORT_VALUES };
+// ---------------------------------------------------------------------------
+// PATCH /api/v1/users/me — self-profile mutation
+// ---------------------------------------------------------------------------
+// A pure self-profile endpoint: the ONLY writable fields are `name` and the
+// three preference leaves. Distinct from updateUserSchema (admin role/status).
+// Preference entries stay free-form strings — no controlled vocabulary. The
+// caps below are an API-boundary policy only; the User schema itself remains a
+// permissive [String] store, so the constants live here rather than in
+// user.model.js. See docs/architecture/self-profile-backend-api.md.
+const MAX_PREFERENCE_ENTRIES = 20;
+const MAX_PREFERENCE_ENTRY_LENGTH = 50;
+const MAX_SELF_NAME_LENGTH = 100;
+
+// Registration-compatible name semantics (see auth.validation.js): trim, 1..100.
+// No internal-whitespace collapsing, no Unicode normalization — neither the
+// model nor registration does either.
+const selfNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'Name is required.')
+  .max(MAX_SELF_NAME_LENGTH, `Name must be ${MAX_SELF_NAME_LENGTH} characters or fewer.`);
+
+const preferenceEntrySchema = z
+  .string()
+  .trim()
+  .min(1, 'Preference entries cannot be empty.')
+  .max(
+    MAX_PREFERENCE_ENTRY_LENGTH,
+    `Each preference entry must be ${MAX_PREFERENCE_ENTRY_LENGTH} characters or fewer.`
+  );
+
+// No .default([]) — an omitted array leaves the stored value untouched. A
+// supplied array (including []) replaces that array wholesale. Duplicates are
+// intentionally preserved: this endpoint stores exactly what the client sent,
+// after per-entry trimming only.
+const preferenceListSchema = z
+  .array(preferenceEntrySchema)
+  .max(
+    MAX_PREFERENCE_ENTRIES,
+    `A maximum of ${MAX_PREFERENCE_ENTRIES} preference entries is allowed.`
+  );
+
+// `enabled` is REQUIRED when `notifications` is present, so `{ notifications: {} }`
+// is rejected natively. Presence is by key, never truthiness — `enabled: false`
+// is a valid update.
+const notificationsPatchSchema = z.object({ enabled: z.boolean() }).strict();
+
+// .strict() rejects any unknown preference key. .refine() rejects a
+// structurally-empty `{ preferences: {} }` no-op.
+const preferencesPatchSchema = z
+  .object({
+    dietaryPreferences: preferenceListSchema.optional(),
+    allergies: preferenceListSchema.optional(),
+    notifications: notificationsPatchSchema.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'preferences must include at least one field to update.',
+  });
+
+// .strict() on the body makes role, status, email, emailVerified, passwordHash,
+// authProviders, _id/id, createdAt/updatedAt — and every other key, including
+// `$set` / `__proto__` — a 400 VALIDATION_ERROR rather than a silently-dropped
+// key or a mass-assignment vector. The outer wrapper is deliberately NOT
+// .strict(): the validate middleware always hands the schema { body, params,
+// query }.
+const updateCurrentUserSchema = z.object({
+  body: z
+    .object({
+      name: selfNameSchema.optional(),
+      preferences: preferencesPatchSchema.optional(),
+    })
+    .strict()
+    .refine((value) => Object.keys(value).length > 0, {
+      message: 'At least one field must be provided.',
+    }),
+});
+
+module.exports = {
+  listUsersSchema,
+  updateUserSchema,
+  updateCurrentUserSchema,
+  SORT_VALUES,
+  MAX_PREFERENCE_ENTRIES,
+  MAX_PREFERENCE_ENTRY_LENGTH,
+};
