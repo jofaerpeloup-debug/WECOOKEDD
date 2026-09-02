@@ -1,9 +1,97 @@
-# Social authentication foundation (B4.0)
+# Social authentication (B4.0 foundation + B4.1 Google backend)
 
-B4.0 establishes provider-neutral identity storage and local-password
-compatibility. It does **not** expose social login, provider linking, OAuth or
-OIDC verification, provider UI, challenges, or provider-backed WeCooked
-sessions.
+B4.0 established provider-neutral identity storage and local-password
+compatibility. B4.1 adds the backend-only Google credential, challenge, login,
+and explicit-link paths. Mobile provider UI and token acquisition remain B4.2
+scope. Google is never WeCooked's session or authorization authority.
+
+## B4.1 Google request flow
+
+The API exposes these endpoints under `/api/v1/auth`:
+
+- `POST /social/challenge` with the strict body `{ "provider": "google" }`.
+- `POST /social/google` with `{ "idToken", "challengeId" }`.
+- `POST /social/google/link` with the same body and an authenticated WeCooked
+  session.
+
+A challenge contains 32 random bytes encoded as an unpadded, 43-character
+base64url nonce and expires exactly five minutes after issue. The raw nonce is
+returned once. Only its lowercase SHA-256 digest, provider, and expiry are
+stored in the dedicated `SocialAuthChallenge` collection. Its TTL index is
+cleanup only; authorization depends on a single atomic `findOneAndDelete`
+matching `_id`, `provider`, `nonceHash`, and `expiresAt > now`.
+
+The Google credential is verified before challenge consumption, so an invalid
+credential cannot burn a valid challenge. After signature and claim
+verification, the signed `nonce` is hashed and used in that exact atomic match.
+Once consumed, any later account or database failure requires a fresh
+challenge.
+
+## Google verification boundary
+
+The provider adapter lazily loads `jose` and maintains one process-wide remote
+JWKS resolver for Google's fixed `https://www.googleapis.com/oauth2/v3/certs`
+endpoint. It accepts only `RS256`, Google's two documented issuer forms, and
+audiences from the server-owned `GOOGLE_OAUTH_CLIENT_IDS` allow-list. That
+variable contains approved Web/server Google OAuth client IDs only, normally
+one shared backend audience at first; multiple values support safe rotation or
+intentional environment/deployment needs. It does not normally contain Android
+or iOS platform OAuth client IDs. Verification requires `sub`, `exp`, `iat`,
+and `nonce`, applies at most 60 seconds of clock tolerance, lets `jose` enforce
+`nbf` when present, and independently validates the stable subject, issued-at
+time, and exact WeCooked nonce format.
+
+No client can select an audience, issuer, JWKS URL, identity, role, or status.
+No Google token, authorization code, raw nonce, claims object, email, subject,
+or JWK payload is persisted or logged. Provider failures are collapsed to
+sanitized `AUTH_SOCIAL_CREDENTIAL_INVALID` or `AUTH_PROVIDER_UNAVAILABLE`
+errors before they reach central logging.
+
+## Account policy
+
+The durable identity is the verified pair `google` + Google `sub`; email is
+profile/contact data only. Existing linked users sign in by that pair and
+Google claim changes never overwrite their WeCooked name or email. A first
+social account requires a usable Google email with literal
+`email_verified === true`; otherwise provisioning returns
+`AUTH_SOCIAL_EMAIL_REQUIRED`. Any existing WeCooked account with the same
+normalized email returns the generic `AUTH_ACCOUNT_LINK_REQUIRED`; email never
+auto-links.
+
+Only an authenticated, active, role=`user` principal can explicitly link
+Google, and the target is always `req.auth.userId`. Linking does not require
+email equality, mutate profile/password/role/status, or issue/rotate sessions.
+The same identity on the same user is idempotent; ownership by another user and
+a different Google identity already on the target are distinct safe conflicts.
+Admins cannot Google-login or link. Suspended identity owners receive no
+session.
+
+Social account creation uses explicit creation, never upsert. The B4.0 unique
+identity index and provider-guarded atomic link remain the database authority.
+On `E11000`, AuthService reloads identity ownership first, then email occupancy;
+only a recognized concurrent winner is recovered, and unexplained duplicates
+fail closed. Successful login reuses the ordinary WeCooked SessionService and
+access-token issuer unchanged.
+
+## Rate and error contract
+
+Challenge, Google login, link-by-IP, and link-by-authenticated-user limits are
+respectively 30, 20, 20, and 10 attempts per 15 minutes. Link middleware order
+is IP limiter, authentication, user limiter, strict validation, controller.
+Stable B4.1 errors are:
+
+- `400 AUTH_SOCIAL_CHALLENGE_INVALID`
+- `401 AUTH_SOCIAL_CREDENTIAL_INVALID`
+- `403 AUTH_ACCOUNT_SUSPENDED`
+- `403 AUTH_SOCIAL_LOGIN_UNAVAILABLE`
+- `409 AUTH_ACCOUNT_LINK_REQUIRED`
+- `409 AUTH_SOCIAL_IDENTITY_IN_USE`
+- `409 AUTH_SOCIAL_PROVIDER_ALREADY_LINKED`
+- `422 AUTH_SOCIAL_EMAIL_REQUIRED`
+- `503 AUTH_PROVIDER_UNAVAILABLE`
+
+Validation and limiter failures continue to use `VALIDATION_ERROR` and
+`RATE_LIMIT_EXCEEDED`.
 
 ## Authentication capabilities
 
@@ -91,19 +179,23 @@ subject is deliberately not converted.
 
 ## Future slice gates
 
-### B4.1 Google
+### B4.2 Google Mobile
 
-Do not assume the selected native Google library can bind a WeCooked nonce into
-the resulting ID token. Verify that behavior against the current library source
-before implementing B4.1. If cryptographic nonce binding is supported, retain
-the planned server-issued challenge. If it is not, redesign replay protection
-around the provider-supported flow rather than shipping an unbound challenge.
-
-B4.1 must not create social users through an update/upsert path that bypasses
-the new-document authentication-method invariant. Continue using explicit
-document creation through the reviewed `createSocialUser`/create path unless a
-separately reviewed implementation proves equivalent validation and ownership
-guarantees.
+B4.1 deliberately defines a library-independent credential contract: Mobile
+must obtain a fresh, interactive Google ID token whose signed `nonce` claim is
+exactly the raw WeCooked nonce for that attempt. B4.2 must use a free,
+currently supported native/provider mechanism. Android still needs its Android
+OAuth client for package/signing identity, while the Web/server client ID is
+supplied as `serverClientId`; the resulting ID token's `aud`, verified by B4.1,
+is that Web/server client ID. iOS likewise needs its iOS OAuth client for
+bundle/app identity, while the Web/server client ID is supplied as
+`serverClientID`; its resulting ID-token audience is also the Web/server ID.
+Only those accepted Web/server audiences belong in `GOOGLE_OAUTH_CLIENT_IDS`.
+Platform OAuth client IDs bind native applications to Google but never become
+WeCooked authorization authority. Direct Expo AuthSession's Google provider is
+not the selected cross-platform production path, and the paid Universal Google
+Sign-In library is neither required nor selected. No native bridge or Mobile
+token-acquisition flow is implemented in B4.1, and Firebase is not used.
 
 ### B4.3 Apple
 

@@ -12,10 +12,38 @@ the layered request-flow/module conventions this feature follows.
 - `src/modules/sessions/` — the `Session` model plus a repository/service for
   refresh-token sessions. Sessions are their own collection, not embedded in
   `User`.
-- `src/modules/auth/` — orchestrates registration, login, refresh, and
-  logout. `AuthService` calls `UserService` and `SessionService` only; it
-  never imports `User.model.js` or `Session.model.js` directly, matching the
-  module-boundary rule in `backend.md`.
+- `src/modules/auth/` — orchestrates registration, local/Google login,
+  explicit Google linking, refresh, and logout. `AuthService` calls service
+  boundaries (including the challenge/provider adapters) and never imports
+  `User.model.js` or `Session.model.js` directly, matching the module-boundary
+  rule in `backend.md`.
+
+## Google social authentication (B4.1)
+
+B4.1 is backend-only. A public challenge endpoint issues a five-minute random
+nonce and stores only its SHA-256 digest. Google ID tokens are verified with
+`jose` against Google's fixed JWKS, `RS256`, accepted Google issuers, required
+timing/identity/nonce claims, and the server-owned comma-separated
+`GOOGLE_OAUTH_CLIENT_IDS` audience allow-list. B4.1 accepts only Web/server
+Google OAuth client IDs from that configuration. Mobile cannot select or send
+an accepted audience, and platform-specific Android/iOS OAuth client IDs bind
+the native apps to Google without becoming WeCooked authorization authority.
+There is no Google client secret.
+
+Only after cryptographic verification does the API atomically consume the
+challenge by its id, provider, signed-nonce digest, and unexpired timestamp.
+Invalid credentials do not consume challenges; replay, mismatch, expiry, and
+unknown ids all receive the same safe challenge error. Google tokens and raw
+claims are never stored or logged.
+
+Google `sub` is identity; email never auto-links. A first Google-only user needs
+a usable, literally verified email. Existing email collisions require the user
+to sign in locally and call the authenticated link route. Login and link are
+normal-user-only, Admin social access is prohibited, and suspended accounts do
+not receive sessions. Google login reuses the existing SessionService and JWT
+issuer exactly; linking issues no tokens and changes no profile or authority
+fields. See [social-authentication.md](./social-authentication.md) for routes,
+race handling, errors, and future Mobile constraints.
 
 ## Password storage
 
@@ -230,6 +258,12 @@ the app-wide baseline, since they are the endpoints most attractive for
 credential stuffing and account enumeration. Limited requests return the
 existing standard `429 RATE_LIMIT_EXCEEDED` envelope.
 
+Google challenge/login/link add dedicated in-memory limits: challenge 30 per
+15 minutes per IP; login 20 per IP; link 20 per IP plus 10 per authenticated
+user. Link runs IP limiting before authentication, then user limiting before
+validation. The user-keyed limiter refuses to operate without `req.auth.userId`
+rather than collapsing unauthenticated traffic into a shared key.
+
 ## Secrets & configuration
 
 `JWT_ACCESS_SECRET`, `JWT_ACCESS_TTL`, `REFRESH_TOKEN_TTL_DAYS`, and
@@ -237,6 +271,15 @@ existing standard `429 RATE_LIMIT_EXCEEDED` envelope.
 Phase 1 variables. `JWT_ACCESS_SECRET` has no committed default and must be
 at least 32 characters — the server refuses to start without a
 sufficiently strong one configured.
+
+`GOOGLE_OAUTH_CLIENT_IDS` is also required outside automated tests. It is a
+comma-separated, trimmed, deduplicated allow-list of approved Web/server Google
+OAuth client IDs used as backend-verified ID-token audiences. It normally
+contains one Web/server ID shared by Android (`serverClientId`) and iOS
+(`serverClientID`), with additional entries reserved for safe rotation or
+intentional deployment needs—not the platform client IDs themselves. The API
+never accepts an audience from a request. Automated tests use a clearly
+synthetic default and never contact Google.
 
 ## What's temporary vs. future work
 
@@ -250,10 +293,11 @@ sufficiently strong one configured.
   independent of the HTTP transport, specifically so that change can be made
   without redesigning session logic — only the controller/route layer
   should need to change.
-- **Social authentication is not implemented.** B4.0 adds only the
-  provider-neutral `User.authIdentities` storage/index/repository foundation.
-  There is no Google, Apple, or Facebook credential verification, route,
-  linking API, challenge, or session issuance path. See
+- **Google Mobile integration is not implemented.** B4.1 now implements the
+  backend challenge, Google ID-token verification, login, and explicit linking
+  contract. B4.2 must obtain a fresh nonce-bound Google ID token through a free,
+  supported provider/native mechanism; no paid Universal library or Firebase
+  path is selected. Apple and Facebook provider work remains future scope. See
   [social-authentication.md](./social-authentication.md).
 - Email verification delivery remains out of scope. Password **reset** was out
   of scope for Phase 2 and is now implemented by Phase B3 as documented above.

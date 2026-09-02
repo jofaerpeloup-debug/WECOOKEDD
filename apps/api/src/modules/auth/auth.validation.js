@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { MAX_PASSWORD_BYTES } = require('../../shared/security/password');
 const { PASSWORD_RESET_TOKEN_PATTERN } = require('../../shared/security/password-reset-token');
+const { objectIdSchema } = require('../../shared/validation/object-id');
 
 const emailSchema = z.string().trim().toLowerCase().email('Invalid email address.');
 
@@ -85,6 +86,19 @@ const resetPasswordSchema = z.object({
     .strict(),
 });
 
+const socialChallengeSchema = z.object({
+  body: z.object({ provider: z.literal('google') }).strict(),
+});
+
+const googleSocialSchema = z.object({
+  body: z
+    .object({
+      idToken: z.string().min(1, 'Google ID token is required.').max(8192),
+      challengeId: objectIdSchema,
+    })
+    .strict(),
+});
+
 module.exports = {
   registerSchema,
   loginSchema,
@@ -92,6 +106,8 @@ module.exports = {
   changePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  socialChallengeSchema,
+  googleSocialSchema,
   emailSchema,
   newPasswordSchema,
 };

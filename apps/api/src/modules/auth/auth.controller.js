@@ -1,4 +1,5 @@
 const authService = require('./auth.service');
+const socialAuthChallengeService = require('./social-auth-challenge.service');
 const { toPublicUser } = require('../users/user.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
@@ -13,6 +14,25 @@ const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const { user, accessToken, refreshToken } = await authService.login({ email, password });
   sendSuccess(res, { user: toPublicUser(user), accessToken, refreshToken });
+});
+
+const socialChallenge = asyncHandler(async (req, res) => {
+  const challenge = await socialAuthChallengeService.issueChallenge(req.body.provider);
+  sendSuccess(res, challenge, 201);
+});
+
+const googleLogin = asyncHandler(async (req, res) => {
+  const { user, accessToken, refreshToken } = await authService.googleLogin(req.body);
+  sendSuccess(res, { user: toPublicUser(user), accessToken, refreshToken });
+});
+
+const googleLink = asyncHandler(async (req, res) => {
+  const user = await authService.googleLink({
+    userId: req.auth.userId,
+    idToken: req.body.idToken,
+    challengeId: req.body.challengeId,
+  });
+  sendSuccess(res, { user: toPublicUser(user) });
 });
 
 const refresh = asyncHandler(async (req, res) => {
@@ -61,6 +81,9 @@ const resetPassword = asyncHandler(async (req, res) => {
 module.exports = {
   register,
   login,
+  socialChallenge,
+  googleLogin,
+  googleLink,
   refresh,
   logout,
   logoutAll,

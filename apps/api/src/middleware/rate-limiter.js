@@ -22,4 +22,46 @@ function createRateLimiter(options) {
   });
 }
 
-module.exports = { createRateLimiter };
+function authenticatedUserKey(req) {
+  if (!req.auth?.userId) {
+    throw new AppError('Session is no longer valid.', {
+      statusCode: 401,
+      code: 'AUTH_SESSION_INVALID',
+    });
+  }
+  return String(req.auth.userId);
+}
+
+const SOCIAL_RATE_LIMITS = Object.freeze({
+  challenge: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 30 }),
+  googleLogin: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 20 }),
+  googleLinkIp: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 20 }),
+  googleLinkUser: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 10 }),
+});
+
+const socialChallengeRateLimiter = createRateLimiter({
+  ...SOCIAL_RATE_LIMITS.challenge,
+});
+
+const socialGoogleLoginRateLimiter = createRateLimiter({
+  ...SOCIAL_RATE_LIMITS.googleLogin,
+});
+
+const socialGoogleLinkIpRateLimiter = createRateLimiter({
+  ...SOCIAL_RATE_LIMITS.googleLinkIp,
+});
+
+const socialGoogleLinkUserRateLimiter = createRateLimiter({
+  ...SOCIAL_RATE_LIMITS.googleLinkUser,
+  keyGenerator: authenticatedUserKey,
+});
+
+module.exports = {
+  createRateLimiter,
+  authenticatedUserKey,
+  SOCIAL_RATE_LIMITS,
+  socialChallengeRateLimiter,
+  socialGoogleLoginRateLimiter,
+  socialGoogleLinkIpRateLimiter,
+  socialGoogleLinkUserRateLimiter,
+};

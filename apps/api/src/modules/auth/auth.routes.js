@@ -2,7 +2,13 @@ const { Router } = require('express');
 const authController = require('./auth.controller');
 const { validate } = require('../../middleware/validate.middleware');
 const { authenticate } = require('../../middleware/authenticate.middleware');
-const { createRateLimiter } = require('../../middleware/rate-limiter');
+const {
+  createRateLimiter,
+  socialChallengeRateLimiter,
+  socialGoogleLoginRateLimiter,
+  socialGoogleLinkIpRateLimiter,
+  socialGoogleLinkUserRateLimiter,
+} = require('../../middleware/rate-limiter');
 const {
   registerSchema,
   loginSchema,
@@ -10,6 +16,8 @@ const {
   changePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  socialChallengeSchema,
+  googleSocialSchema,
 } = require('./auth.validation');
 
 const router = Router();
@@ -28,6 +36,26 @@ const forgotPasswordRateLimiter = createRateLimiter({
 
 router.post('/register', authRateLimiter, validate(registerSchema), authController.register);
 router.post('/login', authRateLimiter, validate(loginSchema), authController.login);
+router.post(
+  '/social/challenge',
+  socialChallengeRateLimiter,
+  validate(socialChallengeSchema),
+  authController.socialChallenge
+);
+router.post(
+  '/social/google',
+  socialGoogleLoginRateLimiter,
+  validate(googleSocialSchema),
+  authController.googleLogin
+);
+router.post(
+  '/social/google/link',
+  socialGoogleLinkIpRateLimiter,
+  authenticate,
+  socialGoogleLinkUserRateLimiter,
+  validate(googleSocialSchema),
+  authController.googleLink
+);
 router.post('/refresh', authRateLimiter, validate(refreshSchema), authController.refresh);
 router.post(
   '/forgot-password',
@@ -62,3 +90,7 @@ module.exports = router;
 // (v1.routes.js consumes the default router export).
 module.exports.authRateLimiter = authRateLimiter;
 module.exports.forgotPasswordRateLimiter = forgotPasswordRateLimiter;
+module.exports.socialChallengeRateLimiter = socialChallengeRateLimiter;
+module.exports.socialGoogleLoginRateLimiter = socialGoogleLoginRateLimiter;
+module.exports.socialGoogleLinkIpRateLimiter = socialGoogleLinkIpRateLimiter;
+module.exports.socialGoogleLinkUserRateLimiter = socialGoogleLinkUserRateLimiter;

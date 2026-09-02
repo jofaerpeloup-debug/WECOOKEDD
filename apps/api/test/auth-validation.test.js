@@ -8,6 +8,8 @@ const {
   changePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  socialChallengeSchema,
+  googleSocialSchema,
 } = require('../src/modules/auth/auth.validation');
 
 test('registerSchema accepts a well-formed registration payload', () => {
@@ -247,4 +249,51 @@ test('resetPasswordSchema enforces token shape, shared password policy, and a st
     }).success,
     false
   );
+});
+
+test('socialChallengeSchema accepts only the strict Google provider body', () => {
+  assert.equal(socialChallengeSchema.safeParse({ body: { provider: 'google' } }).success, true);
+  assert.equal(socialChallengeSchema.safeParse({ body: { provider: 'apple' } }).success, false);
+  assert.equal(
+    socialChallengeSchema.safeParse({ body: { provider: 'google', nonce: 'caller-value' } }).success,
+    false
+  );
+});
+
+test('googleSocialSchema accepts only an unmodified bounded token and valid challenge id', () => {
+  const challengeId = '507f1f77bcf86cd799439011';
+  const token = '  signed-token-with-spaces  ';
+  const valid = googleSocialSchema.safeParse({ body: { idToken: token, challengeId } });
+  assert.equal(valid.success, true);
+  assert.equal(valid.data.body.idToken, token);
+  assert.equal(googleSocialSchema.safeParse({ body: { idToken: '', challengeId } }).success, false);
+  assert.equal(
+    googleSocialSchema.safeParse({ body: { idToken: 'x'.repeat(8193), challengeId } }).success,
+    false
+  );
+  assert.equal(
+    googleSocialSchema.safeParse({ body: { idToken: 'token', challengeId: 'bad-id' } }).success,
+    false
+  );
+});
+
+test('googleSocialSchema rejects every caller-controlled identity and policy field', () => {
+  const base = { idToken: 'token', challengeId: '507f1f77bcf86cd799439011' };
+  for (const key of [
+    'email',
+    'name',
+    'sub',
+    'userId',
+    'role',
+    'status',
+    'clientId',
+    'audience',
+    'nonce',
+  ]) {
+    assert.equal(
+      googleSocialSchema.safeParse({ body: { ...base, [key]: 'attacker-controlled' } }).success,
+      false,
+      `expected ${key} to be rejected`
+    );
+  }
 });

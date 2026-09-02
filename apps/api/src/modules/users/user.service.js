@@ -97,6 +97,27 @@ function getUserById(id) {
   return userRepository.findById(id);
 }
 
+function getUserByAuthIdentity(provider, subject) {
+  return userRepository.findByAuthIdentity(provider, subject);
+}
+
+function getUserByEmail(email) {
+  return userRepository.findByEmail(normalizeEmail(email));
+}
+
+function createSocialUser({ name, email, emailVerified, authIdentity }) {
+  return userRepository.createSocialUser({
+    name,
+    email: normalizeEmail(email),
+    emailVerified,
+    authIdentity,
+  });
+}
+
+function linkAuthIdentity(userId, authIdentity) {
+  return userRepository.linkAuthIdentity(userId, authIdentity);
+}
+
 /**
  * Admin user-management list. All filtering/sorting/pagination is
  * server-owned. `search` is a case-insensitive substring over name + email
@@ -397,6 +418,10 @@ module.exports = {
   registerUser,
   verifyCredentials,
   getUserById,
+  getUserByAuthIdentity,
+  getUserByEmail,
+  createSocialUser,
+  linkAuthIdentity,
   listUsers,
   adminUpdateUser,
   updateOwnProfile,
