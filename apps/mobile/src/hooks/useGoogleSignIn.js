@@ -1,47 +1,59 @@
 import { useCallback, useState } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { isAvailable } from '../auth/googleAuthFlow';
+import { getAuthErrorMessage } from '../api/errorMessages';
 
-// Google sign-in is DEFERRED for this slice.
+// Thin UI hook for the Google button (B4.2A).
 //
-// The WeCooked backend has no Google-auth endpoint yet, so there is no way for
-// a Google identity to become a real, backend-authenticated WeCooked session.
-// The previous implementation ran a client-side Google OAuth flow (web popup /
-// native device-code) and treated the resulting Google profile as a logged-in
-// user — that produced a *fake* local session that never touched Express auth,
-// and it also required an OAuth **client secret** shipped through
-// `EXPO_PUBLIC_*` (which is bundled into the app and therefore not secret).
+// It holds NO authentication authority — that is AuthContext.signInWithGoogle
+// (-> googleAuthFlow). This hook only exposes React/UI state:
+//   * `loading`  — an attempt is running; also gates cosmetic duplicate presses
+//   * `error`    — a safe, user-facing message (or null)
+//   * `ready`    — the native module is present in this build; when false the
+//                  screen should disable / safely no-op the button
 //
-// Both are removed here. This hook keeps the exact shape the Login screen
-// consumes so the button still renders, but `signIn` only reports that the
-// feature isn't available yet and never yields a profile / session. No OAuth
-// requests are made and no Google client id/secret is read.
-//
-// When the backend gains a real Google flow (e.g. POST /auth/google that
-// verifies an ID token server-side and returns the standard
-// { user, accessToken, refreshToken }), wire that through authService — do not
-// resurrect a client-only session here.
-
-const UNAVAILABLE_MESSAGE =
-  'Google sign-in isn’t available yet — please log in with your email and password.';
+// Cancellation (GOOGLE_CANCELLED) is silent — no banner. On success the auth
+// state flips and the navigator swaps stacks; nothing to do here.
 
 export default function useGoogleSignIn() {
+  const { signInWithGoogle } = useAuth();
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const signIn = useCallback(() => {
-    setError({ message: UNAVAILABLE_MESSAGE });
-  }, []);
+  const ready = isAvailable();
 
-  const cancel = useCallback(() => {
+  const signIn = useCallback(async () => {
+    if (loading) return; // cosmetic duplicate-press guard (UX only)
     setError(null);
-  }, []);
+
+    if (!ready) {
+      // No native module in this build (Expo Go / no dev build). Do not pretend
+      // Google is configured — report it safely and make no OAuth request.
+      setError({ message: getAuthErrorMessage({ code: 'GOOGLE_UNAVAILABLE' }) });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      if (err && err.code === 'GOOGLE_CANCELLED') {
+        // Silent — user backed out.
+      } else {
+        setError({ message: getAuthErrorMessage(err) });
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, ready, signInWithGoogle]);
+
+  const cancel = useCallback(() => setError(null), []);
 
   return {
     signIn,
     cancel,
-    profile: null,
     error,
-    loading: false,
-    ready: false,
-    deviceCode: null,
-    verificationUrl: null,
+    loading,
+    ready,
   };
 }

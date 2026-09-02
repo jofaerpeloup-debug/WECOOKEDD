@@ -10,7 +10,6 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
-  Linking,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -250,8 +249,12 @@ export default function LoginScreen({ navigation }) {
 
             <View style={styles.socialRow}>
               <Pressable
-                style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed]}
-                disabled={google.loading || !!google.deviceCode}
+                style={({ pressed }) => [
+                  styles.socialBtn,
+                  pressed && styles.socialBtnPressed,
+                  !google.ready && styles.socialBtnDisabled,
+                ]}
+                disabled={google.loading}
                 onPress={google.signIn}
               >
                 {google.loading ? <ActivityIndicator size="small" color={COLORS.ink} /> : <GoogleIcon />}
@@ -263,26 +266,6 @@ export default function LoginScreen({ navigation }) {
                 <FacebookIcon />
               </Pressable>
             </View>
-
-            {google.deviceCode && (
-              <View style={styles.deviceBox}>
-                <Text style={styles.deviceLabel}>
-                  On any browser, go to{' '}
-                  <Text style={styles.deviceLink} onPress={() => Linking.openURL(google.verificationUrl)}>
-                    {google.verificationUrl?.replace('https://', '')}
-                  </Text>{' '}
-                  and enter this code:
-                </Text>
-                <Text style={styles.deviceCode}>{google.deviceCode}</Text>
-                <View style={styles.deviceActions}>
-                  <ActivityIndicator size="small" color={COLORS.greenMid} />
-                  <Text style={styles.deviceWaiting}>Waiting for you to sign in…</Text>
-                </View>
-                <Pressable onPress={google.cancel} hitSlop={8}>
-                  <Text style={styles.deviceCancel}>Cancel</Text>
-                </Pressable>
-              </View>
-            )}
 
             {google.error && (
               <Text style={styles.googleError}>
@@ -379,35 +362,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.hairline,
   },
   socialBtnPressed: { opacity: 0.7 },
-
-  deviceBox: {
-    backgroundColor: COLORS.creamCard,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.hairline,
-    padding: 16,
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  deviceLabel: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: COLORS.inkSoft,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 8,
-  },
-  deviceLink: { color: COLORS.greenLink, fontWeight: '800' },
-  deviceCode: {
-    fontSize: 26,
-    fontWeight: '800',
-    letterSpacing: 3,
-    color: COLORS.ink,
-    marginBottom: 10,
-  },
-  deviceActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  deviceWaiting: { fontSize: 12, fontWeight: '600', color: COLORS.inkFaint },
-  deviceCancel: { fontSize: 12.5, fontWeight: '700', color: '#F0544E' },
+  socialBtnDisabled: { opacity: 0.45 },
 
   googleError: {
     fontSize: 12,
