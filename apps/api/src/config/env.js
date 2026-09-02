@@ -13,6 +13,16 @@ const passwordResetUrlSchema = z
     return !url.username && !url.password && !url.search && !url.hash;
   }, 'PASSWORD_RESET_URL must not contain credentials, a query, or a fragment');
 
+const googleOAuthClientIdsSchema = z
+  .string()
+  .max(2048, 'GOOGLE_OAUTH_CLIENT_IDS must be 2048 characters or fewer')
+  .transform((value) => [...new Set(value.split(',').map((item) => item.trim()).filter(Boolean))])
+  .refine((items) => items.length > 0, 'GOOGLE_OAUTH_CLIENT_IDS must contain at least one client ID')
+  .refine(
+    (items) => items.every((item) => item.length <= 255),
+    'Each GOOGLE_OAUTH_CLIENT_IDS entry must be 255 characters or fewer'
+  );
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -35,6 +45,7 @@ const envSchema = z
     EMAIL_FROM: z.string().trim().min(1, 'EMAIL_FROM is required').max(500),
     PASSWORD_RESET_URL: passwordResetUrlSchema,
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(30),
+    GOOGLE_OAUTH_CLIENT_IDS: googleOAuthClientIdsSchema,
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === 'production' && !value.PASSWORD_RESET_URL.startsWith('https://')) {
@@ -52,6 +63,10 @@ const TEST_EMAIL_DEFAULTS = {
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
 };
 
+const TEST_GOOGLE_DEFAULTS = {
+  GOOGLE_OAUTH_CLIENT_IDS: 'test-google-client-id.apps.googleusercontent.com',
+};
+
 /**
  * Pure validation function: takes a raw env-like object and returns a
  * normalized config, or throws a descriptive Error. Has no side effects,
@@ -62,7 +77,9 @@ function parseEnv(source) {
   // keeps every isolated test file from needing to duplicate provider config,
   // while development/production still fail closed when configuration is absent.
   const normalizedSource =
-    source.NODE_ENV === 'test' ? { ...TEST_EMAIL_DEFAULTS, ...source } : source;
+    source.NODE_ENV === 'test'
+      ? { ...TEST_EMAIL_DEFAULTS, ...TEST_GOOGLE_DEFAULTS, ...source }
+      : source;
   const result = envSchema.safeParse(normalizedSource);
 
   if (!result.success) {
@@ -92,6 +109,7 @@ function parseEnv(source) {
     emailFrom: parsed.EMAIL_FROM,
     passwordResetUrl: parsed.PASSWORD_RESET_URL,
     passwordResetTtlMinutes: parsed.PASSWORD_RESET_TTL_MINUTES,
+    googleOAuthClientIds: parsed.GOOGLE_OAUTH_CLIENT_IDS,
   };
 }
 

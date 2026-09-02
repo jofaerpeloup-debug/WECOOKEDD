@@ -8,6 +8,7 @@ const REQUIRED_EMAIL_ENV = {
   RESEND_API_KEY: 'test-resend-key',
   EMAIL_FROM: 'WeCooked <no-reply@example.com>',
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
+  GOOGLE_OAUTH_CLIENT_IDS: 'test-web-client-1.apps.googleusercontent.com',
 };
 
 test('parseEnv accepts a valid configuration', () => {
@@ -23,6 +24,9 @@ test('parseEnv accepts a valid configuration', () => {
   assert.equal(result.port, 4000);
   assert.equal(result.mongodbUri, 'mongodb://127.0.0.1:27017/wecooked_test');
   assert.deepEqual(result.corsOrigins, ['http://localhost:5173', 'http://localhost:19006']);
+  assert.deepEqual(result.googleOAuthClientIds, [
+    'test-google-client-id.apps.googleusercontent.com',
+  ]);
 });
 
 test('parseEnv applies defaults for NODE_ENV, PORT, and CORS_ORIGINS', () => {
@@ -203,4 +207,44 @@ test('parseEnv constrains PASSWORD_RESET_TTL_MINUTES to 5..60', () => {
       })
     );
   }
+});
+
+test('parseEnv trims, removes empty Google client IDs, and deduplicates the server allow-list', () => {
+  const result = parseEnv({
+    ...REQUIRED_EMAIL_ENV,
+    GOOGLE_OAUTH_CLIENT_IDS:
+      ' test-web-client-1.apps.googleusercontent.com ,test-web-client-2.apps.googleusercontent.com,,test-web-client-1.apps.googleusercontent.com, ',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  });
+  assert.deepEqual(result.googleOAuthClientIds, [
+    'test-web-client-1.apps.googleusercontent.com',
+    'test-web-client-2.apps.googleusercontent.com',
+  ]);
+  assert.equal('googleClientSecret' in result, false);
+});
+
+test('parseEnv requires at least one Google OAuth client ID outside test mode', () => {
+  assert.throws(
+    () =>
+      parseEnv({
+        ...REQUIRED_EMAIL_ENV,
+        GOOGLE_OAUTH_CLIENT_IDS: ' , , ',
+        MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+        JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+      }),
+    /GOOGLE_OAUTH_CLIENT_IDS/
+  );
+
+  const missing = { ...REQUIRED_EMAIL_ENV };
+  delete missing.GOOGLE_OAUTH_CLIENT_IDS;
+  assert.throws(
+    () =>
+      parseEnv({
+        ...missing,
+        MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+        JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+      }),
+    /GOOGLE_OAUTH_CLIENT_IDS/
+  );
 });

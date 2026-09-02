@@ -9,7 +9,11 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const request = require('supertest');
 
-const { createRateLimiter } = require('../src/middleware/rate-limiter');
+const {
+  createRateLimiter,
+  authenticatedUserKey,
+  SOCIAL_RATE_LIMITS,
+} = require('../src/middleware/rate-limiter');
 const { errorMiddleware } = require('../src/middleware/error.middleware');
 
 // A tiny test-only app with a 1-request limit, so the standardized 429
@@ -33,4 +37,22 @@ test('requests beyond the limit receive the standard 429 error envelope', async 
   assert.equal(second.body.success, false);
   assert.equal(second.body.error.code, 'RATE_LIMIT_EXCEEDED');
   assert.equal(second.body.error.message, 'Too many requests. Please try again later.');
+});
+
+test('social authentication limiter definitions match the locked budgets', () => {
+  assert.deepEqual(SOCIAL_RATE_LIMITS, {
+    challenge: { windowMs: 15 * 60 * 1000, limit: 30 },
+    googleLogin: { windowMs: 15 * 60 * 1000, limit: 20 },
+    googleLinkIp: { windowMs: 15 * 60 * 1000, limit: 20 },
+    googleLinkUser: { windowMs: 15 * 60 * 1000, limit: 10 },
+  });
+});
+
+test('authenticated social-link rate limiting keys by required user identity', () => {
+  assert.equal(authenticatedUserKey({ auth: { userId: 'user-a' } }), 'user-a');
+  assert.equal(authenticatedUserKey({ auth: { userId: 'user-b' } }), 'user-b');
+  assert.throws(
+    () => authenticatedUserKey({}),
+    (error) => error.statusCode === 401 && error.code === 'AUTH_SESSION_INVALID'
+  );
 });

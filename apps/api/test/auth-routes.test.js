@@ -18,7 +18,19 @@ const sessionRepository = require('../src/modules/sessions/session.repository');
 const { hashPassword } = require('../src/shared/security/password');
 const { signAccessToken } = require('../src/shared/security/access-token');
 const emailService = require('../src/shared/email/email.service');
-const { authRateLimiter, forgotPasswordRateLimiter } = require('../src/modules/auth/auth.routes');
+const googleProvider = require('../src/modules/auth/providers/google.provider');
+const challengeRepository = require('../src/modules/auth/social-auth-challenge.repository');
+const { AppError } = require('../src/shared/errors/app-error');
+const { authenticate } = require('../src/middleware/authenticate.middleware');
+const authRoutes = require('../src/modules/auth/auth.routes');
+const {
+  authRateLimiter,
+  forgotPasswordRateLimiter,
+  socialChallengeRateLimiter,
+  socialGoogleLoginRateLimiter,
+  socialGoogleLinkIpRateLimiter,
+  socialGoogleLinkUserRateLimiter,
+} = authRoutes;
 
 const app = createApp();
 
@@ -33,6 +45,15 @@ function resetAuthLimiter() {
 
 function resetForgotPasswordLimiter() {
   return forgotPasswordRateLimiter.resetKey('127.0.0.1');
+}
+
+async function resetSocialLimiters(userId = AUTH_USER_ID) {
+  await Promise.all([
+    socialChallengeRateLimiter.resetKey('127.0.0.1'),
+    socialGoogleLoginRateLimiter.resetKey('127.0.0.1'),
+    socialGoogleLinkIpRateLimiter.resetKey('127.0.0.1'),
+    socialGoogleLinkUserRateLimiter.resetKey(userId),
+  ]);
 }
 
 // Authenticated routes (GET /users/me, /auth/logout, /auth/logout-all) go
@@ -50,6 +71,7 @@ function fakeUserDoc({
   passwordHash = 'irrelevant-hash',
   role = 'user',
   status = 'active',
+  authIdentities = [],
 } = {}) {
   return {
     _id: id,
@@ -58,13 +80,213 @@ function fakeUserDoc({
     passwordHash,
     role,
     status,
-    authIdentities: [],
+    authIdentities,
     preferences: { dietaryPreferences: [], allergies: [], notifications: { enabled: true } },
     emailVerified: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 }
+
+function fakeGoogleIdentity(overrides = {}) {
+  return {
+    provider: 'google',
+    subject: 'google-subject-1',
+    email: 'ada@example.com',
+    emailVerified: true,
+    suggestedName: 'Ada Google',
+    verifiedNonce: Buffer.alloc(32, 4).toString('base64url'),
+    ...overrides,
+  };
+}
+
+test('social routes install the locked limiter and authentication order', () => {
+  const handles = (path) =>
+    authRoutes.stack.find((layer) => layer.route?.path === path).route.stack.map((layer) => layer.handle);
+
+  assert.equal(handles('/social/challenge')[0], socialChallengeRateLimiter);
+  assert.equal(handles('/social/google')[0], socialGoogleLoginRateLimiter);
+  const link = handles('/social/google/link');
+  assert.equal(link[0], socialGoogleLinkIpRateLimiter);
+  assert.equal(link[1], authenticate);
+  assert.equal(link[2], socialGoogleLinkUserRateLimiter);
+  assert.equal(link.length, 5);
+});
+
+test('POST /api/v1/auth/social/challenge returns only the safe one-time challenge contract', async (t) => {
+  await resetSocialLimiters();
+  let persisted;
+  t.mock.method(challengeRepository, 'createChallenge', async (args) => {
+    persisted = args;
+    return { _id: '507f1f77bcf86cd799439099' };
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/social/challenge')
+    .send({ provider: 'google' });
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(Object.keys(response.body.data).sort(), ['challengeId', 'expiresAt', 'nonce']);
+  assert.equal(response.body.data.challengeId, '507f1f77bcf86cd799439099');
+  assert.match(response.body.data.nonce, /^[A-Za-z0-9_-]{43}$/);
+  assert.match(persisted.nonceHash, /^[a-f0-9]{64}$/);
+  assert.equal('nonce' in persisted, false);
+});
+
+test('social challenge and Google login bodies are strict before provider/account work', async (t) => {
+  await resetSocialLimiters();
+  const verify = t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => fakeGoogleIdentity());
+
+  const challenge = await request(app)
+    .post('/api/v1/auth/social/challenge')
+    .send({ provider: 'google', nonce: 'caller-controlled' });
+  const login = await request(app).post('/api/v1/auth/social/google').send({
+    idToken: 'token',
+    challengeId: '507f1f77bcf86cd799439099',
+    audience: 'caller-controlled',
+  });
+
+  assert.equal(challenge.status, 400);
+  assert.equal(challenge.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(login.status, 400);
+  assert.equal(login.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(verify.mock.callCount(), 0);
+});
+
+test('POST /api/v1/auth/social/google returns ordinary WeCooked tokens without Google secrets', async (t) => {
+  await resetSocialLimiters();
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => fakeGoogleIdentity());
+  let consumeFilter;
+  t.mock.method(challengeRepository, 'consumeChallenge', async (filter) => {
+    consumeFilter = filter;
+    return { _id: filter.challengeId };
+  });
+  t.mock.method(userRepository, 'findByAuthIdentity', async () => fakeUserDoc());
+  t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
+
+  const response = await request(app).post('/api/v1/auth/social/google').send({
+    idToken: 'google-token-secret',
+    challengeId: '507f1f77bcf86cd799439099',
+  });
+
+  assert.equal(response.status, 200);
+  assert.ok(response.body.data.accessToken);
+  assert.ok(response.body.data.refreshToken);
+  assert.equal(JSON.stringify(response.body).includes('google-token-secret'), false);
+  assert.equal(JSON.stringify(response.body).includes(fakeGoogleIdentity().verifiedNonce), false);
+  assert.equal(consumeFilter.challengeId, '507f1f77bcf86cd799439099');
+  assert.equal(consumeFilter.provider, 'google');
+  assert.match(consumeFilter.nonceHash, /^[a-f0-9]{64}$/);
+  assert.ok(consumeFilter.now instanceof Date);
+});
+
+test('Google login exposes sanitized provider and challenge errors through the normal envelope', async (t) => {
+  await resetSocialLimiters();
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => {
+    throw new AppError('Google credential is invalid or expired.', {
+      statusCode: 401,
+      code: 'AUTH_SOCIAL_CREDENTIAL_INVALID',
+    });
+  });
+  const consume = t.mock.method(challengeRepository, 'consumeChallenge', async () => ({}));
+
+  const invalid = await request(app).post('/api/v1/auth/social/google').send({
+    idToken: 'bad-token',
+    challengeId: '507f1f77bcf86cd799439099',
+  });
+  assert.equal(invalid.status, 401);
+  assert.equal(invalid.body.error.code, 'AUTH_SOCIAL_CREDENTIAL_INVALID');
+  assert.equal(consume.mock.callCount(), 0);
+
+  t.mock.restoreAll();
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => fakeGoogleIdentity());
+  t.mock.method(challengeRepository, 'consumeChallenge', async () => null);
+  const replay = await request(app).post('/api/v1/auth/social/google').send({
+    idToken: 'valid-token',
+    challengeId: '507f1f77bcf86cd799439099',
+  });
+  assert.equal(replay.status, 400);
+  assert.equal(replay.body.error.code, 'AUTH_SOCIAL_CHALLENGE_INVALID');
+});
+
+test('POST /api/v1/auth/social/google/link requires authentication before validation', async () => {
+  await resetSocialLimiters();
+  const response = await request(app).post('/api/v1/auth/social/google/link').send({});
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
+});
+
+test('POST /api/v1/auth/social/google/link links the authenticated user and returns no tokens', async (t) => {
+  await resetSocialLimiters();
+  const target = fakeUserDoc({ id: AUTH_USER_ID, email: 'stored@example.com' });
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: AUTH_SESSION_ID,
+    userId: AUTH_USER_ID,
+    revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async () => target);
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () =>
+    fakeGoogleIdentity({ email: 'unrelated@example.com' })
+  );
+  t.mock.method(challengeRepository, 'consumeChallenge', async (filter) => ({
+    _id: filter.challengeId,
+  }));
+  t.mock.method(userRepository, 'findByAuthIdentity', async () => null);
+  let linked;
+  t.mock.method(userRepository, 'linkAuthIdentity', async (userId, identity) => {
+    linked = { userId, identity };
+    return fakeUserDoc({ id: userId, email: 'stored@example.com', authIdentities: [identity] });
+  });
+  const createSession = t.mock.method(sessionRepository, 'createSession', async () => null);
+  const token = signAccessToken({
+    userId: AUTH_USER_ID,
+    role: 'user',
+    sessionId: AUTH_SESSION_ID,
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/social/google/link')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ idToken: 'google-token', challengeId: '507f1f77bcf86cd799439099' });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.user.id, AUTH_USER_ID);
+  assert.equal(response.body.data.user.email, 'stored@example.com');
+  assert.equal('accessToken' in response.body.data, false);
+  assert.equal('refreshToken' in response.body.data, false);
+  assert.equal(linked.userId, AUTH_USER_ID);
+  assert.equal(createSession.mock.callCount(), 0);
+});
+
+test('authenticated Google link applies its ten-attempt per-user limiter after authenticate', async (t) => {
+  await resetSocialLimiters();
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: AUTH_SESSION_ID,
+    userId: AUTH_USER_ID,
+    revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async () => fakeUserDoc({ id: AUTH_USER_ID }));
+  const token = signAccessToken({
+    userId: AUTH_USER_ID,
+    role: 'user',
+    sessionId: AUTH_SESSION_ID,
+  });
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const response = await request(app)
+      .post('/api/v1/auth/social/google/link')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
+  const limited = await request(app)
+    .post('/api/v1/auth/social/google/link')
+    .set('Authorization', `Bearer ${token}`)
+    .send({});
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
+});
 
 let sessionCounter = 0;
 function fakeSessionDoc(userId) {

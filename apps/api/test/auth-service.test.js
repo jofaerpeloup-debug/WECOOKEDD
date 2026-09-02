@@ -11,6 +11,8 @@ const userService = require('../src/modules/users/user.service');
 const sessionService = require('../src/modules/sessions/session.service');
 const authService = require('../src/modules/auth/auth.service');
 const emailService = require('../src/shared/email/email.service');
+const googleProvider = require('../src/modules/auth/providers/google.provider');
+const socialAuthChallengeService = require('../src/modules/auth/social-auth-challenge.service');
 const { verifyAccessToken } = require('../src/shared/security/access-token');
 const { AppError } = require('../src/shared/errors/app-error');
 
@@ -21,8 +23,31 @@ function fakeUser(overrides = {}) {
     email: 'ada@example.com',
     role: 'user',
     status: 'active',
+    authIdentities: [],
     ...overrides,
   };
+}
+
+function fakeGoogleIdentity(overrides = {}) {
+  return {
+    provider: 'google',
+    subject: 'google-subject-1',
+    email: 'ada@example.com',
+    emailVerified: true,
+    suggestedName: 'Ada Google',
+    verifiedNonce: Buffer.alloc(32, 5).toString('base64url'),
+    ...overrides,
+  };
+}
+
+function mockGoogleCredential(t, { identity = fakeGoogleIdentity(), calls } = {}) {
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => {
+    calls?.push('verify');
+    return identity;
+  });
+  return t.mock.method(socialAuthChallengeService, 'consumeChallenge', async () => {
+    calls?.push('consume');
+  });
 }
 
 function fakeSession(overrides = {}) {
@@ -96,6 +121,309 @@ test('login succeeds for valid credentials on an active account and creates a se
   assert.equal(sessionCreated, true);
   assert.equal(result.refreshToken, 'raw-refresh-token');
   assert.ok(result.accessToken);
+});
+
+test('googleLogin verifies the credential before consuming the exact challenge nonce', async (t) => {
+  const calls = [];
+  const consume = mockGoogleCredential(t, { calls });
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => {
+    calls.push('identity');
+    return fakeUser();
+  });
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'refresh',
+  }));
+
+  await authService.googleLogin({ idToken: 'google-token', challengeId: 'challenge-1' });
+
+  assert.deepEqual(calls.slice(0, 3), ['verify', 'consume', 'identity']);
+  assert.deepEqual(consume.mock.calls[0].arguments[0], {
+    challengeId: 'challenge-1',
+    provider: 'google',
+    verifiedNonce: fakeGoogleIdentity().verifiedNonce,
+  });
+});
+
+test('googleLogin does not consume a challenge when Google rejects the credential', async (t) => {
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => {
+    throw new AppError('Google credential is invalid or expired.', {
+      statusCode: 401,
+      code: 'AUTH_SOCIAL_CREDENTIAL_INVALID',
+    });
+  });
+  const consume = t.mock.method(socialAuthChallengeService, 'consumeChallenge', async () => {});
+
+  await assert.rejects(
+    () => authService.googleLogin({ idToken: 'bad-token', challengeId: 'challenge-1' }),
+    { code: 'AUTH_SOCIAL_CREDENTIAL_INVALID' }
+  );
+  assert.equal(consume.mock.callCount(), 0);
+});
+
+test('googleLogin reuses a linked active user without overwriting Google-changed profile data', async (t) => {
+  mockGoogleCredential(t, {
+    identity: fakeGoogleIdentity({ email: 'changed@example.com', suggestedName: 'Changed Name' }),
+  });
+  const existing = fakeUser({ name: 'Stored Name', email: 'stored@example.com' });
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => existing);
+  const create = t.mock.method(userService, 'createSocialUser', async () => null);
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'refresh',
+  }));
+
+  const result = await authService.googleLogin({ idToken: 'token', challengeId: 'challenge' });
+  assert.equal(result.user.name, 'Stored Name');
+  assert.equal(result.user.email, 'stored@example.com');
+  assert.equal(create.mock.callCount(), 0);
+  assert.ok(result.accessToken);
+});
+
+test('googleLogin blocks suspended and Admin identity owners before issuing a session', async (t) => {
+  for (const owner of [fakeUser({ status: 'suspended' }), fakeUser({ role: 'admin' })]) {
+    mockGoogleCredential(t);
+    t.mock.method(userService, 'getUserByAuthIdentity', async () => owner);
+    const createSession = t.mock.method(sessionService, 'createSession', async () => ({}));
+    await assert.rejects(
+      () => authService.googleLogin({ idToken: 'token', challengeId: 'challenge' }),
+      { code: owner.role === 'admin' ? 'AUTH_SOCIAL_LOGIN_UNAVAILABLE' : 'AUTH_ACCOUNT_SUSPENDED' }
+    );
+    assert.equal(createSession.mock.callCount(), 0);
+    t.mock.restoreAll();
+  }
+});
+
+test('googleLogin provisions an explicit normal social user and reuses ordinary session issuance', async (t) => {
+  mockGoogleCredential(t);
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  t.mock.method(userService, 'getUserByEmail', async () => null);
+  let createdWith;
+  t.mock.method(userService, 'createSocialUser', async (args) => {
+    createdWith = args;
+    return fakeUser({ authIdentities: [args.authIdentity], emailVerified: true });
+  });
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'ordinary-refresh',
+  }));
+
+  const result = await authService.googleLogin({ idToken: 'token-secret', challengeId: 'challenge' });
+
+  assert.equal(createdWith.name, 'Ada Google');
+  assert.equal(createdWith.email, 'ada@example.com');
+  assert.equal(createdWith.emailVerified, true);
+  assert.deepEqual(
+    { provider: createdWith.authIdentity.provider, subject: createdWith.authIdentity.subject },
+    { provider: 'google', subject: 'google-subject-1' }
+  );
+  assert.ok(createdWith.authIdentity.linkedAt instanceof Date);
+  assert.equal('password' in createdWith, false);
+  assert.equal('idToken' in createdWith, false);
+  assert.equal(result.refreshToken, 'ordinary-refresh');
+  assert.ok(result.accessToken);
+});
+
+test('googleLogin requires a literal verified usable email only for first provisioning', async (t) => {
+  for (const identity of [
+    fakeGoogleIdentity({ email: null, emailVerified: false }),
+    fakeGoogleIdentity({ emailVerified: 'true' }),
+  ]) {
+    mockGoogleCredential(t, { identity });
+    t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+    await assert.rejects(
+      () => authService.googleLogin({ idToken: 'token', challengeId: 'challenge' }),
+      { code: 'AUTH_SOCIAL_EMAIL_REQUIRED', statusCode: 422 }
+    );
+    t.mock.restoreAll();
+  }
+});
+
+test('googleLogin never auto-links an email collision, including an Admin email', async (t) => {
+  mockGoogleCredential(t);
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  t.mock.method(userService, 'getUserByEmail', async () => fakeUser({ role: 'admin' }));
+  const create = t.mock.method(userService, 'createSocialUser', async () => null);
+
+  await assert.rejects(
+    () => authService.googleLogin({ idToken: 'token', challengeId: 'challenge' }),
+    { code: 'AUTH_ACCOUNT_LINK_REQUIRED', statusCode: 409 }
+  );
+  assert.equal(create.mock.callCount(), 0);
+});
+
+test('googleLogin recovers only recognized E11000 identity and email races', async (t) => {
+  mockGoogleCredential(t);
+  let identityLookups = 0;
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => {
+    identityLookups += 1;
+    return identityLookups === 1 ? null : fakeUser();
+  });
+  t.mock.method(userService, 'getUserByEmail', async () => null);
+  t.mock.method(userService, 'createSocialUser', async () => {
+    throw Object.assign(new Error('duplicate'), { code: 11000 });
+  });
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'refresh',
+  }));
+  const winner = await authService.googleLogin({ idToken: 'token', challengeId: 'challenge' });
+  assert.equal(winner.user._id, 'user-1');
+});
+
+test('googleLogin maps an E11000 email race and propagates an unexplained duplicate', async (t) => {
+  mockGoogleCredential(t);
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  let emailLookups = 0;
+  t.mock.method(userService, 'getUserByEmail', async () => {
+    emailLookups += 1;
+    return emailLookups === 1 ? null : fakeUser();
+  });
+  const duplicate = Object.assign(new Error('duplicate'), { code: 11000 });
+  t.mock.method(userService, 'createSocialUser', async () => {
+    throw duplicate;
+  });
+  await assert.rejects(
+    () => authService.googleLogin({ idToken: 'token', challengeId: 'challenge' }),
+    { code: 'AUTH_ACCOUNT_LINK_REQUIRED' }
+  );
+
+  t.mock.restoreAll();
+  mockGoogleCredential(t);
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  t.mock.method(userService, 'getUserByEmail', async () => null);
+  t.mock.method(userService, 'createSocialUser', async () => {
+    throw duplicate;
+  });
+  await assert.rejects(
+    () => authService.googleLogin({ idToken: 'token', challengeId: 'challenge' }),
+    (error) => error === duplicate
+  );
+});
+
+test('googleLink links only the authenticated active normal user and issues no session', async (t) => {
+  mockGoogleCredential(t, { identity: fakeGoogleIdentity({ email: 'unrelated@example.com' }) });
+  const target = fakeUser({ _id: 'authenticated-user', email: 'stored@example.com' });
+  t.mock.method(userService, 'getUserById', async (id) => {
+    assert.equal(id, 'authenticated-user');
+    return target;
+  });
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  let linkedWith;
+  t.mock.method(userService, 'linkAuthIdentity', async (id, identity) => {
+    linkedWith = { id, identity };
+    return fakeUser({ _id: id, email: 'stored@example.com', authIdentities: [identity] });
+  });
+  const createSession = t.mock.method(sessionService, 'createSession', async () => ({}));
+
+  const result = await authService.googleLink({
+    userId: 'authenticated-user',
+    idToken: 'token',
+    challengeId: 'challenge',
+  });
+  assert.equal(linkedWith.id, 'authenticated-user');
+  assert.equal(linkedWith.identity.subject, 'google-subject-1');
+  assert.equal(result.email, 'stored@example.com');
+  assert.equal(createSession.mock.callCount(), 0);
+});
+
+test('googleLink is idempotent for the same owner and rejects another owner', async (t) => {
+  mockGoogleCredential(t);
+  t.mock.method(userService, 'getUserById', async () => fakeUser({ _id: 'target' }));
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => fakeUser({ _id: 'target' }));
+  const link = t.mock.method(userService, 'linkAuthIdentity', async () => null);
+  const result = await authService.googleLink({ userId: 'target', idToken: 'token', challengeId: 'c' });
+  assert.equal(result._id, 'target');
+  assert.equal(link.mock.callCount(), 0);
+
+  t.mock.restoreAll();
+  mockGoogleCredential(t);
+  t.mock.method(userService, 'getUserById', async () => fakeUser({ _id: 'target' }));
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => fakeUser({ _id: 'other' }));
+  await assert.rejects(
+    () => authService.googleLink({ userId: 'target', idToken: 'token', challengeId: 'c' }),
+    { code: 'AUTH_SOCIAL_IDENTITY_IN_USE' }
+  );
+});
+
+test('googleLink rejects a different Google identity, Admin, and inactive target', async (t) => {
+  const cases = [
+    {
+      target: fakeUser({ authIdentities: [{ provider: 'google', subject: 'other-subject' }] }),
+      code: 'AUTH_SOCIAL_PROVIDER_ALREADY_LINKED',
+    },
+    { target: fakeUser({ role: 'admin' }), code: 'AUTH_SOCIAL_LOGIN_UNAVAILABLE' },
+    { target: fakeUser({ status: 'suspended' }), code: 'AUTH_SESSION_INVALID' },
+  ];
+  for (const { target, code } of cases) {
+    mockGoogleCredential(t);
+    t.mock.method(userService, 'getUserById', async () => target);
+    t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+    await assert.rejects(
+      () => authService.googleLink({ userId: 'user-1', idToken: 'token', challengeId: 'c' }),
+      { code }
+    );
+    t.mock.restoreAll();
+  }
+});
+
+test('googleLink classifies link races by reloading ownership and target state', async (t) => {
+  mockGoogleCredential(t);
+  let ownerLookups = 0;
+  t.mock.method(userService, 'getUserById', async () => fakeUser({ _id: 'target' }));
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => {
+    ownerLookups += 1;
+    return ownerLookups === 1 ? null : fakeUser({ _id: 'other' });
+  });
+  t.mock.method(userService, 'linkAuthIdentity', async () => {
+    throw Object.assign(new Error('duplicate'), { code: 11000 });
+  });
+  await assert.rejects(
+    () => authService.googleLink({ userId: 'target', idToken: 'token', challengeId: 'c' }),
+    { code: 'AUTH_SOCIAL_IDENTITY_IN_USE' }
+  );
+});
+
+test('googleLink treats a concurrent same-user/same-subject winner as idempotent', async (t) => {
+  mockGoogleCredential(t);
+  let ownerLookups = 0;
+  const target = fakeUser({ _id: 'target' });
+  t.mock.method(userService, 'getUserById', async () => target);
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => {
+    ownerLookups += 1;
+    return ownerLookups === 1 ? null : fakeUser({ _id: 'target' });
+  });
+  t.mock.method(userService, 'linkAuthIdentity', async () => {
+    throw Object.assign(new Error('duplicate'), { code: 11000 });
+  });
+
+  const result = await authService.googleLink({
+    userId: 'target',
+    idToken: 'token',
+    challengeId: 'challenge',
+  });
+  assert.equal(result._id, 'target');
+});
+
+test('googleLink maps a provider-guard no-match to the concurrently linked different subject', async (t) => {
+  mockGoogleCredential(t);
+  let targetLookups = 0;
+  t.mock.method(userService, 'getUserById', async () => {
+    targetLookups += 1;
+    return targetLookups === 1
+      ? fakeUser({ _id: 'target' })
+      : fakeUser({
+          _id: 'target',
+          authIdentities: [{ provider: 'google', subject: 'concurrent-other-subject' }],
+        });
+  });
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  t.mock.method(userService, 'linkAuthIdentity', async () => null);
+
+  await assert.rejects(
+    () => authService.googleLink({ userId: 'target', idToken: 'token', challengeId: 'challenge' }),
+    { code: 'AUTH_SOCIAL_PROVIDER_ALREADY_LINKED' }
+  );
 });
 
 test('refresh rejects with AUTH_REFRESH_TOKEN_INVALID when no active session matches the token, and never rotates', async (t) => {

@@ -51,6 +51,61 @@ test('registerUser normalizes the email, hashes the password, and delegates to t
   assert.equal(user.role, 'user');
 });
 
+test('social identity lookup is a thin provider/subject repository wrapper', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'findByAuthIdentity', async (...args) => {
+    captured = args;
+    return fakeUser();
+  });
+  await userService.getUserByAuthIdentity('google', 'stable-subject');
+  assert.deepEqual(captured, ['google', 'stable-subject']);
+});
+
+test('social email lookup normalizes before delegating', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'findByEmail', async (email) => {
+    captured = email;
+    return null;
+  });
+  await userService.getUserByEmail('  ADA@Example.com ');
+  assert.equal(captured, 'ada@example.com');
+});
+
+test('social creation normalizes email and forwards only the explicit B4.0 fields', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'createSocialUser', async (args) => {
+    captured = args;
+    return fakeUser();
+  });
+  const authIdentity = { provider: 'google', subject: 'stable-subject', linkedAt: new Date() };
+  await userService.createSocialUser({
+    name: 'Ada',
+    email: ' ADA@Example.com ',
+    emailVerified: true,
+    authIdentity,
+  });
+  assert.deepEqual(captured, {
+    name: 'Ada',
+    email: 'ada@example.com',
+    emailVerified: true,
+    authIdentity,
+  });
+  assert.equal('passwordHash' in captured, false);
+  assert.equal('role' in captured, false);
+  assert.equal('status' in captured, false);
+});
+
+test('social linking is a thin user-id/identity repository wrapper', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'linkAuthIdentity', async (...args) => {
+    captured = args;
+    return fakeUser();
+  });
+  const identity = { provider: 'google', subject: 'stable-subject', linkedAt: new Date() };
+  await userService.linkAuthIdentity(TARGET_USER_ID, identity);
+  assert.deepEqual(captured, [TARGET_USER_ID, identity]);
+});
+
 test('registerUser translates a MongoDB duplicate-key error into USER_EMAIL_ALREADY_EXISTS', async (t) => {
   t.mock.method(userRepository, 'createUser', async () => {
     const err = new Error('E11000 duplicate key error collection: wecooked.users index: email_1');
