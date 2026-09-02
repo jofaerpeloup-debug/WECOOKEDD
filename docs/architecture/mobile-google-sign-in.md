@@ -1,10 +1,15 @@
-# Mobile Google Sign-In (B4.2A foundation)
+# Mobile Google Sign-In (B4.2A + B4.2B-1 foundations)
 
 B4.2A adds the **credential-free, login-only source foundation** for Google
 sign-in on the mobile app. It builds the local native module, the JS
 orchestration, the config surface, and the automated tests — but it does **not**
 configure Google Cloud, perform a real Google sign-in, or produce a development
 build.
+
+B4.2B-1 adds the **build tooling foundation** on top of it (`expo-dev-client`,
+`eas.json` development profiles, build-input docs) — still no credentials, no
+EAS project, no native build. See "B4.2B-1 build tooling foundation" and
+"B4.2B-2 sequencing" below.
 
 > **Do not replace this design with a third-party wrapper.** The tiny native
 > surface is intentional and security-relevant. See "Why a local module" below.
@@ -41,15 +46,17 @@ build.
 
 ## Not yet verified (later slices)
 
-- native compilation (Kotlin / Swift) — **B4.2B**
-- Google Cloud OAuth clients (Web/server, Android, iOS) — **B4.2B**
+- native compilation (Kotlin / Swift) — **B4.2B-2**
+- Google Cloud OAuth clients (Web/server, Android, iOS) — **B4.2B-2**
+- EAS account/project, credentials, environment variables — **B4.2B-2**
 - a real Android provider result — **B4.2C**
 - a real iOS provider result — **B4.2D**
 - real ID-token `aud` / `nonce` behavior on a device
-- EAS build / `expo-dev-client` / `eas.json`
+- an EAS build — **B4.2B-2** (`expo-dev-client` + `eas.json` land in B4.2B-1)
 - production readiness
 
-Do not claim mobile Google login works on a real device after B4.2A.
+Do not claim mobile Google login works on a real device after B4.2A, or that a
+development build exists after B4.2B-1.
 
 ## Locked security protocol (per user attempt)
 
@@ -134,8 +141,9 @@ after a successful acquisition.
 
 The Web/server client ID is **not** passed from JS. The config plugin writes it
 into a dedicated Android string resource `wecooked_google_web_client_id`; the
-module reads the build-pinned value. Android's own OAuth client is associated in
-Google Cloud via `com.wecooked.app` + signing-cert fingerprints in **B4.2B**.
+module reads the build-pinned value. Android's own OAuth client is created in
+Google Cloud in **B4.2B-2**, and it requires **both** `com.wecooked.app` **and**
+the signing-certificate SHA-1 at creation time — see "B4.2B-2 sequencing" below.
 
 ### iOS
 
@@ -193,15 +201,89 @@ Never `disconnect` / `revoke`.
   raw nonce reaches Google untransformed and that nothing but the ID token comes
   back.
 
-Excluded dependencies (do not add): `expo-dev-client`,
-`react-native-nitro-google-signin`, `react-native-nitro-modules`,
-`@react-native-google-signin/google-signin`, any third-party Google auth
-wrapper, Firebase, a direct `play-services-auth` dependency.
+Excluded dependencies (do not add): `react-native-nitro-google-signin`,
+`react-native-nitro-modules`, `@react-native-google-signin/google-signin`, any
+third-party Google auth wrapper, Firebase, a direct `play-services-auth`
+dependency. Also not added in B4.2B-1: `eas-cli` (B4.2B-2 uses
+`npx eas-cli@latest` or a global CLI), `expo-build-properties`, `expo-updates`,
+`jest-expo`.
+
+`expo-dev-client` is **added in B4.2B-1** (see "B4.2B-1 build tooling
+foundation" below); it is no longer on this excluded list.
+
+## B4.2B-1 build tooling foundation
+
+B4.2B-1 prepares the mobile project for a later EAS / native Google sign-in
+development build **without** creating any credential, logging into EAS,
+initializing an EAS project, or running a native build. It is tooling only.
+
+Tracked changes in B4.2B-1:
+
+- `apps/mobile/package.json` — adds `expo-dev-client` (`~6.0.21`, the SDK 54
+  compatible version chosen by `npx expo install`). Needed so a future EAS
+  `development` build boots a custom dev client instead of Expo Go, which cannot
+  load the `WeCookedGoogleSignIn` native module.
+- `package-lock.json` — the mechanical root-lockfile update from that install
+  (root lockfile only; there is no `apps/mobile/package-lock.json`).
+- `apps/mobile/eas.json` — **new**, development build profiles only:
+  - `cli.appVersionSource: "local"` (no `cli.version` constraint yet — a real
+    one is added in B4.2B-2 once the EAS CLI version in use is fixed).
+  - `development` — `developmentClient: true`, `distribution: "internal"`,
+    `environment: "development"`, Android `buildType: "apk"`.
+  - `development-simulator` — `extends: "development"` plus `ios.simulator: true`.
+- `apps/mobile/.env.example` — documents the two build-time Google client-ID
+  inputs and notes that B4.2B-2 supplies the real values to EAS through the EAS
+  `development` environment, not a committed file.
+
+B4.2B-1 does **not** add `eas-cli`, `expo-build-properties`, `expo-updates`, or
+`jest-expo`, does not add `android/` or `ios/` `.gitignore` entries (no local
+prebuild yet), and does not touch `app.config.js`, `app.json`, `src/**`, the
+native module, or the Jest config.
+
+## B4.2B-2 sequencing (credential + build follow-up)
+
+B4.2B-2 creates three OAuth clients (Web/server, Android, iOS) and runs the
+first builds. The Android OAuth client **cannot** be created with the package
+name alone — Google requires `com.wecooked.app` **and** the signing-certificate
+SHA-1 together at creation time. Required order:
+
+1. Establish the EAS project / account.
+2. Generate / configure the EAS Android **development** signing credentials.
+3. Obtain the SHA-1 / SHA-256 from those credentials.
+4. Create the Android OAuth client using `com.wecooked.app` + the actual SHA-1.
+5. Create / configure the Web/server and iOS OAuth clients.
+6. Configure the EAS `development` environment
+   (`GOOGLE_WEB_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`; backend runtime
+   `GOOGLE_OAUTH_CLIENT_IDS` = the Web/server client ID only).
+7. Run the Android development build.
+
+A local debug-keystore SHA can be registered as an additional Android OAuth
+fingerprint later, only if local `expo run:android` is intentionally used.
+
+The backend audience allow-list (`GOOGLE_OAUTH_CLIENT_IDS`) contains **only**
+the Web/server client ID — never the Android or iOS platform client IDs. The
+expected ID-token `aud` is the Web/server client ID (Android uses it as the
+server client ID; iOS sets it as `GIDServerClientID`). Real `aud` / `nonce`
+proof on a device is B4.2C / B4.2D.
+
+iOS in B4.2B-2 is a **cloud compile / link gate only** (an EAS iOS simulator
+build). This is a Windows workstation and cannot launch or test the iOS
+simulator artifact; real iOS execution / provider proof is B4.2D on a suitable
+Apple setup.
+
+Firebase is not involved at any step: no `google-services.json`, no
+`GoogleService-Info.plist`, no Identity Toolkit, no `google-services` Gradle
+plugin.
 
 ## Future gates
 
-- **B4.2B** — Google Cloud OAuth clients + development build + `expo-dev-client`
-  + `eas.json`.
+- **B4.2B-1** — build tooling foundation: `expo-dev-client` + `eas.json`
+  development profiles + `.env.example` build-input docs. No credentials, no
+  build. *(this slice)*
+- **B4.2B-2** — EAS account/project, Android signing credentials + SHA-1,
+  Google Cloud OAuth clients (Web/server, Android, iOS), EAS `development`
+  environment variables, backend `GOOGLE_OAUTH_CLIENT_IDS`, first Android
+  development build, iOS cloud compile/link gate.
 - **B4.2C** — real Android provider verification.
 - **B4.2D** — real iOS provider verification.
 - **B4.3** — explicit Google account linking (`POST /auth/social/google/link`,
