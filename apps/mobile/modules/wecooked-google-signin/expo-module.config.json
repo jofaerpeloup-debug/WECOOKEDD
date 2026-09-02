@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["WeCookedGoogleSignInModule"],
+    "appDelegateSubscribers": ["WeCookedGoogleSignInAppDelegateSubscriber"]
+  },
+  "android": {
+    "modules": ["expo.modules.wecookedgooglesignin.WeCookedGoogleSignInModule"]
+  }
+}

@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import * as authService from '../api/authService';
+import * as googleAuthFlow from '../auth/googleAuthFlow';
 
 // Single source of truth for auth/session state. Three states:
 //   'restoring'      — app just launched, trying to rebuild a session
@@ -60,6 +61,19 @@ export function AuthProvider({ children }) {
     return u;
   }, []);
 
+  // Google sign-in. All orchestration (single-flight, challenge, native call,
+  // backend exchange) lives in googleAuthFlow; this context only reconciles the
+  // authoritative user it returns into auth state — exactly like signIn(). No
+  // nonce / challengeId / Google idToken / Google profile is held here.
+  const signInWithGoogle = useCallback(async () => {
+    const u = await googleAuthFlow.signInWithGoogle();
+    if (mountedRef.current) {
+      setUser(u);
+      setStatus('authenticated');
+    }
+    return u;
+  }, []);
+
   const signUp = useCallback(async ({ name, email, password }) => {
     const u = await authService.register({ name, email, password });
     if (mountedRef.current) {
@@ -75,6 +89,10 @@ export function AuthProvider({ children }) {
       setUser(null);
       setStatus('unauthenticated');
     }
+    // Best-effort Google provider cleanup, AFTER the auth-state flip and
+    // deliberately NOT awaited — a slow/hung native clear must never delay
+    // visible logout. clearNativeState never throws.
+    void googleAuthFlow.clearNativeState();
   }, []);
 
   const signOutEverywhere = useCallback(async () => {
@@ -83,6 +101,7 @@ export function AuthProvider({ children }) {
       setUser(null);
       setStatus('unauthenticated');
     }
+    void googleAuthFlow.clearNativeState();
   }, []);
 
   const refreshUser = useCallback(async () => {
@@ -108,6 +127,7 @@ export function AuthProvider({ children }) {
     isReady: status !== 'restoring',
     isLoggedIn: status === 'authenticated',
     signIn,
+    signInWithGoogle,
     signUp,
     signOut,
     signOutEverywhere,

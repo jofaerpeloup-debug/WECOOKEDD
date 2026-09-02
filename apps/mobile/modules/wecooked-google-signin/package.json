@@ -1,0 +1,9 @@
+{
+  "name": "wecooked-google-signin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeCooked local Expo module — credential-free, login-only, per-attempt raw-nonce Google Sign-In foundation (B4.2A). Native compilation is NOT verified in B4.2A.",
+  "main": "index.ts",
+  "author": "WeCooked",
+  "license": "UNLICENSED"
+}

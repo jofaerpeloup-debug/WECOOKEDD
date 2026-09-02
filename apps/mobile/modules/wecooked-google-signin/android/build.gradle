@@ -1,0 +1,25 @@
+plugins {
+  id 'com.android.library'
+  id 'org.jetbrains.kotlin.android'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.wecooked.googlesignin'
+version = '0.1.0'
+
+android {
+  namespace 'expo.modules.wecookedgooglesignin'
+  defaultConfig {
+    minSdkVersion 24
+  }
+}
+
+dependencies {
+  // Modern, currently-supported, free Google identity path. B4.2A does NOT add
+  // com.google.android.gms:play-services-auth directly — that is only pulled in
+  // (transitively) by credentials-play-services-auth and is revisited in B4.2B
+  // if a real build proves a direct entry is required.
+  implementation 'androidx.credentials:credentials:1.6.0'
+  implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
+  implementation 'com.google.android.libraries.identity.googleid:googleid:1.2.0'
+}

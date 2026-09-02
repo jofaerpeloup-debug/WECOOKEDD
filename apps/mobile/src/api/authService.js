@@ -164,6 +164,37 @@ export async function login({ email, password }) {
   return establishSession(data);
 }
 
+// --- Google social login (B4.1 backend contract) ----------------------
+//
+// Two public, unauthenticated endpoints. The mobile app never sends a nonce,
+// email, name, sub, role, status, audience, clientId, or userId — only the
+// exact bodies below.
+//
+//   POST /auth/social/challenge  body { provider: 'google' }
+//        -> { challengeId, nonce, expiresAt }
+//   POST /auth/social/google     body { idToken, challengeId }
+//        -> { user, accessToken, refreshToken }
+//
+// A 401 (AUTH_SOCIAL_CREDENTIAL_INVALID) from these `auth: false` calls does
+// NOT trigger the WeCooked refresh+retry — the shared client only refreshes
+// when `auth` is true (see client.js).
+
+export function getSocialChallenge() {
+  return api.post('/auth/social/challenge', {
+    auth: false,
+    body: { provider: 'google' },
+  });
+}
+
+export async function googleLogin({ idToken, challengeId }) {
+  const data = await api.post('/auth/social/google', {
+    auth: false,
+    body: { idToken, challengeId },
+  });
+  // Reuse the exact same session-establishment path as password login/register.
+  return establishSession(data);
+}
+
 export async function register({ name, email, password }) {
   // The backend issues a full session on registration (access + refresh token
   // in the response), so a successful register is also a sign-in.
@@ -182,6 +213,9 @@ export async function logout() {
   } catch {
     // Best effort — local cleanup below must happen regardless of the result.
   }
+  // Authoritative: local WeCooked session is now cleared. Provider-side (Google)
+  // logout hygiene is not this module's concern — the React auth boundary
+  // (AuthContext) triggers it best-effort, detached, after the state flip.
   await tokenStore.clearSession();
 }
 
