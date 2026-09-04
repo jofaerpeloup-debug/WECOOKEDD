@@ -18,8 +18,27 @@
 
 const { expo: base } = require('./app.json');
 
+// Shape of a real Google OAuth client ID (e.g.
+// "123456789-abc123.apps.googleusercontent.com"). Both the web and iOS client
+// IDs are validated against this before they are ever passed to the config
+// plugin, so a malformed value (truncated paste, wrong field, shell-command
+// injection, etc.) fails config evaluation instead of reaching a native build.
+const GOOGLE_CLIENT_ID_PATTERN = /^\d+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/;
+
 const WEB_CLIENT_ID = (process.env.GOOGLE_WEB_CLIENT_ID || '').trim();
 const IOS_CLIENT_ID = (process.env.GOOGLE_IOS_CLIENT_ID || '').trim();
+
+// Fixed, safe error — identifies which env var is malformed and never echoes
+// the offending value (it must never appear in a thrown message, a log, or
+// anywhere else reachable from build output).
+function assertValidGoogleClientId(name, value) {
+  if (!GOOGLE_CLIENT_ID_PATTERN.test(value)) {
+    throw new Error(
+      `WeCooked Google sign-in configuration is invalid: ${name} is not a ` +
+        'well-formed Google OAuth client ID.'
+    );
+  }
+}
 
 module.exports = () => {
   const haveWeb = WEB_CLIENT_ID.length > 0;
@@ -31,6 +50,11 @@ module.exports = () => {
         'GOOGLE_WEB_CLIENT_ID and GOOGLE_IOS_CLIENT_ID, or neither. ' +
         '(B4.2A is credential-free — leaving both unset is expected.)'
     );
+  }
+
+  if (haveWeb && haveIos) {
+    assertValidGoogleClientId('GOOGLE_WEB_CLIENT_ID', WEB_CLIENT_ID);
+    assertValidGoogleClientId('GOOGLE_IOS_CLIENT_ID', IOS_CLIENT_ID);
   }
   const plugins = [
     ...(base.plugins || []),
