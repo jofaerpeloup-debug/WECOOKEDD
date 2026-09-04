@@ -32,8 +32,26 @@ module.exports = () => {
         '(B4.2A is credential-free — leaving both unset is expected.)'
     );
   }
-
-  const plugins = [...(base.plugins || [])];
+  const plugins = [
+    ...(base.plugins || []),
+    [
+      'expo-build-properties',
+      {
+        ios: {
+          extraPods: [
+            {
+              name: 'GoogleUtilities',
+              modular_headers: true,
+            },
+            {
+              name: 'RecaptchaInterop',
+              modular_headers: true,
+            },
+          ],
+        },
+      },
+    ],
+  ];
 
   if (haveWeb && haveIos) {
     plugins.push([

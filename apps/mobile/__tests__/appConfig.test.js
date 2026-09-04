@@ -42,9 +42,30 @@ describe('app.config.js — credential-free (both unset)', () => {
     expect(c.newArchEnabled).toBe(true);
   });
 
-  it('adds no Google config plugin and preserves the existing plugins list', () => {
+  it('adds build properties but no Google config plugin', () => {
     const c = loadConfig({});
-    expect(c.plugins).toEqual(appJson.plugins);
+
+    expect(c.plugins).toEqual([
+      ...appJson.plugins,
+      [
+        'expo-build-properties',
+        {
+          ios: {
+            extraPods: [
+              {
+                name: 'GoogleUtilities',
+                modular_headers: true,
+              },
+              {
+                name: 'RecaptchaInterop',
+                modular_headers: true,
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+
     expect(JSON.stringify(c.plugins)).not.toMatch(/wecooked-google-signin/);
   });
 
@@ -73,11 +94,19 @@ describe('app.config.js — configured (both set)', () => {
     const entry = c.plugins.find(
       (p) => Array.isArray(p) && String(p[0]).includes('wecooked-google-signin')
     );
+
     expect(entry).toBeDefined();
     expect(entry[1]).toEqual({
       googleWebClientId: WEB_CLIENT_ID,
       googleIosClientId: IOS_CLIENT_ID,
     });
+
+    expect(
+      c.plugins.filter(
+        (plugin) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties'
+      )
+    ).toHaveLength(1);
+
     // original plugins still present
     for (const p of appJson.plugins) {
       expect(c.plugins).toContainEqual(p);
