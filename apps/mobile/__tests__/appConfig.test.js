@@ -2,7 +2,7 @@
 // Google client IDs into `extra` / EXPO_PUBLIC.
 
 const IOS_CLIENT_ID = '123-abc.apps.googleusercontent.com';
-const WEB_CLIENT_ID = 'web-server-oauth-client-id';
+const WEB_CLIENT_ID = '456-def.apps.googleusercontent.com';
 
 function loadConfig({ web, ios } = {}) {
   const saved = { web: process.env.GOOGLE_WEB_CLIENT_ID, ios: process.env.GOOGLE_IOS_CLIENT_ID };
@@ -111,5 +111,39 @@ describe('app.config.js — configured (both set)', () => {
     for (const p of appJson.plugins) {
       expect(c.plugins).toContainEqual(p);
     }
+  });
+});
+
+describe('app.config.js — malformed client ID (both set, one or both invalid)', () => {
+  const SHELL_COMMAND_VALUE = '$webClientId = (Get-Clipboard).Trim()';
+
+  it('rejects a malformed GOOGLE_WEB_CLIENT_ID', () => {
+    expect(() =>
+      loadConfig({ web: 'not-a-real-client-id', ios: IOS_CLIENT_ID })
+    ).toThrow(/GOOGLE_WEB_CLIENT_ID/);
+  });
+
+  it('rejects a malformed GOOGLE_IOS_CLIENT_ID', () => {
+    expect(() =>
+      loadConfig({ web: WEB_CLIENT_ID, ios: 'not-a-real-client-id' })
+    ).toThrow(/GOOGLE_IOS_CLIENT_ID/);
+  });
+
+  it('rejects a shell-command-shaped value', () => {
+    expect(() =>
+      loadConfig({ web: SHELL_COMMAND_VALUE, ios: IOS_CLIENT_ID })
+    ).toThrow(/GOOGLE_WEB_CLIENT_ID/);
+  });
+
+  it('never echoes the malformed value in the thrown error', () => {
+    let error;
+    try {
+      loadConfig({ web: SHELL_COMMAND_VALUE, ios: IOS_CLIENT_ID });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeDefined();
+    expect(error.message).not.toContain(SHELL_COMMAND_VALUE);
+    expect(error.message).not.toContain('Get-Clipboard');
   });
 });
