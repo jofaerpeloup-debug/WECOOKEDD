@@ -11,6 +11,11 @@ import { imageSource } from '../utils/image';
 export default function CommunityScreen({ navigation }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
+  // Renders both as a bottom tab (brand bar, no back arrow) and as a pushed
+  // stack screen (back arrow + title). Teammate keys this off the tab's route
+  // name; here Community is registered in the root stack under that same name,
+  // so the guard asks the hosting navigator instead.
+  const asTab = navigation.getState?.()?.type === 'tab';
   const { posts, addPost, removePost } = useCommunity();
   const [liked, setLiked] = useState({});
   const [caption, setCaption] = useState('');
@@ -33,7 +38,11 @@ export default function CommunityScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="back" title="Community" onBack={() => navigation.goBack()} />
+      <TopBar
+        mode={asTab ? 'brand' : 'back'}
+        title="Community"
+        onBack={asTab ? undefined : () => navigation.goBack()}
+      />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.subtitle}>See what other home cooks are making.</Text>
