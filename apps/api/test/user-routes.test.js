@@ -41,7 +41,13 @@ function userDoc({
     name,
     email,
     passwordHash: FORBIDDEN_HASH,
-    authIdentities: [{ provider: 'google', subject: 'private-subject' }],
+    authIdentities: [
+      {
+        provider: 'google',
+        subject: 'private-subject',
+        linkedAt: new Date('2026-03-02T03:04:05.000Z'),
+      },
+    ],
     role,
     status,
     preferences: {
@@ -604,6 +610,27 @@ test('GET /api/v1/users/me still returns the current user (regression, includes 
   assert.equal('passwordHash' in res.body.data.user, false);
   assert.ok(res.body.data.user.preferences, 'the self view still carries preferences');
 });
+
+test('GET /api/v1/users/me exposes provider + linkedAt and never the Google subject', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+
+  const res = await request(app)
+    .get('/api/v1/users/me')
+    .set('Authorization', `Bearer ${userToken()}`);
+
+  assert.equal(res.status, 200);
+  const { authIdentities } = res.body.data.user;
+  assert.equal(Array.isArray(authIdentities), true);
+  assert.equal(authIdentities.length, 1);
+  // Exactly the two public fields — no third key can ride along.
+  assert.deepEqual(Object.keys(authIdentities[0]).sort(), ['linkedAt', 'provider']);
+  assert.equal(authIdentities[0].provider, 'google');
+  assert.equal(authIdentities[0].linkedAt, '2026-03-02T03:04:05.000Z');
+  assert.equal('subject' in authIdentities[0], false);
+  // The stub's subject value must not appear anywhere in the serialized body,
+  // under any key or nesting.
+  assert.equal(JSON.stringify(res.body).includes('private-subject'), false);
+});
 // ===========================================================================
 // PATCH /api/v1/users/me  (self-profile)
 // ===========================================================================
@@ -700,10 +727,13 @@ test('PATCH /api/v1/users/me updates only the supplied preference leaf and retur
   const raw = JSON.stringify(res.body);
   assert.equal(raw.includes('passwordHash'), false);
   assert.equal(raw.includes(FORBIDDEN_HASH), false);
-  assert.equal(raw.includes('authIdentities'), false);
   assert.equal(raw.includes('private-subject'), false);
   assert.equal(raw.includes('__v'), false);
   assert.ok(res.body.data.user.preferences, 'response carries preferences');
+  // The self-view names the linked providers (B4.3A) but never their subjects.
+  assert.deepEqual(res.body.data.user.authIdentities, [
+    { provider: 'google', linkedAt: '2026-03-02T03:04:05.000Z' },
+  ]);
 });
 
 test('PATCH /api/v1/users/me accepts notifications.enabled:false (present value, not "missing")', async (t) => {

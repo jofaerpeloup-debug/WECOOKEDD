@@ -4,6 +4,8 @@ const { toPublicUser } = require('../users/user.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
 
+const { CHALLENGE_INTENT } = socialAuthChallengeService;
+
 const register = asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
   const { user, accessToken, refreshToken } = await authService.register({ name, email, password });
@@ -16,8 +18,26 @@ const login = asyncHandler(async (req, res) => {
   sendSuccess(res, { user: toPublicUser(user), accessToken, refreshToken });
 });
 
+// Login-intent challenge: usable by Google login / first-time Google account
+// creation, so it needs no WeCooked account and is bound to no user.
 const socialChallenge = asyncHandler(async (req, res) => {
-  const challenge = await socialAuthChallengeService.issueChallenge(req.body.provider);
+  const challenge = await socialAuthChallengeService.issueChallenge({
+    provider: req.body.provider,
+    intent: CHALLENGE_INTENT.LOGIN,
+  });
+  sendSuccess(res, challenge, 201);
+});
+
+// Link-intent challenge: account-management state. The binding is the
+// authenticated principal's DB-verified id from `authenticate` — the request
+// body carries no user field at all (socialChallengeSchema is .strict()), so a
+// caller can neither choose nor spoof whose challenge this is.
+const socialLinkChallenge = asyncHandler(async (req, res) => {
+  const challenge = await socialAuthChallengeService.issueChallenge({
+    provider: req.body.provider,
+    intent: CHALLENGE_INTENT.LINK,
+    userId: req.auth.userId,
+  });
   sendSuccess(res, challenge, 201);
 });
 
@@ -82,6 +102,7 @@ module.exports = {
   register,
   login,
   socialChallenge,
+  socialLinkChallenge,
   googleLogin,
   googleLink,
   refresh,

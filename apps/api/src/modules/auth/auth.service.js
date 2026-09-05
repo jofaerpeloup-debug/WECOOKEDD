@@ -11,6 +11,8 @@ const { AppError } = require('../../shared/errors/app-error');
 const googleProvider = require('./providers/google.provider');
 const socialAuthChallengeService = require('./social-auth-challenge.service');
 
+const { CHALLENGE_INTENT } = socialAuthChallengeService;
+
 const FORGOT_PASSWORD_MIN_RESPONSE_MS = 750;
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
@@ -137,11 +139,19 @@ function findGoogleIdentity(user) {
   return user.authIdentities?.find((identity) => identity.provider === 'google');
 }
 
-async function verifyAndConsumeGoogleCredential({ idToken, challengeId }) {
+/**
+ * `intent` is the server-enforced separation between the two Google flows:
+ * a `login` challenge can only be consumed here by googleLogin and a `link`
+ * challenge only by googleLink, which additionally binds it to the
+ * authenticated user. Neither value comes from the request body.
+ */
+async function verifyAndConsumeGoogleCredential({ idToken, challengeId, intent, userId = null }) {
   const identity = await googleProvider.verifyGoogleIdToken({ idToken });
   await socialAuthChallengeService.consumeChallenge({
     challengeId,
     provider: 'google',
+    intent,
+    userId,
     verifiedNonce: identity.verifiedNonce,
   });
   return identity;
@@ -153,8 +163,21 @@ async function issueSocialLogin(user) {
   return { user, ...tokens };
 }
 
+/**
+ * Google login / first-time Google account creation. When the verified
+ * provider+sub already owns a WeCooked account the caller signs in; when it
+ * owns none, a NEW account is provisioned for that identity. This is
+ * deliberately not account linking: an existing WeCooked account with the same
+ * email is never adopted, merged, or converted — it returns the generic
+ * AUTH_ACCOUNT_LINK_REQUIRED so the owner must authenticate and link
+ * explicitly through googleLink.
+ */
 async function googleLogin({ idToken, challengeId }) {
-  const identity = await verifyAndConsumeGoogleCredential({ idToken, challengeId });
+  const identity = await verifyAndConsumeGoogleCredential({
+    idToken,
+    challengeId,
+    intent: CHALLENGE_INTENT.LOGIN,
+  });
   let user = await userService.getUserByAuthIdentity(identity.provider, identity.subject);
   if (user) {
     return issueSocialLogin(user);
@@ -200,8 +223,21 @@ async function googleLogin({ idToken, challengeId }) {
   return issueSocialLogin(user);
 }
 
+/**
+ * Attaches a verified Google identity to the ALREADY authenticated WeCooked
+ * user. `userId` is req.auth.userId (DB-verified), never a body field. This
+ * path never creates a user, never merges two accounts, never mutates
+ * role/status/email/passwordHash, and never issues or rotates a session — the
+ * caller keeps the exact session they arrived with. Email equality is not
+ * consulted anywhere.
+ */
 async function googleLink({ userId, idToken, challengeId }) {
-  const identity = await verifyAndConsumeGoogleCredential({ idToken, challengeId });
+  const identity = await verifyAndConsumeGoogleCredential({
+    idToken,
+    challengeId,
+    intent: CHALLENGE_INTENT.LINK,
+    userId,
+  });
   let target = await userService.getUserById(userId);
   if (!target || target.status !== 'active') {
     throw sessionInvalidError();

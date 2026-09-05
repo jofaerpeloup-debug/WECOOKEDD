@@ -1,11 +1,18 @@
 const { loadEnv } = require('./config/env');
 const { createApp } = require('./app');
 const { connectDatabase, disconnectDatabase } = require('./config/database');
+const { verifyRequiredIndexes } = require('./config/required-indexes');
 
 async function start() {
   const env = loadEnv();
 
   await connectDatabase(env.mongodbUri);
+
+  // Read-only. Refuses to serve traffic when the unique auth-identity index is
+  // missing or has drifted. This check never creates or repairs THAT index —
+  // the auth-identity migration is its only creator. It says nothing about the
+  // other schema-declared indexes Mongoose still manages on its own.
+  await verifyRequiredIndexes();
 
   const app = createApp();
   const server = app.listen(env.port, () => {

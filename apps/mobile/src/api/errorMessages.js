@@ -21,10 +21,14 @@ const GOOGLE_NATIVE_MESSAGES = {
 };
 
 export function getAuthErrorMessage(err, fallback = FALLBACK) {
+  // GOOGLE_* is checked first and for ANY error class: these codes are raised
+  // both by the native adapter (plain errors) and by the JS flow's
+  // single-flight guard (an ApiError), and they never collide with a backend
+  // code, so one lookup keeps both safely mapped.
+  if (err && typeof err.code === 'string' && GOOGLE_NATIVE_MESSAGES[err.code]) {
+    return GOOGLE_NATIVE_MESSAGES[err.code];
+  }
   if (!(err instanceof ApiError)) {
-    if (err && typeof err.code === 'string' && GOOGLE_NATIVE_MESSAGES[err.code]) {
-      return GOOGLE_NATIVE_MESSAGES[err.code];
-    }
     return fallback;
   }
   if (err.isNetworkError) {
@@ -54,6 +58,14 @@ export function getAuthErrorMessage(err, fallback = FALLBACK) {
       return 'Google sign-in isn’t available for this account. Please log in with your email and password.';
     case 'AUTH_SOCIAL_EMAIL_REQUIRED':
       return 'Your Google account needs a verified email before it can be used to sign in. Please log in with your email and password.';
+    // --- Google account linking (B4.3A) ---
+    // Fixed strings: these two 409s must never fall through to the backend's
+    // own message, and must not hint at which other account owns the identity.
+    case 'AUTH_SOCIAL_IDENTITY_IN_USE':
+      return 'That Google account is already linked to a different WeCooked account.';
+    case 'AUTH_SOCIAL_PROVIDER_ALREADY_LINKED':
+      return 'A different Google account is already linked to your WeCooked account.';
+
     case 'AUTH_PROVIDER_UNAVAILABLE':
       return 'Google sign-in is temporarily unavailable. Please try again shortly.';
     case 'SESSION_PERSIST_FAILED':

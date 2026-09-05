@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const User = require('../src/modules/users/user.model');
-const { toPublicUser } = require('../src/modules/users/user.serializer');
+const { toPublicUser, toAdminUserSummary } = require('../src/modules/users/user.serializer');
 
 test('email is required, trimmed, lowercased, and uniquely indexed', () => {
   const emailPath = User.schema.path('email');
@@ -209,7 +209,7 @@ test('emailVerified defaults to false', () => {
   assert.equal(user.emailVerified, false);
 });
 
-test('toPublicUser exposes id and hides passwordHash/authIdentities/__v', () => {
+test('toPublicUser exposes id and hides passwordHash/_id/__v', () => {
   const user = new User({
     name: 'Ada',
     email: 'ada@example.com',
@@ -222,8 +222,46 @@ test('toPublicUser exposes id and hides passwordHash/authIdentities/__v', () => 
   assert.equal(publicUser.name, 'Ada');
   assert.equal(publicUser.email, 'ada@example.com');
   assert.equal('passwordHash' in publicUser, false);
-  assert.equal('authIdentities' in publicUser, false);
   assert.equal('_id' in publicUser, false);
   assert.equal('__v' in publicUser, false);
   assert.equal(JSON.stringify(publicUser).includes('super-secret-hash'), false);
+});
+
+test('toPublicUser exposes linked provider and linkedAt but never the subject', () => {
+  const linkedAt = new Date('2026-09-04T10:00:00.000Z');
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    passwordHash: 'hash',
+    authIdentities: [{ provider: 'google', subject: 'private-subject', linkedAt }],
+  });
+
+  const publicUser = toPublicUser(user);
+
+  assert.equal(publicUser.authIdentities.length, 1);
+  assert.deepEqual(Object.keys(publicUser.authIdentities[0]).sort(), ['linkedAt', 'provider']);
+  assert.equal(publicUser.authIdentities[0].provider, 'google');
+  assert.deepEqual(publicUser.authIdentities[0].linkedAt, linkedAt);
+  assert.equal('subject' in publicUser.authIdentities[0], false);
+  assert.equal(JSON.stringify(publicUser).includes('private-subject'), false);
+});
+
+test('toPublicUser reports no linked identities for a password-only account', () => {
+  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
+  assert.deepEqual(toPublicUser(user).authIdentities, []);
+  // A caller may pass a lean/partial document that has no identity array.
+  assert.deepEqual(toPublicUser({ _id: 'u1' }).authIdentities, []);
+});
+
+test('toAdminUserSummary still omits identity data entirely', () => {
+  const user = new User({
+    name: 'Ada',
+    email: 'ada@example.com',
+    passwordHash: 'hash',
+    authIdentities: [{ provider: 'google', subject: 'private-subject' }],
+  });
+  const summary = toAdminUserSummary(user);
+
+  assert.equal('authIdentities' in summary, false);
+  assert.equal(JSON.stringify(summary).includes('private-subject'), false);
 });

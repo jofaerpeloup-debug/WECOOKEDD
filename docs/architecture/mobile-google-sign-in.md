@@ -81,9 +81,9 @@ Google-token persistence, no mobile-side nonce hashing.
 | Layer | File | Responsibility |
 |---|---|---|
 | UI hook | `src/hooks/useGoogleSignIn.js` | React/UI state only: `loading`, `error`, `ready`. No auth authority. Cancellation is silent. |
-| Auth state | `src/context/AuthContext.js` | Sole React auth-state authority. `signInWithGoogle()` reconciles the returned user. Stores no credentials. |
-| Orchestration | `src/auth/googleAuthFlow.js` | Authoritative JS single-flight (mirrors `authService.refreshInFlight`). Challenge → native → backend. No React state, no persistence, no logging. |
-| REST | `src/api/authService.js` | `getSocialChallenge()`, `googleLogin()`. `googleLogin` reuses `establishSession()` — no duplicated token/session logic. |
+| Auth state | `src/context/AuthContext.js` | Sole React auth-state authority. `signInWithGoogle()` reconciles the returned user; `linkGoogle()` (B4.3A) reconciles through `syncUser` only. Stores no credentials. |
+| Orchestration | `src/auth/googleAuthFlow.js` | Authoritative JS single-flight (mirrors `authService.refreshInFlight`), shared by login and link. Challenge → native → backend. No React state, no persistence, no logging. |
+| REST | `src/api/authService.js` | `getSocialChallenge()`, `googleLogin()`, and (B4.3A) `getSocialLinkChallenge()`, `linkGoogleAccount()`. `googleLogin` reuses `establishSession()` — no duplicated token/session logic; the link methods deliberately do not. |
 | Native adapter | `src/native/googleSignIn.js` | Thin seam. Optional native-module detection, error normalization to `GOOGLE_*`, returns only `{ idToken }`. No persistence, no logging. |
 | Native module | `modules/wecooked-google-signin/{android,ios}` | `signIn({ nonce }) -> { idToken }`, `clearState() -> void`. Nothing else. |
 
@@ -180,6 +180,48 @@ never as `EXPO_PUBLIC_*`.
     `GoogleService-Info.plist`, no Firebase.
 
 There is no client secret anywhere — Google verification is server-side (B4.1).
+
+## B4.3A account linking (session-preserving)
+
+Linking Google to an ALREADY authenticated WeCooked user reuses steps 2–5 of the
+protocol above with two substitutions and one prohibition:
+
+1. The challenge comes from `authService.getSocialLinkChallenge()` →
+   `POST /auth/social/challenge/link`, sent **authenticated** (the bearer token
+   is what binds the challenge to the current user server-side). The app never
+   sends and cannot choose a `userId`.
+2. The exchange is `authService.linkGoogleAccount()` →
+   `POST /auth/social/google/link`, which returns `{ user }` and **no tokens**.
+3. `linkGoogleAccount` **never** calls `establishSession()`, never writes the
+   access or refresh token, and never clears the session. The caller keeps the
+   exact session they arrived with.
+
+`AuthContext.linkGoogle()` is headless (no UI-specific state) and reconciles the
+returned public user through the existing identity-guarded `syncUser` — it never
+calls `setUser`/`setStatus` directly, so a link cannot switch the active user
+even if a payload for a different id arrived.
+
+It **resolves with nothing**, deliberately. A sign-out or user switch can land
+while the link is in flight; `syncUser` then refuses to install the payload, and
+returning it anyway would hand the caller a user object the context rejected,
+which they could render as "the current linked account". Success is the absence
+of a rejection, and the linked state is read from the context's `user` like
+every other piece of auth state — so `AuthContext` remains the sole authority.
+
+B4.3A ships no UI; `SecurityScreen` and teammate screens are untouched.
+
+**One native-operation slot.** `googleAuthFlow` keeps a single module-global
+`inFlight` slot tagged with its mode. Duplicate taps of the same mode share the
+one promise (one challenge, one native operation). A cross-mode attempt — a link
+while a login is running, or the reverse — is refused with the stable
+`GOOGLE_IN_PROGRESS` code rather than joined, so a link can never resolve with a
+login's session switch and there is still never a second native operation.
+
+Known link conflicts map to fixed safe strings and never fall through to the
+backend message: `AUTH_SOCIAL_IDENTITY_IN_USE` ("already linked to a different
+WeCooked account") and `AUTH_SOCIAL_PROVIDER_ALREADY_LINKED` ("a different
+Google account is already linked to your account"). Neither names the other
+account.
 
 ## Logout hygiene
 
@@ -305,6 +347,17 @@ entries for `react-native`, `expo-secure-store`, `expo-modules-core`, and
   logging.
 - `authServiceSocial.test.js` — `auth:false`, exact bodies, `establishSession`
   reuse.
+- `authServiceLink.test.js` (B4.3A) — authenticated link endpoints, exact
+  bodies, and the negative invariants: no `establishSession`, no access-token
+  write, no refresh-token write, no session clear, even on a store failure or a
+  409.
+- `googleLinkFlow.test.js` (B4.3A) — link challenge → native → link exchange
+  ordering, exact bodies, the shared single-flight (duplicate link taps run one
+  native operation; cross-mode attempts run none), the identity-guarded
+  reconciliation that keeps the current user id unchanged, `linkGoogle()`
+  resolving with no user payload (driven through the real `AuthProvider` via
+  `react-dom/server`, so a payload `syncUser` refused cannot escape to the
+  caller), and the fixed safe link error strings.
 - `clientAuthFalseRefresh.test.js` — an `auth:false` 401 does not trigger the
   WeCooked refresh+retry; an `auth:true` 401 still does.
 - `googleSignInAdapter.test.js` — missing native module safety, only `{ idToken }`
@@ -314,7 +367,10 @@ entries for `react-native`, `expo-secure-store`, `expo-modules-core`, and
   leakage, no Firebase / AppDelegate patching.
 - `staticNativeAudit.test.js` — source-level checks: `setNonce(rawNonce)` /
   `nonce: rawNonce`, no SHA/hashing, no token logging, no persistent-storage or
-  silent/restore APIs, no `serverAuthCode`.
+  silent/restore APIs, no `serverAuthCode`; and (B4.3A) that
+  `linkGoogleAccount` references no `establishSession`/token storage, that the
+  link calls never opt out of authentication, that exactly one `inFlight` slot
+  exists, and that `AuthContext.linkGoogle` reconciles only through `syncUser`.
 
 Mocks prove orchestration only — **not** real Google token behavior. Real build
 and provider verification are B4.2B–B4.2D.

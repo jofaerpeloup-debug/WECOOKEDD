@@ -45,6 +45,7 @@ test('social authentication limiter definitions match the locked budgets', () =>
     googleLogin: { windowMs: 15 * 60 * 1000, limit: 20 },
     googleLinkIp: { windowMs: 15 * 60 * 1000, limit: 20 },
     googleLinkUser: { windowMs: 15 * 60 * 1000, limit: 10 },
+    linkChallengeUser: { windowMs: 15 * 60 * 1000, limit: 10 },
   });
 });
 

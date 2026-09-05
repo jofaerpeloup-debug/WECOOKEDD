@@ -1,25 +1,92 @@
-# Social authentication (B4.0 foundation + B4.1 Google backend)
+# Social authentication (B4.0 foundation + B4.1 Google backend + B4.3A linking)
 
 B4.0 established provider-neutral identity storage and local-password
 compatibility. B4.1 adds the backend-only Google credential, challenge, login,
-and explicit-link paths. Mobile provider UI and token acquisition remain B4.2
-scope. Google is never WeCooked's session or authorization authority.
+and explicit-link paths. B4.3A adds the account-linking foundation: server-
+enforced challenge intent, authenticated user binding for link challenges,
+public linked-identity state, and read-only startup index verification. Mobile
+provider UI and token acquisition remain B4.2 scope. Google is never WeCooked's
+session or authorization authority.
 
-## B4.1 Google request flow
+## Google login vs. account linking
+
+These are two distinct flows and must not be conflated.
+
+**Google login / first-time Google account creation** (`POST /social/google`)
+is for a caller who may not have a WeCooked account yet. When the verified
+`google` + `sub` pair already owns an account, that account signs in. When it
+owns none, a NEW WeCooked account is provisioned and the Google identity becomes
+its authentication identity automatically. This creation path is intentional and
+is **not** B4.3 account linking; it requires no WeCooked registration email
+verification.
+
+**Account linking** (`POST /social/google/link`) applies only when a WeCooked
+user ALREADY exists and is ALREADY authenticated — for example a password
+account whose owner signs in with email/password and then explicitly chooses to
+link Google. The identity is attached to that SAME user and the current session
+is untouched. Linking never creates a user, never merges two users, never
+mutates role/status/email/passwordHash, and never issues, rotates, or replaces
+tokens.
+
+**Email equality is never account ownership.** A password account
+`maria@gmail.com` and a Google token claiming `maria@gmail.com` are not
+evidence of the same person. The login endpoint returns the generic
+`AUTH_ACCOUNT_LINK_REQUIRED` for that collision and the link endpoint does not
+consult email at all. There is no email-based auto-linking, no account merging,
+and no automatic conversion of a password account into a Google-linked account.
+
+## B4.1/B4.3A Google request flow
 
 The API exposes these endpoints under `/api/v1/auth`:
 
-- `POST /social/challenge` with the strict body `{ "provider": "google" }`.
+- `POST /social/challenge` with the strict body `{ "provider": "google" }`
+  — a **login-intent** challenge; deliberately unauthenticated.
+- `POST /social/challenge/link` with the same strict body **and** an
+  authenticated WeCooked session — a **link-intent** challenge.
 - `POST /social/google` with `{ "idToken", "challengeId" }`.
 - `POST /social/google/link` with the same body and an authenticated WeCooked
   session.
 
 A challenge contains 32 random bytes encoded as an unpadded, 43-character
 base64url nonce and expires exactly five minutes after issue. The raw nonce is
-returned once. Only its lowercase SHA-256 digest, provider, and expiry are
-stored in the dedicated `SocialAuthChallenge` collection. Its TTL index is
-cleanup only; authorization depends on a single atomic `findOneAndDelete`
-matching `_id`, `provider`, `nonceHash`, and `expiresAt > now`.
+returned once. Only its lowercase SHA-256 digest, provider, intent, expiry, and
+(for a link challenge) the bound user id are stored in the dedicated
+`SocialAuthChallenge` collection. Its TTL index is cleanup only; authorization
+depends on a single atomic `findOneAndDelete` matching `_id`, `provider`,
+`intent`, the user binding, `nonceHash`, and `expiresAt > now`.
+
+### Challenge intent and user binding
+
+`intent` is server-owned and never a request field. The two intents are not
+interchangeable in either direction:
+
+- A **login** challenge stores no user field at all. `googleLogin` consumes with
+  `intent: 'login'` and `userId: { $exists: false }`, so a link challenge — which
+  always carries a real bound user id — can never satisfy it.
+- A **link** challenge is account-management state. Requesting one requires
+  authentication, and the binding is the caller's authoritative database user id
+  taken from `req.auth.userId` (DB-verified by `authenticate`). `googleLink`
+  consumes with `intent: 'link'` and that same authenticated id, so a challenge
+  issued for User A cannot be consumed while authenticated as User B, and a
+  login challenge cannot be consumed by the link endpoint.
+
+The client never supplies, and cannot spoof, the binding: both challenge routes
+use the same `.strict()` `{ provider }` schema, so a `userId` (or `intent`) key
+in the body is a 400 `VALIDATION_ERROR`. The response shape is identical for
+both intents — `{ challengeId, nonce, expiresAt }` — so neither the intent nor
+the bound user is echoed back.
+
+A dedicated authenticated route is used rather than optional authentication on
+one generic `/social/challenge`: making authentication optional there would put
+the binding decision behind a request-shape branch on the endpoint that must
+stay usable with no account at all.
+
+Every failure mode — wrong intent, foreign binding, expired, replayed, wrong
+nonce — is a single no-match producing one sanitized
+`400 AUTH_SOCIAL_CHALLENGE_INVALID`, so nothing about another account's
+challenge state leaks. Nonce hashing, the five-minute TTL, one-time atomic
+consumption, strict validation, rate limiting, authoritative DB role/status
+checks, and the no-token/no-nonce logging rule are all unchanged.
 
 The Google credential is verified before challenge consumption, so an invalid
 credential cannot burn a valid challenge. After signature and claim
@@ -73,10 +140,63 @@ only a recognized concurrent winner is recovered, and unexplained duplicates
 fail closed. Successful login reuses the ordinary WeCooked SessionService and
 access-token issuer unchanged.
 
+## Public linked-identity state
+
+`toPublicUser` carries an `authIdentities` array so the client can show which
+providers are linked. Every response built with that serializer includes it —
+`GET /users/me`, `PATCH /users/me`, `POST /social/google/link`, and the
+register / login / Google-login session responses:
+
+```js
+authIdentities: [{ provider: 'google', linkedAt: Date }]
+```
+
+It is built field-by-field from `provider` + `linkedAt` only. The
+provider-stable `subject` is the durable authentication identity and is **never**
+public, even though it sits on the same embedded document. A password-only
+account serializes `[]`. `toAdminUserSummary` is unchanged and still omits
+identity data entirely — an admin has no need for another user's linked
+providers.
+
+## Startup index verification
+
+`src/config/required-indexes.js` verifies, at startup and read-only, that the
+unique auth-identity index actually exists in the shape the cross-document
+uniqueness guarantee depends on. `server.js` calls it after `connectDatabase`
+and before the HTTP listener; a failure aborts startup with a loud, actionable
+message.
+
+Verification is exact, not by name: the required index
+`uniq_auth_identity_provider_subject` must be keyed
+`{ 'authIdentities.provider': 1, 'authIdentities.subject': 1 }` **in that
+order**, be `unique: true`, and carry the partial filter requiring both
+`authIdentities.provider` and `authIdentities.subject` to exist. A name match
+alone would silently accept an index enforcing something else. Partial-filter
+comparison ignores key order only; key-specification comparison does not.
+
+It uses `listIndexes` and nothing else: the verifier never calls `createIndex`,
+`dropIndex`, or any repair path for `uniq_auth_identity_provider_subject`.
+Creation of that index remains owned solely by
+`npm run migrate:auth-identities -- --apply`, and the User schema deliberately
+does not declare it (see "Identity model"), so Mongoose's index synchronisation
+does not build it either. Operators must run the migration to create it. An
+unreadable catalogue (including a not-yet-created collection) also stops startup
+rather than being assumed safe.
+
+Scope note: this is a guarantee about the auth-identity index specifically, not
+a claim that startup creates no indexes at all. Mongoose's default `autoIndex`
+behaviour still manages the other schema-declared indexes (email,
+password-reset digest, the challenge TTL index); ownership of those was not
+audited or migrated in B4.3A and is unchanged.
+
 ## Rate and error contract
 
 Challenge, Google login, link-by-IP, and link-by-authenticated-user limits are
-respectively 30, 20, 20, and 10 attempts per 15 minutes. Link middleware order
+respectively 30, 20, 20, and 10 attempts per 15 minutes. The link-challenge
+route reuses the 30/15min challenge IP limiter and adds its own 10/15min
+per-authenticated-user limiter — its own budget rather than a share of the link
+exchange's, since one link attempt spends exactly one challenge and one
+exchange. Link middleware order (both the link challenge and the link exchange)
 is IP limiter, authentication, user limiter, strict validation, controller.
 Stable B4.1 errors are:
 
@@ -144,8 +264,12 @@ enforcement after a successful migration apply.
 
 The provider-neutral repository primitives do not make identities publicly
 writable. Registration and user-update validation reject both `authIdentities`
-and the removed legacy `authProviders` input, and current serializers omit
-identity records.
+and the removed legacy `authProviders` input. The only identity data any
+serializer emits is the owner's own provider + `linkedAt` (see "Public
+linked-identity state"); subjects are never serialized.
+
+Startup verifies this index read-only (see "Startup index verification") but
+still never creates it.
 
 ## Legacy migration
 
