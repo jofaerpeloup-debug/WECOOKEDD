@@ -39,7 +39,10 @@ describe('app.config.js — credential-free (both unset)', () => {
     expect(c.scheme).toBe('wecooked');
     expect(c.ios.bundleIdentifier).toBe('com.wecooked.app');
     expect(c.android.package).toBe('com.wecooked.app');
-    expect(c.newArchEnabled).toBe(true);
+    // SDK 55 removed both config keys — New Architecture and Android
+    // edge-to-edge are mandatory defaults, so neither may be resolved.
+    expect(c).not.toHaveProperty('newArchEnabled');
+    expect(c.android).not.toHaveProperty('edgeToEdgeEnabled');
   });
 
   it('adds build properties but no Google config plugin', () => {
