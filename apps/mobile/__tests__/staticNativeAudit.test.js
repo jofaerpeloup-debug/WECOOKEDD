@@ -163,3 +163,60 @@ describe('logout provider-cleanup wiring', () => {
     expect(authContextCode).not.toMatch(/await\s+googleAuthFlow\.clearNativeState/);
   });
 });
+
+// B4.3A — the account-link path must not be able to replace the session.
+describe('Google account-link source (B4.3A)', () => {
+  // The body of authService.linkGoogleAccount, up to the next top-level
+  // `export`. establishSession / applyTokens / tokenStore must not appear in it.
+  const linkFn = authServiceCode.match(
+    /export async function linkGoogleAccount\([\s\S]*?\n\}/
+  );
+
+  it('authService.linkGoogleAccount exists and never calls establishSession', () => {
+    expect(linkFn).not.toBeNull();
+    expect(linkFn[0]).not.toMatch(/establishSession/);
+  });
+
+  it('authService.linkGoogleAccount touches no token storage', () => {
+    expect(linkFn[0]).not.toMatch(/tokenStore|applyTokens|endSession|clearSession/);
+    expect(linkFn[0]).not.toMatch(/accessToken|refreshToken/);
+  });
+
+  it('the link endpoints are called authenticated (no `auth: false` opt-out)', () => {
+    const linkCalls = authServiceCode.match(/api\.post\('\/auth\/social\/(?:google\/link|challenge\/link)'[\s\S]*?\}\);/g);
+    expect(linkCalls).toHaveLength(2);
+    for (const call of linkCalls) {
+      expect(call).not.toMatch(/auth:\s*false/);
+    }
+  });
+
+  it('googleAuthFlow keeps ONE in-flight slot shared by login and link', () => {
+    // Exactly one module-global slot variable; a second `let ...InFlight` would
+    // let a login and a link run two native operations at once.
+    const slots = flowCode.match(/^let\s+inFlight\s*=/gm) || [];
+    expect(slots).toHaveLength(1);
+    expect(flowCode).not.toMatch(/^let\s+link(In)?Flight/m);
+    // Both entry points go through the same runner.
+    expect(flowCode).toMatch(/export function signInWithGoogle\(\)\s*\{\s*return run\(LOGIN\);/);
+    expect(flowCode).toMatch(/export function linkGoogleAccount\(\)\s*\{\s*return run\(LINK\);/);
+  });
+
+  it('googleAuthFlow still persists nothing on the link path', () => {
+    expect(flowCode).not.toMatch(/SecureStore|AsyncStorage|tokenStore|establishSession/);
+  });
+
+  it('AuthContext.linkGoogle reconciles through syncUser and never switches session state', () => {
+    const linkGoogle = authContextCode.match(
+      /const linkGoogle = useCallback\([\s\S]*?\n  \}, \[syncUser\]\);/
+    );
+    expect(linkGoogle).not.toBeNull();
+    expect(linkGoogle[0]).toMatch(/googleAuthFlow\.linkGoogleAccount\(\)/);
+    expect(linkGoogle[0]).toMatch(/syncUser\(/);
+    // No direct state replacement: no setUser, no setStatus, no sign-in call.
+    expect(linkGoogle[0]).not.toMatch(/setUser\(|setStatus\(/);
+    expect(linkGoogle[0]).not.toMatch(/authService\.(login|register|restoreSession)/);
+    // And no user payload escapes to the caller — a stale one syncUser refused
+    // must not come back as if it were the current linked user.
+    expect(linkGoogle[0]).not.toMatch(/\breturn\b/);
+  });
+});

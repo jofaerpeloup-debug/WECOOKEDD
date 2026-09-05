@@ -30,6 +30,7 @@ const {
   socialGoogleLoginRateLimiter,
   socialGoogleLinkIpRateLimiter,
   socialGoogleLinkUserRateLimiter,
+  socialLinkChallengeUserRateLimiter,
 } = authRoutes;
 
 const app = createApp();
@@ -47,12 +48,15 @@ function resetForgotPasswordLimiter() {
   return forgotPasswordRateLimiter.resetKey('127.0.0.1');
 }
 
+const SOCIAL_LIMITER_USER_IDS = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439077'];
+
 async function resetSocialLimiters(userId = AUTH_USER_ID) {
   await Promise.all([
     socialChallengeRateLimiter.resetKey('127.0.0.1'),
     socialGoogleLoginRateLimiter.resetKey('127.0.0.1'),
     socialGoogleLinkIpRateLimiter.resetKey('127.0.0.1'),
     socialGoogleLinkUserRateLimiter.resetKey(userId),
+    ...SOCIAL_LIMITER_USER_IDS.map((id) => socialLinkChallengeUserRateLimiter.resetKey(id)),
   ]);
 }
 
@@ -113,7 +117,18 @@ test('social routes install the locked limiter and authentication order', () => 
   assert.equal(link.length, 5);
 });
 
-test('POST /api/v1/auth/social/challenge returns only the safe one-time challenge contract', async (t) => {
+// Mounts a valid authenticated session for AUTH_USER_ID.
+function mockAuthenticatedUser(t, { userId = AUTH_USER_ID, user } = {}) {
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: AUTH_SESSION_ID,
+    userId,
+    revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async () => user || fakeUserDoc({ id: userId }));
+  return signAccessToken({ userId, role: 'user', sessionId: AUTH_SESSION_ID });
+}
+
+test('POST /api/v1/auth/social/challenge returns only the safe one-time login challenge contract', async (t) => {
   await resetSocialLimiters();
   let persisted;
   t.mock.method(challengeRepository, 'createChallenge', async (args) => {
@@ -131,6 +146,144 @@ test('POST /api/v1/auth/social/challenge returns only the safe one-time challeng
   assert.match(response.body.data.nonce, /^[A-Za-z0-9_-]{43}$/);
   assert.match(persisted.nonceHash, /^[a-f0-9]{64}$/);
   assert.equal('nonce' in persisted, false);
+  // Login intent, unbound: this endpoint must stay usable with no account.
+  assert.equal(persisted.intent, 'login');
+  assert.equal(persisted.userId, null);
+});
+
+test('link challenge route applies the locked limiter/authentication order', () => {
+  const handles = (path) =>
+    authRoutes.stack.find((layer) => layer.route?.path === path).route.stack.map((layer) => layer.handle);
+
+  const linkChallenge = handles('/social/challenge/link');
+  assert.equal(linkChallenge[0], socialChallengeRateLimiter);
+  assert.equal(linkChallenge[1], authenticate);
+  assert.equal(linkChallenge[2], socialLinkChallengeUserRateLimiter);
+  assert.equal(linkChallenge.length, 5);
+});
+
+test('an unauthenticated client cannot obtain a link-bound challenge', async (t) => {
+  await resetSocialLimiters();
+  const create = t.mock.method(challengeRepository, 'createChallenge', async () => ({ _id: 'x' }));
+
+  const missing = await request(app)
+    .post('/api/v1/auth/social/challenge/link')
+    .send({ provider: 'google' });
+  const bogus = await request(app)
+    .post('/api/v1/auth/social/challenge/link')
+    .set('Authorization', 'Bearer not-a-real-token')
+    .send({ provider: 'google' });
+
+  assert.equal(missing.status, 401);
+  assert.equal(missing.body.error.code, 'AUTH_TOKEN_MISSING');
+  assert.equal(bogus.status, 401);
+  assert.equal(bogus.body.error.code, 'AUTH_TOKEN_INVALID');
+  assert.equal(create.mock.callCount(), 0);
+});
+
+test('a link challenge is bound to the authenticated user and the client cannot choose that id', async (t) => {
+  await resetSocialLimiters();
+  const token = mockAuthenticatedUser(t);
+  let persisted;
+  t.mock.method(challengeRepository, 'createChallenge', async (args) => {
+    persisted = args;
+    return { _id: '507f1f77bcf86cd799439098' };
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/social/challenge/link')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ provider: 'google' });
+
+  assert.equal(response.status, 201);
+  // Response shape is identical to the login challenge — intent and the bound
+  // user are server state and are never echoed.
+  assert.deepEqual(Object.keys(response.body.data).sort(), ['challengeId', 'expiresAt', 'nonce']);
+  assert.equal(persisted.intent, 'link');
+  assert.equal(persisted.userId, AUTH_USER_ID);
+
+  // A caller-supplied userId is rejected outright by the strict schema, so it
+  // can never become the binding.
+  await resetSocialLimiters();
+  const spoofed = await request(app)
+    .post('/api/v1/auth/social/challenge/link')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ provider: 'google', userId: '507f1f77bcf86cd799439055' });
+  assert.equal(spoofed.status, 400);
+  assert.equal(spoofed.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('User B cannot consume User A’s link challenge, and intents are not interchangeable', async (t) => {
+  await resetSocialLimiters();
+  const USER_B = '507f1f77bcf86cd799439077';
+  const token = mockAuthenticatedUser(t, { userId: USER_B });
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => fakeGoogleIdentity());
+  // The atomic match is the authority: a challenge bound to User A (or issued
+  // with intent 'login') simply does not match this predicate.
+  let consumeFilter;
+  t.mock.method(challengeRepository, 'consumeChallenge', async (filter) => {
+    consumeFilter = filter;
+    return null;
+  });
+  const link = t.mock.method(userRepository, 'linkAuthIdentity', async () => fakeUserDoc());
+
+  const response = await request(app)
+    .post('/api/v1/auth/social/google/link')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ idToken: 'google-token', challengeId: '507f1f77bcf86cd799439099' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'AUTH_SOCIAL_CHALLENGE_INVALID');
+  assert.equal(consumeFilter.intent, 'link');
+  assert.equal(consumeFilter.userId, USER_B);
+  assert.equal(link.mock.callCount(), 0);
+});
+
+test('the Google login flow only ever consumes an unbound login challenge', async (t) => {
+  await resetSocialLimiters();
+  t.mock.method(googleProvider, 'verifyGoogleIdToken', async () => fakeGoogleIdentity());
+  let consumeFilter;
+  t.mock.method(challengeRepository, 'consumeChallenge', async (filter) => {
+    consumeFilter = filter;
+    return { _id: filter.challengeId };
+  });
+  t.mock.method(userRepository, 'findByAuthIdentity', async () => fakeUserDoc());
+  t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
+
+  const response = await request(app).post('/api/v1/auth/social/google').send({
+    idToken: 'google-token',
+    challengeId: '507f1f77bcf86cd799439099',
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(consumeFilter.intent, 'login');
+  // No binding at all. The repository turns this into `userId: { $exists:
+  // false }` (see social-auth-challenge-repository.test.js), which a link
+  // challenge — always carrying a real bound user id — can never satisfy.
+  assert.equal(consumeFilter.userId, null);
+});
+
+test('the link-challenge route applies its own ten-attempt per-user limiter', async (t) => {
+  await resetSocialLimiters();
+  const token = mockAuthenticatedUser(t);
+  t.mock.method(challengeRepository, 'createChallenge', async () => ({
+    _id: '507f1f77bcf86cd799439098',
+  }));
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const ok = await request(app)
+      .post('/api/v1/auth/social/challenge/link')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ provider: 'google' });
+    assert.equal(ok.status, 201);
+  }
+  const limited = await request(app)
+    .post('/api/v1/auth/social/challenge/link')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ provider: 'google' });
+
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
 });
 
 test('social challenge and Google login bodies are strict before provider/account work', async (t) => {
@@ -256,6 +409,12 @@ test('POST /api/v1/auth/social/google/link links the authenticated user and retu
   assert.equal('refreshToken' in response.body.data, false);
   assert.equal(linked.userId, AUTH_USER_ID);
   assert.equal(createSession.mock.callCount(), 0);
+  // The response tells the client WHICH provider is now linked and when, and
+  // nothing else about the identity.
+  assert.deepEqual(response.body.data.user.authIdentities, [
+    { provider: 'google', linkedAt: linked.identity.linkedAt.toISOString() },
+  ]);
+  assert.equal(JSON.stringify(response.body).includes('google-subject-1'), false);
 });
 
 test('authenticated Google link applies its ten-attempt per-user limiter after authenticate', async (t) => {

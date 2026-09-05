@@ -195,6 +195,41 @@ export async function googleLogin({ idToken, challengeId }) {
   return establishSession(data);
 }
 
+// --- Google account linking (B4.3A) ----------------------------------
+//
+// Account management for an ALREADY authenticated WeCooked user. Both calls go
+// out with the normal bearer token (`auth` defaults to true), and neither
+// touches the session:
+//
+//   POST /auth/social/challenge/link  body { provider: 'google' }
+//        -> { challengeId, nonce, expiresAt }   (bound server-side to req.auth)
+//   POST /auth/social/google/link     body { idToken, challengeId }
+//        -> { user }                            (NO tokens in the response)
+//
+// The link challenge's owner is the authenticated backend principal — the app
+// never sends, and could not choose, a userId.
+
+export function getSocialLinkChallenge() {
+  return api.post('/auth/social/challenge/link', {
+    body: { provider: 'google' },
+  });
+}
+
+/**
+ * Attaches a Google identity to the current user and returns the updated
+ * public user.
+ *
+ * Deliberately does NOT go through establishSession(): the backend issues no
+ * tokens here and the caller's session must survive untouched, so this writes
+ * neither the access token nor the refresh token and never clears the session.
+ */
+export async function linkGoogleAccount({ idToken, challengeId }) {
+  const data = await api.post('/auth/social/google/link', {
+    body: { idToken, challengeId },
+  });
+  return data.user;
+}
+
 export async function register({ name, email, password }) {
   // The backend issues a full session on registration (access + refresh token
   // in the response), so a successful register is also a sign-in.

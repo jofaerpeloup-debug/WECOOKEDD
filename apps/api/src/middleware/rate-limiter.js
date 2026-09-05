@@ -37,6 +37,10 @@ const SOCIAL_RATE_LIMITS = Object.freeze({
   googleLogin: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 20 }),
   googleLinkIp: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 20 }),
   googleLinkUser: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 10 }),
+  // Its own per-user budget rather than a share of googleLinkUser: one link
+  // attempt spends exactly one challenge AND one exchange, so a shared counter
+  // would halve the effective link allowance.
+  linkChallengeUser: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 10 }),
 });
 
 const socialChallengeRateLimiter = createRateLimiter({
@@ -56,6 +60,11 @@ const socialGoogleLinkUserRateLimiter = createRateLimiter({
   keyGenerator: authenticatedUserKey,
 });
 
+const socialLinkChallengeUserRateLimiter = createRateLimiter({
+  ...SOCIAL_RATE_LIMITS.linkChallengeUser,
+  keyGenerator: authenticatedUserKey,
+});
+
 module.exports = {
   createRateLimiter,
   authenticatedUserKey,
@@ -64,4 +73,5 @@ module.exports = {
   socialGoogleLoginRateLimiter,
   socialGoogleLinkIpRateLimiter,
   socialGoogleLinkUserRateLimiter,
+  socialLinkChallengeUserRateLimiter,
 };

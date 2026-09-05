@@ -1,8 +1,30 @@
 /**
+ * Linked social identities as the account's OWNER may see them. Built
+ * field-by-field from `provider` + `linkedAt` only: the provider-stable
+ * `subject` is the durable authentication identity and is never public, so it
+ * must not appear here even though it sits on the same embedded document.
+ * Returns [] when the caller passed a document without identities.
+ */
+function toPublicAuthIdentities(authIdentities) {
+  if (!Array.isArray(authIdentities)) {
+    return [];
+  }
+  return authIdentities.map((identity) => ({
+    provider: identity.provider,
+    linkedAt: identity.linkedAt,
+  }));
+}
+
+/**
  * Maps a User document to the public API representation. Never touches
  * passwordHash — it is excluded from the query projection upstream (model
  * has select: false) and is not read here even if a caller passed a
  * document that included it.
+ *
+ * `authIdentities` is the self-view of linked providers, reduced to provider +
+ * linkedAt. Every response built with this serializer carries it, not only the
+ * account screens: GET /users/me, PATCH /users/me, POST /auth/social/google/link,
+ * and the register / login / Google-login session responses.
  */
 function toPublicUser(user) {
   return {
@@ -18,6 +40,7 @@ function toPublicUser(user) {
         enabled: user.preferences?.notifications?.enabled ?? true,
       },
     },
+    authIdentities: toPublicAuthIdentities(user.authIdentities),
     emailVerified: user.emailVerified,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
