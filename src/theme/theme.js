@@ -1,75 +1,116 @@
-// WeCooked design tokens
-// "Noir & Ember" — a single dark, orange-accented visual language used
-// across the entire app (replaces the earlier cream/sage theme). There is
-// no separate light palette anymore: lightColors and darkColors intentionally
-// point at the same values so ThemeContext's light/dark plumbing keeps
-// working without every screen needing to change, but toggling no longer
-// changes the look.
+// WeCooked design tokens — "Sage & Stone" palette
+//   Sage Deep    #4A5D4E  (primary — the one token fixed across light & dark)
+//   Warm Cream   #FAF9F6  (background)
+//   Saffron      #C9962E  (secondary accent — eyebrows, badges, timers, ratings)
+//   Clay         #B15A3E  (favorite heart / destructive / warm highlight)
+//
+// Every token name is shared by both palettes so every screen (all on
+// useTheme()) repaints when the mode switches:
+//   light = "Sage & Stone"        — cream ground, deep-sage primary
+//   dark  = "Sage & Stone Night"  — near-black sage ground, same deep-sage primary
+//
+// Values mirror the WeCooked Admin colour system (the .exp.direct token set):
+// --cream, --parchment, --field-bg, --stone-light, --sage-deep/-mid/-light,
+// --ink, --stone, --saffron, --clay.
 
-const noir = {
-  // Core neutrals
-  cream: '#121212',       // primary app background (near-black)
-  creamDeep: '#1A1A1A',   // secondary/inset surfaces (search bars, chip fills)
-  paper: '#1C1C1E',       // cards, inputs, sheets
-  ink: '#FFFFFF',          // primary text
-  inkSoft: '#B4B4B9',     // secondary text
-  inkFaint: '#7C7C82',    // tertiary / placeholder text
-  hairline: '#2A2A2E',    // borders, dividers
+const sageStone = {
+  cream: '#FAF9F6',       // --cream: app background (warm cream)
+  creamDeep: '#F1ECE1',   // --parchment: secondary surfaces / chips / hover
+  paper: '#FFFFFF',       // --field-bg: cards, inputs, sheets
+  ink: '#2A2F28',          // --ink: primary text
+  inkSoft: '#5B6058',      // secondary text
+  inkFaint: '#8C8577',     // --stone: tertiary / placeholder / eyebrow
+  hairline: '#DAD3C4',    // --stone-light: borders, dividers
 
-  // Text/icon color for use on top of accent-colored (orange) surfaces
-  onAccent: '#FFFFFF',
+  onAccent: '#FAF9F6',    // text/icons on deep-sage surfaces
 
-  // Ember system (brand primary — was "sage")
-  sagePale: '#241A10',    // dark accent-tinted fills (pills, chip backgrounds)
-  sageLight: '#2E2118',   // soft blocks
-  sage: '#F0A155',        // mid accent — badges, secondary text
-  sageDeep: '#F5821F',    // primary buttons, active nav, headline accent
-  sageDeeper: '#D66F12',  // pressed states
+  // Sage system (brand primary)
+  sagePale: '#E9EFE7',    // pale sage fills (icon badges, chips)
+  sageLight: '#C0D5C2',   // --sage-light: soft sage blocks
+  sage: '#6B8069',        // --sage-mid: mid sage — badges, secondary, section icons
+  sageDeep: '#4A5D4E',    // --sage-deep: primary buttons, active tab, headline accent, wordmark
+  sageDeeper: '#3C4B3F',  // pressed states
 
-  // Gold accent (used sparingly: swap ratios, secondary highlights)
-  stone: '#E0A458',
-  stoneLight: '#2B2013',
+  // Saffron accent
+  stone: '#C9962E',       // --saffron
+  stoneLight: '#F3E7CC',
+
+  // Clay — favorite heart + occasional warm highlight
+  favorite: '#B15A3E',    // --clay
 
   // Semantic
-  success: '#3DD16F',
-  successBg: '#12291B',
-  warning: '#E0A458',
-  warningBg: '#332714',
-  error: '#F0544E',
-  errorBg: '#33191A',
-  info: '#5B9BD5',
-  infoBg: '#16232F',
+  success: '#4A5D4E',
+  successBg: '#E4EDE4',
+  warning: '#A9781C',
+  warningBg: '#F3E7CC',
+  error: '#B15A3E',
+  errorBg: '#F4E1DA',
+  info: '#5B7C9E',
+  infoBg: '#E7EDF2',
 
-  // Confidence / score tiers (molecular precision screens)
-  scoreHigh: '#3DD16F',
-  scoreMid: '#E0A458',
+  scoreHigh: '#4A5D4E',
+  scoreMid: '#C9962E',
 
-  overlay: 'rgba(0, 0, 0, 0.65)',
+  overlay: 'rgba(30, 33, 29, 0.5)',
+  shadow: 'rgba(42, 47, 40, 0.12)',
+};
+
+const sageStoneNight = {
+  cream: '#1E211D',       // --cream (dark)
+  creamDeep: '#262B24',   // --parchment (dark)
+  paper: '#2F342B',       // --field-bg (dark)
+  ink: '#EDEAE0',          // --ink (dark)
+  inkSoft: '#B4B6AC',
+  inkFaint: '#A39C8C',     // --stone (dark)
+  hairline: '#3A392F',    // --stone-light (dark)
+
+  onAccent: '#FAF9F6',    // deep-sage stays fixed, so its text stays cream
+
+  sagePale: '#2A342A',
+  sageLight: '#33402F',
+  sage: '#7C9478',        // --sage-mid (dark)
+  sageDeep: '#4A5D4E',    // --sage-deep: fixed across modes
+  sageDeeper: '#3C4B3F',
+
+  stone: '#D9A64B',       // --saffron (dark)
+  stoneLight: 'rgba(217,166,75,0.16)',
+
+  favorite: '#C97558',    // --clay (dark)
+
+  success: '#7C9478',
+  successBg: 'rgba(124,148,120,0.16)',
+  warning: '#D9A64B',
+  warningBg: 'rgba(217,166,75,0.16)',
+  error: '#C97558',
+  errorBg: '#34221C',
+  info: '#7CA3C0',
+  infoBg: '#1C2530',
+
+  scoreHigh: '#7C9478',
+  scoreMid: '#D9A64B',
+
+  overlay: 'rgba(0, 0, 0, 0.6)',
   shadow: 'rgba(0, 0, 0, 0.5)',
 };
 
-export const lightColors = noir;
-export const darkColors = noir;
+export const lightColors = sageStone;
+export const darkColors = sageStoneNight;
 
-// Kept as a plain, non-reactive default so nothing breaks if a file imports
-// `colors` directly instead of going through useTheme(). Every screen in
-// this app has been converted to useTheme(); this export exists as a
-// safety net for future files, not the source of truth.
+// Non-reactive default for any file that imports `colors` directly. Every
+// screen goes through useTheme(); this is a safety net.
 export const colors = lightColors;
 
 export const typography = {
-  // Display/serif: used for hero headlines, screen titles like
-  // "Molecular Precision.", "Good Morning, Chef Ninong ry.", recipe titles.
   display: {
-    fontFamily: 'PlayfairDisplay_700Bold',
+    fontFamily: 'PlayfairDisplay_600SemiBold',
     fontFamilyItalic: 'PlayfairDisplay_600SemiBold_Italic',
+    fontFamilyBold: 'PlayfairDisplay_700Bold',
   },
-  // Body/sans: UI chrome, labels, buttons, inputs, nav.
   body: {
-    fontFamily: 'Inter_400Regular',
-    medium: 'Inter_500Medium',
-    semibold: 'Inter_600SemiBold',
-    bold: 'Inter_700Bold',
+    fontFamily: 'WorkSans_400Regular',
+    medium: 'WorkSans_500Medium',
+    semibold: 'WorkSans_600SemiBold',
+    bold: 'WorkSans_700Bold',
   },
   sizes: {
     xs: 11,
@@ -96,14 +137,12 @@ export const spacing = {
 
 export const radius = {
   sm: 8,
-  md: 12,
+  md: 14,
   lg: 18,
-  xl: 24,
+  xl: 22,
   pill: 999,
 };
 
-// shadowColor needs to track the active palette, so this is a function of
-// the current colors rather than a static export.
 export function buildShadow(activeColors) {
   return {
     card: {

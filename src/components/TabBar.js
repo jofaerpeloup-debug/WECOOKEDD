@@ -1,92 +1,99 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
+import PlusMenu from './PlusMenu';
 
 const TABS = [
   { key: 'Home', label: 'Home', icon: 'home', iconOutline: 'home-outline' },
-  { key: 'Discover', label: 'Explore', icon: 'compass', iconOutline: 'compass-outline' },
-  { key: 'Assistant', label: '', icon: 'add', iconOutline: 'add' },
-  { key: 'Saved', label: 'Favorites', icon: 'heart', iconOutline: 'heart-outline' },
+  { key: 'Community', label: 'Community', icon: 'people', iconOutline: 'people-outline' },
+  { key: 'Swaps', label: 'Swaps', icon: 'swap-horizontal', iconOutline: 'swap-horizontal' },
   { key: 'Profile', label: 'Profile', icon: 'person', iconOutline: 'person-outline' },
 ];
 
 export default function TabBar({ state, navigation }) {
-  const { colors, shadow } = useTheme();
-  const styles = makeStyles(colors, shadow);
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const activeIndex = state.index;
+  const styles = makeStyles(colors);
+  const activeKey = state.routeNames[state.index];
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Left two tabs, then the raised "+", then right two tabs.
+  const left = TABS.slice(0, 2);
+  const right = TABS.slice(2);
+
+  const renderTab = (tab) => {
+    const focused = tab.key === activeKey;
+    return (
+      <Pressable
+        key={tab.key}
+        style={styles.tab}
+        hitSlop={6}
+        onPress={() => navigation.navigate(tab.key)}
+      >
+        <Ionicons
+          name={focused ? tab.icon : tab.iconOutline}
+          size={20}
+          color={focused ? colors.sageDeep : colors.inkFaint}
+        />
+        <Text style={[styles.label, focused && styles.labelActive]}>{tab.label}</Text>
+      </Pressable>
+    );
+  };
 
   return (
     <View style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, 10) }]}>
-      {TABS.map((tab, i) => {
-        const focused = i === activeIndex;
-        const isCenter = tab.key === 'Assistant';
-        return (
-          <Pressable
-            key={tab.key}
-            onPress={() => navigation.navigate(tab.key)}
-            style={styles.tab}
-            hitSlop={6}
-          >
-            {isCenter ? (
-              <View style={styles.centerIcon}>
-                <Ionicons name="add" size={26} color={colors.onAccent} />
-              </View>
-            ) : (
-              <>
-                <Ionicons
-                  name={focused ? tab.icon : tab.iconOutline}
-                  size={21}
-                  color={focused ? colors.sageDeep : colors.inkFaint}
-                />
-                <Text style={[styles.label, focused && styles.labelActive]}>{tab.label}</Text>
-              </>
-            )}
-          </Pressable>
-        );
-      })}
+      {left.map(renderTab)}
+      <Pressable
+        style={styles.plus}
+        onPress={() => setMenuOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Quick actions"
+      >
+        <MaterialCommunityIcons name="chef-hat" size={22} color={colors.onAccent} />
+      </Pressable>
+      {right.map(renderTab)}
+
+      <PlusMenu visible={menuOpen} onClose={() => setMenuOpen(false)} navigation={navigation} />
     </View>
   );
 }
 
-function makeStyles(colors, shadow) {
+function makeStyles(colors) {
   return StyleSheet.create({
     wrap: {
       flexDirection: 'row',
-      backgroundColor: colors.paper,
+      alignItems: 'center',
+      justifyContent: 'space-around',
+      backgroundColor: colors.cream,
       borderTopWidth: 1,
       borderTopColor: colors.hairline,
       paddingTop: spacing.sm,
-      paddingHorizontal: spacing.sm,
+      paddingHorizontal: spacing.md,
     },
-    tab: {
-      flex: 1,
-      alignItems: 'center',
-      gap: 4,
+    tab: { flex: 1, alignItems: 'center', gap: 4, paddingVertical: 2 },
+    label: {
+      fontFamily: typography.body.semibold,
+      fontSize: 10.5,
+      color: colors.inkFaint,
     },
-    centerIcon: {
-      width: 46,
-      height: 46,
-      borderRadius: 23,
+    labelActive: { color: colors.sageDeep },
+    plus: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
       backgroundColor: colors.sageDeep,
       alignItems: 'center',
       justifyContent: 'center',
-      marginTop: -26,
-      borderWidth: 4,
-      borderColor: colors.paper,
-      ...shadow.card,
-    },
-    label: {
-      fontFamily: typography.body.medium,
-      fontSize: 10,
-      color: colors.inkFaint,
-    },
-    labelActive: {
-      color: colors.sageDeep,
-      fontFamily: typography.body.semibold,
+      marginTop: -22,
+      marginHorizontal: 4,
+      shadowColor: colors.sageDeep,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.4,
+      shadowRadius: 16,
+      elevation: 6,
     },
   });
 }

@@ -9,34 +9,90 @@ import { ingredientSwaps } from '../data/mockData';
 
 const INGREDIENT_KEYS = Object.keys(ingredientSwaps);
 
+// Recipe ingredient names are freeform ("White vinegar", "Coconut milk") —
+// match them to a swap-card key by substring, preferring the most specific
+// (longest) key so "Coconut milk" resolves to 'coconut milk', not 'milk'.
+function keyForIngredientName(name) {
+  const n = name.toLowerCase();
+  const candidates = INGREDIENT_KEYS.filter((key) => n.includes(key));
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.length - a.length)[0];
+}
+
 export default function IngredientStudioScreen({ navigation, route }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
+  // Rendered both as the "Swaps" bottom tab (no back arrow) and pushed from a
+  // recipe's "Need a substitute?" row (back arrow returns to the recipe).
+  const asTab = route.name === 'Swaps';
+  const recipe = route.params?.recipe || null;
+
+  // The ingredients THIS recipe actually needs to swap — what the row that
+  // opened this screen promised ("Need a substitute? Find swaps").
+  const recipeKeys = useMemo(() => {
+    if (!recipe?.ingredients) return [];
+    const seen = new Set();
+    const keys = [];
+    for (const ing of recipe.ingredients) {
+      const key = keyForIngredientName(ing.name);
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+    return keys;
+  }, [recipe]);
+
   const [query, setQuery] = useState('');
-  const [selectedKey, setSelectedKey] = useState(route.params?.ingredientKey || 'butter');
+  const [browseAll, setBrowseAll] = useState(recipeKeys.length === 0);
+  const [selectedKey, setSelectedKey] = useState(
+    route.params?.ingredientKey || recipeKeys[0] || 'butter'
+  );
 
   const matches = useMemo(() => {
-    if (!query.trim()) return INGREDIENT_KEYS;
-    const q = query.trim().toLowerCase();
-    return INGREDIENT_KEYS.filter((key) => ingredientSwaps[key].name.toLowerCase().includes(q));
-  }, [query]);
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      return INGREDIENT_KEYS.filter((key) => ingredientSwaps[key].name.toLowerCase().includes(q));
+    }
+    if (recipeKeys.length && !browseAll) return recipeKeys;
+    return INGREDIENT_KEYS;
+  }, [query, recipeKeys, browseAll]);
 
   const data = ingredientSwaps[selectedKey];
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
+      <TopBar title="Substitute Finder" onBack={asTab ? undefined : () => navigation.goBack()} />
+
+      {!!recipe && (
+        <View style={styles.recipeBanner}>
+          <Ionicons name="restaurant-outline" size={13} color={colors.sageDeep} />
+          <Text style={styles.recipeBannerText} numberOfLines={1}>
+            {recipeKeys.length === 0
+              ? `No specific swaps found for ${recipe.title} — browse ingredients below.`
+              : browseAll
+                ? 'All swappable ingredients'
+                : `What ${recipe.title} needs to swap`}
+          </Text>
+          {recipeKeys.length > 0 && (
+            <Pressable onPress={() => setBrowseAll((v) => !v)} hitSlop={8}>
+              <Text style={styles.recipeBannerLink}>{browseAll ? 'Just this recipe' : 'Browse all'}</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
 
       <View style={styles.searchWrap}>
         <View style={styles.searchBar}>
           <Ionicons name="search" size={17} color={colors.inkFaint} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search an ingredient (e.g. eggs, sugar, milk)..."
+            placeholder="Search an ingredient (e.g. garlic, vinegar, coconut milk)..."
             placeholderTextColor={colors.inkFaint}
             value={query}
             onChangeText={setQuery}
             autoCapitalize="none"
+            autoComplete="off"
           />
           {query.length > 0 && (
             <Pressable onPress={() => setQuery('')} hitSlop={8}>
@@ -116,6 +172,26 @@ export default function IngredientStudioScreen({ navigation, route }) {
 function makeStyles(colors, shadow) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
+    recipeBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      backgroundColor: colors.sagePale,
+    },
+    recipeBannerText: {
+      flex: 1,
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+    },
+    recipeBannerLink: {
+      fontFamily: typography.body.bold,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+      textDecorationLine: 'underline',
+    },
     searchWrap: {
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.md,
@@ -141,6 +217,7 @@ function makeStyles(colors, shadow) {
       fontSize: typography.sizes.base,
       color: colors.ink,
       height: '100%',
+      outlineStyle: 'none',
     },
     chipRow: { gap: spacing.sm, paddingBottom: spacing.xs },
     chip: {

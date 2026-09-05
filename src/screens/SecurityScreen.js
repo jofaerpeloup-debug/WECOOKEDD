@@ -1,10 +1,14 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Switch, Alert } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Switch } from 'react-native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Input from '../components/Input';
 import Button from '../components/Button';
+import { notify } from '../utils/alert';
+import { loadJSON, saveJSON } from '../utils/storage';
+
+const TFA_KEY = 'wecooked:twoFactor';
 
 export default function SecurityScreen({ navigation }) {
   const { colors } = useTheme();
@@ -13,15 +17,24 @@ export default function SecurityScreen({ navigation }) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [twoFactor, setTwoFactor] = useState(false);
+  const hydrated = useRef(false);
+
+  useEffect(() => {
+    (async () => {
+      setTwoFactor(await loadJSON(TFA_KEY, false));
+      hydrated.current = true;
+    })();
+  }, []);
+  useEffect(() => {
+    if (hydrated.current) saveJSON(TFA_KEY, twoFactor);
+  }, [twoFactor]);
 
   const save = () => {
     if (newPassword && newPassword !== confirmPassword) {
-      Alert.alert("Passwords don't match", 'Double-check your new password and try again.');
+      notify("Passwords don't match", 'Double-check your new password and try again.');
       return;
     }
-    Alert.alert('Security updated', 'Your changes have been saved.', [
-      { text: 'OK', onPress: () => navigation.goBack() },
-    ]);
+    notify('Security updated', 'Your preferences have been saved.', () => navigation.goBack());
   };
 
   return (
@@ -29,6 +42,10 @@ export default function SecurityScreen({ navigation }) {
       <TopBar mode="back" title="Security" onBack={() => navigation.goBack()} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Text style={styles.demoNote}>
+          WeCooked is a demo — sign-in doesn't check a real password. These settings are saved to
+          your device.
+        </Text>
         <Text style={styles.groupTitle}>CHANGE PASSWORD</Text>
         <Input
           label="Current Password"
@@ -81,6 +98,13 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    demoNote: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      lineHeight: 17,
+      marginBottom: spacing.lg,
+    },
     groupTitle: {
       fontFamily: typography.body.semibold,
       fontSize: 10,

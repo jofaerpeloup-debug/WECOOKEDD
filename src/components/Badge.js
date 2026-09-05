@@ -19,7 +19,7 @@ export default function Badge({ label, tone = 'neutral', style }) {
 function makeTones(colors) {
   return {
     success: { bg: colors.successBg, fg: colors.sageDeep },
-    warning: { bg: colors.warningBg, fg: colors.stone },
+    warning: { bg: colors.warningBg, fg: colors.warning },
     info: { bg: colors.infoBg, fg: colors.info },
     neutral: { bg: colors.creamDeep, fg: colors.inkSoft },
     sage: { bg: colors.sagePale, fg: colors.sageDeep },

@@ -1,10 +1,10 @@
 # WeCooked
 
-A recipe & ingredient-swap app, built in React Native (Expo SDK 54) from the "Sage & Stone" mockup set.
+A recipe & ingredient-swap app, built in React Native (Expo SDK 57) from the "Sage & Stone" mockup set.
 
 ## Requirements
 
-- **Expo Go SDK 54** on your phone. Expo Go on the App Store / Play Store always runs the *latest* published SDK, so if your installed Expo Go is newer than 54, update this project's `expo` package to match instead of downgrading Expo Go (see [Upgrading](#upgrading-to-a-newer-sdk) below).
+- **Expo Go SDK 57** on your phone. Expo Go on the App Store / Play Store always runs the *latest* published SDK, so if your installed Expo Go is newer than 57, update this project's `expo` package to match instead of downgrading Expo Go (see [Upgrading](#upgrading-to-a-newer-sdk) below).
 - Node 18+.
 
 ## Screens
@@ -49,7 +49,7 @@ Then press `i` for iOS simulator, `a` for Android emulator, or scan the QR code 
 
 ## Upgrading to a newer SDK
 
-If your Expo Go app has moved past SDK 54:
+If your Expo Go app has moved past SDK 57:
 
 ```bash
 npx expo install expo@latest
@@ -64,7 +64,7 @@ npx expo start -c
 ```
 App.js                        Root component, font loading
 index.js                      Entry point (registerRootComponent)
-app.json                      Expo config: icon, splash, newArchEnabled, edgeToEdgeEnabled
+app.json                      Expo config: icon, splash (via the expo-splash-screen plugin), adaptive icon
 assets/                       icon.png, adaptive-icon.png, splash-icon.png, favicon.png
 src/
   theme/theme.js               Design tokens (colors, type, spacing, radius)
@@ -78,10 +78,10 @@ src/
 
 ## Notes on dependencies
 
-- Every package version was pulled from the npm registry and cross-checked against Expo's own SDK-54 compatibility table (`expo`'s `bundledNativeModules.json`) — nothing here is guessed. React Navigation is on v7 (a major bump from v6); the custom `tabBar` prop shape, `navigation.replace()`, and nested-navigator auto-routing were all individually verified against the installed package's type definitions.
-- **`babel-preset-expo` is listed explicitly in `devDependencies`.** It's normally a transitive dependency of `expo` and doesn't need to be listed directly — but in this dependency tree npm doesn't hoist it to the top level, and Babel's own config loader only resolves preset names via an upward directory walk from `babel.config.js`, not into nested `node_modules`. Without the explicit entry, `expo start`/`expo export` fails with `Cannot find module 'babel-preset-expo'`. This is reproducible on a completely untouched `create-expo-app` SDK 54 template too — it's not specific to this project. If you bump the SDK, bump this version to match.
-- New Architecture (Fabric/TurboModules) is enabled by default at SDK 54 (`newArchEnabled: true`); all native-touching libraries here (`react-native-svg`, `react-native-screens`, `react-native-safe-area-context`, `expo-linear-gradient`, `@expo/vector-icons`) are the exact versions Expo bundles for SDK 54, so they're New Architecture–compatible out of the box.
-- Android edge-to-edge display is enabled (`edgeToEdgeEnabled: true`); all screens already use `useSafeAreaInsets()` for top/bottom spacing, so no layout changes were needed.
+- Every package version was pulled from the npm registry and cross-checked against Expo's own SDK-57 compatibility table (`expo`'s `bundledNativeModules.json`) — nothing here is guessed. React Navigation is on v7 (a major bump from v6); the custom `tabBar` prop shape, `navigation.replace()`, and nested-navigator auto-routing were all individually verified against the installed package's type definitions.
+- **`babel-preset-expo` is listed explicitly in `devDependencies`.** It's normally a transitive dependency of `expo` and doesn't need to be listed directly — but in this dependency tree npm doesn't hoist it to the top level, and Babel's own config loader only resolves preset names via an upward directory walk from `babel.config.js`, not into nested `node_modules`. Without the explicit entry, `expo start`/`expo export` fails with `Cannot find module 'babel-preset-expo'`. This is reproducible on a completely untouched `create-expo-app` template too — it's not specific to this project. If you bump the SDK, bump this version to match.
+- New Architecture (Fabric/TurboModules) is mandatory as of SDK 57 — `newArchEnabled` was removed from the app.json schema entirely, it's just always on. All native-touching libraries here (`react-native-svg`, `react-native-screens`, `react-native-safe-area-context`, `expo-linear-gradient`, `@expo/vector-icons`) are the exact versions Expo bundles for SDK 57, so they're New Architecture–compatible out of the box.
+- Android edge-to-edge display is likewise mandatory as of SDK 57 (`edgeToEdgeEnabled` was removed from the schema too); all screens already use `useSafeAreaInsets()` for top/bottom spacing, so no layout changes were needed.
 - All data is mocked in `src/data/mockData.js` — swap in real API calls there when ready.
 - Photos are placeholder Unsplash images; replace with your own asset pipeline for production.
 - Expo Go cannot preview the custom splash screen (Expo Go always shows your app icon instead, since SDK 52) — this is expected; test the real splash via a preview/production build.
@@ -89,6 +89,6 @@ src/
 ## Verified
 
 - Full dependency graph bundles cleanly via Metro for iOS and Android (dev + minified production builds), from a clean `npm ci` against the exact shipped lockfile.
-- `expo-doctor` (Expo's own project health-check): 16/18 checks pass; the remaining 2 require reaching external validation servers not relevant to local project correctness.
+- `expo-doctor` (Expo's own project health-check): 21/21 checks pass on SDK 57.
 - ESLint (React, Hooks, React Native rules): no real issues.
 - 60+ logic/data-shape assertions covering chart math, list-toggle state, and every screen's mock-data expectations.

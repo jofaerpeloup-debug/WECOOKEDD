@@ -1,18 +1,15 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Switch } from 'react-native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import { notificationSettings } from '../data/mockData';
+import { useNotifications } from '../context/NotificationsContext';
 
 export default function NotificationsScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const [values, setValues] = useState(
-    Object.fromEntries(notificationSettings.map((item) => [item.id, item.value]))
-  );
-
-  const toggle = (id) => setValues((prev) => ({ ...prev, [id]: !prev[id] }));
+  const { prefs, setPref } = useNotifications();
 
   return (
     <View style={styles.root}>
@@ -32,8 +29,8 @@ export default function NotificationsScreen({ navigation }) {
                 <Text style={styles.rowSub}>{item.sub}</Text>
               </View>
               <Switch
-                value={values[item.id]}
-                onValueChange={() => toggle(item.id)}
+                value={!!prefs[item.id]}
+                onValueChange={(v) => setPref(item.id, v)}
                 trackColor={{ false: colors.hairline, true: colors.sageDeep }}
                 thumbColor={colors.onAccent}
               />

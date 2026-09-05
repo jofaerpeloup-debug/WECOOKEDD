@@ -4,15 +4,21 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 
-import LandingScreen from '../screens/LandingScreen';
+import OnboardingScreen from '../screens/OnboardingScreen';
 import LoginScreen from '../screens/LoginScreen';
 import MainTabs from './MainTabs';
-import IngredientStudioScreen from '../screens/IngredientStudioScreen';
-import SwapDetailScreen from '../screens/SwapDetailScreen';
+import AssistantScreen from '../screens/AssistantScreen';
+import DiscoverScreen from '../screens/DiscoverScreen';
 import RecipeDetailScreen from '../screens/RecipeDetailScreen';
 import CookModeScreen from '../screens/CookModeScreen';
+import MealPlanScreen from '../screens/MealPlanScreen';
+import CollectionDetailScreen from '../screens/CollectionDetailScreen';
 import ShoppingListScreen from '../screens/ShoppingListScreen';
+import SavedScreen from '../screens/SavedScreen';
+import IngredientStudioScreen from '../screens/IngredientStudioScreen';
+import SwapDetailScreen from '../screens/SwapDetailScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import AccountDetailsScreen from '../screens/AccountDetailsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SecurityScreen from '../screens/SecurityScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
@@ -26,10 +32,8 @@ const Stack = createNativeStackNavigator();
 
 export default function RootNavigator() {
   const { colors, isDark } = useTheme();
-  const { isLoggedIn } = useAuth();
+  const { isLoggedIn, onboardingSeen } = useAuth();
 
-  // Keeps the (mostly invisible) native-stack transition background in sync
-  // with the active theme, so a screen transition never flashes white/black.
   const navTheme = {
     ...(isDark ? DarkTheme : DefaultTheme),
     colors: {
@@ -45,26 +49,32 @@ export default function RootNavigator() {
   return (
     <NavigationContainer theme={navTheme}>
       <Stack.Navigator
-        initialRouteName={isLoggedIn ? 'MainTabs' : 'Landing'}
+        initialRouteName={isLoggedIn ? 'MainTabs' : onboardingSeen ? 'Login' : 'Onboarding'}
         screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
       >
-        <Stack.Screen name="Landing" component={LandingScreen} />
+        <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="MainTabs" component={MainTabs} />
-        <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />
-        <Stack.Screen
-          name="SwapDetail"
-          component={SwapDetailScreen}
-          options={{ animation: 'slide_from_bottom' }}
-        />
+        <Stack.Screen name="Assistant" component={AssistantScreen} />
+        <Stack.Screen name="Search" component={DiscoverScreen} />
         <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
         <Stack.Screen
           name="CookMode"
           component={CookModeScreen}
           options={{ animation: 'slide_from_bottom' }}
         />
-        <Stack.Screen name="List" component={ShoppingListScreen} />
+        <Stack.Screen name="MealPlan" component={MealPlanScreen} />
+        <Stack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
+        <Stack.Screen name="Saved" component={SavedScreen} />
+        <Stack.Screen name="Grocery" component={ShoppingListScreen} />
+        <Stack.Screen
+          name="SwapDetail"
+          component={SwapDetailScreen}
+          options={{ animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
+        <Stack.Screen name="AccountDetails" component={AccountDetailsScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="Security" component={SecurityScreen} />
         <Stack.Screen name="Notifications" component={NotificationsScreen} />

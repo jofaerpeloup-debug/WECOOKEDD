@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Button from '../components/Button';
 import { faqs } from '../data/mockData';
+import { notify } from '../utils/alert';
 
 export default function HelpCenterScreen({ navigation }) {
   const { colors } = useTheme();
@@ -14,7 +15,7 @@ export default function HelpCenterScreen({ navigation }) {
 
   const contactSupport = () =>
     Linking.openURL('mailto:support@wecooked.app?subject=Help%20request').catch(() =>
-      Alert.alert('Contact Support', 'Reach us at support@wecooked.app')
+      notify('Contact Support', 'Reach us at support@wecooked.app')
     );
 
   return (
@@ -22,6 +23,20 @@ export default function HelpCenterScreen({ navigation }) {
       <TopBar mode="back" title="Help Center" onBack={() => navigation.goBack()} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Pressable
+          style={styles.tourRow}
+          onPress={() => navigation.navigate('Onboarding', { replay: true })}
+        >
+          <View style={styles.tourIcon}>
+            <Ionicons name="sparkles-outline" size={18} color={colors.sageDeep} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tourTitle}>Take the app tour</Text>
+            <Text style={styles.tourSub}>A quick walkthrough of everything WeCooked can do.</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={17} color={colors.inkFaint} />
+        </Pressable>
+
         <Text style={styles.groupTitle}>FREQUENTLY ASKED QUESTIONS</Text>
         <View style={styles.card}>
           {faqs.map((item, i) => {
@@ -56,6 +71,37 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    tourRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      backgroundColor: colors.paper,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      padding: spacing.md,
+      marginBottom: spacing.xl,
+    },
+    tourIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      backgroundColor: colors.sagePale,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    tourTitle: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    tourSub: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: 1,
+      lineHeight: 15,
+    },
     groupTitle: {
       fontFamily: typography.body.semibold,
       fontSize: 10,

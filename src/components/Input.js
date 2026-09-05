@@ -81,6 +81,7 @@ function makeStyles(colors) {
       fontSize: typography.sizes.base,
       color: colors.ink,
       height: '100%',
+      outlineStyle: 'none',
     },
     rightAction: {
       fontFamily: typography.body.medium,

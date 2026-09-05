@@ -1,188 +1,182 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Image, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import TopBar from '../components/TopBar';
-import Button from '../components/Button';
+import { COLLECTIONS, recipes } from '../data/mockData';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
+import { useCollections } from '../context/CollectionsContext';
+import { collectionRecipes } from '../utils/recipe';
+import { imageSource } from '../utils/image';
 
 export default function SavedScreen({ navigation }) {
-  const { colors, shadow } = useTheme();
-  const styles = makeStyles(colors, shadow);
-  const { savedRecipes, toggleSaved } = useSavedRecipes();
-  const [featured, ...rest] = savedRecipes;
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const styles = makeStyles(colors);
+  const { savedIds } = useSavedRecipes();
+  const { collections: userCollections, addCollection } = useCollections();
+  const [name, setName] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const create = () => {
+    const t = name.trim();
+    if (t) addCollection(t);
+    setName('');
+    setAdding(false);
+  };
+
+  // Built-in "smart" collections + the user's own.
+  const cards = [
+    ...COLLECTIONS.map((c) => {
+      const list = collectionRecipes(c, savedIds);
+      return { id: c.id, title: c.title, recipeList: list };
+    }),
+    ...userCollections.map((c) => ({
+      id: c.id,
+      title: c.title,
+      recipeList: recipes.filter((r) => c.recipeIds.includes(r.id)),
+    })),
+  ];
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onMenuPress={() => {}} />
-
-      {!featured ? (
-        <View style={styles.emptyWrap}>
-          <View style={styles.emptyIcon}>
-            <Ionicons name="bookmark-outline" size={26} color={colors.sageDeep} />
-          </View>
-          <Text style={styles.emptyTitle}>No saved recipes yet</Text>
-          <Text style={styles.emptySub}>
-            Tap the bookmark icon on any recipe to save it here.
-          </Text>
-          <Button
-            title="Discover Recipes"
-            variant="primary"
-            onPress={() => navigation.navigate('Discover')}
-            style={{ marginTop: spacing.xl, alignSelf: 'stretch' }}
-          />
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <Pressable
-            style={styles.featuredCard}
-            onPress={() => navigation.navigate('RecipeDetail', { recipe: featured })}
-          >
-            <Image source={{ uri: featured.image }} style={styles.featuredImage} />
-            <Pressable
-              style={styles.saveIconFeatured}
-              hitSlop={8}
-              onPress={() => toggleSaved(featured.id)}
-            >
-              <Ionicons name="bookmark" size={16} color={colors.sageDeep} />
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={18} color={colors.ink} />
             </Pressable>
-            <View style={styles.featuredTextWrap}>
-              <Text style={styles.featuredTitle}>{featured.title}</Text>
-              <View style={styles.metaRow}>
-                <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
-                <Text style={styles.metaText}>{featured.time}</Text>
-                <Text style={styles.metaDot}>·</Text>
-                <Text style={styles.metaText}>{featured.tags[0] || 'Dinner'}</Text>
-              </View>
-            </View>
-          </Pressable>
-
-          <View style={styles.grid}>
-            {rest.map((recipe) => (
-              <Pressable
-                key={recipe.id}
-                style={styles.gridCard}
-                onPress={() => navigation.navigate('RecipeDetail', { recipe })}
-              >
-                <Image source={{ uri: recipe.image }} style={styles.gridImage} />
-                <Pressable
-                  style={styles.saveIconGrid}
-                  hitSlop={8}
-                  onPress={() => toggleSaved(recipe.id)}
-                >
-                  <Ionicons name="bookmark" size={13} color={colors.sageDeep} />
-                </Pressable>
-                <View style={styles.gridTextWrap}>
-                  <Text style={styles.gridTitle} numberOfLines={1}>
-                    {recipe.title}
-                  </Text>
-                  <View style={styles.metaRow}>
-                    <Ionicons name="time-outline" size={11} color={colors.inkFaint} />
-                    <Text style={styles.metaTextSm}>{recipe.tags[0] || recipe.time}</Text>
-                  </View>
-                </View>
-              </Pressable>
-            ))}
+            <Text style={styles.title}>My Collections</Text>
           </View>
-        </ScrollView>
-      )}
+          <View style={styles.headerActions}>
+            <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => navigation.navigate('Grocery')}>
+              <Ionicons name="cart-outline" size={16} color={colors.ink} />
+            </Pressable>
+            <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => setAdding((v) => !v)}>
+              <Ionicons name={adding ? 'close' : 'add'} size={18} color={colors.ink} />
+            </Pressable>
+          </View>
+        </View>
+
+        {adding && (
+          <View style={styles.newRow}>
+            <TextInput
+              style={styles.input}
+              placeholder="New collection name"
+              placeholderTextColor={colors.inkFaint}
+              value={name}
+              onChangeText={setName}
+              autoFocus
+              onSubmitEditing={create}
+              returnKeyType="done"
+            />
+            <Pressable style={styles.createBtn} onPress={create}>
+              <Text style={styles.createText}>Create</Text>
+            </Pressable>
+          </View>
+        )}
+
+        <View style={styles.grid}>
+          {cards.map((c) => {
+            const covers = c.recipeList.slice(0, 4);
+            return (
+              <Pressable
+                key={c.id}
+                style={styles.card}
+                onPress={() =>
+                  navigation.navigate('CollectionDetail', { collection: { id: c.id, title: c.title } })
+                }
+              >
+                <View style={styles.cardImg}>
+                  {covers.length === 0 ? (
+                    <Ionicons name="bookmark-outline" size={18} color={colors.inkFaint} />
+                  ) : covers.length === 1 ? (
+                    <Image source={imageSource(covers[0].image)} style={styles.coverFull} />
+                  ) : (
+                    <View style={styles.coverGrid}>
+                      {covers.map((r, i) => (
+                        <Image key={r.id + i} source={imageSource(r.image)} style={styles.coverQuad} />
+                      ))}
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.cardTitle}>{c.title}</Text>
+                <Text style={styles.cardCount}>
+                  {c.recipeList.length} {c.recipeList.length === 1 ? 'recipe' : 'recipes'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </ScrollView>
     </View>
   );
 }
 
-function makeStyles(colors, shadow) {
+function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
-    scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-    emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl },
-    emptyIcon: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: colors.sagePale,
+    flex: { flex: 1 },
+    scroll: { paddingHorizontal: spacing.xl, paddingBottom: 120 },
+    header: {
+      flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
+      justifyContent: 'space-between',
       marginBottom: spacing.lg,
     },
-    emptyTitle: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 20,
-      color: colors.ink,
-      marginBottom: spacing.sm,
-    },
-    emptySub: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkSoft,
-      textAlign: 'center',
-      lineHeight: 19,
-      maxWidth: '80%',
-    },
-    featuredCard: {
-      borderRadius: radius.lg,
-      overflow: 'hidden',
-      marginBottom: spacing.lg,
-      backgroundColor: colors.paper,
-      ...shadow.soft,
-    },
-    featuredImage: { width: '100%', height: 170 },
-    saveIconFeatured: {
-      position: 'absolute',
-      top: spacing.md,
-      right: spacing.md,
-      width: 30,
-      height: 30,
-      borderRadius: 15,
-      backgroundColor: 'rgba(255,255,255,0.92)',
+    title: { fontFamily: typography.display.fontFamily, fontSize: 24, color: colors.ink },
+    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    headerActions: { flexDirection: 'row', gap: 8 },
+    iconBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.creamDeep,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    featuredTextWrap: { padding: spacing.lg },
-    featuredTitle: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 19,
-      color: colors.ink,
-      marginBottom: spacing.sm,
-    },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-    gridCard: {
-      width: '47%',
-      backgroundColor: colors.paper,
+    newRow: { flexDirection: 'row', gap: 8, marginBottom: spacing.lg },
+    input: {
+      flex: 1,
+      height: 44,
       borderRadius: radius.md,
-      overflow: 'hidden',
-      ...shadow.soft,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      paddingHorizontal: 14,
+      fontFamily: typography.body.fontFamily,
+      fontSize: 14,
+      color: colors.ink,
+      outlineStyle: 'none',
     },
-    gridImage: { width: '100%', height: 110 },
-    saveIconGrid: {
-      position: 'absolute',
-      top: spacing.sm,
-      right: spacing.sm,
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      backgroundColor: 'rgba(255,255,255,0.92)',
+    createBtn: {
+      paddingHorizontal: 16,
+      height: 44,
+      borderRadius: radius.md,
+      backgroundColor: colors.sageDeep,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    gridTextWrap: { padding: spacing.md },
-    gridTitle: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.sm,
-      color: colors.ink,
-      marginBottom: 4,
+    createText: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.onAccent },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 14 },
+    card: { width: '47.5%' },
+    cardImg: {
+      height: 96,
+      borderRadius: 14,
+      backgroundColor: colors.creamDeep,
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
     },
-    metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    metaText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
-    },
-    metaTextSm: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: 10,
-      color: colors.inkFaint,
-    },
-    metaDot: { color: colors.inkFaint, fontSize: 10 },
+    coverFull: { width: '100%', height: '100%' },
+    coverGrid: { width: '100%', height: '100%', flexDirection: 'row', flexWrap: 'wrap' },
+    coverQuad: { width: '50%', height: '50%' },
+    cardTitle: { fontFamily: typography.body.semibold, fontSize: 13.5, color: colors.ink, marginTop: 8 },
+    cardCount: { fontFamily: typography.body.fontFamily, fontSize: 11.5, color: colors.inkFaint, marginTop: 2 },
   });
 }

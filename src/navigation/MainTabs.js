@@ -3,9 +3,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import TabBar from '../components/TabBar';
 
 import DashboardScreen from '../screens/DashboardScreen';
-import DiscoverScreen from '../screens/DiscoverScreen';
-import AssistantScreen from '../screens/AssistantScreen';
-import SavedScreen from '../screens/SavedScreen';
+import CommunityScreen from '../screens/CommunityScreen';
+import IngredientStudioScreen from '../screens/IngredientStudioScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 
 const Tab = createBottomTabNavigator();
@@ -17,9 +16,8 @@ export default function MainTabs() {
       tabBar={(props) => <TabBar {...props} />}
     >
       <Tab.Screen name="Home" component={DashboardScreen} />
-      <Tab.Screen name="Discover" component={DiscoverScreen} />
-      <Tab.Screen name="Assistant" component={AssistantScreen} />
-      <Tab.Screen name="Saved" component={SavedScreen} />
+      <Tab.Screen name="Community" component={CommunityScreen} />
+      <Tab.Screen name="Swaps" component={IngredientStudioScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
