@@ -187,7 +187,7 @@ export default function SubstitutionsSheet({ visible, ingredient, cacheRef, onCl
 function makeStyles(colors) {
   return StyleSheet.create({
     backdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
-    backdropFill: { ...StyleSheet.absoluteFillObject },
+    backdropFill: { ...StyleSheet.absoluteFill },
     sheet: {
       backgroundColor: colors.cream,
       borderTopLeftRadius: radius.xl,

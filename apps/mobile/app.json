@@ -7,18 +7,13 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#FAF9F6"
-    },
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.wecooked.app",
+      "deploymentTarget": "16.4",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -28,7 +23,6 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#4A5D4E"
       },
-      "edgeToEdgeEnabled": true,
       "package": "com.wecooked.app"
     },
     "web": {
@@ -37,7 +31,17 @@
     },
     "plugins": [
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#FAF9F6",
+          "imageWidth": 200,
+          "enableFullScreenImage_legacy": true
+        }
+      ]
     ],
     "extra": {
       "eas": {
