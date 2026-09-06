@@ -384,7 +384,7 @@ function makeStyles(colors) {
       backgroundColor: colors.overlay,
       justifyContent: 'flex-end',
     },
-    backdropFill: { ...StyleSheet.absoluteFillObject },
+    backdropFill: { ...StyleSheet.absoluteFill },
     kav: { width: '100%' },
     sheet: {
       backgroundColor: colors.cream,

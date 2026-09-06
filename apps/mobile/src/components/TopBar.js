@@ -189,7 +189,7 @@ function makeStyles(colors) {
 
 function makeDropdownStyles(colors, shadow) {
   return StyleSheet.create({
-    backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
+    backdrop: { ...StyleSheet.absoluteFill, backgroundColor: colors.overlay },
     panel: {
       position: 'absolute',
       right: spacing.lg,

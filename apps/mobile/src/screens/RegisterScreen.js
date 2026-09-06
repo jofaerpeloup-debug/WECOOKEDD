@@ -132,7 +132,7 @@ export default function RegisterScreen({ navigation }) {
     <View style={styles.root}>
       <Image
         source={LOGIN_BG}
-        style={[StyleSheet.absoluteFillObject, { width: '100%', height: '100%' }]}
+        style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
         resizeMode="cover"
       />
       <View style={styles.scrim} pointerEvents="none" />
@@ -229,7 +229,7 @@ export default function RegisterScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
-  scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
+  scrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.45)' },
   scrollContent: { paddingHorizontal: 26, flexGrow: 1, justifyContent: 'center' },
 
   logoRow: {
