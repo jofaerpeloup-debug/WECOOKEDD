@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { recipes } from '../../data/mockData';
+import { imageSource } from '../../utils/image';
 import { SectionHeading, MiniFrame, Bar, previewStyles as p, pageTextStyles as pt } from './shared';
 
 const sampleRecipe = recipes[0];
@@ -44,7 +45,7 @@ export default function StepsPage() {
               <View style={p.stepIndex}>
                 <Text style={p.stepIndexText}>{i + 1}</Text>
               </View>
-              <Image source={{ uri: sampleRecipe.image }} style={p.stepThumb} />
+              <Image source={imageSource(sampleRecipe.image)} style={p.stepThumb} />
               <View style={{ flex: 1, gap: 5 }}>
                 <Text style={p.cardTitle} numberOfLines={1}>
                   {s.title}
