@@ -1,115 +1,131 @@
-// WeCooked design tokens
-// Two palettes share the same shape so every screen (all on useTheme())
-// repaints correctly when the mode switches:
-//  - "Sage & Stone": the original cream/sage light palette.
-//  - "Noir & Ember": a dark, orange-accented palette.
+// WeCooked design tokens — "Sage & Stone" palette
+//   Sage Deep    #4A5D4E  (primary — the one token fixed across light & dark)
+//   Warm Cream   #FAF9F6  (background)
+//   Saffron      #C9962E  (secondary accent — eyebrows, badges, timers, ratings)
+//   Clay         #B15A3E  (favorite heart / destructive / warm highlight)
+//
+// Both palettes expose the same token names, so every theme-aware consumer
+// (anything reading colors through useTheme()) repaints safely when the mode
+// switches:
+//   light = "Sage & Stone"        — cream ground, deep-sage primary
+//   dark  = "Sage & Stone Night"  — near-black sage ground, same deep-sage primary
+//
+// Values mirror the WeCooked Admin colour system (the .exp.direct token set):
+// --cream, --parchment, --field-bg, --stone-light, --sage-deep/-mid/-light,
+// --ink, --stone, --saffron, --clay.
 
-const sageAndStone = {
+const sageStone = {
   // Core neutrals
-  cream: '#FAF9F6',       // primary app background
-  creamDeep: '#F4F1EA',   // secondary/inset surfaces
-  paper: '#FFFFFF',       // cards, inputs, sheets
-  ink: '#232620',          // primary text (warm near-black, not pure black)
+  cream: '#FAF9F6',       // --cream: app background (warm cream)
+  creamDeep: '#F1ECE1',   // --parchment: secondary surfaces / chips / hover
+  paper: '#FFFFFF',       // --field-bg: cards, inputs, sheets
+  ink: '#2A2F28',          // --ink: primary text
   inkSoft: '#5B6058',      // secondary text
-  inkFaint: '#9B9F96',     // tertiary / placeholder text
-  hairline: '#E7E4DC',    // borders, dividers
+  inkFaint: '#8C8577',     // --stone: tertiary / placeholder / eyebrow
+  hairline: '#DAD3C4',    // --stone-light: borders, dividers
 
   // Text/icon color for use on top of accent-colored (sage) surfaces
-  onAccent: '#FFFFFF',
+  onAccent: '#FAF9F6',
 
   // Sage system (brand primary)
-  sagePale: '#DCE7DD',    // pale sage fills (pills, chip backgrounds)
-  sageLight: '#C0D5C2',   // login panel, soft blocks
-  sage: '#8FA88F',        // mid sage — badges, secondary buttons
-  sageDeep: '#4A5D4E',    // primary buttons, active nav, headlines accent
-  sageDeeper: '#3A4A3E',  // pressed states
+  sagePale: '#E9EFE7',    // pale sage fills (icon badges, chips)
+  sageLight: '#C0D5C2',   // --sage-light: soft sage blocks
+  sage: '#6B8069',        // --sage-mid: mid sage — badges, secondary, section icons
+  sageDeep: '#4A5D4E',    // --sage-deep: primary buttons, active tab, headline accent
+  sageDeeper: '#3C4B3F',  // pressed states
 
-  // Stone / clay accent (used sparingly: swap ratios, warm highlights)
-  stone: '#B08968',
-  stoneLight: '#E8DCC8',
+  // Saffron accent (used sparingly: swap ratios, warm highlights)
+  stone: '#C9962E',       // --saffron
+  stoneLight: '#F3E7CC',
+
+  // Clay — favorite heart + occasional warm highlight
+  favorite: '#B15A3E',    // --clay
 
   // Semantic
   success: '#4A5D4E',
   successBg: '#E4EDE4',
-  warning: '#B08968',
-  warningBg: '#F4E9DA',
-  error: '#B1503F',
-  errorBg: '#F4E1DC',
+  warning: '#A9781C',
+  warningBg: '#F3E7CC',
+  error: '#B15A3E',
+  errorBg: '#F4E1DA',
   info: '#5B7C9E',
-  infoBg: '#E4EBF2',
+  infoBg: '#E7EDF2',
 
   // Confidence / score tiers (molecular precision screens)
   scoreHigh: '#4A5D4E',
-  scoreMid: '#B08968',
+  scoreMid: '#C9962E',
 
-  overlay: 'rgba(35, 38, 32, 0.55)',
-  shadow: 'rgba(35, 38, 32, 0.12)',
+  overlay: 'rgba(30, 33, 29, 0.5)',
+  shadow: 'rgba(42, 47, 40, 0.12)',
 };
 
-const noir = {
+const sageStoneNight = {
   // Core neutrals
-  cream: '#121212',       // primary app background (near-black)
-  creamDeep: '#1A1A1A',   // secondary/inset surfaces (search bars, chip fills)
-  paper: '#1C1C1E',       // cards, inputs, sheets
-  ink: '#FFFFFF',          // primary text
-  inkSoft: '#B4B4B9',     // secondary text
-  inkFaint: '#7C7C82',    // tertiary / placeholder text
-  hairline: '#2A2A2E',    // borders, dividers
+  cream: '#1E211D',       // --cream (dark)
+  creamDeep: '#262B24',   // --parchment (dark)
+  paper: '#2F342B',       // --field-bg (dark)
+  ink: '#EDEAE0',          // --ink (dark)
+  inkSoft: '#B4B6AC',
+  inkFaint: '#A39C8C',     // --stone (dark)
+  hairline: '#3A392F',    // --stone-light (dark)
 
-  // Text/icon color for use on top of accent-colored (orange) surfaces
-  onAccent: '#FFFFFF',
+  // deep-sage stays fixed across modes, so its text stays cream
+  onAccent: '#FAF9F6',
 
-  // Ember system (brand primary — was "sage")
-  sagePale: '#241A10',    // dark accent-tinted fills (pills, chip backgrounds)
-  sageLight: '#2E2118',   // soft blocks
-  sage: '#F0A155',        // mid accent — badges, secondary text
-  sageDeep: '#F5821F',    // primary buttons, active nav, headline accent
-  sageDeeper: '#D66F12',  // pressed states
+  // Sage system (brand primary — sageDeep is intentionally mode-invariant)
+  sagePale: '#2A342A',
+  sageLight: '#33402F',
+  sage: '#7C9478',        // --sage-mid (dark)
+  sageDeep: '#4A5D4E',    // --sage-deep: fixed across modes
+  sageDeeper: '#3C4B3F',
 
-  // Gold accent (used sparingly: swap ratios, secondary highlights)
-  stone: '#E0A458',
-  stoneLight: '#2B2013',
+  // Saffron accent
+  stone: '#D9A64B',       // --saffron (dark)
+  stoneLight: 'rgba(217,166,75,0.16)',
+
+  // Clay — favorite heart + occasional warm highlight
+  favorite: '#C97558',    // --clay (dark)
 
   // Semantic
-  success: '#3DD16F',
-  successBg: '#12291B',
-  warning: '#E0A458',
-  warningBg: '#332714',
-  error: '#F0544E',
-  errorBg: '#33191A',
-  info: '#5B9BD5',
-  infoBg: '#16232F',
+  success: '#7C9478',
+  successBg: 'rgba(124,148,120,0.16)',
+  warning: '#D9A64B',
+  warningBg: 'rgba(217,166,75,0.16)',
+  error: '#C97558',
+  errorBg: '#34221C',
+  info: '#7CA3C0',
+  infoBg: '#1C2530',
 
   // Confidence / score tiers (molecular precision screens)
-  scoreHigh: '#3DD16F',
-  scoreMid: '#E0A458',
+  scoreHigh: '#7C9478',
+  scoreMid: '#D9A64B',
 
-  overlay: 'rgba(0, 0, 0, 0.65)',
+  overlay: 'rgba(0, 0, 0, 0.6)',
   shadow: 'rgba(0, 0, 0, 0.5)',
 };
 
-export const lightColors = sageAndStone;
-export const darkColors = noir;
+export const lightColors = sageStone;
+export const darkColors = sageStoneNight;
 
 // Kept as a plain, non-reactive default so nothing breaks if a file imports
-// `colors` directly instead of going through useTheme(). Every screen in
-// this app has been converted to useTheme(); this export exists as a
-// safety net for future files, not the source of truth.
+// `colors` directly instead of going through useTheme(). This is a safety
+// net for non-theme-aware consumers, not the source of truth.
 export const colors = lightColors;
 
 export const typography = {
   // Display/serif: used for hero headlines, screen titles like
   // "Molecular Precision.", "Good Morning, Chef Ninong ry.", recipe titles.
   display: {
-    fontFamily: 'PlayfairDisplay_700Bold',
+    fontFamily: 'PlayfairDisplay_600SemiBold',
     fontFamilyItalic: 'PlayfairDisplay_600SemiBold_Italic',
+    fontFamilyBold: 'PlayfairDisplay_700Bold',
   },
   // Body/sans: UI chrome, labels, buttons, inputs, nav.
   body: {
-    fontFamily: 'Inter_400Regular',
-    medium: 'Inter_500Medium',
-    semibold: 'Inter_600SemiBold',
-    bold: 'Inter_700Bold',
+    fontFamily: 'WorkSans_400Regular',
+    medium: 'WorkSans_500Medium',
+    semibold: 'WorkSans_600SemiBold',
+    bold: 'WorkSans_700Bold',
   },
   sizes: {
     xs: 11,
@@ -136,9 +152,9 @@ export const spacing = {
 
 export const radius = {
   sm: 8,
-  md: 12,
+  md: 14,
   lg: 18,
-  xl: 24,
+  xl: 22,
   pill: 999,
 };
 
