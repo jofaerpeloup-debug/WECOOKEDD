@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,31 +11,107 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
+import { difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
+import { loadJSON, saveJSON } from '../utils/storage';
 
-// Each shortcut jumps to Discover with an EXPLICIT backend-supported initial
-// filter. The backend has no meal-type/curation concept, so the old
-// Breakfast/Lunch/Dinner/Dessert/Vegies chips are gone (see
-// docs/architecture/mobile-recipes-integration.md).
+// M2.1 — teammate Dashboard/Home visual port on top of our real data + routes.
+//
+// PRESENTATION comes from the teammate Dashboard (commit c1c86ed): time-of-day
+// greeting, search + filter affordance, recent-search chips, a rotating
+// "Today's Feature" hero, a browse row, and a horizontal recipe rail.
+//
+// DATA + ROUTES stay ours and are NOT regressed:
+//   - recipes come from the Express REST API via `listRecipes` (debounced,
+//     generation-guarded search + a "latest" fetch). No mockData, no fake
+//     loading, no local recipe arrays.
+//   - recipe cards keep the real `FavoriteHeart` (Favorites API) and
+//     `RecipeImage` (backend `imageUrl` + the existing bundled fallback).
+//   - navigation uses OUR route names/params: RecipeDetail takes
+//     `{ recipeSource:'api', recipeId, initialRecipe }`; every Dashboard ->
+//     Discover jump goes through `openDiscover(key)` which ALWAYS passes an
+//     explicit `initialFilter` ('all' for the filter button / "See all"), so
+//     the already-mounted Discover tab never keeps a stale shortcut. No
+//     MainTabs replace/reset, no RootNavigator change.
+//   - the header stays our shared `<TopBar mode="brand">` (wordmark + swap
+//     shortcut + bell). The teammate's left-wordmark + bookmark header
+//     treatment is a shared-component change, deferred to the TopBar
+//     reconciliation pass rather than forked into this screen.
+//
+// Teammate parts that need a backend we don't have yet are represented
+// honestly, never faked:
+//   - "Browse by craving" is category-driven in the teammate app. `category`
+//     (+ Philippine `region`) only become authoritative in M3, and per the M2
+//     locked decisions we add no new cuisine-based UX here. So this row links to
+//     the backend-supported Discover filters (difficulty / dietary) instead of
+//     inventing category tiles or imagery.
+//   - "Today's Feature" is a deterministic daily pick FROM the real latest
+//     recipes — not a curated/editorial "featured" flag (the backend has none).
+//   - the notifications bell stays the shared TopBar affordance (a real
+//     notifications feed is M9).
+//
+// Recent searches are device-local only (an allowed M2 decision): hydrated once
+// from the shared `utils/storage` helper and written back by a single effect on
+// every change (add / bump-to-front / clear). Never through auth/token storage.
+// The chips show whenever history exists — including while a search is active —
+// so a just-submitted query is visible immediately.
+
+const SEARCH_DEBOUNCE_MS = 300;
+const LATEST_LIMIT = 8;
+const SEARCH_LIMIT = 20;
+
+const RECENT_SEARCH_KEY = 'wecooked:recentSearches';
+const RECENT_SEARCH_MAX = 6;
+
+// Each shortcut maps to an EXACT backend-supported Discover filter key
+// (see api/recipeOptions.js DISCOVER_FILTERS). No cuisine entry — `cuisine` is
+// being removed in M3 and the M2 decisions forbid new cuisine UX on Home.
 const BROWSE_SHORTCUTS = [
-  { key: 'filipino', label: 'Filipino', icon: 'restaurant-outline' },
   { key: 'easy', label: 'Easy', icon: 'flash-outline' },
   { key: 'vegetarian', label: 'Vegetarian', icon: 'leaf-outline' },
   { key: 'vegan', label: 'Vegan', icon: 'nutrition-outline' },
 ];
 
-const SEARCH_DEBOUNCE_MS = 300;
-const LATEST_LIMIT = 6;
-const SEARCH_LIMIT = 20;
+function greetingForNow(date = new Date()) {
+  const h = date.getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function firstNameOf(user) {
+  const raw = (user && user.name ? String(user.name) : '').trim();
+  if (!raw) return 'Chef';
+  return raw.replace(/^chef\s+/i, '').split(/\s+/)[0] || 'Chef';
+}
+
+// Deterministic "pick of the day" so the hero rotates once per day rather than
+// on every render — over the real latest recipes, not a curated flag.
+function featureIndexForToday(length, date = new Date()) {
+  if (!length) return 0;
+  const dayNumber = Math.floor(date.getTime() / 86400000);
+  return ((dayNumber % length) + length) % length;
+}
+
+function metaLine(recipe) {
+  return [recipeTimeLabel(recipe), difficultyLabel(recipe.difficulty)]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 export default function DashboardScreen({ navigation }) {
-  const { colors, shadow } = useTheme();
-  const styles = makeStyles(colors, shadow);
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
+  const { user } = useAuth();
+
+  const firstName = firstNameOf(user);
+  const greeting = greetingForNow();
 
   const [query, setQuery] = useState('');
   const trimmed = query.trim();
@@ -50,17 +126,65 @@ export default function DashboardScreen({ navigation }) {
   const [searchError, setSearchError] = useState(null);
   const [searchNonce, setSearchNonce] = useState(0);
 
+  const [recent, setRecent] = useState([]);
+
   // Monotonic request generations — a slower earlier response is discarded once
   // a newer request (query change / retry / unmount) supersedes it.
   const mountedRef = useRef(true);
   const latestGenRef = useRef(0);
   const searchGenRef = useRef(0);
+  // Gates the persist effect below so the initial hydrate never writes the
+  // empty seed over stored history.
+  const recentHydratedRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
+  }, []);
+
+  // Recent searches — device-local convenience only. Hydrate once from the
+  // shared storage helper; a separate effect (below) is the ONLY writer, so
+  // every mutation — add, bump, clear — persists the same way.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const stored = await loadJSON(RECENT_SEARCH_KEY, []);
+      if (!active || !mountedRef.current) return;
+      if (Array.isArray(stored)) {
+        setRecent(stored.filter((v) => typeof v === 'string').slice(0, RECENT_SEARCH_MAX));
+      }
+      recentHydratedRef.current = true;
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Single writer. Runs after every `recent` change once hydration is done.
+  useEffect(() => {
+    if (!recentHydratedRef.current) return;
+    saveJSON(RECENT_SEARCH_KEY, recent);
+  }, [recent]);
+
+  const rememberSearch = useCallback((raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return;
+    setRecent((prev) => {
+      const next = [
+        value,
+        ...prev.filter((v) => v.toLowerCase() !== value.toLowerCase()),
+      ].slice(0, RECENT_SEARCH_MAX);
+      // Same list, same order -> return the previous reference so React bails
+      // and the persist effect does not re-fire.
+      const unchanged = next.length === prev.length && next.every((v, i) => v === prev[i]);
+      return unchanged ? prev : next;
+    });
+  }, []);
+
+  const clearRecent = useCallback(() => {
+    setRecent([]);
   }, []);
 
   const loadLatest = useCallback(async () => {
@@ -83,8 +207,8 @@ export default function DashboardScreen({ navigation }) {
     loadLatest();
   }, [loadLatest]);
 
-  // Debounced search. Backend `search` matches TITLE or DESCRIPTION only — not
-  // ingredients, not tags. The generation guard makes a late response harmless.
+  // Debounced search. Backend `search` matches TITLE or DESCRIPTION only. The
+  // generation guard makes a late response harmless.
   useEffect(() => {
     if (!searching) {
       searchGenRef.current += 1; // abandon any pending/in-flight search
@@ -115,6 +239,9 @@ export default function DashboardScreen({ navigation }) {
   }, [searching, trimmed, searchNonce]);
 
   const openRecipe = (recipe) => {
+    // Opening a result means that query mattered — record it even if the user
+    // never pressed the keyboard's search key.
+    if (searching) rememberSearch(trimmed);
     navigation.navigate('RecipeDetail', {
       recipeSource: 'api',
       recipeId: recipe.id,
@@ -122,23 +249,21 @@ export default function DashboardScreen({ navigation }) {
     });
   };
 
-  // The heart is a sibling of the card Pressable (not a child) so tapping it
-  // never also triggers card navigation. It talks to the shared Favorites API
-  // state — no SavedRecipesContext, no mock ids.
-  const renderCard = (recipe) => (
-    <View key={recipe.id} style={styles.card}>
-      <Pressable onPress={() => openRecipe(recipe)}>
-        <RecipeImage source={recipe.imageUrl} style={styles.cardImage} />
-        <Text style={styles.cardTitle} numberOfLines={2}>
-          {recipe.title}
-        </Text>
-        <View style={styles.cardMeta}>
-          <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
-          <Text style={styles.cardTime}>{recipeTimeLabel(recipe)}</Text>
-        </View>
-      </Pressable>
-      <FavoriteHeart recipe={recipe} size={15} variant="overlay" style={styles.cardHeart} />
-    </View>
+  // Every Dashboard -> Discover navigation passes an EXPLICIT filter key so the
+  // already-mounted Discover tab never keeps a stale shortcut. 'all' is a real
+  // DISCOVER_FILTERS key (unfiltered) that Discover's param effect consumes, so
+  // "See all" / the filter button reliably clear a previously chosen shortcut.
+  const openDiscover = (filterKey) =>
+    navigation.navigate('Discover', { initialFilter: filterKey || 'all' });
+
+  const feature = useMemo(() => {
+    if (latest.length === 0) return null;
+    return latest[featureIndexForToday(latest.length)];
+  }, [latest]);
+
+  const rail = useMemo(
+    () => (feature ? latest.filter((r) => r.id !== feature.id) : latest),
+    [latest, feature]
   );
 
   const renderErrorBlock = (message, onRetry) => (
@@ -151,24 +276,66 @@ export default function DashboardScreen({ navigation }) {
     </View>
   );
 
+  // Horizontal rail card. The heart is a SIBLING of the navigating Pressable
+  // (not a child) so a tap on it never also opens the recipe.
+  const renderRailCard = (recipe) => (
+    <View key={recipe.id} style={styles.railCard}>
+      <Pressable onPress={() => openRecipe(recipe)}>
+        <RecipeImage source={recipe.imageUrl} style={styles.railImage} />
+        <Text style={styles.railTitle} numberOfLines={2}>
+          {recipe.title}
+        </Text>
+        <Text style={styles.railMeta} numberOfLines={1}>
+          {metaLine(recipe)}
+        </Text>
+      </Pressable>
+      <FavoriteHeart recipe={recipe} size={15} variant="overlay" style={styles.railHeart} />
+    </View>
+  );
+
+  const renderSearchRow = (recipe) => (
+    <View key={recipe.id} style={styles.resultRow}>
+      <Pressable style={styles.resultMain} onPress={() => openRecipe(recipe)}>
+        <RecipeImage source={recipe.imageUrl} style={styles.resultThumb} />
+        <View style={styles.resultTextWrap}>
+          <Text style={styles.resultTitle} numberOfLines={1}>
+            {recipe.title}
+          </Text>
+          <Text style={styles.resultMeta} numberOfLines={1}>
+            {metaLine(recipe)}
+          </Text>
+        </View>
+      </Pressable>
+      <FavoriteHeart recipe={recipe} size={16} variant="plain" style={styles.resultHeart} />
+    </View>
+  );
+
   return (
     <View style={styles.root}>
       <TopBar mode="brand" />
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={styles.greeting}>Hello, Chef! 👋</Text>
-        <Text style={styles.subGreeting}>What shall we cook today?</Text>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.greetingSub}>
+          {greeting}, {firstName}
+        </Text>
+        <Text style={styles.greeting}>What shall we cook today?</Text>
 
         <View style={styles.searchRow}>
           <View style={styles.searchBar}>
-            <Ionicons name="search" size={17} color={colors.inkFaint} />
+            <Ionicons name="search" size={16} color={colors.inkSoft} />
             <TextInput
               style={styles.searchInput}
               placeholder="Search recipes by name..."
               placeholderTextColor={colors.inkFaint}
               value={query}
               onChangeText={setQuery}
+              onSubmitEditing={() => rememberSearch(trimmed)}
               autoCapitalize="none"
               autoComplete="off"
+              autoCorrect={false}
               returnKeyType="search"
             />
             {searching && (
@@ -177,10 +344,46 @@ export default function DashboardScreen({ navigation }) {
               </Pressable>
             )}
           </View>
+          <Pressable
+            style={styles.filterBtn}
+            onPress={() => openDiscover()}
+            accessibilityRole="button"
+            accessibilityLabel="Open recipe filters"
+          >
+            <Ionicons name="options-outline" size={18} color={colors.onAccent} />
+          </Pressable>
         </View>
 
+        {recent.length > 0 && (
+          <View style={styles.recentWrap}>
+            <View style={styles.recentHead}>
+              <Text style={styles.eyebrow}>Recent searches</Text>
+              <Pressable hitSlop={8} onPress={clearRecent}>
+                <Text style={styles.linkText}>Clear</Text>
+              </Pressable>
+            </View>
+            <View style={styles.recentChips}>
+              {recent.map((term) => (
+                <Pressable
+                  key={term}
+                  style={styles.recentChip}
+                  onPress={() => {
+                    setQuery(term);
+                    rememberSearch(term);
+                  }}
+                >
+                  <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
+                  <Text style={styles.recentChipText} numberOfLines={1}>
+                    {term}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
+
         {searching ? (
-          <>
+          <View style={styles.searchSection}>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionLabel}>Results for “{trimmed}”</Text>
               {searchLoading && results.length > 0 && (
@@ -196,97 +399,109 @@ export default function DashboardScreen({ navigation }) {
             ) : results.length === 0 ? (
               <Text style={styles.emptyText}>No recipes match “{trimmed}”.</Text>
             ) : (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.cardRow}
-              >
-                {results.map(renderCard)}
-              </ScrollView>
+              <View style={styles.resultList}>{results.map(renderSearchRow)}</View>
             )}
-          </>
+          </View>
         ) : (
           <>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>Browse</Text>
-              <Pressable onPress={() => navigation.navigate('Discover')}>
-                <Text style={styles.seeAll}>See all</Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.browseRow}
-            >
-              {BROWSE_SHORTCUTS.map((c) => (
-                <Pressable
-                  key={c.key}
-                  onPress={() => navigation.navigate('Discover', { initialFilter: c.key })}
-                  style={styles.browseChip}
-                >
-                  <Ionicons name={c.icon} size={18} color={colors.inkSoft} />
-                  <Text style={styles.browseLabel}>{c.label}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>Latest Recipes</Text>
-              <Pressable onPress={() => navigation.navigate('Discover')}>
-                <Text style={styles.seeAll}>See all</Text>
-              </Pressable>
-            </View>
+            {/* Today's Feature — a daily pick from the real latest recipes. */}
             {latestLoading && latest.length === 0 ? (
               <View style={styles.stateBlock}>
                 <ActivityIndicator color={colors.sageDeep} />
               </View>
             ) : latestError ? (
               renderErrorBlock(latestError, loadLatest)
-            ) : latest.length === 0 ? (
-              <Text style={styles.emptyText}>No recipes yet.</Text>
+            ) : feature ? (
+              <>
+                <Pressable style={styles.hero} onPress={() => openRecipe(feature)}>
+                  <RecipeImage source={feature.imageUrl} style={styles.heroImage} />
+                  {/* Plain stacked overlay for text legibility — NOT
+                      expo-linear-gradient (proven not to paint on the
+                      Samsung/Fabric runtime this app was tested on). */}
+                  <View style={styles.heroScrim} pointerEvents="none" />
+                  <Text style={styles.heroEyebrow}>TODAY'S FEATURE</Text>
+                  <View style={styles.heroTextWrap}>
+                    <Text style={styles.heroTitle} numberOfLines={2}>
+                      {feature.title}
+                    </Text>
+                    <Text style={styles.heroMeta}>{metaLine(feature)}</Text>
+                  </View>
+                  <View style={styles.heroPlay}>
+                    <Ionicons name="play" size={14} color={colors.onAccent} />
+                  </View>
+                </Pressable>
+
+                <View style={styles.eyebrowRow}>
+                  <Text style={styles.eyebrow}>Browse</Text>
+                  <Pressable hitSlop={8} onPress={() => openDiscover()}>
+                    <Text style={styles.linkText}>See all</Text>
+                  </Pressable>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.browseRow}
+                >
+                  {BROWSE_SHORTCUTS.map((shortcut) => (
+                    <Pressable
+                      key={shortcut.key}
+                      style={styles.browseChip}
+                      onPress={() => openDiscover(shortcut.key)}
+                    >
+                      <Ionicons name={shortcut.icon} size={18} color={colors.sageDeep} />
+                      <Text style={styles.browseLabel}>{shortcut.label}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+
+                <View style={styles.eyebrowRow}>
+                  <Text style={styles.eyebrow}>Latest recipes</Text>
+                  <Pressable hitSlop={8} onPress={() => openDiscover()}>
+                    <Text style={styles.linkText}>See all</Text>
+                  </Pressable>
+                </View>
+                {rail.length === 0 ? (
+                  <Text style={styles.emptyText}>No other recipes yet.</Text>
+                ) : (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.railRow}
+                  >
+                    {rail.map(renderRailCard)}
+                  </ScrollView>
+                )}
+              </>
             ) : (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.cardRow}
-              >
-                {latest.map(renderCard)}
-              </ScrollView>
+              <Text style={styles.emptyText}>No recipes yet.</Text>
             )}
           </>
         )}
-
-        <View style={styles.toolsGrid}>
-          <Pressable style={styles.toolCard} onPress={() => navigation.navigate('Saved')}>
-            <View style={styles.toolIconWrap}>
-              <Ionicons name="book" size={20} color={colors.sageDeep} />
-            </View>
-            <Text style={styles.toolLabel}>Recipe{'\n'}Collection</Text>
-          </Pressable>
-        </View>
       </ScrollView>
     </View>
   );
 }
 
-function makeStyles(colors, shadow) {
+function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-    greeting: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 24,
-      color: colors.ink,
-      marginTop: spacing.sm,
-    },
-    subGreeting: {
+
+    greetingSub: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.base,
       color: colors.inkSoft,
+      marginTop: spacing.sm,
+    },
+    greeting: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 22,
+      color: colors.ink,
       marginTop: 2,
       marginBottom: spacing.lg,
     },
-    searchRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.xl },
+
+    searchRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
     searchBar: {
       flex: 1,
       flexDirection: 'row',
@@ -306,6 +521,59 @@ function makeStyles(colors, shadow) {
       color: colors.ink,
       outlineStyle: 'none',
     },
+    filterBtn: {
+      width: 46,
+      height: 46,
+      borderRadius: radius.md,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    recentWrap: { marginBottom: spacing.xl },
+    recentHead: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      justifyContent: 'space-between',
+      marginBottom: spacing.sm,
+    },
+    recentChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+    recentChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      maxWidth: '100%',
+      paddingHorizontal: spacing.md,
+      paddingVertical: 7,
+      borderRadius: radius.pill,
+      backgroundColor: colors.creamDeep,
+    },
+    recentChipText: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+      flexShrink: 1,
+    },
+
+    eyebrowRow: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      justifyContent: 'space-between',
+      marginBottom: spacing.md,
+    },
+    eyebrow: {
+      fontFamily: typography.body.bold,
+      fontSize: typography.sizes.xs,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: colors.inkFaint,
+    },
+    linkText: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
+
     sectionHeaderRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -317,11 +585,53 @@ function makeStyles(colors, shadow) {
       fontSize: typography.sizes.base,
       color: colors.ink,
     },
-    seeAll: {
-      fontFamily: typography.body.medium,
-      fontSize: typography.sizes.xs,
-      color: colors.sageDeep,
+
+    hero: {
+      borderRadius: radius.xl,
+      overflow: 'hidden',
+      height: 190,
+      backgroundColor: colors.creamDeep,
+      marginBottom: spacing.xxl,
     },
+    heroImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+    heroScrim: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(18,22,14,0.42)',
+    },
+    heroEyebrow: {
+      position: 'absolute',
+      left: spacing.lg,
+      top: spacing.md,
+      fontFamily: typography.body.bold,
+      fontSize: 10.5,
+      letterSpacing: 1.2,
+      color: '#FAF9F6',
+    },
+    heroTextWrap: { position: 'absolute', left: spacing.lg, right: 68, bottom: spacing.md },
+    heroTitle: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 21,
+      lineHeight: 25,
+      color: '#FAF9F6',
+    },
+    heroMeta: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: 'rgba(250,249,246,0.85)',
+      marginTop: 6,
+    },
+    heroPlay: {
+      position: 'absolute',
+      right: spacing.lg,
+      bottom: spacing.lg,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
     browseRow: { gap: spacing.sm, paddingBottom: spacing.xl, paddingRight: spacing.md },
     browseChip: {
       alignItems: 'center',
@@ -333,13 +643,69 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline,
       paddingVertical: spacing.md,
       paddingHorizontal: spacing.lg,
-      minWidth: 82,
+      minWidth: 92,
     },
     browseLabel: {
       fontFamily: typography.body.medium,
-      fontSize: typography.sizes.xs,
+      fontSize: typography.sizes.sm,
       color: colors.inkSoft,
     },
+
+    railRow: { gap: spacing.md, paddingBottom: spacing.xl, paddingRight: spacing.md },
+    railCard: { width: 158 },
+    railImage: {
+      width: 158,
+      height: 112,
+      borderRadius: radius.md,
+      backgroundColor: colors.creamDeep,
+    },
+    railHeart: {
+      position: 'absolute',
+      top: spacing.sm,
+      right: spacing.sm,
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: 'rgba(255,255,255,0.92)',
+    },
+    railTitle: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+      marginTop: spacing.sm,
+      lineHeight: 16,
+    },
+    railMeta: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: 3,
+    },
+
+    searchSection: { marginTop: spacing.xs },
+    resultList: { gap: spacing.md },
+    resultRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    resultMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    resultThumb: {
+      width: 56,
+      height: 56,
+      borderRadius: radius.md,
+      backgroundColor: colors.creamDeep,
+    },
+    resultTextWrap: { flex: 1 },
+    resultTitle: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    resultMeta: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: 3,
+    },
+    resultHeart: { paddingHorizontal: spacing.xs },
+
     emptyText: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
@@ -373,71 +739,6 @@ function makeStyles(colors, shadow) {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
       color: colors.sageDeep,
-    },
-    cardRow: { gap: spacing.md, paddingBottom: spacing.xl, paddingRight: spacing.md },
-    card: {
-      width: 160,
-      backgroundColor: colors.paper,
-      borderRadius: radius.lg,
-      overflow: 'hidden',
-      ...shadow.soft,
-    },
-    cardHeart: {
-      position: 'absolute',
-      top: spacing.sm,
-      right: spacing.sm,
-      width: 26,
-      height: 26,
-      borderRadius: 13,
-      backgroundColor: 'rgba(255,255,255,0.92)',
-    },
-    cardImage: { width: '100%', height: 110 },
-    cardTitle: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.sm,
-      color: colors.ink,
-      marginTop: spacing.sm,
-      marginHorizontal: spacing.sm,
-      lineHeight: 16,
-    },
-    cardMeta: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      marginHorizontal: spacing.sm,
-      marginTop: 4,
-      marginBottom: spacing.sm,
-    },
-    cardTime: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
-    },
-    toolsGrid: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.xl },
-    toolCard: {
-      flex: 1,
-      backgroundColor: colors.paper,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: spacing.lg,
-      alignItems: 'center',
-      gap: spacing.sm,
-    },
-    toolIconWrap: {
-      width: 40,
-      height: 40,
-      borderRadius: 12,
-      backgroundColor: colors.sagePale,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    toolLabel: {
-      fontFamily: typography.body.medium,
-      fontSize: typography.sizes.sm,
-      color: colors.ink,
-      textAlign: 'center',
-      lineHeight: 17,
     },
   });
 }
