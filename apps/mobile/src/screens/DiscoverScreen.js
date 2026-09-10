@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   FlatList,
   ScrollView,
   Pressable,
+  TextInput,
   RefreshControl,
   ActivityIndicator,
 } from 'react-native';
@@ -20,8 +21,59 @@ import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { DISCOVER_FILTERS, difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 
+// M2.2 — teammate Discover ("Search") visual port on top of our real data + routes.
+//
+// PRESENTATION comes from the teammate Discover screen (commit c1c86ed): the
+// screen title, the filled search field, pill filter chips (active = deep sage),
+// an uppercase result-count label, and compact image + title + meta result rows.
+//
+// DATA + ROUTES stay ours and are NOT regressed:
+//   - recipes come from the Express REST API via `listRecipes` — the same
+//     generation-guarded first-page / load-more / pull-to-refresh pipeline as
+//     before. No mockData, no fake latency, no local recipe arrays.
+//   - the search box is wired to the real backend `search` param (debounced,
+//     trimmed, generation-guarded); it is NOT the teammate's client-side
+//     title/description/ingredient scan over a mock array.
+//   - cards keep the real `FavoriteHeart` (Favorites API) and `RecipeImage`
+//     (backend `imageUrl` + the bundled fallback).
+//   - navigation stays ours: RecipeDetail takes
+//     `{ recipeSource:'api', recipeId, initialRecipe }`; the Dashboard handoff
+//     param `initialFilter` ('all' | 'easy' | 'vegetarian' | 'vegan') is still
+//     consumed on the already-mounted tab.
+//   - the 5-tab shell is untouched: this stays a root tab with the shared
+//     `<TopBar mode="brand">` — no back button, no PlusMenu, no tab-arch port.
+//
+// Teammate parts that do not map onto our real model, represented honestly:
+//   - the collapsible multi-group filter panel (Cooking Time / Difficulty /
+//     multi-select Dietary) + the bottom "Show N recipes" CTA are a staged
+//     apply-then-show flow. Our filters refetch immediately and the Dashboard
+//     handoff carries exactly ONE filter key, so we keep a single-select chip
+//     row mapped to the four real M2 filters. `cuisine` is intentionally NOT a
+//     chip here — it leaves the data model in M3 and the M2 decisions forbid new
+//     cuisine UX. Real category + Philippine-region browsing arrives in M3.
+//   - the teammate "Recent" chips read a shared SearchHistory context. Recent
+//     searches are Dashboard-owned in our app (device-local, one store); Discover
+//     does not open a second one.
+
 const PAGE_LIMIT = 20;
-const FILTER_BY_KEY = Object.fromEntries(DISCOVER_FILTERS.map((f) => [f.key, f]));
+const SEARCH_DEBOUNCE_MS = 300;
+
+// The four real M2 Discover filters — the exact Dashboard handoff contract
+// ('all' | 'easy' | 'vegetarian' | 'vegan'), taken from the shared
+// `DISCOVER_FILTERS` source of truth so each keeps its real backend query. The
+// legacy Filipino entry is left out: that filter is cuisine-backed, cuisine
+// leaves the data model in M3, and the M2 decisions forbid new cuisine UX.
+const M2_FILTER_KEYS = ['all', 'easy', 'vegetarian', 'vegan'];
+const M2_FILTERS = M2_FILTER_KEYS
+  .map((key) => DISCOVER_FILTERS.find((f) => f.key === key))
+  .filter(Boolean);
+const FILTER_BY_KEY = Object.fromEntries(M2_FILTERS.map((f) => [f.key, f]));
+
+function metaLine(recipe) {
+  return [recipeTimeLabel(recipe), difficultyLabel(recipe.difficulty)]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 function dedupeById(list) {
   const seen = new Set();
@@ -55,6 +107,12 @@ export default function DiscoverScreen({ navigation, route }) {
     const k = route.params?.initialFilter;
     return k && FILTER_BY_KEY[k] ? k : 'all';
   });
+
+  // Real backend search: `search` is the live field value, `debouncedSearch`
+  // is what actually reaches the API (trimmed, settled).
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
   const [recipes, setRecipes] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [pageLoaded, setPageLoaded] = useState(0);
@@ -64,8 +122,8 @@ export default function DiscoverScreen({ navigation, route }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState(null);
 
-  // One monotonic generation per filter change / refresh. A response tagged
-  // with a superseded generation is dropped instead of mutating the new list.
+  // One monotonic generation per filter/search change / refresh. A response
+  // tagged with a superseded generation is dropped instead of mutating the list.
   const genRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const mountedRef = useRef(true);
@@ -78,18 +136,36 @@ export default function DiscoverScreen({ navigation, route }) {
   }, []);
 
   // Consume an initial filter handed over from Home, then clear it so a repeat
-  // tap re-applies even when the value is unchanged.
+  // tap re-applies even when the value is unchanged. A fresh filter intent also
+  // clears any search the user had typed, so "Home -> Vegan" lands on the plain
+  // Vegan list.
   useEffect(() => {
     const key = route.params?.initialFilter;
     if (key && FILTER_BY_KEY[key]) {
       setActiveKey(key);
+      setSearch('');
+      setDebouncedSearch('');
       navigation.setParams({ initialFilter: undefined });
     }
   }, [route.params?.initialFilter, navigation]);
 
+  // Debounce the search field into `debouncedSearch`. Whitespace-only collapses
+  // to '' (an unfiltered search), matching Dashboard.
+  useEffect(() => {
+    const trimmed = search.trim();
+    if (trimmed === debouncedSearch) return undefined;
+    const timer = setTimeout(() => setDebouncedSearch(trimmed), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search, debouncedSearch]);
+
   const queryFor = useCallback(
-    (page) => ({ ...(FILTER_BY_KEY[activeKey]?.query || {}), page, limit: PAGE_LIMIT }),
-    [activeKey]
+    (page) => ({
+      ...(FILTER_BY_KEY[activeKey]?.query || {}),
+      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+      page,
+      limit: PAGE_LIMIT,
+    }),
+    [activeKey, debouncedSearch]
   );
 
   const loadFirstPage = useCallback(
@@ -164,28 +240,30 @@ export default function DiscoverScreen({ navigation, route }) {
     });
   };
 
-  // The heart is a sibling of the card Pressable (not a child) so tapping it
+  const countLabel = useMemo(() => {
+    if (phase !== 'ready') return null;
+    const n = recipes.length;
+    const more = pagination && pageLoaded < (pagination.totalPages || 0);
+    return `${n}${more ? '+' : ''} recipe${n === 1 && !more ? '' : 's'}`;
+  }, [phase, recipes.length, pagination, pageLoaded]);
+
+  // The heart is a SIBLING of the card Pressable (not a child) so tapping it
   // never also triggers Recipe navigation. Shared Favorites API state — one
   // fetch in the provider, never one per card.
   const renderItem = ({ item }) => (
-    <View style={styles.card}>
-      <Pressable onPress={() => openRecipe(item)}>
-        <RecipeImage source={item.imageUrl} style={styles.cardImage} />
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{item.title}</Text>
-          <View style={styles.metaRow}>
-            <View style={styles.metaItem}>
-              <Ionicons name="time-outline" size={13} color={colors.inkFaint} />
-              <Text style={styles.metaText}>{recipeTimeLabel(item)}</Text>
-            </View>
-            <View style={styles.metaItem}>
-              <Ionicons name="stats-chart-outline" size={13} color={colors.inkFaint} />
-              <Text style={styles.metaText}>{difficultyLabel(item.difficulty)}</Text>
-            </View>
-          </View>
+    <View style={styles.row}>
+      <Pressable style={styles.rowMain} onPress={() => openRecipe(item)}>
+        <RecipeImage source={item.imageUrl} style={styles.thumb} />
+        <View style={styles.rowText}>
+          <Text style={styles.rowTitle} numberOfLines={2}>
+            {item.title}
+          </Text>
+          <Text style={styles.rowMeta} numberOfLines={1}>
+            {metaLine(item)}
+          </Text>
         </View>
       </Pressable>
-      <FavoriteHeart recipe={item} size={16} variant="overlay" style={styles.cardHeart} />
+      <FavoriteHeart recipe={item} size={16} variant="plain" style={styles.rowHeart} />
     </View>
   );
 
@@ -210,7 +288,11 @@ export default function DiscoverScreen({ navigation, route }) {
     }
     return (
       <View style={styles.centerBox}>
-        <Text style={styles.emptyText}>No recipes match this filter yet.</Text>
+        <Text style={styles.emptyText}>
+          {debouncedSearch
+            ? `No recipes match “${debouncedSearch}”.`
+            : 'No recipes match this filter yet.'}
+        </Text>
       </View>
     );
   };
@@ -237,27 +319,55 @@ export default function DiscoverScreen({ navigation, route }) {
     <View style={styles.root}>
       <TopBar mode="brand" />
 
-      <View style={styles.filterRow}>
+      {/* Fixed search / filter header — kept out of the FlatList so the text
+          field is never re-mounted by list virtualization. */}
+      <View style={styles.header}>
+        <Text style={styles.pageTitle}>Discover</Text>
+        <Text style={styles.pageSub}>Search our kitchen, then narrow it down.</Text>
+
+        <View style={styles.searchField}>
+          <Ionicons name="search" size={15} color={colors.inkSoft} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search recipes..."
+            placeholderTextColor={colors.inkFaint}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+            autoComplete="off"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch('')} hitSlop={8}>
+              <Ionicons name="close-circle" size={16} color={colors.inkFaint} />
+            </Pressable>
+          )}
+        </View>
+
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: spacing.sm }}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.chipRow}
         >
-          {DISCOVER_FILTERS.map((f) => {
+          {M2_FILTERS.map((f) => {
             const isActive = f.key === activeKey;
             return (
               <Pressable
                 key={f.key}
                 onPress={() => setActiveKey(f.key)}
-                style={[styles.filterPill, isActive && styles.filterPillActive]}
+                style={[styles.chip, isActive && styles.chipActive]}
               >
-                <Text style={[styles.filterText, isActive && styles.filterTextActive]}>
+                <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
                   {f.label}
                 </Text>
               </Pressable>
             );
           })}
         </ScrollView>
+
+        {countLabel && <Text style={styles.countLabel}>{countLabel} found</Text>}
       </View>
 
       <FlatList
@@ -266,6 +376,7 @@ export default function DiscoverScreen({ navigation, route }) {
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         refreshControl={
@@ -276,7 +387,6 @@ export default function DiscoverScreen({ navigation, route }) {
             colors={[colors.sageDeep]}
           />
         }
-        ListHeaderComponent={<Text style={styles.pageTitle}>Recipe Discovery</Text>}
         ListEmptyComponent={renderEmpty()}
         ListFooterComponent={renderFooter()}
       />
@@ -287,68 +397,96 @@ export default function DiscoverScreen({ navigation, route }) {
 function makeStyles(colors, shadow) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
-    filterRow: {
+    header: {
       paddingHorizontal: spacing.lg,
-      paddingVertical: spacing.md,
+      paddingTop: spacing.lg,
+      paddingBottom: spacing.md,
       borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
     },
-    filterPill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: spacing.md,
-      paddingVertical: 8,
-      borderRadius: radius.pill,
-      backgroundColor: colors.paper,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-    },
-    filterPillActive: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
-    filterText: {
-      fontFamily: typography.body.medium,
-      fontSize: typography.sizes.sm,
-      color: colors.inkSoft,
-    },
-    filterTextActive: { color: colors.onAccent },
-    listContent: { padding: spacing.lg, paddingBottom: spacing.xxxl, flexGrow: 1 },
     pageTitle: {
       fontFamily: typography.display.fontFamily,
       fontSize: 22,
       color: colors.ink,
-      marginBottom: spacing.lg,
     },
-    card: {
+    pageSub: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkFaint,
+      marginTop: 2,
+      marginBottom: spacing.md,
+    },
+    searchField: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      backgroundColor: colors.creamDeep,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      height: 44,
+    },
+    searchInput: {
+      flex: 1,
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+      outlineStyle: 'none',
+    },
+    chipRow: { gap: spacing.sm, paddingTop: spacing.md, paddingRight: spacing.md },
+    chip: {
+      paddingHorizontal: 15,
+      paddingVertical: 9,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+    },
+    chipActive: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
+    chipText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 13,
+      color: colors.inkSoft,
+    },
+    chipTextActive: { color: colors.onAccent },
+    countLabel: {
+      fontFamily: typography.body.bold,
+      fontSize: 11.5,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: colors.inkFaint,
+      marginTop: spacing.md,
+    },
+    listContent: { padding: spacing.lg, paddingBottom: spacing.xxxl, flexGrow: 1 },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
       backgroundColor: colors.paper,
-      borderRadius: radius.lg,
-      overflow: 'hidden',
-      marginBottom: spacing.xl,
+      borderRadius: radius.md,
+      padding: spacing.sm,
+      marginBottom: spacing.md,
       ...shadow.soft,
     },
-    cardHeart: {
-      position: 'absolute',
-      top: spacing.md,
-      right: spacing.md,
-      width: 32,
-      height: 32,
-      borderRadius: 16,
-      backgroundColor: 'rgba(255,255,255,0.92)',
+    rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    thumb: {
+      width: 64,
+      height: 64,
+      borderRadius: radius.sm,
+      backgroundColor: colors.creamDeep,
     },
-    cardImage: { width: '100%', height: 190 },
-    cardBody: { padding: spacing.lg },
-    cardTitle: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 19,
-      lineHeight: 24,
+    rowText: { flex: 1 },
+    rowTitle: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.base,
+      lineHeight: 19,
       color: colors.ink,
-      marginBottom: spacing.sm,
     },
-    metaRow: { flexDirection: 'row', gap: spacing.lg },
-    metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    metaText: {
+    rowMeta: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
       color: colors.inkFaint,
+      marginTop: 3,
     },
+    rowHeart: { paddingHorizontal: spacing.xs },
     centerBox: {
       alignItems: 'center',
       justifyContent: 'center',
