@@ -11,7 +11,6 @@ function baseRecipe(overrides = {}) {
   return new Recipe({
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
-    cuisine: 'filipino',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -26,13 +25,12 @@ function baseRecipe(overrides = {}) {
   });
 }
 
-test('title, description, cuisine, difficulty, prepTimeMinutes, cookTimeMinutes, and servings are required', async () => {
+test('title, description, difficulty, prepTimeMinutes, cookTimeMinutes, and servings are required', async () => {
   const recipe = new Recipe({});
   await assert.rejects(() => recipe.validate(), (err) => {
     for (const field of [
       'title',
       'description',
-      'cuisine',
       'difficulty',
       'prepTimeMinutes',
       'cookTimeMinutes',
@@ -54,14 +52,55 @@ test('title is trimmed and length-limited, and does not require uniqueness', () 
   assert.notEqual(path.options.unique, true);
 });
 
-test('cuisine is constrained to the controlled V1 enum and includes filipino without a special type', async () => {
-  const path = Recipe.schema.path('cuisine');
-  assert.deepEqual(path.options.enum, Recipe.CUISINES);
-  assert.ok(Recipe.CUISINES.includes('filipino'));
-  assert.ok(Recipe.CUISINES.includes('other'));
+test('cuisine is no longer part of the Recipe schema (retired in M3)', () => {
+  assert.equal(Recipe.schema.path('cuisine'), undefined);
+  assert.equal(Recipe.CUISINES, undefined);
+});
 
-  const invalid = baseRecipe({ cuisine: 'klingon' });
-  await assert.rejects(() => invalid.validate());
+test('region and category are optional canonical-slug fields (no enum, valid for legacy records)', async () => {
+  for (const field of ['region', 'category']) {
+    const path = Recipe.schema.path(field);
+    assert.equal(path.isRequired, undefined);
+    assert.equal(path.options.lowercase, true);
+    assert.equal(path.options.maxlength, Recipe.SLUG_MAX_LENGTH);
+    assert.ok(path.options.match);
+  }
+
+  // A recipe with neither field still validates.
+  await assert.doesNotReject(() => baseRecipe().validate());
+
+  // Case is normalized to a canonical slug.
+  const normalized = baseRecipe({ region: 'Central-Luzon', category: 'Main-Dish' });
+  await normalized.validate();
+  assert.equal(normalized.region, 'central-luzon');
+  assert.equal(normalized.category, 'main-dish');
+
+  // A value that isn't a slug is rejected by the schema `match`.
+  await assert.rejects(() => baseRecipe({ region: 'not/a/slug' }).validate());
+});
+
+test('a legacy document that physically still carries cuisine serializes without leaking it', () => {
+  const legacy = {
+    _id: '507f1f77bcf86cd7994390aa',
+    title: 'Old Adobo',
+    description: 'Predates the M3 schema.',
+    cuisine: 'filipino',
+    difficulty: 'easy',
+    prepTimeMinutes: 10,
+    cookTimeMinutes: 30,
+    servings: 4,
+    ingredients: [],
+    instructions: ['Cook.'],
+    dietaryTags: [],
+    imageUrl: null,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const publicRecipe = toPublicRecipe(legacy);
+  assert.equal('cuisine' in publicRecipe, false);
+  assert.equal(publicRecipe.region, null);
+  assert.equal(publicRecipe.category, null);
 });
 
 test('difficulty is constrained to easy/medium/hard', async () => {
@@ -203,9 +242,10 @@ test('timestamps are enabled', () => {
   assert.equal(Recipe.schema.options.timestamps, true);
 });
 
-test('there are compound indexes for isActive/cuisine and isActive/difficulty filtering', () => {
+test('there are compound indexes for isActive/region, isActive/category and isActive/difficulty filtering', () => {
   const indexes = Recipe.schema.indexes();
-  assert.ok(indexes.some(([spec]) => spec.isActive === 1 && spec.cuisine === 1));
+  assert.ok(indexes.some(([spec]) => spec.isActive === 1 && spec.region === 1));
+  assert.ok(indexes.some(([spec]) => spec.isActive === 1 && spec.category === 1));
   assert.ok(indexes.some(([spec]) => spec.isActive === 1 && spec.difficulty === 1));
 });
 
@@ -229,7 +269,8 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
     _id: '507f1f77bcf86cd799439099',
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce and vinegar.',
-    cuisine: 'filipino',
+    region: 'central-luzon',
+    category: 'main-dish',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -243,7 +284,7 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
         optional: false,
       },
     ],
-    instructions: ['Combine chicken, soy sauce, garlic, and bay leaves.'],
+    instructions: ['Combine chicken, soy sauce, garlic, and bay leaves.', 'Simmer until done.'],
     dietaryTags: [],
     imageUrl: null,
     isActive: true,
@@ -254,6 +295,15 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
 
   assert.equal(publicRecipe.id, recipe._id);
   assert.equal(publicRecipe.title, 'Chicken Adobo');
+  assert.equal(publicRecipe.region, 'central-luzon');
+  assert.equal(publicRecipe.category, 'main-dish');
+  assert.equal('cuisine' in publicRecipe, false);
+  // Derived structured steps mirror the persisted instruction array, 1-based.
+  assert.deepEqual(publicRecipe.steps, [
+    { order: 1, text: 'Combine chicken, soy sauce, garlic, and bay leaves.' },
+    { order: 2, text: 'Simmer until done.' },
+  ]);
+  assert.deepEqual(publicRecipe.instructions, recipe.instructions);
   assert.equal(publicRecipe.ingredients[0].ingredient.id, OTHER_INGREDIENT_ID);
   assert.equal(publicRecipe.ingredients[0].ingredient.name, 'Chicken');
   assert.deepEqual(Object.keys(publicRecipe.ingredients[0].ingredient).sort(), ['id', 'name']);

@@ -29,7 +29,6 @@ function adoboPayload(overrides = {}) {
   return {
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
-    cuisine: 'filipino',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -311,7 +310,7 @@ test('listRecipes rejects status=inactive and status=all for a non-admin caller'
   );
 });
 
-test('listRecipes builds a filter from cuisine, difficulty, dietaryTag, ingredientId, and maxPrepTimeMinutes', async (t) => {
+test('listRecipes builds a filter from region, category, difficulty, dietaryTag, ingredientId, and maxPrepTimeMinutes', async (t) => {
   let capturedFilter;
   t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
     capturedFilter = filter;
@@ -320,7 +319,8 @@ test('listRecipes builds a filter from cuisine, difficulty, dietaryTag, ingredie
   t.mock.method(recipeRepository, 'countByFilter', async () => 0);
 
   await recipeService.listRecipes({
-    cuisine: 'filipino',
+    region: 'central-luzon',
+    category: 'main-dish',
     difficulty: 'easy',
     dietaryTag: 'dairyFree',
     ingredientId: CHICKEN_ID,
@@ -333,11 +333,133 @@ test('listRecipes builds a filter from cuisine, difficulty, dietaryTag, ingredie
   });
 
   assert.equal(capturedFilter.isActive, true);
-  assert.equal(capturedFilter.cuisine, 'filipino');
+  assert.equal(capturedFilter.region, 'central-luzon');
+  assert.equal(capturedFilter.category, 'main-dish');
   assert.equal(capturedFilter.difficulty, 'easy');
   assert.equal(capturedFilter.dietaryTags, 'dairyFree');
   assert.equal(capturedFilter['ingredients.ingredientId'], CHICKEN_ID);
   assert.deepEqual(capturedFilter.prepTimeMinutes, { $lte: 30 });
+  assert.equal('cuisine' in capturedFilter, false);
+});
+
+test('listRecipes composes a region/category filter with search and count over the same universe', async (t) => {
+  let findFilter;
+  let countFilter;
+  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+    findFilter = filter;
+    return [];
+  });
+  t.mock.method(recipeRepository, 'countByFilter', async (filter) => {
+    countFilter = filter;
+    return 0;
+  });
+
+  await recipeService.listRecipes({
+    search: 'adobo',
+    region: 'bicol',
+    category: 'main-dish',
+    status: 'active',
+    page: 1,
+    limit: 20,
+    sort: 'titleAsc',
+    isAdmin: false,
+  });
+
+  assert.deepEqual(findFilter, countFilter);
+  assert.equal(findFilter.region, 'bicol');
+  assert.equal(findFilter.category, 'main-dish');
+  assert.ok(findFilter.$or);
+});
+
+test('createRecipe normalizes structured steps into ordered instruction text and never stores cuisine', async (t) => {
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  let capturedArgs;
+  t.mock.method(recipeRepository, 'createRecipe', async (args) => {
+    capturedArgs = args;
+    return { _id: 'recipe1', ...args };
+  });
+
+  const payload = adoboPayload({ region: 'bicol', category: 'main-dish' });
+  delete payload.instructions;
+  payload.steps = [
+    { order: 3, text: 'Serve hot.' },
+    { order: 1, text: 'Marinate the chicken.' },
+    { order: 2, text: 'Simmer until tender.' },
+  ];
+
+  await recipeService.createRecipe(payload);
+
+  assert.deepEqual(capturedArgs.instructions, [
+    'Marinate the chicken.',
+    'Simmer until tender.',
+    'Serve hot.',
+  ]);
+  assert.equal(capturedArgs.region, 'bicol');
+  assert.equal(capturedArgs.category, 'main-dish');
+  assert.equal('cuisine' in capturedArgs, false);
+});
+
+test('updateRecipe clears region/category via $unset on an explicit null, and does not cross-touch the other', async (t) => {
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: 'recipe1',
+    isActive: true,
+    region: 'bicol',
+    category: 'main-dish',
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+  let capturedUpdate;
+  t.mock.method(recipeRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return { _id: id };
+  });
+
+  await recipeService.updateRecipe('recipe1', { region: null });
+
+  assert.deepEqual(capturedUpdate.$unset, { region: '' });
+  assert.equal('category' in (capturedUpdate.$unset || {}), false);
+  assert.equal(capturedUpdate.$set, undefined);
+});
+
+test('updateRecipe replaces one classifier while clearing the other in a single patch', async (t) => {
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: 'recipe1',
+    isActive: true,
+    region: 'bicol',
+    category: 'main-dish',
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+  let capturedUpdate;
+  t.mock.method(recipeRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return { _id: id, ...(update.$set || {}) };
+  });
+
+  await recipeService.updateRecipe('recipe1', { region: null, category: 'dessert' });
+
+  assert.deepEqual(capturedUpdate.$unset, { region: '' });
+  assert.deepEqual(capturedUpdate.$set, { category: 'dessert' });
+});
+
+test('updateRecipe accepts structured steps as an instructions replacement', async (t) => {
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: 'recipe1',
+    isActive: true,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+  let capturedUpdate;
+  t.mock.method(recipeRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return { _id: id, ...update.$set };
+  });
+
+  await recipeService.updateRecipe('recipe1', {
+    steps: [
+      { order: 2, text: 'Second.' },
+      { order: 1, text: 'First.' },
+    ],
+  });
+
+  assert.deepEqual(capturedUpdate.$set.instructions, ['First.', 'Second.']);
 });
 
 test('listRecipes search matches title/description via an escaped, case-insensitive regex', async (t) => {

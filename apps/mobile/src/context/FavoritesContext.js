@@ -65,7 +65,8 @@ function toRecipeSummary(recipe) {
   return {
     id: r.id,
     title: r.title ?? null,
-    cuisine: r.cuisine ?? null,
+    region: r.region ?? null,
+    category: r.category ?? null,
     difficulty: r.difficulty ?? null,
     prepTimeMinutes: r.prepTimeMinutes ?? null,
     cookTimeMinutes: r.cookTimeMinutes ?? null,

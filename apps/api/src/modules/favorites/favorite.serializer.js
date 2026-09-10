@@ -4,7 +4,8 @@ function toFavoriteRecipeSummary(recipe) {
   return {
     id: String(recipe._id),
     title: recipe.title,
-    cuisine: recipe.cuisine,
+    region: recipe.region ?? null,
+    category: recipe.category ?? null,
     difficulty: recipe.difficulty,
     prepTimeMinutes: recipe.prepTimeMinutes,
     cookTimeMinutes: recipe.cookTimeMinutes,

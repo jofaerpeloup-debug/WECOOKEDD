@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
 } from 'recharts';
 import { auth } from './firebase.js';
 import {
@@ -18,7 +17,7 @@ import {
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
 import { listUsers } from './userApi.js';
-import { CUISINE_LABELS, CUISINE_COLORS } from './recipeOptions.js';
+import { slugLabel } from './recipeOptions.js';
 import IngredientsTab from './IngredientsTab.jsx';
 import SubstitutionsTab from './SubstitutionsTab.jsx';
 import RecipesTab from './RecipesTab.jsx';
@@ -86,12 +85,13 @@ function WeCookedAdminApp() {
   const [tab, setTab] = useState('overview');
   // Recipes and users are fully REST-backed now (zero Firestore). The Overview
   // tab shows a few summary widgets, so it pulls lightweight, best-effort
-  // counts from the same REST APIs the Recipes / Users tabs use. `sampleSize`
-  // is how many recipes the cuisine breakdown was actually computed from
-  // (≤100), so the widget can say so when it isn't the whole catalog.
-  const [recipeStats, setRecipeStats] = useState({
-    total: 0, latest: [], byCuisine: [], sampleSize: 0,
-  });
+  // counts from the same REST APIs the Recipes / Users tabs use.
+  //
+  // The "Cuisines" breakdown widget was removed in M3 when `cuisine` left the
+  // Recipe domain. A replacement region/category visualization waits on a
+  // content-classification milestone — showing one now would be misleading
+  // (no existing recipe is classified yet).
+  const [recipeStats, setRecipeStats] = useState({ total: 0, latest: [] });
   const [userCounts, setUserCounts] = useState({ total: 0, active: 0, suspended: 0 });
 
   const [account, setAccount] = useState(null);
@@ -140,25 +140,12 @@ function WeCookedAdminApp() {
           status: 'all', sort: 'newest', page: 1, limit: 100,
         });
         if (cancelled) return;
-        const counts = {};
-        recipes.forEach((r) => { counts[r.cuisine] = (counts[r.cuisine] || 0) + 1; });
-        const sampled = recipes.length || 1;
-        const byCuisine = Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .map(([cuisine, count], i) => ({
-            name: CUISINE_LABELS[cuisine] || cuisine,
-            count,
-            pct: Math.round((count / sampled) * 100),
-            color: CUISINE_COLORS[i % CUISINE_COLORS.length],
-          }));
         setRecipeStats({
           total: pagination?.total ?? recipes.length,
           latest: recipes.slice(0, 4),
-          byCuisine,
-          sampleSize: recipes.length,
         });
       } catch {
-        if (!cancelled) setRecipeStats({ total: 0, latest: [], byCuisine: [], sampleSize: 0 });
+        if (!cancelled) setRecipeStats({ total: 0, latest: [] });
       }
     })();
     return () => { cancelled = true; };
@@ -1036,8 +1023,6 @@ function WeCookedAdminApp() {
                 metrics={metrics}
                 dark={displayPrefs.theme === 'dark'}
                 latestRecipes={recipeStats.latest}
-                cuisineBreakdown={recipeStats.byCuisine}
-                cuisineSampleSize={recipeStats.sampleSize}
               />
             )}
 
@@ -1471,12 +1456,9 @@ function LogoutConfirmModal({ onCancel, onConfirm }) {
   );
 }
 
-function OverviewTab({ metrics, dark, latestRecipes, cuisineBreakdown, cuisineSampleSize }) {
+function OverviewTab({ metrics, dark, latestRecipes }) {
   const gridStroke = dark ? '#3A392F' : '#DAD3C4';
   const tickFill = dark ? '#A39C8C' : '#8C8577';
-  // The cuisine breakdown is computed from at most the 100 most recent recipes;
-  // only claim it's the whole catalog when it actually is.
-  const cuisinePartial = cuisineSampleSize > 0 && metrics.totalRecipes > cuisineSampleSize;
   return (
     <div>
       <div className="wc-topbar">
@@ -1555,7 +1537,9 @@ function OverviewTab({ metrics, dark, latestRecipes, cuisineBreakdown, cuisineSa
               {latestRecipes.map((r) => (
                 <li key={r.id}>
                   <span className="wc-toprecipe-title">{r.title}</span>
-                  <span className="wc-toprecipe-saves">{CUISINE_LABELS[r.cuisine] || r.cuisine}</span>
+                  <span className="wc-toprecipe-saves">
+                    {slugLabel(r.category) || slugLabel(r.region) || ''}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -1563,49 +1547,11 @@ function OverviewTab({ metrics, dark, latestRecipes, cuisineBreakdown, cuisineSa
         </div>
 
         <div className="wc-card">
-          <h2>Cuisines</h2>
-          {cuisineBreakdown.length === 0 ? (
-            <div className="wc-empty-inline">No recipes yet.</div>
-          ) : (
-            <>
-              {cuisinePartial && (
-                <div className="wc-empty-inline" style={{ paddingTop: 0, marginBottom: 4 }}>
-                  Based on the {cuisineSampleSize} most recent recipes.
-                </div>
-              )}
-              <div className="wc-donut-wrap">
-                <ResponsiveContainer width="100%" height={180}>
-                  <PieChart>
-                    <Pie
-                      data={cuisineBreakdown}
-                      dataKey="count"
-                      nameKey="name"
-                      innerRadius={52}
-                      outerRadius={78}
-                      paddingAngle={cuisineBreakdown.length > 1 ? 2 : 0}
-                      stroke="none"
-                    >
-                      {cuisineBreakdown.map((entry) => (
-                        <Cell key={entry.name} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value, name) => [`${value} recipe${value === 1 ? '' : 's'}`, name]}
-                      contentStyle={{ borderRadius: 8, border: `1px solid ${gridStroke}`, fontSize: 13, background: dark ? '#262B24' : '#fff', color: dark ? '#EDEAE0' : '#2A2F28' }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="wc-donut-legend">
-                {cuisineBreakdown.map((entry) => (
-                  <div className="wc-donut-legend-item" key={entry.name}>
-                    <span className="wc-donut-dot" style={{ background: entry.color }} />
-                    {entry.name} {entry.pct}%
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
+          <h2>Catalog</h2>
+          <div className="wc-empty-inline">
+            {metrics.totalRecipes === 1 ? '1 recipe' : `${metrics.totalRecipes} recipes`} in the
+            catalog. A region / category breakdown returns once recipe content is classified.
+          </div>
         </div>
       </div>
     </div>

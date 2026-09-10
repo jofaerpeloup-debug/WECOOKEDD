@@ -2,7 +2,7 @@
 // fabricated fields (no score/rating/nutrition/author/mealType), no unit
 // conversion, server order preserved.
 
-import { cuisineLabel, dietaryTagLabel, unitLabel } from '../api/recipeOptions';
+import { categoryLabel, regionLabel, dietaryTagLabel, unitLabel } from '../api/recipeOptions';
 
 export function totalTimeMinutes(recipe) {
   const prep = Number(recipe && recipe.prepTimeMinutes) || 0;
@@ -20,11 +20,15 @@ export function recipeTimeLabel(recipe) {
   return formatMinutes(totalTimeMinutes(recipe));
 }
 
-// Badges for an API recipe: cuisine first, then each dietary tag, as readable
-// labels. Never includes mock-only tags (Dinner, Quick, High-Protein, …).
+// Badges for an API recipe: the recipe's classifier first (category, else
+// region — both optional canonical slugs, absent on legacy records), then
+// each dietary tag, as readable labels. `cuisine` is retired and never read.
+// Never includes mock-only tags (Dinner, Quick, High-Protein, …) and never
+// fabricates a classifier for a recipe that has none.
 export function recipeBadges(recipe) {
   const badges = [];
-  if (recipe && recipe.cuisine) badges.push(cuisineLabel(recipe.cuisine));
+  const classifier = categoryLabel(recipe && recipe.category) || regionLabel(recipe && recipe.region);
+  if (classifier) badges.push(classifier);
   for (const tag of (recipe && recipe.dietaryTags) || []) badges.push(dietaryTagLabel(tag));
   return badges;
 }

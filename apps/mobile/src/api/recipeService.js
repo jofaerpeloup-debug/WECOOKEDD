@@ -23,7 +23,8 @@ import { api } from './client';
 // non-admin caller with 403 — the mobile app must never send it.
 const LIST_PARAM_KEYS = [
   'search',
-  'cuisine',
+  'region',
+  'category',
   'difficulty',
   'dietaryTag',
   'ingredientId',
@@ -46,8 +47,8 @@ function buildQuery(params) {
 /**
  * GET /api/v1/recipes
  * @param {{
- *   search?: string, cuisine?: string, difficulty?: string, dietaryTag?: string,
- *   ingredientId?: string, maxPrepTimeMinutes?: number,
+ *   search?: string, region?: string, category?: string, difficulty?: string,
+ *   dietaryTag?: string, ingredientId?: string, maxPrepTimeMinutes?: number,
  *   page?: number, limit?: number,
  *   sort?: 'titleAsc'|'titleDesc'|'newest'|'oldest'|'prepTimeAsc'|'prepTimeDesc',
  * }} [params]

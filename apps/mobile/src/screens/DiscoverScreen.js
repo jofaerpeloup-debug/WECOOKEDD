@@ -49,8 +49,8 @@ import { recipeTimeLabel } from '../utils/recipe';
 //     apply-then-show flow. Our filters refetch immediately and the Dashboard
 //     handoff carries exactly ONE filter key, so we keep a single-select chip
 //     row mapped to the four real M2 filters. `cuisine` is intentionally NOT a
-//     chip here — it leaves the data model in M3 and the M2 decisions forbid new
-//     cuisine UX. Real category + Philippine-region browsing arrives in M3.
+//     chip here — it was retired from the Recipe domain in M3. Real category +
+//     Philippine-region browsing waits on a content-classification milestone.
 //   - the teammate "Recent" chips read a shared SearchHistory context. Recent
 //     searches are Dashboard-owned in our app (device-local, one store); Discover
 //     does not open a second one.
@@ -60,9 +60,9 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 // The four real M2 Discover filters — the exact Dashboard handoff contract
 // ('all' | 'easy' | 'vegetarian' | 'vegan'), taken from the shared
-// `DISCOVER_FILTERS` source of truth so each keeps its real backend query. The
-// legacy Filipino entry is left out: that filter is cuisine-backed, cuisine
-// leaves the data model in M3, and the M2 decisions forbid new cuisine UX.
+// `DISCOVER_FILTERS` source of truth so each keeps its real backend query.
+// There is no cuisine/region/category chip: cuisine was retired in M3 and
+// region/category have no controlled vocabulary yet.
 const M2_FILTER_KEYS = ['all', 'easy', 'vegetarian', 'vegan'];
 const M2_FILTERS = M2_FILTER_KEYS
   .map((key) => DISCOVER_FILTERS.find((f) => f.key === key))

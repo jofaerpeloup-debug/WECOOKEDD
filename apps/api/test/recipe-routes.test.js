@@ -39,7 +39,8 @@ function fakeRecipeDoc(overrides = {}) {
     _id: RECIPE_ID,
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
-    cuisine: 'filipino',
+    region: 'central-luzon',
+    category: 'main-dish',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -71,7 +72,6 @@ function validCreatePayload(overrides = {}) {
   return {
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
-    cuisine: 'filipino',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -211,7 +211,7 @@ test('GET /api/v1/recipes rejects invalid query params', async (t) => {
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
 });
 
-test('GET /api/v1/recipes?cuisine=filipino&maxPrepTimeMinutes=20 is applied as filters', async (t) => {
+test('GET /api/v1/recipes?region=&category=&maxPrepTimeMinutes=20 is applied as filters', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   let capturedFilter;
   t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
@@ -222,12 +222,41 @@ test('GET /api/v1/recipes?cuisine=filipino&maxPrepTimeMinutes=20 is applied as f
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app)
-    .get('/api/v1/recipes?cuisine=filipino&maxPrepTimeMinutes=20')
+    .get('/api/v1/recipes?region=Central%20Luzon&category=main-dish&maxPrepTimeMinutes=20')
     .set('Authorization', `Bearer ${token}`);
 
   assert.equal(response.status, 200);
-  assert.equal(capturedFilter.cuisine, 'filipino');
+  assert.equal(capturedFilter.region, 'central-luzon');
+  assert.equal(capturedFilter.category, 'main-dish');
   assert.deepEqual(capturedFilter.prepTimeMinutes, { $lte: 20 });
+});
+
+test('GET /api/v1/recipes?cuisine=filipino is rejected (retired query param)', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+
+  const response = await request(app)
+    .get('/api/v1/recipes?cuisine=filipino')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('GET /api/v1/recipes response carries region/category/steps and no cuisine', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  t.mock.method(recipeRepository, 'findMany', async () => [fakeRecipeDoc()]);
+  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const response = await request(app).get('/api/v1/recipes').set('Authorization', `Bearer ${token}`);
+
+  const recipe = response.body.data.recipes[0];
+  assert.equal(recipe.region, 'central-luzon');
+  assert.equal(recipe.category, 'main-dish');
+  assert.equal('cuisine' in recipe, false);
+  assert.equal(recipe.steps[0].order, 1);
+  assert.equal(recipe.steps[0].text, recipe.instructions[0]);
 });
 
 test('GET /api/v1/recipes/:id returns 404 for an unknown id', async (t) => {
@@ -462,6 +491,101 @@ test('POST /api/v1/recipes rejects unknown top-level fields', async (t) => {
     .post('/api/v1/recipes')
     .set('Authorization', `Bearer ${token}`)
     .send(validCreatePayload({ notAField: true }));
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/recipes rejects a retired cuisine field and never stores it', async (t) => {
+  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+
+  const response = await request(app)
+    .post('/api/v1/recipes')
+    .set('Authorization', `Bearer ${token}`)
+    .send(validCreatePayload({ cuisine: 'filipino' }));
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/recipes accepts structured steps and a canonical region/category, normalizing steps into instructions', async (t) => {
+  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findById', async (id) =>
+    activeIngredient(id, id === CHICKEN_ID ? 'Chicken' : 'Garlic')
+  );
+  let capturedData;
+  t.mock.method(recipeRepository, 'createRecipe', async (data) => {
+    capturedData = data;
+    return fakeRecipeDoc({
+      ...data,
+      ingredients: data.ingredients.map((entry) => ({
+        ...entry,
+        ingredientId: activeIngredient(entry.ingredientId, entry.ingredientId === CHICKEN_ID ? 'Chicken' : 'Garlic'),
+      })),
+    });
+  });
+
+  const body = validCreatePayload({ region: 'Bicol', category: 'Main Dish' });
+  delete body.instructions;
+  body.steps = [
+    { order: 2, text: 'Simmer until tender.' },
+    { order: 1, text: 'Combine the marinade.' },
+  ];
+
+  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const response = await request(app)
+    .post('/api/v1/recipes')
+    .set('Authorization', `Bearer ${token}`)
+    .send(body);
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(capturedData.instructions, ['Combine the marinade.', 'Simmer until tender.']);
+  assert.equal(capturedData.region, 'bicol');
+  assert.equal(capturedData.category, 'main-dish');
+  assert.equal('cuisine' in capturedData, false);
+});
+
+test('PATCH /api/v1/recipes/:id clears category with an explicit null and the serializer returns it as null', async (t) => {
+  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: RECIPE_ID,
+    isActive: true,
+    region: 'central-luzon',
+    category: 'main-dish',
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+  let capturedOps;
+  t.mock.method(recipeRepository, 'updateById', async (id, update) => {
+    capturedOps = update;
+    // Mimic $unset: the returned doc no longer carries `category`.
+    const doc = fakeRecipeDoc();
+    delete doc.category;
+    return doc;
+  });
+
+  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ category: null });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(capturedOps.$unset, { category: '' });
+  assert.equal(capturedOps.$set, undefined);
+  assert.equal(response.body.data.recipe.category, null);
+  // The untouched region is unaffected.
+  assert.equal(response.body.data.recipe.region, 'central-luzon');
+});
+
+test('PATCH /api/v1/recipes/:id rejects an empty-string region (clear requires null)', async (t) => {
+  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+
+  const response = await request(app)
+    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ region: '' });
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');

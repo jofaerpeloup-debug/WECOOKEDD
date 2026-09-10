@@ -98,7 +98,7 @@ Response envelopes (already unwrapped by `client.js` to `data`):
 {
   "id": "<favoriteId>",
   "recipe": {
-    "id": "<recipeId>", "title": "...", "cuisine": "filipino",
+    "id": "<recipeId>", "title": "...", "region": null, "category": null,
     "difficulty": "easy", "prepTimeMinutes": 15, "cookTimeMinutes": 40,
     "imageUrl": null
   },
@@ -339,8 +339,8 @@ navigation contract is unchanged.
 Fully migrated to `useFavorites()` — no `SavedRecipesContext`, no `mockData`,
 no mock recipe lookup. Renders the favorite's nested recipe **summary** only
 (`title`, `imageUrl` via `RecipeImage`, `recipeTimeLabel` from prep+cook, and a
-`cuisine`/`difficulty` label). Featured + grid layout and the existing
-empty-state copy/styling are preserved.
+short classifier label — `category`, else `region`, else `difficulty`).
+Featured + grid layout and the existing empty-state copy/styling are preserved.
 
 States:
 
