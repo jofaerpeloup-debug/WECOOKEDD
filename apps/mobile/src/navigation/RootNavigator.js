@@ -8,14 +8,16 @@ import LandingScreen from '../screens/LandingScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import MainTabs from './MainTabs';
+import DiscoverScreen from '../screens/DiscoverScreen';
+import SavedScreen from '../screens/SavedScreen';
+import AssistantScreen from '../screens/AssistantScreen';
+import MealPlanScreen from '../screens/MealPlanScreen';
 import IngredientStudioScreen from '../screens/IngredientStudioScreen';
 import SwapDetailScreen from '../screens/SwapDetailScreen';
 import RecipeDetailScreen from '../screens/RecipeDetailScreen';
 import CookModeScreen from '../screens/CookModeScreen';
 import ShoppingListScreen from '../screens/ShoppingListScreen';
-import ProfileScreen from '../screens/ProfileScreen';
 import AccountDetailsScreen from '../screens/AccountDetailScreen';
-import CommunityScreen from '../screens/CommunityScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import SecurityScreen from '../screens/SecurityScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
@@ -55,6 +57,29 @@ export default function RootNavigator() {
           // the correct stack simply renders.
           <>
             <Stack.Screen name="MainTabs" component={MainTabs} />
+            {/*
+              M2 navigation shell: the teammate tab set is Home | Community |
+              Swaps | Profile only (see MainTabs.js). Discover, Assistant and
+              Saved are no longer tabs, so they are registered here as stack
+              destinations to stay reachable:
+                - Discover  — Dashboard "search / browse / See all / Easy / Vegan
+                  / Vegetarian" all navigate('Discover', { initialFilter }); the
+                  internal route name stays "Discover" (user-facing title may be
+                  "Search"). SavedScreen also navigate('Discover').
+                - Assistant — PlusMenu "Ask the Chef".
+                - MealPlan  — PlusMenu "Meal Plan" (minimal placeholder screen;
+                  real feature is a later milestone).
+
+              Community is NOT registered here: it is a MainTabs route. Its only
+              caller, ProfileScreen's menu (navigation.navigate('Community')),
+              runs inside MainTabs and resolves to the sibling Community tab. A
+              duplicate root-stack "Community" would only trigger React
+              Navigation's nested same-name warning.
+            */}
+            <Stack.Screen name="Discover" component={DiscoverScreen} />
+            <Stack.Screen name="Saved" component={SavedScreen} />
+            <Stack.Screen name="Assistant" component={AssistantScreen} />
+            <Stack.Screen name="MealPlan" component={MealPlanScreen} />
             <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />
             <Stack.Screen
               name="SwapDetail"
@@ -68,9 +93,16 @@ export default function RootNavigator() {
               options={{ animation: 'slide_from_bottom' }}
             />
             <Stack.Screen name="List" component={ShoppingListScreen} />
-            <Stack.Screen name="Profile" component={ProfileScreen} />
+            {/*
+              Profile is a MainTabs route only — no root-stack registration.
+              Nothing navigates('Profile'); the tab is the sole entry point, and
+              a duplicate root-stack "Profile" would only trip React Navigation's
+              nested same-name warning. Its detail pages (AccountDetails,
+              Settings, Security, Notifications, HelpCenter, About, Terms,
+              Privacy, Licenses) stay here — the Profile tab navigates out to
+              them and the calls bubble up to this stack.
+            */}
             <Stack.Screen name="AccountDetails" component={AccountDetailsScreen} />
-            <Stack.Screen name="Community" component={CommunityScreen} />
             <Stack.Screen name="Settings" component={SettingsScreen} />
             <Stack.Screen name="Security" component={SecurityScreen} />
             <Stack.Screen name="Notifications" component={NotificationsScreen} />
