@@ -1,156 +1,83 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Image,
-  TextInput,
   Pressable,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   ActivityIndicator,
+  BackHandler,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS, HeartIcon } from '../theme/brandKit';
+import { typography, spacing, radius } from '../theme/theme';
+import { useTheme } from '../theme/ThemeContext';
+import { BowlMark, GoogleGlyph } from '../theme/brandKit';
+import Input from '../components/Input';
+import Button from '../components/Button';
 import useGoogleSignIn from '../hooks/useGoogleSignIn';
 import { useAuth } from '../context/AuthContext';
+import * as authService from '../api/authService';
 import { getAuthErrorMessage } from '../api/errorMessages';
 
-const LOGIN_BG = require('../assets/landing/login-bg.jpg');
-
-function MailIcon({ size = 16, color = COLORS.inkFaint }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M4 6h16v12H4V6Z"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinejoin="round"
-      />
-      <Path d="M4.5 6.5 12 12.5l7.5-6" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-    </Svg>
-  );
-}
-
-function LockIcon({ size = 16, color = COLORS.inkFaint }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M6 11h12v9H6v-9Z"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinejoin="round"
-      />
-      <Path d="M8 11V8a4 4 0 1 1 8 0v3" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-function EyeIcon({ size = 16, color = COLORS.inkFaint, off }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinejoin="round"
-      />
-      <Path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke={color} strokeWidth={1.8} />
-      {off && <Path d="M3 3l18 18" stroke={color} strokeWidth={1.8} strokeLinecap="round" />}
-    </Svg>
-  );
-}
-
-function GoogleIcon({ size = 18 }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24">
-      <Path
-        d="M21.6 12.23c0-.7-.06-1.38-.18-2.03H12v3.84h5.4a4.6 4.6 0 0 1-2 3.02v2.5h3.23c1.9-1.75 2.97-4.33 2.97-7.33Z"
-        fill="#4285F4"
-      />
-      <Path
-        d="M12 22c2.7 0 4.96-.9 6.62-2.44l-3.23-2.5c-.9.6-2.04.96-3.39.96-2.6 0-4.8-1.76-5.59-4.12H3.07v2.58A10 10 0 0 0 12 22Z"
-        fill="#34A853"
-      />
-      <Path
-        d="M6.41 13.9a6 6 0 0 1 0-3.8V7.52H3.07a10 10 0 0 0 0 8.96l3.34-2.58Z"
-        fill="#FBBC05"
-      />
-      <Path
-        d="M12 6.18c1.47 0 2.79.5 3.83 1.5l2.87-2.87A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.93 5.52l3.34 2.58C7.2 7.94 9.4 6.18 12 6.18Z"
-        fill="#EA4335"
-      />
-    </Svg>
-  );
-}
-
-function AppleIcon({ size = 19, color = '#fff' }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24">
-      <Path
-        d="M16.4 1c.1 1-.3 2-1 2.7-.7.8-1.8 1.4-2.8 1.3-.1-1 .4-2 1-2.7C14.3 1.4 15.4 1 16.4 1Zm3.6 16.3c-.3.7-.6 1.3-1 1.9-.6.9-1.1 1.6-1.6 2-.5.5-1.1.7-1.8.7-.5 0-1.1-.1-1.9-.5-.7-.3-1.4-.5-2-.5-.7 0-1.3.2-2 .5-.7.4-1.3.5-1.7.5-.7 0-1.3-.2-1.8-.7-.6-.5-1.1-1.2-1.7-2.1-.6-1-1.1-2.1-1.5-3.4-.4-1.4-.6-2.7-.6-4 0-1.5.3-2.7 1-3.8.5-.9 1.2-1.5 2-2 .8-.5 1.7-.7 2.6-.7.5 0 1.2.2 2.1.5.8.3 1.4.5 1.7.5.2 0 .8-.2 1.8-.6 1-.3 1.8-.5 2.4-.4 1.8.1 3.1.9 4 2.2-1.6 1-2.4 2.3-2.4 4.1 0 1.4.5 2.5 1.5 3.5.4.4.9.8 1.4 1-.1.3-.2.6-.3.8Z"
-        fill={color}
-      />
-    </Svg>
-  );
-}
-
-function FacebookIcon({ size = 18, color = '#1877F2' }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24">
-      <Path
-        d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.5-3.89 3.78-3.89 1.1 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12Z"
-        fill={color}
-      />
-    </Svg>
-  );
-}
-
-function Field({ icon, secureTextEntry, rightAction, style, ...props }) {
-  const [hidden, setHidden] = useState(!!secureTextEntry);
-
-  return (
-    <View style={[styles.field, style]}>
-      {icon}
-      <TextInput
-        style={styles.input}
-        placeholderTextColor={COLORS.inkFaint}
-        secureTextEntry={hidden}
-        {...props}
-      />
-      {secureTextEntry && (
-        <Pressable onPress={() => setHidden(!hidden)} hitSlop={10}>
-          <EyeIcon off={hidden} />
-        </Pressable>
-      )}
-      {rightAction}
-    </View>
-  );
-}
+// Identical wording whether or not the address has an account — the screen must
+// never become an account-existence oracle.
+const RESET_REQUESTED =
+  'If an account exists for that email, password reset instructions have been sent.';
 
 export default function LoginScreen({ navigation }) {
+  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const styles = makeStyles(colors, isDark);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [activeAction, setActiveAction] = useState(null);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const inFlightRef = useRef(false);
+
   const google = useGoogleSignIn();
   const { signIn } = useAuth();
 
+  const submitting = activeAction === 'login';
+  const resetting = activeAction === 'reset';
+  const googleSubmitting = activeAction === 'google' || google.loading;
+  const busy = activeAction !== null || google.loading;
+
+  // Disable only user-driven back mechanisms while work is active. This does
+  // not register a navigation-removal blocker, so RootNavigator remains free
+  // to replace the unauthenticated tree immediately after a successful login.
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !busy });
+  }, [busy, navigation]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => inFlightRef.current
+    );
+    return () => subscription.remove();
+  }, []);
+
+  const goRegister = () => {
+    if (inFlightRef.current) return;
+    navigation.navigate('Register');
+  };
+
   const login = async () => {
     if (inFlightRef.current) return; // guard against rapid duplicate submissions
+    google.cancel();
+    setNotice(null);
+    setError(null);
     const trimmedEmail = email.trim();
     if (!trimmedEmail || !password) {
       setError('Enter your email and password to continue.');
       return;
     }
     inFlightRef.current = true;
-    setSubmitting(true);
-    setError(null);
+    setActiveAction('login');
     try {
       await signIn({ email: trimmedEmail, password });
       // On success the auth state flips and RootNavigator swaps to the
@@ -159,126 +86,199 @@ export default function LoginScreen({ navigation }) {
       setError(getAuthErrorMessage(err));
     } finally {
       inFlightRef.current = false;
-      setSubmitting(false);
+      setActiveAction(null);
     }
   };
 
+  // Request step only. Goes straight to authService because it carries no
+  // session authority — no tokens are issued, and AuthContext (the auth
+  // boundary) has nothing to reconcile. The reset itself is completed off-device
+  // through the emailed link, so there is no route to navigate to here.
+  const requestPasswordReset = async () => {
+    if (inFlightRef.current) return;
+    google.cancel();
+    setNotice(null);
+    setError(null);
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError('Enter your email address first, then tap Forgot password.');
+      return;
+    }
+    inFlightRef.current = true;
+    setActiveAction('reset');
+    try {
+      await authService.forgotPassword(trimmedEmail);
+      setNotice(RESET_REQUESTED);
+    } catch (err) {
+      setError(getAuthErrorMessage(err));
+    } finally {
+      inFlightRef.current = false;
+      setActiveAction(null);
+    }
+  };
+
+  const signInWithGoogle = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setActiveAction('google');
+    setError(null);
+    setNotice(null);
+    try {
+      await google.signIn();
+    } finally {
+      inFlightRef.current = false;
+      setActiveAction(null);
+    }
+  };
+
+  // One polite live region for everything the form has to say back, so the
+  // spinner-only states still announce what is happening.
+  let status = null;
+  if (error) status = { text: error, tone: styles.statusError };
+  else if (notice) status = { text: notice, tone: styles.statusNotice };
+  else if (submitting) status = { text: 'Logging in…', tone: styles.statusMuted };
+  else if (resetting) status = { text: 'Sending reset instructions…', tone: styles.statusMuted };
+
   return (
     <View style={styles.root}>
-      <Image
-        source={LOGIN_BG}
-        style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
-        resizeMode="cover"
-      />
-      <View style={styles.scrim} pointerEvents="none" />
-
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
         <ScrollView
           contentContainerStyle={[
-            styles.scrollContent,
-            { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 8 },
+            styles.content,
+            { paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + spacing.xl },
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.logoRow}>
-            <View style={styles.logoMark}>
-              <MaterialCommunityIcons name="chef-hat" size={18} color="#fff" />
-            </View>
-            <Text style={styles.wordmark}>
-              <Text style={{ color: COLORS.greenMid }}>We</Text>Cooked
+            <BowlMark size={34} ring={false} color={colors.sageDeep} accent={colors.stone} />
+            <Text style={styles.wordmark}>WeCooked</Text>
+          </View>
+
+          <Text style={styles.title} accessibilityRole="header">
+            Welcome back
+          </Text>
+          <Text style={styles.subtitle}>Log in to continue your cooking journey.</Text>
+
+          {/* Password-manager integration is deferred out of M1 to its own
+              slice, so these fields carry no autofill hints — same as before
+              the migration. What stays is IME hardening: an email address must
+              not be capitalised, autocorrected or spell-checked on its way in. */}
+          <Input
+            label="Email"
+            icon="mail-outline"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="youremail@gmail.com"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            editable={!busy}
+          />
+          {/* The IME transforms are pinned off for their own sake, not for
+              autofill: the eye toggle unmasks this field, and a plain text
+              field would otherwise apply sentence capitalisation, autocorrect
+              and spell-check suggestions to a typed password. */}
+          <Input
+            label="Password"
+            icon="lock-closed-outline"
+            value={password}
+            onChangeText={setPassword}
+            placeholder="Enter your password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            editable={!busy}
+            style={{ marginBottom: spacing.sm }}
+          />
+
+          <Pressable
+            hitSlop={8}
+            onPress={requestPasswordReset}
+            disabled={busy}
+            style={({ pressed }) => [styles.forgotWrap, (pressed || busy) && styles.dim]}
+            accessibilityRole="button"
+            accessibilityLabel="Forgot password"
+            accessibilityHint="Emails reset instructions to the address entered above"
+            accessibilityState={{ disabled: busy, busy: resetting }}
+          >
+            <Text style={styles.forgot}>Forgot password?</Text>
+          </Pressable>
+
+          {status && (
+            <Text style={[styles.status, status.tone]} accessibilityLiveRegion="polite">
+              {status.text}
             </Text>
+          )}
+
+          <Button
+            title="Log in"
+            onPress={login}
+            loading={submitting}
+            disabled={busy}
+            style={{ marginTop: spacing.lg }}
+          />
+
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <Text style={styles.dividerText}>or continue with</Text>
+            <View style={styles.divider} />
           </View>
 
-          <View style={styles.headerText}>
-            <Text style={styles.welcome}>Welcome back!</Text>
-            <View style={styles.subtitleRow}>
-              <Text style={styles.subtitle}>Log in to continue your cooking journey</Text>
-              <HeartIcon size={14} />
-            </View>
-          </View>
-
-          <View style={styles.form}>
-            <Text style={styles.label}>Email</Text>
-            <Field
-              icon={<MailIcon />}
-              value={email}
-              onChangeText={setEmail}
-              placeholder="youremail@gmail.com"
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-
-            <Text style={styles.label}>Password</Text>
-            <Field
-              icon={<LockIcon />}
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Enter your password"
-              secureTextEntry
-              style={{ marginBottom: 4 }}
-            />
-
-            <Pressable hitSlop={8} style={styles.forgotWrap}>
-              <Text style={styles.forgot}>Forgot password?</Text>
-            </Pressable>
-
-            {error && <Text style={styles.formError}>{error}</Text>}
-
-            <Pressable
-              onPress={login}
-              disabled={submitting}
-              style={({ pressed }) => [
-                styles.cta,
-                pressed && styles.ctaPressed,
-                submitting && styles.ctaDisabled,
-              ]}
-            >
-              {submitting ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.ctaText}>Log in</Text>
-              )}
-            </Pressable>
-
-            <View style={styles.dividerRow}>
-              <View style={styles.divider} />
-              <Text style={styles.dividerText}>or continue with</Text>
-              <View style={styles.divider} />
-            </View>
-
-            <View style={styles.socialRow}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.socialBtn,
-                  pressed && styles.socialBtnPressed,
-                  !google.ready && styles.socialBtnDisabled,
-                ]}
-                disabled={google.loading}
-                onPress={google.signIn}
-              >
-                {google.loading ? <ActivityIndicator size="small" color={COLORS.ink} /> : <GoogleIcon />}
-              </Pressable>
-              <Pressable style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed]}>
-                <AppleIcon />
-              </Pressable>
-              <Pressable style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed]}>
-                <FacebookIcon />
-              </Pressable>
-            </View>
-
-            {google.error && (
-              <Text style={styles.googleError}>
-                {google.error.message || 'Google sign-in failed. Try again.'}
-              </Text>
+          {/* The real WeCooked Google flow: useGoogleSignIn -> AuthContext
+              .signInWithGoogle -> googleAuthFlow. Presentation only here. */}
+          <Pressable
+            onPress={signInWithGoogle}
+            disabled={busy}
+            style={({ pressed }) => [
+              styles.googleBtn,
+              pressed && styles.dim,
+              busy && styles.dim,
+              !google.ready && styles.googleBtnUnavailable,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              googleSubmitting ? 'Signing in with Google' : 'Continue with Google'
+            }
+            accessibilityState={{
+              disabled: busy,
+              busy: googleSubmitting,
+            }}
+          >
+            {googleSubmitting ? (
+              <ActivityIndicator size="small" color={colors.ink} />
+            ) : (
+              <>
+                <GoogleGlyph size={18} />
+                <Text style={styles.googleText}>Continue with Google</Text>
+              </>
             )}
+          </Pressable>
 
-            <View style={styles.signupRow}>
-              <Text style={styles.signupText}>Don't have an account? </Text>
-              <Pressable onPress={() => navigation.navigate('Register')} hitSlop={8}>
-                <Text style={styles.signupLink}>Sign up</Text>
-              </Pressable>
-            </View>
+          {google.error && (
+            <Text style={styles.googleError} accessibilityLiveRegion="polite">
+              {google.error.message || 'Google sign-in failed. Try again.'}
+            </Text>
+          )}
+
+          <View style={styles.signupRow}>
+            <Text style={styles.signupText}>Don't have an account? </Text>
+            <Pressable
+              onPress={goRegister}
+              disabled={busy}
+              hitSlop={8}
+              style={({ pressed }) => [(pressed || busy) && styles.dim]}
+              accessibilityRole="button"
+              accessibilityLabel="Create a new account"
+              accessibilityState={{ disabled: busy }}
+            >
+              <Text style={styles.signupLink}>Sign up</Text>
+            </Pressable>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -286,94 +286,103 @@ export default function LoginScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
-  scrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.45)' },
-  scrollContent: { paddingHorizontal: 26, flexGrow: 1, justifyContent: 'center' },
+function makeStyles(colors, isDark) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.cream },
+    content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: spacing.xl },
 
-  logoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 10 },
-  logoMark: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    backgroundColor: COLORS.greenMid,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  wordmark: { fontSize: 18, fontWeight: '700', color: COLORS.ink },
+    logoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.xl },
+    wordmark: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: typography.sizes.xl,
+      color: colors.ink,
+    },
 
-  headerText: { alignItems: 'center', marginBottom: 32 },
-  welcome: { fontSize: 20, fontWeight: '800', color: COLORS.ink, marginBottom: 3 },
-  subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  subtitle: { fontSize: 12.5, fontWeight: '600', color: COLORS.inkSoft },
+    title: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: typography.sizes.xxl,
+      color: colors.ink,
+      marginBottom: spacing.xs,
+    },
+    subtitle: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      color: colors.inkSoft,
+      marginBottom: spacing.xxl,
+    },
 
-  form: { width: '100%' },
-  label: { fontSize: 12.5, fontWeight: '700', color: COLORS.inkSoft, marginBottom: 6 },
-  field: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: COLORS.creamCard,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.hairline,
-    paddingHorizontal: 14,
-    height: 46,
-    marginBottom: 10,
-  },
-  input: { flex: 1, fontSize: 14, color: COLORS.ink, height: '100%', outlineStyle: 'none' },
+    forgotWrap: { alignSelf: 'flex-end', marginTop: -spacing.xs },
+    forgot: {
+      fontFamily: typography.body.bold,
+      fontSize: 13,
+      color: isDark ? colors.sage : colors.sageDeep,
+    },
+    dim: { opacity: 0.6 },
 
-  forgotWrap: { alignSelf: 'flex-end', marginTop: -6, marginBottom: 10 },
-  forgot: { fontSize: 12, fontWeight: '700', color: COLORS.greenLink },
+    status: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      lineHeight: 18,
+      textAlign: 'center',
+      marginTop: spacing.lg,
+    },
+    statusError: { color: colors.error },
+    statusNotice: { color: colors.inkSoft },
+    statusMuted: { color: colors.inkFaint },
 
-  cta: {
-    backgroundColor: COLORS.greenMid,
-    borderRadius: 26,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  ctaPressed: { backgroundColor: COLORS.greenChef },
-  ctaDisabled: { opacity: 0.6 },
-  ctaText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+    dividerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      marginVertical: spacing.xl,
+    },
+    divider: { flex: 1, height: 1, backgroundColor: colors.hairline },
+    dividerText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkFaint,
+    },
 
-  formError: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: '#F0544E',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
+    googleBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.md,
+      height: 50,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      backgroundColor: colors.paper,
+    },
+    googleBtnUnavailable: { opacity: 0.55 },
+    googleText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    googleError: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.error,
+      textAlign: 'center',
+      marginTop: spacing.md,
+    },
 
-  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  divider: { flex: 1, height: 1, backgroundColor: COLORS.hairline },
-  dividerText: { fontSize: 11.5, fontWeight: '600', color: COLORS.inkFaint },
-
-  socialRow: { flexDirection: 'row', gap: 14, marginBottom: 14, justifyContent: 'center' },
-  socialBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.creamCard,
-    borderWidth: 1,
-    borderColor: COLORS.hairline,
-  },
-  socialBtnPressed: { opacity: 0.7 },
-  socialBtnDisabled: { opacity: 0.45 },
-
-  googleError: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#F0544E',
-    textAlign: 'center',
-    marginTop: -6,
-    marginBottom: 12,
-  },
-
-  signupRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
-  signupText: { fontSize: 13.5, fontWeight: '600', color: COLORS.inkSoft },
-  signupLink: { fontSize: 13.5, fontWeight: '800', color: COLORS.greenLink },
-});
+    signupRow: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginTop: spacing.xxl,
+    },
+    signupText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 13.5,
+      color: colors.inkSoft,
+    },
+    signupLink: {
+      fontFamily: typography.body.bold,
+      fontSize: 13.5,
+      color: isDark ? colors.sage : colors.sageDeep,
+    },
+  });
+}
