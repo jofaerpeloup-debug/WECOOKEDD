@@ -7,6 +7,7 @@
 // Endpoints consumed (all under /api/v1):
 //   POST /auth/register   -> { user, accessToken, refreshToken }
 //   POST /auth/login      -> { user, accessToken, refreshToken }
+//   POST /auth/forgot-password -> { passwordResetRequested: true } (no session change)
 //   POST /auth/refresh    -> { accessToken, refreshToken }        (rotating; no user)
 //   POST /auth/logout     -> { loggedOut: true }                  (needs access token)
 //   POST /auth/logout-all -> { revokedCount }                     (needs access token)
@@ -162,6 +163,24 @@ export async function login({ email, password }) {
     body: { email, password },
   });
   return establishSession(data);
+}
+
+// --- password reset request ------------------------------------------
+//
+//   POST /auth/forgot-password  body { email }
+//        -> { passwordResetRequested: true }                  (public)
+//
+// Request step only: the backend mails the reset link and answers the SAME way
+// whether or not an account exists, so the caller learns nothing about the
+// address. Deliberately NOT part of the session paths — this issues no tokens,
+// so it must not touch tokenStore, applyTokens, establishSession or
+// endSession, and a signed-in caller's session is left exactly as it was.
+// Completing the reset happens off-device via that emailed link.
+export function forgotPassword(email) {
+  return api.post('/auth/forgot-password', {
+    auth: false,
+    body: { email },
+  });
 }
 
 // --- Google social login (B4.1 backend contract) ----------------------

@@ -1,106 +1,70 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Image,
-  TextInput,
   Pressable,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   ActivityIndicator,
+  BackHandler,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS, HeartIcon } from '../theme/brandKit';
+import { typography, spacing, radius } from '../theme/theme';
+import { useTheme } from '../theme/ThemeContext';
+import { BowlMark, GoogleGlyph } from '../theme/brandKit';
+import Input from '../components/Input';
+import Button from '../components/Button';
+import useGoogleSignIn from '../hooks/useGoogleSignIn';
 import { useAuth } from '../context/AuthContext';
 import { getAuthErrorMessage } from '../api/errorMessages';
 
-const LOGIN_BG = require('../assets/landing/login-bg.jpg');
-
-function UserIcon({ size = 16, color = COLORS.inkFaint }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" stroke={color} strokeWidth={1.8} />
-      <Path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-function MailIcon({ size = 16, color = COLORS.inkFaint }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M4 6h16v12H4V6Z" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
-      <Path
-        d="M4.5 6.5 12 12.5l7.5-6"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
-function LockIcon({ size = 16, color = COLORS.inkFaint }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M6 11h12v9H6v-9Z" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
-      <Path d="M8 11V8a4 4 0 1 1 8 0v3" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-function EyeIcon({ size = 16, color = COLORS.inkFaint, off }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinejoin="round"
-      />
-      <Path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke={color} strokeWidth={1.8} />
-      {off && <Path d="M3 3l18 18" stroke={color} strokeWidth={1.8} strokeLinecap="round" />}
-    </Svg>
-  );
-}
-
-function Field({ icon, secureTextEntry, style, ...props }) {
-  const [hidden, setHidden] = useState(!!secureTextEntry);
-
-  return (
-    <View style={[styles.field, style]}>
-      {icon}
-      <TextInput
-        style={styles.input}
-        placeholderTextColor={COLORS.inkFaint}
-        secureTextEntry={hidden}
-        {...props}
-      />
-      {secureTextEntry && (
-        <Pressable onPress={() => setHidden(!hidden)} hitSlop={10}>
-          <EyeIcon off={hidden} />
-        </Pressable>
-      )}
-    </View>
-  );
-}
-
 export default function RegisterScreen({ navigation }) {
+  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  const styles = makeStyles(colors, isDark);
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [activeAction, setActiveAction] = useState(null);
   const [error, setError] = useState(null);
   const inFlightRef = useRef(false);
+
+  // The SAME hook, and therefore the same real flow, that Login uses: there is
+  // no separate Google signup path. The backend decides whether a given Google
+  // identity is a new account or an existing one.
+  const google = useGoogleSignIn();
   const { signUp } = useAuth();
+
+  const submitting = activeAction === 'register';
+  const googleSubmitting = activeAction === 'google' || google.loading;
+  const busy = activeAction !== null || google.loading;
+
+  // Block only user back/gesture input while a request is active. Structural
+  // removal by RootNavigator after AuthContext authenticates remains untouched.
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !busy });
+  }, [busy, navigation]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => inFlightRef.current
+    );
+    return () => subscription.remove();
+  }, []);
+
+  const goLogin = () => {
+    if (inFlightRef.current) return;
+    navigation.navigate('Login');
+  };
 
   const register = async () => {
     if (inFlightRef.current) return; // guard against rapid duplicate submissions
+    google.cancel();
+    setError(null);
     const trimmedName = name.trim();
     const trimmedEmail = email.trim();
     if (!trimmedName || !trimmedEmail || !password) {
@@ -112,8 +76,7 @@ export default function RegisterScreen({ navigation }) {
       return;
     }
     inFlightRef.current = true;
-    setSubmitting(true);
-    setError(null);
+    setActiveAction('register');
     try {
       // Only name/email/password are sent — role/status/emailVerified and any
       // other server-owned fields are never supplied. The backend always
@@ -124,102 +87,157 @@ export default function RegisterScreen({ navigation }) {
       setError(getAuthErrorMessage(err));
     } finally {
       inFlightRef.current = false;
-      setSubmitting(false);
+      setActiveAction(null);
     }
   };
 
+  const signInWithGoogle = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setActiveAction('google');
+    setError(null);
+    try {
+      await google.signIn();
+    } finally {
+      inFlightRef.current = false;
+      setActiveAction(null);
+    }
+  };
+
+  let status = null;
+  if (error) status = { text: error, tone: styles.statusError };
+  else if (submitting) status = { text: 'Creating your account…', tone: styles.statusMuted };
+
   return (
     <View style={styles.root}>
-      <Image
-        source={LOGIN_BG}
-        style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
-        resizeMode="cover"
-      />
-      <View style={styles.scrim} pointerEvents="none" />
-
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
         <ScrollView
           contentContainerStyle={[
-            styles.scrollContent,
-            { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 8 },
+            styles.content,
+            { paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + spacing.xl },
           ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.logoRow}>
-            <View style={styles.logoMark}>
-              <MaterialCommunityIcons name="chef-hat" size={18} color="#fff" />
-            </View>
-            <Text style={styles.wordmark}>
-              <Text style={{ color: COLORS.greenMid }}>We</Text>Cooked
+            <BowlMark size={34} ring={false} color={colors.sageDeep} accent={colors.stone} />
+            <Text style={styles.wordmark}>WeCooked</Text>
+          </View>
+
+          <Text style={styles.title} accessibilityRole="header">
+            Create your account
+          </Text>
+          <Text style={styles.subtitle}>Start your cooking journey with us.</Text>
+
+          <Input
+            label="Name"
+            icon="person-outline"
+            value={name}
+            onChangeText={setName}
+            placeholder="Your name"
+            autoCapitalize="words"
+            editable={!busy}
+          />
+          {/* Password-manager integration is deferred out of M1 to its own
+              slice, so these fields carry no autofill hints — same as before
+              the migration. What stays is IME hardening: an email address must
+              not be capitalised, autocorrected or spell-checked on its way in. */}
+          <Input
+            label="Email"
+            icon="mail-outline"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="youremail@gmail.com"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            editable={!busy}
+          />
+          {/* The IME transforms are pinned off for their own sake, not for
+              autofill: the eye toggle unmasks this field, and a plain text
+              field would otherwise apply sentence capitalisation, autocorrect
+              and spell-check suggestions to a typed password. */}
+          <Input
+            label="Password"
+            icon="lock-closed-outline"
+            value={password}
+            onChangeText={setPassword}
+            placeholder="At least 8 characters"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            editable={!busy}
+            style={{ marginBottom: spacing.sm }}
+          />
+
+          {status && (
+            <Text style={[styles.status, status.tone]} accessibilityLiveRegion="polite">
+              {status.text}
             </Text>
+          )}
+
+          <Button
+            title="Create account"
+            onPress={register}
+            loading={submitting}
+            disabled={busy}
+            style={{ marginTop: spacing.lg }}
+          />
+
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <Text style={styles.dividerText}>or continue with</Text>
+            <View style={styles.divider} />
           </View>
 
-          <View style={styles.headerText}>
-            <Text style={styles.welcome}>Create your account</Text>
-            <View style={styles.subtitleRow}>
-              <Text style={styles.subtitle}>Start your cooking journey with us</Text>
-              <HeartIcon size={14} />
-            </View>
-          </View>
+          <Pressable
+            onPress={signInWithGoogle}
+            disabled={busy}
+            style={({ pressed }) => [
+              styles.googleBtn,
+              (pressed || busy) && styles.dim,
+              !google.ready && styles.googleBtnUnavailable,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              googleSubmitting ? 'Continuing with Google' : 'Continue with Google'
+            }
+            accessibilityState={{ disabled: busy, busy: googleSubmitting }}
+          >
+            {googleSubmitting ? (
+              <ActivityIndicator size="small" color={colors.ink} />
+            ) : (
+              <>
+                <GoogleGlyph size={18} />
+                <Text style={styles.googleText}>Continue with Google</Text>
+              </>
+            )}
+          </Pressable>
 
-          <View style={styles.form}>
-            <Text style={styles.label}>Name</Text>
-            <Field
-              icon={<UserIcon />}
-              value={name}
-              onChangeText={setName}
-              placeholder="Your name"
-              autoCapitalize="words"
-            />
+          {google.error && (
+            <Text style={styles.googleError} accessibilityLiveRegion="polite">
+              {google.error.message || 'Google sign-in failed. Try again.'}
+            </Text>
+          )}
 
-            <Text style={styles.label}>Email</Text>
-            <Field
-              icon={<MailIcon />}
-              value={email}
-              onChangeText={setEmail}
-              placeholder="youremail@gmail.com"
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-
-            <Text style={styles.label}>Password</Text>
-            <Field
-              icon={<LockIcon />}
-              value={password}
-              onChangeText={setPassword}
-              placeholder="At least 8 characters"
-              secureTextEntry
-              style={{ marginBottom: 10 }}
-            />
-
-            {error && <Text style={styles.formError}>{error}</Text>}
-
+          <View style={styles.signinRow}>
+            <Text style={styles.signinText}>Already have an account? </Text>
             <Pressable
-              onPress={register}
-              disabled={submitting}
-              style={({ pressed }) => [
-                styles.cta,
-                pressed && styles.ctaPressed,
-                submitting && styles.ctaDisabled,
-              ]}
+              onPress={goLogin}
+              disabled={busy}
+              hitSlop={8}
+              style={({ pressed }) => [(pressed || busy) && styles.dim]}
+              accessibilityRole="button"
+              accessibilityLabel="Log in to an existing account"
+              accessibilityState={{ disabled: busy }}
             >
-              {submitting ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.ctaText}>Create account</Text>
-              )}
+              <Text style={styles.signinLink}>Log in</Text>
             </Pressable>
-
-            <View style={styles.signupRow}>
-              <Text style={styles.signupText}>Already have an account? </Text>
-              <Pressable onPress={() => navigation.navigate('Login')} hitSlop={8}>
-                <Text style={styles.signupLink}>Log in</Text>
-              </Pressable>
-            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -227,70 +245,96 @@ export default function RegisterScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
-  scrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.45)' },
-  scrollContent: { paddingHorizontal: 26, flexGrow: 1, justifyContent: 'center' },
+function makeStyles(colors, isDark) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: colors.cream },
+    content: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: spacing.xl },
 
-  logoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 10,
-  },
-  logoMark: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    backgroundColor: COLORS.greenMid,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  wordmark: { fontSize: 18, fontWeight: '700', color: COLORS.ink },
+    logoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.xl },
+    wordmark: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: typography.sizes.xl,
+      color: colors.ink,
+    },
 
-  headerText: { alignItems: 'center', marginBottom: 32 },
-  welcome: { fontSize: 20, fontWeight: '800', color: COLORS.ink, marginBottom: 3 },
-  subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  subtitle: { fontSize: 12.5, fontWeight: '600', color: COLORS.inkSoft },
+    title: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: typography.sizes.xxl,
+      color: colors.ink,
+      marginBottom: spacing.xs,
+    },
+    subtitle: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      color: colors.inkSoft,
+      marginBottom: spacing.xxl,
+    },
 
-  form: { width: '100%' },
-  label: { fontSize: 12.5, fontWeight: '700', color: COLORS.inkSoft, marginBottom: 6 },
-  field: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: COLORS.creamCard,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.hairline,
-    paddingHorizontal: 14,
-    height: 46,
-    marginBottom: 10,
-  },
-  input: { flex: 1, fontSize: 14, color: COLORS.ink, height: '100%', outlineStyle: 'none' },
+    dim: { opacity: 0.6 },
 
-  formError: {
-    fontSize: 12.5,
-    fontWeight: '600',
-    color: '#F0544E',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
+    status: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      lineHeight: 18,
+      textAlign: 'center',
+      marginTop: spacing.md,
+    },
+    statusError: { color: colors.error },
+    statusMuted: { color: colors.inkFaint },
 
-  cta: {
-    backgroundColor: COLORS.greenMid,
-    borderRadius: 26,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  ctaPressed: { backgroundColor: COLORS.greenChef },
-  ctaDisabled: { opacity: 0.6 },
-  ctaText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+    dividerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      marginVertical: spacing.xl,
+    },
+    divider: { flex: 1, height: 1, backgroundColor: colors.hairline },
+    dividerText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkFaint,
+    },
 
-  signupRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
-  signupText: { fontSize: 13.5, fontWeight: '600', color: COLORS.inkSoft },
-  signupLink: { fontSize: 13.5, fontWeight: '800', color: COLORS.greenLink },
-});
+    googleBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.md,
+      height: 50,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      backgroundColor: colors.paper,
+    },
+    googleBtnUnavailable: { opacity: 0.55 },
+    googleText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    googleError: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.error,
+      textAlign: 'center',
+      marginTop: spacing.md,
+    },
+
+    signinRow: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginTop: spacing.xxl,
+    },
+    signinText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 13.5,
+      color: colors.inkSoft,
+    },
+    signinLink: {
+      fontFamily: typography.body.bold,
+      fontSize: 13.5,
+      color: isDark ? colors.sage : colors.sageDeep,
+    },
+  });
+}
