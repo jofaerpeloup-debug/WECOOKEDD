@@ -183,7 +183,8 @@ every other list endpoint in this API.
   "recipe": {
     "id": "<recipeId>",
     "title": "Chicken Adobo",
-    "cuisine": "filipino",
+    "region": null,
+    "category": null,
     "difficulty": "easy",
     "prepTimeMinutes": 15,
     "cookTimeMinutes": 40,

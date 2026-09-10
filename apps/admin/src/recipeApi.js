@@ -26,7 +26,8 @@ import { TO_TASTE_UNIT } from './recipeOptions.js';
  * GET /api/v1/recipes
  * @param {{
  *   search?: string,
- *   cuisine?: string,
+ *   region?: string,
+ *   category?: string,
  *   difficulty?: string,
  *   dietaryTag?: string,
  *   ingredientId?: string,
@@ -37,17 +38,18 @@ import { TO_TASTE_UNIT } from './recipeOptions.js';
  *   limit?: number,
  * }} params
  *   status: "active" (default) | "inactive" | "all" — "inactive"/"all" are admin-only.
+ *   region / category: canonical slugs (e.g. "central-luzon", "main-dish").
  * @returns {Promise<{ recipes: object[], pagination: object|null }>}
  */
 export function listRecipes(params = {}) {
   const {
-    search, cuisine, difficulty, dietaryTag, ingredientId,
+    search, region, category, difficulty, dietaryTag, ingredientId,
     maxPrepTimeMinutes, status, sort, page, limit,
   } = params;
   return api
     .get('/recipes', {
       query: {
-        search, cuisine, difficulty, dietaryTag, ingredientId,
+        search, region, category, difficulty, dietaryTag, ingredientId,
         maxPrepTimeMinutes, status, sort, page, limit,
       },
     })
@@ -89,18 +91,22 @@ export function toIngredientUsagePayload(row) {
 /**
  * POST /api/v1/recipes (admin only)
  * @param {{
- *   title: string, description: string, cuisine: string, difficulty: string,
+ *   title: string, description: string, difficulty: string,
+ *   region?: string, category?: string,
  *   prepTimeMinutes: number, cookTimeMinutes: number, servings: number,
  *   ingredients: object[], instructions: string[],
  *   dietaryTags?: string[], imageUrl?: string|null,
  * }} input
  *   `ingredients` entries must already be in the `toIngredientUsagePayload`
- *   shape. Every referenced ingredient must exist and be active.
+ *   shape. Every referenced ingredient must exist and be active. `region` /
+ *   `category` are optional canonical slugs — omitted entirely when blank
+ *   (the API rejects an empty string).
  */
 export function createRecipe({
   title,
   description,
-  cuisine,
+  region,
+  category,
   difficulty,
   prepTimeMinutes,
   cookTimeMinutes,
@@ -110,23 +116,21 @@ export function createRecipe({
   dietaryTags = [],
   imageUrl = null,
 }) {
-  return api
-    .post('/recipes', {
-      body: {
-        title,
-        description,
-        cuisine,
-        difficulty,
-        prepTimeMinutes,
-        cookTimeMinutes,
-        servings,
-        ingredients,
-        instructions,
-        dietaryTags,
-        imageUrl,
-      },
-    })
-    .then((data) => data.recipe);
+  const body = {
+    title,
+    description,
+    difficulty,
+    prepTimeMinutes,
+    cookTimeMinutes,
+    servings,
+    ingredients,
+    instructions,
+    dietaryTags,
+    imageUrl,
+  };
+  if (region) body.region = region;
+  if (category) body.category = category;
+  return api.post('/recipes', { body }).then((data) => data.recipe);
 }
 
 /**

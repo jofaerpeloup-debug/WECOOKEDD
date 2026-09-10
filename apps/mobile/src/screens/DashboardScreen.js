@@ -47,9 +47,10 @@ import { loadJSON, saveJSON } from '../utils/storage';
 // Teammate parts that need a backend we don't have yet are represented
 // honestly, never faked:
 //   - "Browse by craving" is category-driven in the teammate app. `category`
-//     (+ Philippine `region`) only become authoritative in M3, and per the M2
-//     locked decisions we add no new cuisine-based UX here. So this row links to
-//     the backend-supported Discover filters (difficulty / dietary) instead of
+//     (+ Philippine `region`) exist on the Recipe domain as of M3 but have no
+//     controlled vocabulary or classified content yet, and per the M2 locked
+//     decisions we add no new cuisine-based UX here. So this row links to the
+//     backend-supported Discover filters (difficulty / dietary) instead of
 //     inventing category tiles or imagery.
 //   - "Today's Feature" is a deterministic daily pick FROM the real latest
 //     recipes — not a curated/editorial "featured" flag (the backend has none).
@@ -70,8 +71,9 @@ const RECENT_SEARCH_KEY = 'wecooked:recentSearches';
 const RECENT_SEARCH_MAX = 6;
 
 // Each shortcut maps to an EXACT backend-supported Discover filter key
-// (see api/recipeOptions.js DISCOVER_FILTERS). No cuisine entry — `cuisine` is
-// being removed in M3 and the M2 decisions forbid new cuisine UX on Home.
+// (see api/recipeOptions.js DISCOVER_FILTERS). No cuisine entry — `cuisine`
+// was retired from the Recipe domain in M3 and the M2 decisions forbid new
+// cuisine UX on Home.
 const BROWSE_SHORTCUTS = [
   { key: 'easy', label: 'Easy', icon: 'flash-outline' },
   { key: 'vegetarian', label: 'Vegetarian', icon: 'leaf-outline' },

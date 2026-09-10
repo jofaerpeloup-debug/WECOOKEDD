@@ -16,16 +16,26 @@ for the `Ingredient`/`Substitution` modules it builds on.
   `ingredient.model.js` or `ingredient.repository.js` directly, matching the
   cross-module boundary rule in `backend.md`.
 
-## Filipino focus, cuisine-agnostic schema
+## Philippine focus — `region` and `category`, no `cuisine`
 
-WeCooked initially targets Filipino dishes, but `cuisine` is a plain
-controlled field on `Recipe`, not a special-cased type. Filipino is just one
-value in the `CUISINES` enum (`filipino`, `chinese`, `japanese`, `korean`,
-`thai`, `vietnamese`, `indian`, `italian`, `mexican`, `american`,
-`mediterranean`, `middleEastern`, `other`) — adding a new cuisine later is an
-enum addition, not a schema redesign. Test fixtures use Filipino dishes
-(Chicken Adobo, Sinigang na Baboy, Tinolang Manok, Pancit Bihon) as realistic
-examples, not as evidence of a Filipino-only code path.
+WeCooked is focused on Philippine food. The Recipe domain classifies a dish
+by an optional Philippine **`region`** and an optional **`category`**, both
+stored as conservative canonical slugs (see `shared/validation/slug.js`).
+There is **no controlled vocabulary yet** — a future content milestone
+establishes the canonical `region` / `category` values; until then any valid
+slug is accepted and legacy recipes may have neither field.
+
+**`cuisine` was retired from the Recipe domain in M3** (`feat/recipe-schema-m3`).
+It is not part of the model, the create/update input, the list query, or the
+public response. A create/update/query request that still sends `cuisine` is
+rejected with `400 VALIDATION_ERROR` by the strict schema. Documents created
+before M3 may still physically carry a `cuisine` property in MongoDB — the
+serializer never reads it, and no destructive migration unsets it. `cuisine`
+is **never** derived from anything, and `region` / `category` are **never**
+derived from `cuisine`, the title, or ingredient content.
+
+Test fixtures use Filipino dishes (Chicken Adobo, Sinigang na Baboy, Tinolang
+Manok, Pancit Bihon) as realistic examples.
 
 ## Recipe schema
 
@@ -34,16 +44,32 @@ examples, not as evidence of a Filipino-only code path.
   **Deliberately not unique** — two recipes may share a title (e.g. two
   different "Chicken Adobo" variations), unlike `Ingredient.name`.
 - `description` — required, trimmed, max 2000 characters.
-- `cuisine` — required, one of the controlled `CUISINES` enum above.
+- `region` — **optional** Philippine-region slug. Trimmed, lowercased,
+  internal whitespace/underscores collapsed to single hyphens, must match
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$`, max 64 chars. No enum. Absent on legacy
+  records; never fabricated.
+- `category` — **optional** recipe-category slug, same normalization/validation
+  rules as `region`. No enum.
 - `difficulty` — required, one of `easy` / `medium` / `hard`.
 - `prepTimeMinutes` / `cookTimeMinutes` — required non-negative integers,
   capped at 1440 (24 hours) to reject nonsense input.
 - `servings` — required positive integer, capped at 100.
 - `ingredients` — embedded array, 1–50 entries (see below).
-- `instructions` — required array of trimmed, non-empty strings, 1–50 steps,
-  each up to 1000 characters, stored and returned **in order**. There is no
-  separate `Instruction` collection — steps are simple ordered text, and
-  nothing in this phase needs to query or reference an individual step.
+- `instructions` — array of trimmed, non-empty strings, 1–50 steps, each up
+  to 1000 characters, **persisted and returned in order**. This string array
+  is the single Mongo source of truth for cooking steps — there is no
+  separate `Instruction` collection and no second stored `steps` field.
+  - **Write input:** a request may send `instructions: string[]` (legacy) or
+    the structured `steps: [{ order, text }]` form. On create exactly one is
+    required; when both are sent they must describe the identical ordered text
+    sequence (a mismatch is `400 VALIDATION_ERROR` — the API never silently
+    picks one). Structured `steps` require a contiguous `order` running `1..N`
+    with unique values and non-empty trimmed `text`; the service sorts by
+    `order` and stores the resulting `string[]`.
+  - **Response:** every recipe response carries both `instructions: string[]`
+    (unchanged) **and** a derived `steps: [{ order, text }]` view (1-based,
+    order = array position) for later RecipeDetail / CookMode work. Legacy
+    string-only recipes need no migration — `steps` is derived on read.
 - `dietaryTags` — array constrained to a fixed V1 enum (`vegetarian`,
   `vegan`, `pescatarian`, `glutenFree`, `dairyFree`, `nutFree`), default
   `[]`, deduplicated by `RecipeService`. **Always admin-supplied, never
@@ -183,9 +209,16 @@ PATCH  /api/v1/recipes/:id        admin only
 DELETE /api/v1/recipes/:id        admin only (archives, does not delete)
 ```
 
-List query params: `search`, `cuisine`, `difficulty`, `dietaryTag`,
+List query params: `search`, `region`, `category`, `difficulty`, `dietaryTag`,
 `ingredientId`, `maxPrepTimeMinutes`, `status`, `page`, `limit`, `sort`.
 
+- `region` / `category` filter on the canonical slug and are normalized the
+  same way as the stored field (`?region=Central%20Luzon` → `region=central-luzon`).
+  They compose with `search`, `difficulty`, `dietaryTag`, `ingredientId`,
+  pagination and the visibility/status rules, and are applied in the DB query
+  before `countDocuments`, so `pagination.total` covers the same filtered
+  universe. (The separate pre-existing "usable-recipe" overcount below is
+  unchanged — see the known limitation.)
 - `status` is one of `active` (default) / `inactive` / `all`. A non-admin
   requesting `inactive` or `all` gets `403 FORBIDDEN`.
 - `sort` is one of `titleAsc` (default), `titleDesc`, `newest`, `oldest`,
@@ -284,8 +317,10 @@ transactions.
 
 ## MongoDB indexes
 
-- `{ isActive: 1, cuisine: 1 }` and `{ isActive: 1, difficulty: 1 }` — the
-  primary list-filtering shapes.
+- `{ isActive: 1, region: 1 }`, `{ isActive: 1, category: 1 }` and
+  `{ isActive: 1, difficulty: 1 }` — the primary list-filtering shapes.
+  (The pre-M3 `{ isActive: 1, cuisine: 1 }` declaration was removed; see the
+  M3 section above for the stale-physical-index note.)
 - `{ "ingredients.ingredientId": 1 }` — backs `?ingredientId=` filtering and
   future "recipes using this ingredient" / recommendation queries.
 - `{ title: 1 }` — backs `titleAsc`/`titleDesc` sort and the regex search.
@@ -305,11 +340,41 @@ All of the above are raised as `AppError`s and pass through the existing
 central `error.middleware.js` unchanged — no new error-handling
 infrastructure was introduced for this phase.
 
+## M3 recipe-domain uplift (`feat/recipe-schema-m3`)
+
+Delta on top of the Phase 4 baseline above:
+
+- Added optional `region` / `category` slug fields + `?region=` / `?category=`
+  server-side filters + supporting indexes.
+- Retired `cuisine` from the model, validation, list query, service filter,
+  serializer, the **declared** index set, and the Favorites recipe summary.
+  New writes/queries carrying `cuisine` are rejected; legacy Mongo `cuisine`
+  values are left physically in place (no destructive migration) and never
+  read. **The schema no longer declares `{ isActive: 1, cuisine: 1 }`, but on
+  an already-deployed database the physical `isActive_1_cuisine_1` index is
+  not auto-dropped** (the app relies on Mongoose `autoIndex`, which only
+  *creates* missing indexes — nothing here calls `syncIndexes()`). Dropping
+  the stale index is a one-line deployment/data-maintenance task
+  (`db.recipes.dropIndex('isActive_1_cuisine_1')`), not done in this slice —
+  an unused index is harmless; an automatic drop is not.
+- `region` / `category` on PATCH accept an explicit `null` to **unset** the
+  field (`$unset`, the way to correct a bad classification); an empty string
+  or non-slug is still `400`. Create does not accept `null`.
+- Structured cooking steps: `instructions: string[]` stays the Mongo source
+  of truth; write input additionally accepts `steps: [{ order, text }]`
+  (normalized to `instructions`), and every response adds a derived
+  `steps: [{ order, text }]` view.
+- **Not** in M3: the pre-existing `pagination.total` "usable recipe"
+  overcount (needs a cross-collection aggregation touching Favorites /
+  ShoppingList too — tracked separately), ingredient-name search (needs a new
+  cross-module Ingredient lookup abstraction), and any `region` / `category`
+  content classification / backfill.
+
 ## Explicitly out of scope for Phase 4
 
 Per the Phase 4 brief: favorites, shopping lists, recommendations, AI/OpenAI
 integration, Google Sign-In, mobile/admin frontend integration, image
 uploads/storage, and unit conversion are all deliberately not implemented
-here. `ingredients.ingredientId` filtering and the cuisine-agnostic schema
-exist specifically so this later work has something to build on without a
-schema migration.
+here. `ingredients.ingredientId` filtering exists specifically so this later
+work has something to build on without a schema migration. (The Phase 4
+`cuisine` field was later retired — see the M3 section above.)

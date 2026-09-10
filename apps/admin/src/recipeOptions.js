@@ -2,9 +2,9 @@
 //
 // Source of truth:
 //   apps/api/src/modules/recipes/recipe.model.js
-//     (CUISINES, DIFFICULTIES, DIETARY_TAGS, MAX_* limits)
+//     (DIFFICULTIES, DIETARY_TAGS, SLUG_MAX_LENGTH, MAX_* limits)
 //   apps/api/src/modules/recipes/recipe.validation.js
-//     (status / sort enums)
+//     (status / sort enums, region/category slug rules)
 //   apps/api/src/shared/constants/measurement-units.js
 //     (UNITS — the single quantity/unit contract, shared with ShoppingList)
 //
@@ -12,25 +12,48 @@
 // recognise with a 400 VALIDATION_ERROR. When packages/contracts starts
 // carrying public API contracts, this belongs there (same note as
 // ingredientOptions.js / substitutionOptions.js).
+//
+// `cuisine` was retired from the Recipe domain in M3. `region` (Philippine
+// region) and `category` are open canonical slug strings — no controlled
+// vocabulary exists yet, so there is no enum here, just the slug rules and a
+// `slugLabel` humanizer.
 
-// cuisine is a plain controlled field — NOT Filipino-only. Filipino is just the
-// natural default for WeCooked's initial content focus; the schema stays
-// cuisine-agnostic (see docs/architecture/recipes.md).
-export const RECIPE_CUISINES = [
-  { value: 'filipino', label: 'Filipino' },
-  { value: 'chinese', label: 'Chinese' },
-  { value: 'japanese', label: 'Japanese' },
-  { value: 'korean', label: 'Korean' },
-  { value: 'thai', label: 'Thai' },
-  { value: 'vietnamese', label: 'Vietnamese' },
-  { value: 'indian', label: 'Indian' },
-  { value: 'italian', label: 'Italian' },
-  { value: 'mexican', label: 'Mexican' },
-  { value: 'american', label: 'American' },
-  { value: 'mediterranean', label: 'Mediterranean' },
-  { value: 'middleEastern', label: 'Middle Eastern' },
-  { value: 'other', label: 'Other' },
-];
+// Mirrors shared/validation/slug.js. A canonical slug: lowercase alphanumeric
+// words joined by single hyphens, 1–64 chars. Case and internal whitespace
+// are normalized by the backend; anything else is rejected.
+export const SLUG_MAX_LENGTH = 64;
+export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// "central-luzon" -> "Central Luzon". Returns '' for an empty/absent value —
+// never fabricates a label.
+export function slugLabel(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Client-side pre-check only — the backend Zod schema stays authoritative.
+export function normalizeSlugInput(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '');
+}
+
+// PATCH diff for an optional slug field (`region` / `category`). Returns the
+// value to put in the patch body, or `undefined` when the caller should omit
+// the key entirely:
+//   unchanged (incl. still-blank)  -> undefined   (omit)
+//   populated field cleared to ""  -> null        (explicit unset; API $unsets)
+//   changed to a new slug          -> the normalized slug
+// This is the exact contract the backend PATCH accepts (recipe.validation.js
+// updateRecipeSchema + recipe.service.js) — see the API PATCH tests.
+export function slugPatchValue(current, formValue) {
+  const next = normalizeSlugInput(formValue);
+  const prev = current ?? '';
+  if (next === prev) return undefined;
+  return next === '' ? null : next;
+}
 
 export const RECIPE_DIFFICULTIES = [
   { value: 'easy', label: 'Easy' },
@@ -105,7 +128,6 @@ export const MAX_INSTRUCTION_LENGTH = 1000;
 export const MAX_INGREDIENT_NOTE_LENGTH = 200;
 export const MAX_IMAGE_URL_LENGTH = 2000;
 
-export const CUISINE_LABELS = Object.fromEntries(RECIPE_CUISINES.map((c) => [c.value, c.label]));
 export const DIFFICULTY_LABELS = Object.fromEntries(
   RECIPE_DIFFICULTIES.map((d) => [d.value, d.label]),
 );
@@ -114,14 +136,5 @@ export const DIETARY_TAG_LABELS = Object.fromEntries(
 );
 export const UNIT_LABELS = Object.fromEntries(RECIPE_UNITS.map((u) => [u.value, u.label]));
 
-export const DEFAULT_CUISINE = 'filipino';
 export const DEFAULT_DIFFICULTY = 'easy';
 export const DEFAULT_UNIT = 'g';
-
-// Donut-chart colours for the Overview cuisine breakdown, drawn from the
-// existing admin palette so nothing new is introduced visually.
-export const CUISINE_COLORS = [
-  '#4A5D4E', '#C9962E', '#B15A3E', '#6B8069', '#8C8577',
-  '#7C9478', '#D9A64B', '#9DBB9C', '#A39C8C', '#C97558',
-  '#5B6E5F', '#B8842A', '#8a6a16',
-];

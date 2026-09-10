@@ -1,7 +1,7 @@
 const { z } = require('zod');
 const { objectIdSchema } = require('../../shared/validation/object-id');
+const { SLUG_MAX_LENGTH, SLUG_PATTERN, normalizeSlug } = require('../../shared/validation/slug');
 const {
-  CUISINES,
   DIFFICULTIES,
   UNITS,
   DIETARY_TAGS,
@@ -29,7 +29,21 @@ const descriptionSchema = z
   .min(1, 'Description is required.')
   .max(MAX_DESCRIPTION_LENGTH, `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.`);
 
-const cuisineSchema = z.enum(CUISINES, 'Invalid cuisine.');
+// `region` / `category`: a conservative canonical slug. Case and internal
+// whitespace/underscores are normalized ("Central Luzon" -> "central-luzon");
+// anything that still isn't a slug afterwards (stray punctuation, empty) is
+// rejected rather than silently mangled. Shared by list-query, create and
+// update. There is no controlled vocabulary yet — see slug.js.
+const slugFieldSchema = z
+  .string('Value must be a string.')
+  .trim()
+  .min(1, 'Value cannot be empty.')
+  .max(SLUG_MAX_LENGTH, `Value must be ${SLUG_MAX_LENGTH} characters or fewer.`)
+  .transform((value) => normalizeSlug(value))
+  .refine((value) => value.length >= 1 && value.length <= SLUG_MAX_LENGTH && SLUG_PATTERN.test(value), {
+    message: 'Value must be a lowercase slug (letters, numbers and single hyphens), e.g. "central-luzon".',
+  });
+
 const difficultySchema = z.enum(DIFFICULTIES, 'Invalid difficulty.');
 const unitSchema = z.enum(UNITS, 'Invalid unit.');
 const dietaryTagSchema = z.enum(DIETARY_TAGS, 'Invalid dietary tag.');
@@ -67,6 +81,58 @@ const instructionsArraySchema = z
   .array(instructionItemSchema)
   .min(1, 'At least one instruction step is required.')
   .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} instruction steps is allowed.`);
+
+// Structured cooking-steps input. Mongo still persists `instructions:
+// string[]` as the source of truth (see recipe.model.js /
+// docs/architecture/recipes.md) — the service normalizes a valid `steps`
+// array down to ordered instruction text. `order` must form a contiguous
+// 1..N sequence so the persisted order is deterministic and unambiguous.
+const stepItemSchema = z
+  .object({
+    order: z
+      .number('step order must be a number.')
+      .int('step order must be an integer.')
+      .positive('step order must be a positive integer.'),
+    text: instructionItemSchema,
+  })
+  .strict();
+
+const stepsArraySchema = z
+  .array(stepItemSchema)
+  .min(1, 'At least one step is required.')
+  .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} steps is allowed.`)
+  .superRefine((steps, ctx) => {
+    const orders = steps.map((step) => step.order);
+    if (new Set(orders).size !== orders.length) {
+      ctx.addIssue({ code: 'custom', message: 'step order values must be unique.' });
+    }
+    const sorted = [...orders].sort((a, b) => a - b);
+    if (!sorted.every((value, index) => value === index + 1)) {
+      ctx.addIssue({ code: 'custom', message: 'step order values must be contiguous starting at 1.' });
+    }
+  });
+
+// Rule when both `instructions` and `steps` are supplied: they must describe
+// the exact same ordered text sequence. Equivalent input is accepted (the
+// service uses `steps`); a mismatch is rejected rather than silently picking
+// one. See docs/architecture/recipes.md.
+function stepsMatchInstructions(steps, instructions) {
+  const orderedStepText = [...steps].sort((a, b) => a.order - b.order).map((step) => step.text);
+  return (
+    orderedStepText.length === instructions.length &&
+    orderedStepText.every((text, index) => text === instructions[index])
+  );
+}
+
+function refineStepConsistency(body, ctx) {
+  if (body.instructions !== undefined && body.steps !== undefined && !stepsMatchInstructions(body.steps, body.instructions)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['steps'],
+      message: 'instructions and steps must describe the same ordered steps when both are provided.',
+    });
+  }
+}
 
 const dietaryTagsArraySchema = z
   .array(dietaryTagSchema)
@@ -137,7 +203,8 @@ const listRecipesSchema = z.object({
   query: z
     .object({
       search: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
-      cuisine: cuisineSchema.optional(),
+      region: slugFieldSchema.optional(),
+      category: slugFieldSchema.optional(),
       difficulty: difficultySchema.optional(),
       dietaryTag: dietaryTagSchema.optional(),
       ingredientId: objectIdSchema.optional(),
@@ -155,17 +222,32 @@ const createRecipeSchema = z.object({
     .object({
       title: titleSchema,
       description: descriptionSchema,
-      cuisine: cuisineSchema,
+      region: slugFieldSchema.optional(),
+      category: slugFieldSchema.optional(),
       difficulty: difficultySchema,
       prepTimeMinutes: prepTimeMinutesSchema,
       cookTimeMinutes: cookTimeMinutesSchema,
       servings: servingsSchema,
       ingredients: ingredientsArraySchema,
-      instructions: instructionsArraySchema,
+      // Steps may arrive as legacy `instructions: string[]` or as structured
+      // `steps: [{ order, text }]`. At least one is required on create; when
+      // both are given they must be equivalent (refineStepConsistency).
+      instructions: instructionsArraySchema.optional(),
+      steps: stepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.default([]),
       imageUrl: imageUrlSchema,
     })
-    .strict(),
+    .strict()
+    .superRefine((body, ctx) => {
+      if (body.instructions === undefined && body.steps === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['instructions'],
+          message: 'Provide either instructions (string[]) or steps ([{ order, text }]).',
+        });
+      }
+      refineStepConsistency(body, ctx);
+    }),
 });
 
 const updateRecipeSchema = z.object({
@@ -174,18 +256,24 @@ const updateRecipeSchema = z.object({
     .object({
       title: titleSchema.optional(),
       description: descriptionSchema.optional(),
-      cuisine: cuisineSchema.optional(),
+      // On PATCH, an explicit `null` clears (unsets) the field — the only way
+      // to correct a bad classification. A valid slug replaces it; an empty
+      // string or non-slug is still rejected (never silently unset).
+      region: slugFieldSchema.nullable().optional(),
+      category: slugFieldSchema.nullable().optional(),
       difficulty: difficultySchema.optional(),
       prepTimeMinutes: prepTimeMinutesSchema.optional(),
       cookTimeMinutes: cookTimeMinutesSchema.optional(),
       servings: servingsSchema.optional(),
       ingredients: ingredientsArraySchema.optional(),
       instructions: instructionsArraySchema.optional(),
+      steps: stepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.optional(),
       imageUrl: imageUrlSchema,
       isActive: z.boolean().optional(),
     })
     .strict()
+    .superRefine(refineStepConsistency)
     .refine((body) => Object.keys(body).length > 0, {
       message: 'At least one field must be provided.',
     }),

@@ -26,8 +26,10 @@ Admin React  ->  frontend service layer  ->  Express REST API  ->  MongoDB
 - A standalone canonical ingredient picker (`src/IngredientPicker.jsx`) used for
   recipe ingredient usages and for the "uses ingredient" list filter. The admin
   never types a Mongo id.
-- The Overview tab's recipe widgets (total, "Latest recipes", "Cuisines" donut)
-  now read from the same REST API — the last Firestore recipe read is gone.
+- The Overview tab's recipe widgets (total, "Latest recipes") read from the
+  same REST API — the last Firestore recipe read is gone. The "Cuisines" donut
+  was removed in M3 when `cuisine` left the Recipe domain; a region/category
+  visualization waits on a content-classification milestone.
 
 **Explicitly out (left exactly as they were):**
 
@@ -49,8 +51,9 @@ src/recipeApi.js         recipe feature service — one function per operation u
                          (list / create / update / archive / restore) + the
                          toIngredientUsagePayload() shaper; the backend GET-by-id
                          is deliberately not wrapped
-src/recipeOptions.js     frontend-safe mirror of the backend cuisine / difficulty
-                         / dietary-tag / unit / sort / status enums + limits
+src/recipeOptions.js     frontend-safe mirror of the backend difficulty /
+                         dietary-tag / unit / sort / status enums + limits +
+                         the region/category slug rules and slugLabel() helper
 src/IngredientPicker.jsx standalone name->public-id combobox over /api/v1/ingredients
 src/RecipesTab.jsx       the Recipes screen: useRecipes() hook + table + filters
                          + create/edit modal (ingredient rows + instruction rows)
@@ -77,8 +80,8 @@ from memory.
 
 | Function | Endpoint | Auth |
 | --- | --- | --- |
-| `listRecipes({ search, cuisine, difficulty, dietaryTag, ingredientId, maxPrepTimeMinutes, status, sort, page, limit })` | `GET /api/v1/recipes` | any authenticated |
-| `createRecipe({ title, description, cuisine, difficulty, prepTimeMinutes, cookTimeMinutes, servings, ingredients, instructions, dietaryTags, imageUrl })` | `POST /api/v1/recipes` | admin |
+| `listRecipes({ search, region, category, difficulty, dietaryTag, ingredientId, maxPrepTimeMinutes, status, sort, page, limit })` | `GET /api/v1/recipes` | any authenticated |
+| `createRecipe({ title, description, region?, category?, difficulty, prepTimeMinutes, cookTimeMinutes, servings, ingredients, instructions, dietaryTags, imageUrl })` | `POST /api/v1/recipes` | admin |
 | `updateRecipe(id, patch)` | `PATCH /api/v1/recipes/:id` | admin |
 | `archiveRecipe(id)` | `DELETE /api/v1/recipes/:id` | admin (soft archive) |
 | `restoreRecipe(id)` | `PATCH /api/v1/recipes/:id { isActive: true }` | admin |
@@ -95,8 +98,11 @@ single-resource read. Same choice as `substitutionApi.js`.
   "id": "…",                       // Mongo _id, never exposed as _id
   "title": "Chicken Adobo",
   "description": "…",
-  "cuisine": "filipino",           // one of the CUISINES enum
+  "region": "central-luzon",       // optional canonical slug | null
+  "category": "main-dish",         // optional canonical slug | null
   "difficulty": "easy",            // easy | medium | hard
+  // "steps": [{ order, text }]    // derived from instructions, 1-based
+  // (no "cuisine" — retired in M3)
   "prepTimeMinutes": 15,
   "cookTimeMinutes": 40,
   "servings": 4,
@@ -138,7 +144,8 @@ the tab, and it does **no** client-side filtering of the returned page:
 | Param | Values | Notes |
 | --- | --- | --- |
 | `search` | free text | case-insensitive substring over `title` + `description`, regex-escaped by the backend |
-| `cuisine` | `CUISINES` enum | |
+| `region` | canonical slug | optional Philippine region; normalized like the stored field |
+| `category` | canonical slug | optional recipe category; normalized like the stored field |
 | `difficulty` | `easy` / `medium` / `hard` | |
 | `dietaryTag` | `DIETARY_TAGS` enum (singular param) | matches recipes containing that tag |
 | `ingredientId` | ObjectId | recipes referencing that canonical ingredient (picker resolves the name) |
@@ -162,7 +169,7 @@ than re-implementing the backend's read-time filter client-side.
 
 | Code | Status | UI treatment |
 | --- | --- | --- |
-| `VALIDATION_ERROR` | 400 | per-field messages in the modal from `error.details` (field paths `title`, `description`, `cuisine`, `difficulty`, `prepTimeMinutes`, `cookTimeMinutes`, `servings`, `imageUrl`, `ingredients.*`, `instructions.*`, `dietaryTags.*`) |
+| `VALIDATION_ERROR` | 400 | per-field messages in the modal from `error.details` (field paths `title`, `description`, `region`, `category`, `difficulty`, `prepTimeMinutes`, `cookTimeMinutes`, `servings`, `imageUrl`, `ingredients.*`, `instructions.*`, `steps.*`, `dietaryTags.*`) — a body still sending `cuisine` is rejected as an unknown field |
 | `RECIPE_INGREDIENT_NOT_FOUND` | 404 | safe backend message on the modal ("One or more referenced ingredients do not exist.") |
 | `RECIPE_INGREDIENT_INACTIVE` | 400 (no `details`) | safe backend message on the modal ("One or more referenced ingredients are not active.") — the main path to this is reactivating a recipe whose stored ingredient is archived |
 | `RECIPE_NOT_FOUND` | 404 | row/modal error line |
@@ -177,21 +184,28 @@ the backend, so the UI invents no such rule.
 
 ## Recipe list / table
 
-Columns come straight from the serializer: **Title**, **Cuisine** (labelled),
-**Difficulty** (pill), **Prep** / **Cook** (minutes), **Servings**, **Dietary**
-(tag pills or "—"), **Status** (Active / Archived pill), row actions. `id` (not
-`_id`) is the React key and the id sent to every mutation.
+Columns come straight from the serializer: **Title**, **Category** and
+**Region** (humanized slug or "—"), **Difficulty** (pill), **Prep** / **Cook**
+(minutes), **Servings**, **Dietary** (tag pills or "—"), **Status** (Active /
+Archived pill), row actions. `id` (not `_id`) is the React key and the id sent
+to every mutation.
 
 ## Create form behavior
 
-`POST` sends exactly the backend create body:
-`{ title, description, cuisine, difficulty, prepTimeMinutes, cookTimeMinutes,
-servings, ingredients, instructions, dietaryTags, imageUrl }`.
+`POST` sends the backend create body:
+`{ title, description, difficulty, prepTimeMinutes, cookTimeMinutes, servings,
+ingredients, instructions, dietaryTags, imageUrl }` plus `region` / `category`
+only when non-blank.
 
-- `cuisine` defaults to `filipino` (WeCooked's content focus) and `difficulty`
-  to `easy` — both are ordinary controlled selects over the full backend enum;
-  Filipino is **not** hard-coded as the only option and the schema stays
-  cuisine-agnostic.
+- `region` / `category` are optional free-text slug inputs (no dropdown — there
+  is no controlled vocabulary yet). The value is normalized client-side
+  (lowercased, spaces → hyphens) for a UX pre-check; the backend Zod schema is
+  authoritative and rejects a non-slug or an empty string. On **create** a
+  blank field is omitted from the payload entirely.
+- `cuisine` is **gone** — the field, its default, and its select were removed
+  in M3. A stray `cuisine` in the body is rejected as an unknown field.
+- `difficulty` defaults to `easy` — an ordinary controlled select over the
+  backend enum.
 - `description` is required (min 1 char) — a field the legacy Firestore form did
   not have; it was added to match the contract.
 - `prepTimeMinutes` / `cookTimeMinutes` / `servings` are whole numbers in the
@@ -211,8 +225,12 @@ servings, ingredients, instructions, dietaryTags, imageUrl }`.
 The modal builds a **minimal patch** — only fields whose value actually changed
 versus the loaded recipe:
 
-- scalars (`title`, `description`, `cuisine`, `difficulty`, `prepTimeMinutes`,
-  `cookTimeMinutes`, `servings`) — sent only if different. `title` is compared
+- scalars (`title`, `description`, `region`, `category`, `difficulty`,
+  `prepTimeMinutes`, `cookTimeMinutes`, `servings`) — sent only if different.
+  `region` / `category` use `slugPatchValue(stored, formValue)`: an unchanged
+  field is omitted, a changed value is sent as the normalized slug, and a
+  populated field the admin **blanked** is sent as `null` — which the API
+  `$unset`s (the way to remove a bad classification). `title` is compared
   after the same whitespace-collapse the backend applies, so a cosmetic re-save
   is a true no-op.
 - `dietaryTags` — sent (as a de-duplicated array, a full replacement) only if
@@ -333,15 +351,12 @@ physical delete:
   **deleted from `src/firestore.js`**, the `seedCollection('recipes', …)` call
   and `seedRecipes` fixture are gone, and the legacy inline `RecipesTab` /
   `RecipeModal` components were removed from `App.jsx`.
-- The Overview tab's recipe widgets (Total Recipes, "Latest recipes",
-  "Cuisines" donut) now derive from one best-effort
-  `listRecipes({ status: 'all', sort: 'newest', limit: 100 })` call. The total
-  is exact (`pagination.total`); the cuisine breakdown is computed from the
-  returned page (≤100 recipes), and the card renders an explicit
-  "Based on the N most recent recipes." caption whenever `total` exceeds that
-  sample, so the percentages are never presented as an exact all-time
-  distribution. This widget is one-shot (was a live `onSnapshot` before); a
-  page reload refreshes it.
+- The Overview tab's recipe widgets (Total Recipes, "Latest recipes") derive
+  from one best-effort `listRecipes({ status: 'all', sort: 'newest', limit: 100 })`
+  call. The total is exact (`pagination.total`). The former "Cuisines" donut was
+  removed in M3 along with `cuisine`; a region/category breakdown returns after
+  a content-classification milestone. These widgets are one-shot (were a live
+  `onSnapshot` before); a page reload refreshes them.
 
 `src/firestore.js` now holds only the Users / reports / generic-seed layer. No
 Firebase dependency was added or removed from `package.json` (`firebase` stays

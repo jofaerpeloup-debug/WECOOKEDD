@@ -35,9 +35,10 @@ untouched.
 ```
 src/api/recipeService.js   listRecipes(params) + getRecipe(recipeId). Uses the
                            shared `api` client. No create/update/archive/delete.
-src/api/recipeOptions.js   frontend-safe mirror of the backend cuisine /
-                           difficulty / dietaryTag / unit / sort enums + labels,
-                           and the Discover filter set. No backend logic.
+src/api/recipeOptions.js   frontend-safe mirror of the backend difficulty /
+                           dietaryTag / unit / sort enums + labels, the
+                           region/category slugLabel() humanizer, and the
+                           Discover filter set. No backend logic.
 src/api/recipeErrors.js    getRecipeErrorMessage(err) — ApiError -> short safe
                            string (mirrors errorMessages.js for auth).
 src/utils/recipe.js        pure view helpers: time label, badges, structured
@@ -89,8 +90,8 @@ No `POST` / `PATCH` / `DELETE` is wrapped — mobile is read-only against the
 Recipe domain.
 
 List query keys sent (only backend-supported keys; empty/undefined omitted):
-`search`, `cuisine`, `difficulty`, `dietaryTag`, `ingredientId`,
-`maxPrepTimeMinutes`, `page`, `limit`, `sort`.
+`search`, `region`, `category`, `difficulty`, `dietaryTag`, `ingredientId`,
+`maxPrepTimeMinutes`, `page`, `limit`, `sort`. (`cuisine` was retired in M3.)
 
 **`status` is never sent.** The backend defaults it to `active` and returns
 `403 FORBIDDEN` to a non-admin caller that asks for `inactive` / `all`.
@@ -144,8 +145,9 @@ backend mapping (the backend has no meal-type concept). It was **replaced** with
 a small **"Browse"** row of shortcuts that each navigate to Discover with an
 explicit, backend-supported initial filter:
 
-`Filipino` → `cuisine=filipino`, `Easy` → `difficulty=easy`,
-`Vegetarian` → `dietaryTag=vegetarian`, `Vegan` → `dietaryTag=vegan`.
+`Easy` → `difficulty=easy`, `Vegetarian` → `dietaryTag=vegetarian`,
+`Vegan` → `dietaryTag=vegan`. (The former `Filipino` → `cuisine=filipino`
+shortcut was dropped in M3 when `cuisine` left the Recipe domain.)
 
 No fake `mealType`, no `search=breakfast`, no client-side tag invention.
 
@@ -160,10 +162,12 @@ backend query, replacing the invented `Quick` / `High-Protein` pills:
 | Pill | Backend query |
 | --- | --- |
 | All | (none) |
-| Filipino | `cuisine=filipino` |
 | Easy | `difficulty=easy` |
 | Vegetarian | `dietaryTag=vegetarian` |
 | Vegan | `dietaryTag=vegan` |
+
+There is no cuisine / region / category pill: `cuisine` was retired in M3 and
+`region` / `category` have no controlled vocabulary or classified content yet.
 
 An `initialFilter` param handed over from Home is applied on mount and then
 cleared (`navigation.setParams`) so a repeat tap re-applies it.
@@ -260,9 +264,10 @@ so Saved keeps working this slice; it was not extended or improved.
 ## Backend Recipe field mapping (API mode)
 
 Uses the actual `PublicRecipe` contract — `id`, `title`, `description`,
-`cuisine`, `difficulty`, `prepTimeMinutes`, `cookTimeMinutes`, `servings`,
-`ingredients`, `instructions`, `dietaryTags`, `imageUrl`, `isActive`,
-`createdAt`, `updatedAt`.
+`region`, `category`, `difficulty`, `prepTimeMinutes`, `cookTimeMinutes`,
+`servings`, `ingredients`, `instructions`, `steps` (derived `[{ order, text }]`),
+`dietaryTags`, `imageUrl`, `isActive`, `createdAt`, `updatedAt`. (`cuisine` was
+retired in M3; `region` / `category` are optional and `null` on legacy records.)
 
 | UI element | Source |
 | --- | --- |
@@ -270,7 +275,7 @@ Uses the actual `PublicRecipe` contract — `id`, `title`, `description`,
 | Sub-line "Prep N min · Cook N min" | `prepTimeMinutes`, `cookTimeMinutes` shown separately |
 | Stat "Difficulty" | `difficulty` directly (`easy`→`Easy` …) |
 | Stat "Servings" | the servings stepper, initialised from `recipe.servings` |
-| Badges | `cuisine` label, then each `dietaryTags` label (readable: `middleEastern`→`Middle Eastern`, `glutenFree`→`Gluten-free`, …) |
+| Badges | classifier label (`category`, else `region` — humanized slug; absent on legacy records), then each `dietaryTags` label (readable: `glutenFree`→`Gluten-free`, …) |
 | Card meta (Home / Discover) | total time + `difficulty` |
 
 **Never fabricated for API recipes:** `score`, `rating`, `reviews`, nutrition

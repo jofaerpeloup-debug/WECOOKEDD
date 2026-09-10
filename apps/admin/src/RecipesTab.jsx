@@ -10,10 +10,11 @@ import {
 } from './recipeApi.js';
 import IngredientPicker from './IngredientPicker.jsx';
 import {
-  RECIPE_CUISINES, RECIPE_DIFFICULTIES, RECIPE_DIETARY_TAGS, RECIPE_UNITS,
+  RECIPE_DIFFICULTIES, RECIPE_DIETARY_TAGS, RECIPE_UNITS,
   RECIPE_SORTS, RECIPE_STATUS_FILTERS, TO_TASTE_UNIT,
-  CUISINE_LABELS, DIFFICULTY_LABELS, DIETARY_TAG_LABELS,
-  DEFAULT_CUISINE, DEFAULT_DIFFICULTY, DEFAULT_UNIT,
+  DIFFICULTY_LABELS, DIETARY_TAG_LABELS,
+  DEFAULT_DIFFICULTY, DEFAULT_UNIT,
+  SLUG_MAX_LENGTH, SLUG_PATTERN, slugLabel, normalizeSlugInput, slugPatchValue,
   MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_PREP_TIME_MINUTES,
   MAX_COOK_TIME_MINUTES, MAX_SERVINGS, MAX_INGREDIENTS, MAX_INSTRUCTIONS,
   MAX_INSTRUCTION_LENGTH, MAX_INGREDIENT_NOTE_LENGTH, MAX_IMAGE_URL_LENGTH,
@@ -80,8 +81,10 @@ function fieldErrorsFromDetails(details = []) {
     const f = String(d.field || '');
     if (f === 'title') out.title = d.message;
     else if (f === 'description') out.description = d.message;
-    else if (f === 'cuisine') out.cuisine = d.message;
+    else if (f === 'region') out.region = d.message;
+    else if (f === 'category') out.category = d.message;
     else if (f === 'difficulty') out.difficulty = d.message;
+    else if (f.startsWith('steps')) out.instructions = out.instructions || d.message;
     else if (f === 'prepTimeMinutes') out.prepTimeMinutes = d.message;
     else if (f === 'cookTimeMinutes') out.cookTimeMinutes = d.message;
     else if (f === 'servings') out.servings = d.message;
@@ -169,7 +172,8 @@ function storedComparable(entry) {
 function useRecipes() {
   const [filters, setFilters] = useState({
     search: '',
-    cuisine: '',
+    region: '',
+    category: '',
     difficulty: '',
     dietaryTag: '',
     maxPrepTimeMinutes: '',
@@ -200,7 +204,8 @@ function useRecipes() {
         const maxPrep = filters.maxPrepTimeMinutes.trim();
         const { recipes, pagination } = await listRecipes({
           search: filters.search.trim() || undefined,
-          cuisine: filters.cuisine || undefined,
+          region: normalizeSlugInput(filters.region) || undefined,
+          category: normalizeSlugInput(filters.category) || undefined,
           difficulty: filters.difficulty || undefined,
           dietaryTag: filters.dietaryTag || undefined,
           ingredientId: filters.ingredient?.id || undefined,
@@ -253,7 +258,7 @@ export default function RecipesTab() {
 
   const totalPages = pagination?.totalPages ?? 1;
   const hasFilters = Boolean(
-    filters.search || filters.cuisine || filters.difficulty || filters.dietaryTag
+    filters.search || filters.region || filters.category || filters.difficulty || filters.dietaryTag
     || filters.maxPrepTimeMinutes || filters.ingredient || filters.status !== 'active',
   );
 
@@ -445,15 +450,20 @@ export default function RecipesTab() {
               onChange={(e) => patchFilters({ search: e.target.value })}
             />
           </div>
-          <select
-            className="wc-rcp-select"
-            value={filters.cuisine}
-            onChange={(e) => patchFilters({ cuisine: e.target.value })}
-            aria-label="Filter by cuisine"
-          >
-            <option value="">All cuisines</option>
-            {RECIPE_CUISINES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-          </select>
+          <input
+            className="wc-rcp-num"
+            value={filters.region}
+            onChange={(e) => patchFilters({ region: e.target.value })}
+            placeholder="Region slug…"
+            aria-label="Filter by region slug"
+          />
+          <input
+            className="wc-rcp-num"
+            value={filters.category}
+            onChange={(e) => patchFilters({ category: e.target.value })}
+            placeholder="Category slug…"
+            aria-label="Filter by category slug"
+          />
           <select
             className="wc-rcp-select"
             value={filters.difficulty}
@@ -543,7 +553,8 @@ export default function RecipesTab() {
               <thead>
                 <tr>
                   <th>Title</th>
-                  <th>Cuisine</th>
+                  <th>Category</th>
+                  <th>Region</th>
                   <th>Difficulty</th>
                   <th>Prep</th>
                   <th>Cook</th>
@@ -556,8 +567,8 @@ export default function RecipesTab() {
               <tbody>
                 {items.map((r) => (
                   <tr key={r.id}>
-                    <td>{r.title}</td>
-                    <td>{CUISINE_LABELS[r.cuisine] || r.cuisine}</td>
+                    <td>{slugLabel(r.category) || <span className="wc-rcp-muted">—</span>}</td>
+                    <td>{slugLabel(r.region) || <span className="wc-rcp-muted">—</span>}</td>
                     <td>
                       <span className={`wc-pill ${r.difficulty}`}>
                         {DIFFICULTY_LABELS[r.difficulty] || r.difficulty}
@@ -693,7 +704,8 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
   const [form, setForm] = useState(() => ({
     title: recipe?.title || '',
     description: recipe?.description || '',
-    cuisine: recipe?.cuisine || DEFAULT_CUISINE,
+    region: recipe?.region || '',
+    category: recipe?.category || '',
     difficulty: recipe?.difficulty || DEFAULT_DIFFICULTY,
     prepTimeMinutes: recipe ? String(recipe.prepTimeMinutes) : '',
     cookTimeMinutes: recipe ? String(recipe.cookTimeMinutes) : '',
@@ -804,6 +816,15 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
       errs.imageUrl = `URL must be ${MAX_IMAGE_URL_LENGTH} characters or fewer.`;
     }
 
+    for (const field of ['region', 'category']) {
+      const raw = form[field].trim();
+      if (!raw) continue;
+      const slug = normalizeSlugInput(raw);
+      if (!slug || slug.length > SLUG_MAX_LENGTH || !SLUG_PATTERN.test(slug)) {
+        errs[field] = 'Use a lowercase slug — letters, numbers and single hyphens.';
+      }
+    }
+
     // Only enforce the per-row rules when the ingredient list is actually
     // going to be sent (always on create; on edit only if it changed).
     if (ingredientsChanged) {
@@ -850,13 +871,18 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
     const dietaryTags = [...new Set(form.dietaryTags)];
     const imageUrl = form.imageUrl.trim() || null;
     const instructions = form.instructions.map((row) => row.text.trim()).filter(Boolean);
+    const region = normalizeSlugInput(form.region);
+    const category = normalizeSlugInput(form.category);
 
     if (!editing) {
-      return {
-        title, description, cuisine: form.cuisine, difficulty: form.difficulty,
+      const payload = {
+        title, description, difficulty: form.difficulty,
         prepTimeMinutes, cookTimeMinutes, servings,
         ingredients: buildIngredientPayload(), instructions, dietaryTags, imageUrl,
       };
+      if (region) payload.region = region;
+      if (category) payload.category = category;
+      return payload;
     }
 
     // PATCH: only send fields whose value actually changed vs. the loaded
@@ -866,7 +892,13 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
     const patch = {};
     if (title !== recipe.title) patch.title = title;
     if (description !== recipe.description) patch.description = description;
-    if (form.cuisine !== recipe.cuisine) patch.cuisine = form.cuisine;
+    // region/category: an unchanged field is omitted; a populated field the
+    // admin blanked is sent as `null` (the API unsets it); a changed value is
+    // sent as the normalized slug. See slugPatchValue.
+    const regionPatch = slugPatchValue(recipe.region, form.region);
+    if (regionPatch !== undefined) patch.region = regionPatch;
+    const categoryPatch = slugPatchValue(recipe.category, form.category);
+    if (categoryPatch !== undefined) patch.category = categoryPatch;
     if (form.difficulty !== recipe.difficulty) patch.difficulty = form.difficulty;
     if (prepTimeMinutes !== recipe.prepTimeMinutes) patch.prepTimeMinutes = prepTimeMinutes;
     if (cookTimeMinutes !== recipe.cookTimeMinutes) patch.cookTimeMinutes = cookTimeMinutes;
@@ -985,11 +1017,24 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
 
           <div className="wc-field-row">
             <div className="wc-field">
-              <label>Cuisine</label>
-              <select value={form.cuisine} onChange={(e) => setField({ cuisine: e.target.value })}>
-                {RECIPE_CUISINES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-              {fieldErrors.cuisine && <div className="wc-rcp-field-error">{fieldErrors.cuisine}</div>}
+              <label>Region</label>
+              <input
+                value={form.region}
+                onChange={(e) => setField({ region: e.target.value })}
+                placeholder="e.g. bicol (optional)"
+                maxLength={SLUG_MAX_LENGTH + 20}
+              />
+              {fieldErrors.region && <div className="wc-rcp-field-error">{fieldErrors.region}</div>}
+            </div>
+            <div className="wc-field">
+              <label>Category</label>
+              <input
+                value={form.category}
+                onChange={(e) => setField({ category: e.target.value })}
+                placeholder="e.g. main-dish (optional)"
+                maxLength={SLUG_MAX_LENGTH + 20}
+              />
+              {fieldErrors.category && <div className="wc-rcp-field-error">{fieldErrors.category}</div>}
             </div>
             <div className="wc-field">
               <label>Difficulty</label>
@@ -1000,6 +1045,10 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
                 <div className="wc-rcp-field-error">{fieldErrors.difficulty}</div>
               )}
             </div>
+          </div>
+          <div className="wc-rcp-modal-hint">
+            Region &amp; category are optional lowercase slugs (letters, numbers, hyphens) — e.g.
+            “central-luzon”, “dessert”. There is no fixed list yet; leave blank if unsure.
           </div>
 
           <div className="wc-field-row">

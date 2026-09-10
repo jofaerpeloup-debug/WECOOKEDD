@@ -50,6 +50,18 @@ function normalizeDietaryTags(tags = []) {
   return [...new Set(tags)];
 }
 
+// Reduces validated step input to the persisted `instructions: string[]`
+// shape (Mongo's source of truth). A structured `steps` array wins when
+// present — the validation layer has already guaranteed contiguous 1..N
+// ordering and, when `instructions` is also present, that the two are
+// equivalent. Legacy `instructions` input passes straight through.
+function toInstructionsList({ instructions, steps }) {
+  if (steps !== undefined) {
+    return [...steps].sort((a, b) => a.order - b.order).map((step) => step.text.trim());
+  }
+  return (instructions || []).map((step) => step.trim());
+}
+
 // Every referenced Ingredient — including entries marked optional — must
 // exist and be active before a recipe is created, before a replacement
 // ingredient list is saved, or before a recipe is reactivated. This is
@@ -127,31 +139,38 @@ function toNonAdminView(recipe) {
 async function createRecipe({
   title,
   description,
-  cuisine,
+  region,
+  category,
   difficulty,
   prepTimeMinutes,
   cookTimeMinutes,
   servings,
   ingredients,
   instructions,
+  steps,
   dietaryTags = [],
   imageUrl,
 }) {
   await assertIngredientsActive(ingredients);
 
-  return recipeRepository.createRecipe({
+  const doc = {
     title: collapseWhitespace(title),
     description: description.trim(),
-    cuisine,
     difficulty,
     prepTimeMinutes,
     cookTimeMinutes,
     servings,
     ingredients: normalizeIngredients(ingredients),
-    instructions: instructions.map((step) => step.trim()),
+    instructions: toInstructionsList({ instructions, steps }),
     dietaryTags: normalizeDietaryTags(dietaryTags),
     imageUrl: imageUrl ?? null,
-  });
+  };
+  // region/category are optional canonical slugs (already normalized by the
+  // validation layer). Never fabricated from cuisine/title/anything else.
+  if (region !== undefined) doc.region = region;
+  if (category !== undefined) doc.category = category;
+
+  return recipeRepository.createRecipe(doc);
 }
 
 // Raw lookup with no visibility filtering, for trusted cross-module use
@@ -210,7 +229,8 @@ async function findUsableRecipeById(id) {
 
 async function listRecipes({
   search,
-  cuisine,
+  region,
+  category,
   difficulty,
   dietaryTag,
   ingredientId,
@@ -231,8 +251,11 @@ async function listRecipes({
   } else if (status === 'inactive') {
     filter.isActive = false;
   }
-  if (cuisine) {
-    filter.cuisine = cuisine;
+  if (region) {
+    filter.region = region;
+  }
+  if (category) {
+    filter.category = category;
   }
   if (difficulty) {
     filter.difficulty = difficulty;
@@ -276,14 +299,26 @@ async function updateRecipe(id, patch) {
   }
 
   const update = {};
+  // Fields removed from the document rather than set — an explicit `null` for
+  // an optional slug field clears it (see recipe.validation.js).
+  const unset = {};
   if (patch.title !== undefined) update.title = collapseWhitespace(patch.title);
   if (patch.description !== undefined) update.description = patch.description.trim();
-  if (patch.cuisine !== undefined) update.cuisine = patch.cuisine;
+  if (patch.region !== undefined) {
+    if (patch.region === null) unset.region = '';
+    else update.region = patch.region;
+  }
+  if (patch.category !== undefined) {
+    if (patch.category === null) unset.category = '';
+    else update.category = patch.category;
+  }
   if (patch.difficulty !== undefined) update.difficulty = patch.difficulty;
   if (patch.prepTimeMinutes !== undefined) update.prepTimeMinutes = patch.prepTimeMinutes;
   if (patch.cookTimeMinutes !== undefined) update.cookTimeMinutes = patch.cookTimeMinutes;
   if (patch.servings !== undefined) update.servings = patch.servings;
-  if (patch.instructions !== undefined) update.instructions = patch.instructions.map((step) => step.trim());
+  if (patch.instructions !== undefined || patch.steps !== undefined) {
+    update.instructions = toInstructionsList({ instructions: patch.instructions, steps: patch.steps });
+  }
   if (patch.dietaryTags !== undefined) update.dietaryTags = normalizeDietaryTags(patch.dietaryTags);
   if (patch.imageUrl !== undefined) update.imageUrl = patch.imageUrl;
 
@@ -303,7 +338,11 @@ async function updateRecipe(id, patch) {
 
   if (patch.isActive !== undefined) update.isActive = patch.isActive;
 
-  const updated = await recipeRepository.updateById(id, { $set: update });
+  const ops = {};
+  if (Object.keys(update).length > 0) ops.$set = update;
+  if (Object.keys(unset).length > 0) ops.$unset = unset;
+
+  const updated = await recipeRepository.updateById(id, ops);
   if (!updated) {
     throw notFoundError();
   }

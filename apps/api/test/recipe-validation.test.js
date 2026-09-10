@@ -16,7 +16,6 @@ function validPayload(overrides = {}) {
   return {
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
-    cuisine: 'filipino',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -44,9 +43,9 @@ test('createRecipeSchema accepts a valid Filipino recipe payload', () => {
 
 test('createRecipeSchema accepts Sinigang na Baboy, Tinolang Manok, and Pancit Bihon fixtures', () => {
   const fixtures = [
-    validPayload({ title: 'Sinigang na Baboy', cuisine: 'filipino', difficulty: 'medium' }),
-    validPayload({ title: 'Tinolang Manok', cuisine: 'filipino', difficulty: 'easy' }),
-    validPayload({ title: 'Pancit Bihon', cuisine: 'filipino', difficulty: 'medium' }),
+    validPayload({ title: 'Sinigang na Baboy', difficulty: 'medium' }),
+    validPayload({ title: 'Tinolang Manok', difficulty: 'easy' }),
+    validPayload({ title: 'Pancit Bihon', difficulty: 'medium' }),
   ];
   for (const body of fixtures) {
     const result = createRecipeSchema.safeParse({ body });
@@ -54,9 +53,30 @@ test('createRecipeSchema accepts Sinigang na Baboy, Tinolang Manok, and Pancit B
   }
 });
 
-test('createRecipeSchema rejects an invalid cuisine', () => {
-  const result = createRecipeSchema.safeParse({ body: validPayload({ cuisine: 'klingon' }) });
+test('createRecipeSchema rejects a retired cuisine field (strict body)', () => {
+  const result = createRecipeSchema.safeParse({ body: validPayload({ cuisine: 'filipino' }) });
   assert.equal(result.success, false);
+});
+
+test('createRecipeSchema accepts optional region/category and normalizes them to canonical slugs', () => {
+  const result = createRecipeSchema.safeParse({
+    body: validPayload({ region: '  Central Luzon ', category: 'Main_Dish' }),
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.data.body.region, 'central-luzon');
+  assert.equal(result.data.body.category, 'main-dish');
+
+  // Neither field is required.
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload() }).success, true);
+});
+
+test('createRecipeSchema rejects a region/category value that is not a slug', () => {
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ region: 'not/a/slug' }) }).success, false);
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ category: '' }) }).success, false);
+  assert.equal(
+    createRecipeSchema.safeParse({ body: validPayload({ category: 'x'.repeat(65) }) }).success,
+    false
+  );
 });
 
 test('createRecipeSchema rejects an invalid difficulty', () => {
@@ -144,6 +164,50 @@ test('createRecipeSchema rejects a blank instruction step', () => {
   assert.equal(result.success, false);
 });
 
+test('createRecipeSchema requires either instructions or structured steps', () => {
+  const body = validPayload();
+  delete body.instructions;
+  assert.equal(createRecipeSchema.safeParse({ body }).success, false);
+});
+
+test('createRecipeSchema accepts structured steps in place of instructions', () => {
+  const body = validPayload();
+  delete body.instructions;
+  body.steps = [
+    { order: 1, text: 'Combine the marinade.' },
+    { order: 2, text: 'Simmer until tender.' },
+  ];
+  const result = createRecipeSchema.safeParse({ body });
+  assert.equal(result.success, true);
+});
+
+test('createRecipeSchema rejects steps with a blank, duplicate, or non-contiguous order', () => {
+  const withBlank = validPayload();
+  delete withBlank.instructions;
+  withBlank.steps = [{ order: 1, text: '   ' }];
+  assert.equal(createRecipeSchema.safeParse({ body: withBlank }).success, false);
+
+  const dup = validPayload();
+  delete dup.instructions;
+  dup.steps = [{ order: 1, text: 'A' }, { order: 1, text: 'B' }];
+  assert.equal(createRecipeSchema.safeParse({ body: dup }).success, false);
+
+  const gap = validPayload();
+  delete gap.instructions;
+  gap.steps = [{ order: 1, text: 'A' }, { order: 3, text: 'C' }];
+  assert.equal(createRecipeSchema.safeParse({ body: gap }).success, false);
+});
+
+test('createRecipeSchema accepts instructions + steps only when they describe the same ordered text', () => {
+  const same = validPayload({ instructions: ['Heat oil.', 'Add garlic.'] });
+  same.steps = [{ order: 2, text: 'Add garlic.' }, { order: 1, text: 'Heat oil.' }];
+  assert.equal(createRecipeSchema.safeParse({ body: same }).success, true);
+
+  const conflicting = validPayload({ instructions: ['Heat oil.', 'Add garlic.'] });
+  conflicting.steps = [{ order: 1, text: 'Heat oil.' }, { order: 2, text: 'Add onion.' }];
+  assert.equal(createRecipeSchema.safeParse({ body: conflicting }).success, false);
+});
+
 test('createRecipeSchema defaults dietaryTags to [] and preserves valid values', () => {
   const withoutTags = createRecipeSchema.safeParse({ body: validPayload({ dietaryTags: undefined }) });
   assert.equal(withoutTags.success, true);
@@ -217,6 +281,44 @@ test('updateRecipeSchema treats a provided ingredients array as a full replaceme
   assert.equal(valid.success, true);
 });
 
+test('updateRecipeSchema accepts an explicit null for region/category (clear), a valid slug, and rejects blank/non-slug', () => {
+  const clearRegion = updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID },
+    body: { region: null },
+  });
+  assert.equal(clearRegion.success, true);
+  assert.equal(clearRegion.data.body.region, null);
+
+  const clearCategory = updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID },
+    body: { category: null },
+  });
+  assert.equal(clearCategory.success, true);
+  assert.equal(clearCategory.data.body.category, null);
+
+  const setRegion = updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID },
+    body: { region: 'Central Luzon' },
+  });
+  assert.equal(setRegion.success, true);
+  assert.equal(setRegion.data.body.region, 'central-luzon');
+
+  // Empty string and non-slugs are still rejected — clearing requires `null`.
+  assert.equal(
+    updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { region: '' } }).success,
+    false
+  );
+  assert.equal(
+    updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { category: 'bad/slug' } }).success,
+    false
+  );
+});
+
+test('createRecipeSchema still rejects a null region/category (clear is PATCH-only)', () => {
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ region: null }) }).success, false);
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ category: null }) }).success, false);
+});
+
 test('updateRecipeSchema allows reactivation via isActive: true', () => {
   const result = updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { isActive: true } });
   assert.equal(result.success, true);
@@ -244,11 +346,12 @@ test('listRecipesSchema applies defaults for status/sort/page/limit', () => {
   assert.equal(result.data.query.limit, 20);
 });
 
-test('listRecipesSchema accepts search, cuisine, difficulty, dietaryTag, ingredientId, and maxPrepTimeMinutes', () => {
+test('listRecipesSchema accepts search, region, category, difficulty, dietaryTag, ingredientId, and maxPrepTimeMinutes', () => {
   const result = listRecipesSchema.safeParse({
     query: {
       search: 'adobo',
-      cuisine: 'filipino',
+      region: 'Central Luzon',
+      category: 'Main-Dish',
       difficulty: 'easy',
       dietaryTag: 'dairyFree',
       ingredientId: INGREDIENT_ID,
@@ -257,6 +360,13 @@ test('listRecipesSchema accepts search, cuisine, difficulty, dietaryTag, ingredi
   });
   assert.equal(result.success, true);
   assert.equal(result.data.query.maxPrepTimeMinutes, 30);
+  assert.equal(result.data.query.region, 'central-luzon');
+  assert.equal(result.data.query.category, 'main-dish');
+});
+
+test('listRecipesSchema rejects a retired cuisine query param and an invalid region slug', () => {
+  assert.equal(listRecipesSchema.safeParse({ query: { cuisine: 'filipino' } }).success, false);
+  assert.equal(listRecipesSchema.safeParse({ query: { region: 'not/a/slug' } }).success, false);
 });
 
 test('listRecipesSchema rejects an invalid ingredientId', () => {

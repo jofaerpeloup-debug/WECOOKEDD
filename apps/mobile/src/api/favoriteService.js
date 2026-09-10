@@ -41,7 +41,7 @@ function buildQuery(params) {
  *   favorites: object[],
  *   pagination: { page: number, limit: number, total: number, totalPages: number } | null,
  * }>}
- *   Each favorite is `{ id, recipe: { id, title, cuisine, difficulty,
+ *   Each favorite is `{ id, recipe: { id, title, region, category, difficulty,
  *   prepTimeMinutes, cookTimeMinutes, imageUrl }, createdAt }`. The nested
  *   recipe is a SUMMARY — never a full PublicRecipe (no description / servings /
  *   ingredients / instructions).

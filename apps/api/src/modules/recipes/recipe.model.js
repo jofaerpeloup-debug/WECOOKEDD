@@ -1,21 +1,6 @@
 const mongoose = require('mongoose');
 const { UNITS, validateQuantityForUnit } = require('../../shared/constants/measurement-units');
-
-const CUISINES = [
-  'filipino',
-  'chinese',
-  'japanese',
-  'korean',
-  'thai',
-  'vietnamese',
-  'indian',
-  'italian',
-  'mexican',
-  'american',
-  'mediterranean',
-  'middleEastern',
-  'other',
-];
+const { SLUG_MAX_LENGTH, SLUG_PATTERN } = require('../../shared/validation/slug');
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 
@@ -96,10 +81,23 @@ const recipeSchema = new mongoose.Schema(
       trim: true,
       maxlength: MAX_DESCRIPTION_LENGTH,
     },
-    cuisine: {
+    // Philippine `region` and recipe `category` — conservative optional
+    // canonical slugs, not enums (no approved taxonomy yet). Legacy recipes
+    // predating this field remain valid with neither set. See
+    // docs/architecture/recipes.md and shared/validation/slug.js.
+    region: {
       type: String,
-      required: true,
-      enum: CUISINES,
+      trim: true,
+      lowercase: true,
+      maxlength: SLUG_MAX_LENGTH,
+      match: SLUG_PATTERN,
+    },
+    category: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      maxlength: SLUG_MAX_LENGTH,
+      match: SLUG_PATTERN,
     },
     difficulty: {
       type: String,
@@ -172,7 +170,8 @@ const recipeSchema = new mongoose.Schema(
 // Primary list-filtering shapes; ingredients.ingredientId backs the
 // "recipes using this ingredient" lookup (also useful for later
 // recommendation logic); title backs titleAsc/titleDesc sort and search.
-recipeSchema.index({ isActive: 1, cuisine: 1 });
+recipeSchema.index({ isActive: 1, region: 1 });
+recipeSchema.index({ isActive: 1, category: 1 });
 recipeSchema.index({ isActive: 1, difficulty: 1 });
 recipeSchema.index({ 'ingredients.ingredientId': 1 });
 recipeSchema.index({ title: 1 });
@@ -180,10 +179,11 @@ recipeSchema.index({ title: 1 });
 const Recipe = mongoose.model('Recipe', recipeSchema);
 
 module.exports = Recipe;
-module.exports.CUISINES = CUISINES;
 module.exports.DIFFICULTIES = DIFFICULTIES;
 module.exports.UNITS = UNITS;
 module.exports.DIETARY_TAGS = DIETARY_TAGS;
+module.exports.SLUG_MAX_LENGTH = SLUG_MAX_LENGTH;
+module.exports.SLUG_PATTERN = SLUG_PATTERN;
 module.exports.MAX_TITLE_LENGTH = MAX_TITLE_LENGTH;
 module.exports.MAX_DESCRIPTION_LENGTH = MAX_DESCRIPTION_LENGTH;
 module.exports.MAX_PREP_TIME_MINUTES = MAX_PREP_TIME_MINUTES;

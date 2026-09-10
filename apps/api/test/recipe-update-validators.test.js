@@ -78,3 +78,28 @@ test('findByIdAndUpdate accepts a replacement ingredient with a measurable unit 
   assert.ok(err, 'expected a connection-buffering error since no MongoDB is available in this test environment');
   assert.notEqual(err.name, 'ValidationError');
 });
+
+// region/category clear: RecipeService issues `{ $unset: { region: '' } }`.
+// `region`/`category` are not `required`, so runValidators has nothing to
+// reject on an $unset — it must not be a ValidationError (same
+// no-live-MongoDB reasoning as the accept cases above).
+async function attemptUnset(field) {
+  try {
+    await Recipe.findByIdAndUpdate(
+      RECIPE_ID,
+      { $unset: { [field]: '' } },
+      { new: true, runValidators: true }
+    );
+    return null;
+  } catch (err) {
+    return err;
+  }
+}
+
+test('findByIdAndUpdate does not reject an $unset of region or category (optional fields)', async () => {
+  for (const field of ['region', 'category']) {
+    const err = await attemptUnset(field);
+    assert.ok(err, 'expected a connection-buffering error since no MongoDB is available in this test environment');
+    assert.notEqual(err.name, 'ValidationError', `$unset ${field} should not be a ValidationError`);
+  }
+});

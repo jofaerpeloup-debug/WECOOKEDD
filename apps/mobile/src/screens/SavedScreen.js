@@ -18,18 +18,26 @@ import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
 import { useFavorites } from '../context/FavoritesContext';
 import { recipeTimeLabel } from '../utils/recipe';
-import { cuisineLabel, difficultyLabel } from '../api/recipeOptions';
+import { categoryLabel, regionLabel, difficultyLabel } from '../api/recipeOptions';
 
 // The authenticated Saved tab is backed entirely by the real Favorites REST API
 // (via FavoritesProvider) — no SavedRecipesContext, no mockData, no mock recipe
 // lookup. The favorite's nested recipe is a SUMMARY: only
-// { id, title, cuisine, difficulty, prepTimeMinutes, cookTimeMinutes, imageUrl }
+// { id, title, region, category, difficulty, prepTimeMinutes, cookTimeMinutes, imageUrl }
 // are available here — description / servings / ingredients / instructions are
 // NOT, and are never fabricated. Opening a recipe navigates cold to the API
 // Recipe Detail, which performs the authoritative GET /api/v1/recipes/:id.
 
+// Short classifier line: category, then region (both optional canonical slugs,
+// absent on legacy records), then difficulty as a last resort. `cuisine` is
+// retired. Never fabricated for a recipe that has none of these.
 function metaLabel(recipe) {
-  return cuisineLabel(recipe.cuisine) || difficultyLabel(recipe.difficulty) || 'Recipe';
+  return (
+    categoryLabel(recipe.category) ||
+    regionLabel(recipe.region) ||
+    difficultyLabel(recipe.difficulty) ||
+    'Recipe'
+  );
 }
 
 export default function SavedScreen({ navigation }) {
