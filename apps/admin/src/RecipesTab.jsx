@@ -567,6 +567,7 @@ export default function RecipesTab() {
               <tbody>
                 {items.map((r) => (
                   <tr key={r.id}>
+                    <td>{r.title}</td>
                     <td>{slugLabel(r.category) || <span className="wc-rcp-muted">—</span>}</td>
                     <td>{slugLabel(r.region) || <span className="wc-rcp-muted">—</span>}</td>
                     <td>
