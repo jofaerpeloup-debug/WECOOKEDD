@@ -10,6 +10,7 @@ import RegisterScreen from '../screens/RegisterScreen';
 import MainTabs from './MainTabs';
 import DiscoverScreen from '../screens/DiscoverScreen';
 import SavedScreen from '../screens/SavedScreen';
+import CollectionDetailScreen from '../screens/CollectionDetailScreen';
 import AssistantScreen from '../screens/AssistantScreen';
 import MealPlanScreen from '../screens/MealPlanScreen';
 import IngredientStudioScreen from '../screens/IngredientStudioScreen';
@@ -78,6 +79,14 @@ export default function RootNavigator() {
             */}
             <Stack.Screen name="Discover" component={DiscoverScreen} />
             <Stack.Screen name="Saved" component={SavedScreen} />
+            {/*
+              CollectionDetail is Saved's real next screen (teammate "My
+              Collections" -> collection contents). It currently supports only
+              collectionType: 'favorites', backed by FavoritesContext — see
+              CollectionDetailScreen.js. Real Collections (smart/user, with
+              real collection ids) is M5.
+            */}
+            <Stack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
             <Stack.Screen name="Assistant" component={AssistantScreen} />
             <Stack.Screen name="MealPlan" component={MealPlanScreen} />
             <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />

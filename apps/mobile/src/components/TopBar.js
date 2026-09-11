@@ -56,13 +56,18 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
 }
 
 /**
- * mode: 'brand' (wordmark · substitute finder · notification bell) | 'back' (back arrow · title · action)
+ * mode: 'brand' (wordmark · [saved] · substitute finder · notification bell) | 'back' (back arrow · title · action)
+ *
+ * `onSavedPress` is opt-in: only screens that pass it get the bookmark
+ * affordance (teammate `c1c86ed` Dashboard header). Every other `mode="brand"`
+ * caller renders exactly as before.
  */
 export default function TopBar({
   mode = 'brand',
   title,
   onBack,
   onBellPress,
+  onSavedPress,
   rightIcon,
   onRightPress,
   showBellDot = true,
@@ -94,6 +99,17 @@ export default function TopBar({
             <Wordmark style={styles.brand} />
           </View>
           <View style={styles.bellCluster}>
+            {onSavedPress && (
+              <Pressable
+                onPress={onSavedPress}
+                hitSlop={10}
+                style={styles.substituteBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Saved recipes"
+              >
+                <Ionicons name="bookmark-outline" size={16} color={colors.ink} />
+              </Pressable>
+            )}
             <Pressable
               onPress={() => navigation.navigate('IngredientStudio')}
               hitSlop={10}

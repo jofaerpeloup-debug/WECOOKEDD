@@ -149,6 +149,17 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).not.toMatch(/CollectionPicker|useSavedCollections|mockCollections/);
   });
 
+  it('Collections stays add-to-collection-pending — it is NOT repurposed to open Saved/CollectionDetail', () => {
+    // Saved's teammate-authoritative entry point is the Dashboard header
+    // bookmark (see dashboardStaticAudit.test.js), not this icon — the
+    // teammate's own albums-outline control opens an in-place add-to-collection
+    // sheet (CollectionPickerSheet), never a navigation to a Saved/collections
+    // screen. Confirmed by reading `c1c86ed`.
+    expect(apiCode).not.toMatch(/openCollections[\s\S]{0,80}navigate\(\s*['"`](Saved|CollectionDetail)/);
+    expect(apiCode).not.toMatch(/onPress=\{openCollections\}[\s\S]{0,200}navigate\(\s*['"`](Saved|CollectionDetail)/);
+    expect(apiCode).not.toMatch(/CollectionDetail/);
+  });
+
   it('Nutrition Info card never fabricates macros', () => {
     expect(apiCode).toMatch(/Nutrition Info/);
     expect(apiCode).toMatch(/isn't available for this recipe yet/);
@@ -254,7 +265,9 @@ describe('the legacy mock recipe path stays isolated', () => {
     const callers = [
       'screens/DashboardScreen.js',
       'screens/DiscoverScreen.js',
-      'screens/SavedScreen.js',
+      // Saved itself no longer opens RecipeDetail directly — it only
+      // navigates into CollectionDetail, which owns the real recipe rows.
+      'screens/CollectionDetailScreen.js',
     ].map(read);
     for (const src of callers) {
       const calls = [...src.matchAll(/navigation\.navigate\(\s*'RecipeDetail',\s*\{([\s\S]{0,200}?)\}\s*\)/g)];

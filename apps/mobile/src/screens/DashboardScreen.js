@@ -40,9 +40,11 @@ import { loadJSON, saveJSON } from '../utils/storage';
 //     the already-mounted Discover tab never keeps a stale shortcut. No
 //     MainTabs replace/reset, no RootNavigator change.
 //   - the header stays our shared `<TopBar mode="brand">` (wordmark + swap
-//     shortcut + bell). The teammate's left-wordmark + bookmark header
-//     treatment is a shared-component change, deferred to the TopBar
-//     reconciliation pass rather than forked into this screen.
+//     shortcut + bell), with the teammate Dashboard's `bookmark-outline` ->
+//     Saved affordance wired through TopBar's opt-in `onSavedPress` prop —
+//     the only teammate-authoritative entry point into Saved/My Collections
+//     (verified: no other teammate screen navigates there). Every other
+//     `mode="brand"` caller does not pass the prop and is unchanged.
 //
 // Teammate parts that need a backend we don't have yet are represented
 // honestly, never faked:
@@ -314,7 +316,7 @@ export default function DashboardScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" />
+      <TopBar mode="brand" onSavedPress={() => navigation.navigate('Saved')} />
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
