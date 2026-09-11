@@ -1,0 +1,267 @@
+// RecipeDetail final-frontend port — static source validation.
+//
+// This slice ports the teammate RecipeDetail *visual shell* (hero, rating/
+// review summary, rate-this-recipe, metadata, ingredients, nutrition,
+// actions, CTA) onto our real Recipe API + Favorites + Shopping List +
+// CookMode + IngredientStudio wiring, with ONE approved product extension
+// (the M3 category/region + dietary badge row). The mobile workspace has no
+// RN renderer (see jest.config.js / [[wecooked-frontend-reconciliation]]),
+// so the invariants below are encoded as source assertions against
+// `apps/mobile/src/screens/RecipeDetailScreen.js`.
+//
+// "Forbidden" checks run against a comment-stripped copy so a phrase that
+// only appears in an explanatory comment does not trip them; "must contain"
+// checks run against the raw source. Checks scoped to the real API path
+// (`ApiRecipeDetailContainer` / `ApiRecipeDetail`) are sliced out of the
+// full file so the isolated, still-mock `LegacyRecipeDetail` branch never
+// pollutes them.
+
+const fs = require('fs');
+const path = require('path');
+
+const SRC = path.join(__dirname, '../src');
+const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
+
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+const raw = read('screens/RecipeDetailScreen.js');
+const code = stripComments(raw);
+
+// The real-API render path only: from the container through the end of
+// ApiRecipeDetail, stopping before RecipeDetailNotice / LegacyRecipeDetail.
+const apiStart = code.indexOf('function ApiRecipeDetailContainer');
+const apiEnd = code.indexOf('function RecipeDetailNotice');
+if (apiStart === -1 || apiEnd === -1 || apiEnd <= apiStart) {
+  throw new Error('recipeDetailStaticAudit: could not locate the ApiRecipeDetail* source slice');
+}
+const apiCode = code.slice(apiStart, apiEnd);
+
+describe('RecipeDetail (API mode) keeps our real recipe data architecture', () => {
+  it('fetches the real recipe from the REST service, never a mock', () => {
+    expect(raw).toMatch(/import \{ getRecipe \} from '\.\.\/api\/recipeService'/);
+    expect(apiCode).toMatch(/await getRecipe\(recipeId\)/);
+    expect(apiCode).not.toMatch(/data\/mockData/);
+    expect(apiCode).not.toMatch(/\bmockData\b/);
+    expect(apiCode).not.toMatch(/\bingredientSwaps\b/);
+  });
+
+  it('treats recipeId as authoritative and remounts on change', () => {
+    expect(code).toMatch(/params\.recipeSource === 'api'/);
+    expect(code).toMatch(/key=\{params\.recipeId\}/);
+    expect(code).toMatch(/recipeId=\{params\.recipeId\}/);
+    expect(apiCode).toMatch(/useEffect\(\(\) => \{/);
+    expect(apiCode).toMatch(/gen !== genRef\.current/);
+  });
+
+  it('preserves loading / error / retry / not-found handling', () => {
+    expect(apiCode).toMatch(/ActivityIndicator/);
+    expect(apiCode).toMatch(/setNotFound\(true\)/);
+    expect(apiCode).toMatch(/err\.isNotFound \|\| err\.code === 'RECIPE_NOT_FOUND'/);
+    expect(apiCode).toMatch(/onRetry=\{retry\}/);
+    expect(apiCode).toMatch(/let cancelled = false;/);
+    expect(apiCode).toMatch(/if \(cancelled \|\| gen !== genRef\.current\) return;/);
+  });
+
+  it('renders recipe photography from the real backend imageUrl only', () => {
+    expect(apiCode).toMatch(/<RecipeImage source=\{recipe\.imageUrl\}/);
+    expect(apiCode).not.toMatch(/https?:\/\//);
+    expect(apiCode).not.toMatch(/unsplash|picsum|pravatar/i);
+  });
+
+  it('never reintroduces cuisine or vibe anywhere in the screen', () => {
+    expect(code).not.toMatch(/cuisine/i);
+    expect(code).not.toMatch(/\bvibe\b/i);
+  });
+});
+
+describe('RecipeDetail (API mode) final visible structure matches teammate order', () => {
+  it('renders the sections in teammate order, with the approved badge extension after meta', () => {
+    const order = [
+      'ddHero',
+      'ddTitle',
+      'ddRatingRow',
+      'ddRateRow',
+      'ddMetaRow',
+      'tagRow', // approved WeCooked extension: category/region + dietary badges
+      'ddDescription',
+      'ddSectionHeader', // Ingredients eyebrow + stepper
+      'ddIngredientRow',
+      'ddNutritionCard',
+      'ddActionRow', // meal plan
+      'ddCtaWrap',
+    ];
+    const positions = order.map((key) => apiCode.indexOf(`styles.${key}`));
+    for (const [i, pos] of positions.entries()) {
+      expect(pos).toBeGreaterThan(-1);
+      if (i > 0) expect(pos).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+
+  it('hero controls are back, favorite, Collections, cart, share — in that order', () => {
+    const heroStart = apiCode.indexOf('ddHero');
+    const heroEnd = apiCode.indexOf('ddBody');
+    const hero = apiCode.slice(heroStart, heroEnd);
+    const order = ['chevron-back', 'FavoriteHeart', 'albums-outline', 'cart-outline', 'share-social-outline'];
+    const positions = order.map((token) => hero.indexOf(token));
+    for (const [i, pos] of positions.entries()) {
+      expect(pos).toBeGreaterThan(-1);
+      if (i > 0) expect(pos).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+});
+
+describe('RecipeDetail (API mode) never fabricates backend-pending data', () => {
+  it('rating/review summary asserts no aggregate fact the backend cannot know', () => {
+    expect(apiCode).not.toMatch(/shown\.rating|shown\.reviews|useReviews/);
+    expect(apiCode).not.toMatch(/\d(\.\d)?\s*\(?\d*\s*reviews?\)?/);
+    // "No ratings yet" implies the system knows the count is zero — an
+    // aggregate fact M5's Reviews backend doesn't exist to confirm. Only an
+    // honest unavailable-state copy is allowed.
+    expect(apiCode).not.toMatch(/No ratings yet/);
+    expect(apiCode).toMatch(/Ratings unavailable/);
+  });
+
+  it('cook-history pill asserts no per-user fact the backend cannot know', () => {
+    expect(apiCode).not.toMatch(/hasCooked|useCookedRecipes|cooked=\{?true/);
+    // "Not cooked yet" implies the system knows this user never cooked it —
+    // a fact M5's Cook History backend doesn't exist to confirm. Only an
+    // honest unavailable/neutral label is allowed, "Cooked" never appears.
+    expect(apiCode).not.toMatch(/Not cooked yet/);
+    expect(apiCode).not.toMatch(/>Cooked</);
+    expect(apiCode).toMatch(/Cook history/);
+  });
+
+  it('the five-star row renders but never persists or fakes a submission', () => {
+    expect(apiCode).toMatch(/Rate this recipe/);
+    expect(apiCode).toMatch(/\[1, 2, 3, 4, 5\]\.map/);
+    expect(apiCode).toMatch(/rateRecipe = \(\) => Alert\.alert\('Ratings are not available yet\.'\)/);
+    expect(apiCode).not.toMatch(/setRating|AsyncStorage/);
+  });
+
+  it('Collections is visible but only shows an honest pending alert, no local/mock state', () => {
+    expect(apiCode).toMatch(/name="albums-outline"/);
+    expect(apiCode).toMatch(/openCollections = \(\) => Alert\.alert\('Collections are not available yet\.'\)/);
+    expect(apiCode).not.toMatch(/AsyncStorage/);
+    expect(apiCode).not.toMatch(/CollectionPicker|useSavedCollections|mockCollections/);
+  });
+
+  it('Nutrition Info card never fabricates macros', () => {
+    expect(apiCode).toMatch(/Nutrition Info/);
+    expect(apiCode).toMatch(/isn't available for this recipe yet/);
+    expect(apiCode).not.toMatch(/calories|protein|carbs|\bfat\b|estimateNutrition|estimateMacros/i);
+  });
+});
+
+describe('RecipeDetail (API mode) removed old visible UI per the correction pass', () => {
+  it('no visible Steps/Instructions section remains', () => {
+    expect(apiCode).not.toMatch(/>Steps</);
+    expect(apiCode).not.toMatch(/No instructions listed/);
+    expect(apiCode).not.toMatch(/recipeSteps\(/);
+  });
+
+  it('no per-ingredient Substitutes/Swap chip or sheet remains visible', () => {
+    expect(apiCode).not.toMatch(/SubstitutionsSheet/);
+    expect(apiCode).not.toMatch(/openSubstitutes|substitutesCacheRef|swapIngredient/);
+    expect(raw).not.toMatch(/import SubstitutionsSheet/);
+  });
+
+  it('ingredient rows use separate left (identity) / right (scaled qty+unit) presentation', () => {
+    expect(code).toMatch(/function ingredientDisplayRow\(entry, opts\)/);
+    expect(apiCode).toMatch(/\.map\(\(entry\) => ingredientDisplayRow\(entry,/);
+    expect(apiCode).toMatch(/row\.qtyText/);
+    expect(apiCode).toMatch(/row\.name/);
+    // still merged for CookMode, via the untouched shared formatter:
+    expect(apiCode).toMatch(/ingredientDisplayText\(entry, \{ selectedServings: servings, baseServings \}\)/);
+  });
+});
+
+describe('RecipeDetail (API mode) keeps the approved category/region badge extension', () => {
+  it('still calls the real recipeBadges() with no fabricated classifier', () => {
+    expect(apiCode).toMatch(/const badges = recipeBadges\(recipe\);/);
+    expect(raw).toMatch(/import \{[\s\S]*?recipeBadges[\s\S]*?\} from '\.\.\/utils\/recipe'/);
+  });
+
+  it('recipeBadges prefers category, falls back to region, never fabricates a value', () => {
+    const recipeUtilCode = stripComments(read('utils/recipe.js'));
+    expect(recipeUtilCode).toMatch(/categoryLabel\(recipe && recipe\.category\) \|\| regionLabel\(recipe && recipe\.region\)/);
+    // Retirement is documented in a comment (already covered by
+    // recipeCuisineRetired.test.js) — the code itself never reads it.
+    expect(recipeUtilCode).not.toMatch(/recipe\.cuisine/);
+  });
+});
+
+describe('RecipeDetail (API mode) keeps real Favorites / Shopping List / CookMode / swap routing', () => {
+  it('uses the real shared FavoritesProvider heart, not a second local favorites state', () => {
+    expect(raw).toMatch(/import FavoriteHeart from '\.\.\/components\/FavoriteHeart'/);
+    expect(apiCode).toMatch(/<FavoriteHeart recipe=\{recipe\}/);
+    expect(apiCode).not.toMatch(/useSavedRecipes|SavedRecipesContext/);
+  });
+
+  it('adds to the real Shopping List via the recipe id only, no local dual-write, no bottom button', () => {
+    expect(apiCode).toMatch(/const \{ addRecipe, isMutating, pendingAction \} = useShoppingList\(\);/);
+    expect(apiCode).toMatch(/await addRecipe\(recipe\.id\)/);
+    expect(apiCode).not.toMatch(/addFromRecipe/);
+    expect(apiCode).not.toMatch(/Add All to Shopping List/);
+  });
+
+  it('preserves the CookMode route contract exactly, with the full recipe object (steps/instructions intact)', () => {
+    expect(apiCode).toMatch(
+      /navigation\.navigate\('CookMode', \{\s*recipeSource: 'api',\s*recipe,\s*ingredients: ingredientLines,\s*servings,\s*\}\);/
+    );
+  });
+
+  it('CookMode still reads real instruction data off the recipe it receives', () => {
+    const cookModeSrc = read('screens/CookModeScreen.js');
+    expect(cookModeSrc).toMatch(/instructionsToSteps\(recipe\.instructions\)/);
+  });
+
+  it('MealPlan and IngredientStudio use the current real routes, no mock payloads', () => {
+    expect(apiCode).toMatch(/navigation\.navigate\('MealPlan', \{ recipeId: recipe\.id \}\)/);
+    expect(apiCode).toMatch(/navigation\.navigate\('IngredientStudio'\)/);
+    expect(apiCode).not.toMatch(/navigate\('IngredientStudio', \{ recipe/);
+  });
+});
+
+describe('RecipeDetail (API mode) does not cross security / navigation boundaries', () => {
+  it('holds no authentication, session, or local-storage state of its own', () => {
+    expect(apiCode).not.toMatch(/SecureStore|expo-secure-store|tokenStore/);
+    expect(apiCode).not.toMatch(/accessToken|refreshToken|idToken/);
+    expect(apiCode).not.toMatch(/AsyncStorage/);
+    expect(apiCode).not.toMatch(/useAuth\(/);
+  });
+
+  it('never resets or replaces the navigation stack', () => {
+    expect(apiCode).not.toMatch(/navigation\s*\.\s*reset\s*\(/);
+    expect(apiCode).not.toMatch(/navigation\s*\.\s*replace\s*\(/);
+  });
+
+  it('carries no client/provider secrets or token material', () => {
+    expect(apiCode).not.toMatch(/clientId|CLIENT_ID|apiKey|API_KEY|secret|Bearer /i);
+  });
+});
+
+describe('the legacy mock recipe path stays isolated', () => {
+  it("LegacyRecipeDetail exists but is only reached from the dispatcher's non-api fallback", () => {
+    expect(code).toMatch(/function LegacyRecipeDetail\(/);
+    expect(code).toMatch(/return <LegacyRecipeDetail navigation=\{navigation\} recipe=\{params\.recipe\} \/>;/);
+  });
+
+  it("no current screen caller of RecipeDetail omits recipeSource: 'api'", () => {
+    const callers = [
+      'screens/DashboardScreen.js',
+      'screens/DiscoverScreen.js',
+      'screens/SavedScreen.js',
+    ].map(read);
+    for (const src of callers) {
+      const calls = [...src.matchAll(/navigation\.navigate\(\s*'RecipeDetail',\s*\{([\s\S]{0,200}?)\}\s*\)/g)];
+      expect(calls.length).toBeGreaterThan(0);
+      for (const [, args] of calls) {
+        expect(args).toMatch(/recipeSource:\s*'api'/);
+      }
+    }
+  });
+});
