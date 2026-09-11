@@ -4,16 +4,48 @@ import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
-import { settingsGroups } from '../data/mockData';
 import { useAuth } from '../context/AuthContext';
+
+const SETTINGS_GROUPS = [
+  {
+    title: 'Account',
+    items: [
+      { id: 'personal', icon: 'person-outline', label: 'Personal Info', sub: 'Name, email, contact' },
+      { id: 'security', icon: 'shield-checkmark-outline', label: 'Security', sub: 'Password, 2FA' },
+    ],
+  },
+  {
+    title: 'Preferences',
+    items: [
+      { id: 'notifications', icon: 'notifications-outline', label: 'Notifications', sub: 'Push, email alerts' },
+    ],
+  },
+  {
+    title: 'Support',
+    items: [
+      { id: 'help', icon: 'help-circle-outline', label: 'Help Center' },
+      { id: 'about', icon: 'information-circle-outline', label: 'About' },
+    ],
+  },
+  {
+    title: 'Legal',
+    items: [
+      { id: 'terms', icon: 'document-text-outline', label: 'Terms of Service' },
+      { id: 'privacy', icon: 'lock-closed-outline', label: 'Privacy Policy' },
+      { id: 'licenses', icon: 'code-slash-outline', label: 'Open Source Licenses' },
+    ],
+  },
+];
 
 const ROUTES = {
   personal: 'AccountDetails',
   security: 'Security',
   notifications: 'Notifications',
-  dietary: 'AccountDetails',
   help: 'HelpCenter',
   about: 'About',
+  terms: 'Terms',
+  privacy: 'Privacy',
+  licenses: 'Licenses',
 };
 
 const APPEARANCE_OPTIONS = [
@@ -75,7 +107,7 @@ export default function SettingsScreen({ navigation }) {
           </View>
         </View>
 
-        {settingsGroups.map((group) => (
+        {SETTINGS_GROUPS.map((group) => (
           <View key={group.title} style={styles.group}>
             <Text style={styles.groupTitle}>{group.title.toUpperCase()}</Text>
             <View style={styles.card}>
@@ -86,9 +118,7 @@ export default function SettingsScreen({ navigation }) {
                     styles.row,
                     i < group.items.length - 1 && styles.rowBorder,
                   ]}
-                  onPress={() => {
-                    if (ROUTES[item.id]) navigation.navigate(ROUTES[item.id]);
-                  }}
+                  onPress={() => navigation.navigate(ROUTES[item.id])}
                 >
                   <View style={styles.iconWrap}>
                     <Ionicons name={item.icon} size={17} color={colors.sageDeep} />

@@ -183,13 +183,25 @@ describe('no nested duplicate route names (React Navigation same-name warning)',
     }
   });
 
-  it('ProfileScreen\'s only Community caller resolves inside MainTabs', () => {
-    // ProfileScreen is itself a MainTabs tab; navigate('Community') hits the
-    // sibling tab, so no root-stack Community route is needed.
-    const profile = stripComments(read('screens/ProfileScreen.js'));
-    const communityRefs = [...profile.matchAll(/route:\s*'Community'|navigate\(\s*['"]Community['"]/g)];
-    expect(communityRefs.length).toBeGreaterThan(0); // caller exists
-    expect(tabScreenNames(mainTabs)).toContain('Profile');
+  it('Community is reached solely via the tab bar — no in-app screen navigates to it', () => {
+    // Profile Settings final port (feat/frontend-migration-profile-settings)
+    // dropped ProfileScreen's old flat "Community" menu row: the teammate
+    // final Profile has no such row, and Community is already a sibling
+    // MainTabs tab, so a direct row would only duplicate the tab bar. Nothing
+    // needs to call navigate('Community') for the tab to be reachable — a tab
+    // press IS the navigation.
+    const tabBar = read('components/TabBar.js');
+    expect(tabBar).toMatch(/name:\s*'Community'/);
+    expect(tabScreenNames(mainTabs)).toContain('Community');
+
+    const files = ['screens', 'components', 'navigation'].flatMap((d) =>
+      fs.readdirSync(path.join(SRC, d))
+        .filter((f) => f.endsWith('.js'))
+        .map((f) => fs.readFileSync(path.join(SRC, d, f), 'utf8'))
+    );
+    for (const src of files) {
+      expect(stripComments(src)).not.toMatch(/(navigate|push|replace)\(\s*['"]Community['"]|screen:\s*['"]Community['"]/);
+    }
   });
 });
 

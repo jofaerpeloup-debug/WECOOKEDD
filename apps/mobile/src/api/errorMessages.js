@@ -47,6 +47,12 @@ export function getAuthErrorMessage(err, fallback = FALLBACK) {
     case 'RATE_LIMIT_EXCEEDED':
       return 'Too many attempts. Please wait a few minutes and try again.';
 
+    // --- authenticated password change (Security screen) ---
+    case 'AUTH_CURRENT_PASSWORD_INVALID':
+      return 'Current password is incorrect.';
+    case 'AUTH_PASSWORD_CHANGE_UNAVAILABLE':
+      return 'This account signed up with Google and has no WeCooked password to change.';
+
     // --- Google social login (B4.1 backend codes) ---
     case 'AUTH_SOCIAL_CHALLENGE_INVALID':
       return 'Google sign-in didn’t complete. Please try again.';

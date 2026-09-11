@@ -259,6 +259,23 @@ export async function register({ name, email, password }) {
   return establishSession(data);
 }
 
+// --- authenticated password change (Security screen) -------------------
+//
+//   POST /auth/change-password  body { currentPassword, newPassword }
+//        -> { passwordChanged: true }
+//
+// Needs a valid access token (the shared client transparently refresh+retries
+// once). The backend revokes EVERY session for this user on success — this
+// device's tokens are dead the instant the response lands, so the caller must
+// follow a success with AuthContext.signOut() rather than keep using the
+// session. Deliberately not part of establishSession/endSession: it issues no
+// tokens of its own.
+export function changePassword({ currentPassword, newPassword }) {
+  return api.post('/auth/change-password', {
+    body: { currentPassword, newPassword },
+  });
+}
+
 export async function logout() {
   try {
     // Revokes just this session server-side. Needs a valid access token; the

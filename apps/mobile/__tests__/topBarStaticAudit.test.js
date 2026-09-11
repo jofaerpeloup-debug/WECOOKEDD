@@ -2,8 +2,8 @@
 //
 // The teammate-authoritative Saved entry point (the only navigate('Saved')
 // call anywhere in the teammate app, c1c86ed) is a bookmark icon in the
-// Dashboard header. TopBar is shared by five `mode="brand"` screens
-// (Dashboard/Assistant/IngredientStudio/Discover/Profile), so the bookmark is
+// Dashboard header. TopBar is shared by four `mode="brand"` screens
+// (Dashboard/Assistant/IngredientStudio/Discover), so the bookmark is
 // wired as an opt-in `onSavedPress` prop rather than a global addition — only
 // Dashboard passes it. These assertions lock that boundary. The mobile
 // workspace has no RN renderer (see jest.config.js), so invariants are
@@ -64,12 +64,19 @@ describe('other mode="brand" TopBar callers do not opt in (unaffected by the Sav
     'screens/AssistantScreen.js',
     'screens/IngredientStudioScreen.js',
     'screens/DiscoverScreen.js',
-    'screens/ProfileScreen.js',
   ];
 
   it.each(OTHER_BRAND_CALLERS)('%s renders TopBar without onSavedPress', (rel) => {
     const src = stripComments(read(rel));
     expect(src).toMatch(/<TopBar mode="brand"\s*\/>/);
     expect(src).not.toMatch(/onSavedPress/);
+  });
+
+  it('Profile uses its teammate-local header and is no longer a TopBar consumer', () => {
+    const profile = stripComments(read('screens/ProfileScreen.js'));
+    expect(profile).not.toMatch(/import TopBar/);
+    expect(profile).not.toMatch(/<TopBar\b/);
+    expect(profile).toMatch(/name="settings-outline"/);
+    expect(profile).toMatch(/name="notifications-outline"/);
   });
 });

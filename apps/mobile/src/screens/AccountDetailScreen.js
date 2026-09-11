@@ -6,6 +6,7 @@ import {
   ScrollView,
   Pressable,
   TextInput,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
@@ -98,6 +99,11 @@ export default function AccountDetailsScreen({ navigation }) {
 
   const trimmedName = name.trim();
   const nameInvalid = trimmedName.length === 0;
+  const initial = (trimmedName || user?.name || 'A').charAt(0).toUpperCase();
+
+  const showAvatarUnavailable = () => {
+    Alert.alert('Avatar updates unavailable', 'Changing your avatar is not available yet.');
+  };
 
   const makeAdd = (list, setList, setError) => (raw) => {
     const value = raw.trim();
@@ -170,10 +176,18 @@ export default function AccountDetailsScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.avatarSection}>
-          {/* Backend has no avatar field — neutral glyph, no edit affordance. */}
-          <View style={styles.avatar}>
-            <Ionicons name="person" size={34} color={colors.sageDeep} />
-          </View>
+          <Pressable
+            onPress={showAvatarUnavailable}
+            accessibilityRole="button"
+            accessibilityLabel="Change avatar"
+          >
+            <View style={styles.avatar}>
+              <Text style={styles.avatarInitial}>{initial}</Text>
+            </View>
+            <View style={styles.avatarEditBadge}>
+              <Ionicons name="camera" size={13} color={colors.onAccent} />
+            </View>
+          </Pressable>
           <Text style={styles.chefName}>{trimmedName || user?.name}</Text>
         </View>
 
@@ -192,6 +206,27 @@ export default function AccountDetailsScreen({ navigation }) {
           <Text style={styles.readonlyValue}>{user?.email}</Text>
         </View>
         <Text style={styles.caption}>Email changes aren't available yet.</Text>
+
+        <Input
+          label="Bio"
+          icon="create-outline"
+          value=""
+          editable={false}
+          placeholder="Bio isn't available yet"
+        />
+        <Text style={styles.unsupportedCaption}>Bio editing isn't available yet.</Text>
+
+        {/* Never the real password — a static masked placeholder that hands
+            off to the real change-password flow on Security. */}
+        <Input
+          label="Password"
+          icon="lock-closed-outline"
+          value="••••••••••"
+          secureTextEntry
+          editable={false}
+          rightAction="Change Password"
+          onRightActionPress={() => navigation.navigate('Security')}
+        />
 
         <PreferenceSection
           title="Dietary Preferences"
@@ -239,11 +274,29 @@ function makeStyles(colors) {
       width: 84,
       height: 84,
       borderRadius: 42,
-      backgroundColor: colors.sagePale,
+      backgroundColor: colors.sageDeep,
       alignItems: 'center',
       justifyContent: 'center',
       borderWidth: 3,
       borderColor: colors.paper,
+    },
+    avatarInitial: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 30,
+      color: colors.onAccent,
+    },
+    avatarEditBadge: {
+      position: 'absolute',
+      right: 0,
+      bottom: 0,
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: colors.sageDeep,
+      borderWidth: 2,
+      borderColor: colors.cream,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     chefName: {
       fontFamily: typography.display.fontFamily,
@@ -279,6 +332,13 @@ function makeStyles(colors) {
       fontSize: typography.sizes.xs,
       color: colors.inkFaint,
       marginTop: spacing.xs,
+      marginBottom: spacing.lg,
+    },
+    unsupportedCaption: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: -spacing.md,
       marginBottom: spacing.lg,
     },
     section: { marginBottom: spacing.lg },
