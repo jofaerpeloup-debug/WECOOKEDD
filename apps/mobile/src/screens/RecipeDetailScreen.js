@@ -18,7 +18,6 @@ import Badge from '../components/Badge';
 import Button from '../components/Button';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
-import SubstitutionsSheet from '../components/SubstitutionsSheet';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
@@ -26,11 +25,17 @@ import { imageSource } from '../utils/image';
 import { ApiError } from '../api/client';
 import { getRecipe } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
-import { difficultyLabel } from '../api/recipeOptions';
+import { difficultyLabel, unitLabel } from '../api/recipeOptions';
 import {
   formatMinutes,
+  // Aliased: this file already declares a local `formatQuantity` used by the
+  // legacy mock-recipe path below (LegacyRecipeDetail's scaleIngredientText)
+  // — left untouched per scope rules, so the real M3 formatter gets its own
+  // name here instead of colliding with it.
+  formatQuantity as formatIngredientQuantity,
   ingredientDisplayText,
   recipeBadges,
+  scaleQuantity,
   totalTimeMinutes,
 } from '../utils/recipe';
 
@@ -289,6 +294,29 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
   );
 }
 
+// RecipeDetail-local presentation row for one ingredient usage: name/note/
+// optional on the LEFT, the scaled quantity+unit on the RIGHT — the teammate
+// two-column layout, built directly off the real structured ingredient
+// fields (never off the merged `ingredientDisplayText` line CookMode uses).
+// Kept local to this screen so CookMode's existing contract is untouched.
+function ingredientDisplayRow(entry, opts) {
+  if (!entry || !entry.ingredient || !entry.ingredient.name) return null;
+  const id = entry.ingredient.id ? String(entry.ingredient.id) : null;
+  const name = entry.ingredient.name;
+
+  let qtyText = null;
+  if (entry.unit === 'toTaste') {
+    qtyText = 'To taste';
+  } else {
+    const quantity = scaleQuantity(entry.quantity, opts.selectedServings, opts.baseServings);
+    const qty = formatIngredientQuantity(quantity);
+    const unit = entry.unit ? unitLabel(entry.unit) : '';
+    qtyText = [qty, unit].filter(Boolean).join(' ') || null;
+  }
+
+  return { id, name, note: entry.note || null, optional: !!entry.optional, qtyText };
+}
+
 function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
@@ -298,60 +326,36 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const baseServings = recipe.servings > 0 ? recipe.servings : 1;
   const maxServings = Math.max(MAX_SERVINGS, baseServings);
   const [servings, setServings] = useState(baseServings);
+  const [nutritionOpen, setNutritionOpen] = useState(false);
 
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
 
-  // Structured rows: each surviving ingredient usage paired with its display
-  // line and, when the entry resolves to a canonical backend Ingredient, the
-  // { id, name } needed for a substitutes lookup. `ingredient` is null for a
-  // usage with no canonical identity (defensive — a non-admin never receives
-  // one), and such a row never gets a substitutes affordance or request.
-  const ingredientRows = useMemo(
+  // Unchanged contract for Cook Mode: the same ordered, filtered array of
+  // merged display strings this screen has always handed to CookMode (via
+  // the full `recipe` object CookMode also receives, instructions/steps
+  // included — this slice only changes what RecipeDetail itself renders).
+  const ingredientLines = useMemo(
     () =>
       (recipe.ingredients || [])
-        .map((entry) => {
-          const line = ingredientDisplayText(entry, {
-            selectedServings: servings,
-            baseServings,
-          });
-          if (!line) return null;
-          const id =
-            entry && entry.ingredient && entry.ingredient.id
-              ? String(entry.ingredient.id)
-              : null;
-          const name = entry && entry.ingredient ? entry.ingredient.name : null;
-          return { line, ingredient: id && name ? { id, name } : null };
-        })
+        .map((entry) => ingredientDisplayText(entry, { selectedServings: servings, baseServings }))
         .filter(Boolean),
     [recipe.ingredients, servings, baseServings]
   );
 
-  // Unchanged contract for Cook Mode: the same ordered, filtered array of
-  // display strings this screen has always handed to CookMode.
-  const ingredientLines = useMemo(
-    () => ingredientRows.map((row) => row.line),
-    [ingredientRows]
+  // Teammate-shape two-column rows for this screen's own display only.
+  const ingredientRows = useMemo(
+    () =>
+      (recipe.ingredients || [])
+        .map((entry) => ingredientDisplayRow(entry, { selectedServings: servings, baseServings }))
+        .filter(Boolean),
+    [recipe.ingredients, servings, baseServings]
   );
 
-  // Lazy, on-demand ingredient-substitutes lookup. No prefetch: a request is
-  // made only when the user opens the sheet for a specific row, and only for a
-  // canonical backend Ingredient id. Results are cached for this screen visit,
-  // keyed by canonical ingredient id; the cache dies with the screen (the
-  // container remounts on recipeId change via `key`).
-  const substitutesCacheRef = useRef(new Map());
-  const [swapIngredient, setSwapIngredient] = useState(null);
-
-  const openSubstitutes = (ing) => {
-    if (!ing || !ing.id) return; // hard guard: no canonical id -> no sheet, no request
-    setSwapIngredient(ing);
-  };
-  const closeSubstitutes = () => setSwapIngredient(null);
-
-  const stats = [
-    { icon: 'time-outline', value: formatMinutes(totalMins), label: 'Total time' },
-    { icon: 'stats-chart-outline', value: difficultyLabel(recipe.difficulty), label: 'Difficulty' },
-    { icon: 'people-outline', value: String(servings), label: 'Servings' },
+  const meta = [
+    { value: formatMinutes(totalMins), label: 'Time' },
+    { value: difficultyLabel(recipe.difficulty), label: 'Difficulty' },
+    { value: String(servings), label: 'Servings' },
   ];
 
   const share = () => {
@@ -359,14 +363,6 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
       title: recipe.title,
       message: `${recipe.title} — ${recipe.description}`,
     }).catch(() => {});
-  };
-
-  const openMore = () => {
-    Alert.alert(recipe.title, undefined, [
-      { text: 'Share', onPress: share },
-      { text: 'Report Recipe', style: 'destructive' },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
   };
 
   const startCooking = () => {
@@ -395,32 +391,47 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
     // (session changed): silently ignored.
   };
 
+  // Backend-pending action boundaries: M5 owns Collections and Ratings
+  // persistence. Neither writes any local/AsyncStorage state and neither
+  // pretends to succeed — an honest alert is the whole interaction for now.
+  const openCollections = () => Alert.alert('Collections are not available yet.');
+  const rateRecipe = () => Alert.alert('Ratings are not available yet.');
+
   const decrementServings = () => setServings((s) => Math.max(MIN_SERVINGS, s - 1));
   const incrementServings = () => setServings((s) => Math.min(maxServings, s + 1));
 
   return (
     <View style={styles.root}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
-        <View style={styles.imageWrap}>
-          <RecipeImage source={recipe.imageUrl} style={styles.image} />
-          <Pressable
-            style={[styles.iconBtn, styles.backBtn, { top: insets.top + spacing.sm }]}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={20} color="#fff" />
-          </Pressable>
-          <View style={[styles.topRightBtns, { top: insets.top + spacing.sm }]}>
-            {/* API mode only — real Favorites API control via the shared
-                FavoritesProvider. LegacyRecipeDetail keeps its own
-                SavedRecipesContext heart, untouched. */}
-            <FavoriteHeart recipe={recipe} size={18} variant="overlay" style={styles.iconBtn} />
-            <Pressable style={styles.iconBtn} onPress={openMore}>
-              <Ionicons name="ellipsis-horizontal" size={18} color="#fff" />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+        <View style={styles.ddHero}>
+          <RecipeImage source={recipe.imageUrl} style={styles.ddHeroImage} />
+          <View style={[styles.ddTopRow, { top: insets.top + spacing.sm }]}>
+            <Pressable style={styles.ddCircleBtn} onPress={() => navigation.goBack()}>
+              <Ionicons name="chevron-back" size={18} color="#FAF9F6" />
             </Pressable>
+            <View style={styles.ddRightIcons}>
+              {/* API mode only — real Favorites API control via the shared
+                  FavoritesProvider. LegacyRecipeDetail keeps its own
+                  SavedRecipesContext heart, untouched. */}
+              <FavoriteHeart recipe={recipe} size={16} variant="overlay" style={styles.ddCircleBtn} />
+              <Pressable style={styles.ddCircleBtn} onPress={openCollections}>
+                <Ionicons name="albums-outline" size={15} color="#FAF9F6" />
+              </Pressable>
+              <Pressable style={styles.ddCircleBtn} onPress={addToShoppingList} disabled={isMutating}>
+                {addingToShoppingList ? (
+                  <ActivityIndicator size="small" color="#FAF9F6" />
+                ) : (
+                  <Ionicons name="cart-outline" size={16} color="#FAF9F6" />
+                )}
+              </Pressable>
+              <Pressable style={styles.ddCircleBtn} onPress={share}>
+                <Ionicons name="share-social-outline" size={16} color="#FAF9F6" />
+              </Pressable>
+            </View>
           </View>
         </View>
 
-        <View style={styles.body}>
+        <View style={styles.ddBody}>
           {refreshError ? (
             <Pressable style={styles.inlineBanner} onPress={onRetryRefresh}>
               <Ionicons name="refresh" size={14} color={colors.error} />
@@ -428,6 +439,52 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             </Pressable>
           ) : null}
 
+          <Text style={styles.ddTitle}>{recipe.title}</Text>
+
+          {/* Honest M5 placeholder: the real Review + Cook History backends
+              don't exist yet, so this keeps the teammate rating row's
+              placement/hierarchy (rating text + "cooked" pill together)
+              without ever showing a fabricated rating, review count, or
+              cooked=true. */}
+          <View style={styles.ddRatingRow}>
+            <Ionicons name="star-outline" size={13} color={colors.inkFaint} />
+            <Text style={styles.ddRatingText}>Ratings unavailable</Text>
+            <View style={styles.ddCookedPill}>
+              {/* Deliberately short: the pill's compact geometry can't hold
+                  "Cook history unavailable" without wrapping — "Cook history"
+                  plus the pill's already-neutral outline treatment is the
+                  short honest variant the correction asked for. */}
+              <Text style={styles.ddCookedPillText}>Cook history</Text>
+            </View>
+          </View>
+
+          {/* Same honest-pending boundary as Collections above: five-star
+              teammate structure, no local persistence, no fake submission. */}
+          <View style={styles.ddRateRow}>
+            <Text style={styles.ddRateLabel}>Rate this recipe</Text>
+            <View style={styles.ddStarRow}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Pressable key={n} hitSlop={4} onPress={rateRecipe}>
+                  <Ionicons name="star-outline" size={20} color={colors.inkFaint} />
+                </Pressable>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.ddMetaRow}>
+            {meta.map((m) => (
+              <View key={m.label}>
+                <Text style={styles.ddMetaValue}>{m.value}</Text>
+                <Text style={styles.ddMetaLabel}>{m.label}</Text>
+              </View>
+            ))}
+          </View>
+          <Text style={styles.ddSubStat}>
+            Prep {formatMinutes(recipe.prepTimeMinutes)} · Cook {formatMinutes(recipe.cookTimeMinutes)}
+          </Text>
+
+          {/* APPROVED WeCooked extension (not in teammate source): real M3
+              category/region + dietary badges. Kept — see final report. */}
           {badges.length > 0 && (
             <View style={styles.tagRow}>
               {badges.map((label) => (
@@ -435,125 +492,111 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
               ))}
             </View>
           )}
-          <Text style={styles.title}>{recipe.title}</Text>
-          <Text style={styles.description}>{recipe.description}</Text>
 
-          <View style={styles.statsRow}>
-            {stats.map((s, i) => (
-              <React.Fragment key={s.label}>
-                {i > 0 && <View style={styles.statDivider} />}
-                <View style={styles.statItem}>
-                  <View style={styles.statTop}>
-                    <Ionicons name={s.icon} size={14} color={colors.sageDeep} />
-                    <Text style={styles.statValue}>{s.value}</Text>
-                  </View>
-                  <Text style={styles.statLabel}>{s.label}</Text>
-                </View>
-              </React.Fragment>
-            ))}
-          </View>
-          <Text style={styles.subStat}>
-            Prep {formatMinutes(recipe.prepTimeMinutes)} · Cook {formatMinutes(recipe.cookTimeMinutes)}
-          </Text>
+          <Text style={styles.ddDescription}>{recipe.description}</Text>
 
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionLabel}>Ingredients</Text>
-            <View style={styles.stepper}>
+          <View style={styles.ddSectionHeader}>
+            <Text style={styles.ddEyebrow}>Ingredients</Text>
+            <View style={styles.ddStepper}>
               <Pressable
                 onPress={decrementServings}
                 hitSlop={8}
-                style={styles.stepperBtn}
+                style={styles.ddStepperBtn}
                 disabled={servings <= MIN_SERVINGS}
               >
                 <Ionicons
                   name="remove"
-                  size={16}
-                  color={servings <= MIN_SERVINGS ? colors.inkFaint : colors.error}
+                  size={15}
+                  color={servings <= MIN_SERVINGS ? colors.inkFaint : colors.sageDeep}
                 />
               </Pressable>
-              <Text style={styles.stepperValue}>{servings}</Text>
+              <Text style={styles.ddStepperValue}>{servings}</Text>
               <Pressable
                 onPress={incrementServings}
                 hitSlop={8}
-                style={styles.stepperBtn}
+                style={styles.ddStepperBtn}
                 disabled={servings >= maxServings}
               >
                 <Ionicons
                   name="add"
-                  size={16}
-                  color={servings >= maxServings ? colors.inkFaint : colors.error}
+                  size={15}
+                  color={servings >= maxServings ? colors.inkFaint : colors.sageDeep}
                 />
               </Pressable>
             </View>
           </View>
 
-          <View style={styles.ingredientsCard}>
-            {ingredientRows.length === 0 ? (
-              <Text style={styles.mutedText}>No ingredients listed.</Text>
-            ) : (
-              ingredientRows.map((row, i) => (
-                <View key={i} style={styles.ingredientRow}>
-                  <View style={styles.bullet} />
-                  <Text style={styles.ingredientText}>{row.line}</Text>
-                  {row.ingredient ? (
-                    <Pressable
-                      onPress={() => openSubstitutes(row.ingredient)}
-                      hitSlop={6}
-                      style={styles.substituteChip}
-                    >
-                      <Ionicons name="swap-horizontal" size={13} color={colors.sageDeep} />
-                      <Text style={styles.substituteChipText}>Substitutes</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              ))
-            )}
-          </View>
-
-          <Text style={styles.sectionLabel}>Instructions</Text>
-          <View style={styles.instructionsCard}>
-            {(recipe.instructions || []).length === 0 ? (
-              <Text style={styles.mutedText}>No instructions listed.</Text>
-            ) : (
-              recipe.instructions.map((step, i) => (
-                <View key={i} style={styles.instructionRow}>
-                  <View style={styles.instructionIndex}>
-                    <Text style={styles.instructionIndexText}>{i + 1}</Text>
+          {ingredientRows.length === 0 ? (
+            <Text style={styles.mutedText}>No ingredients listed.</Text>
+          ) : (
+            <View>
+              {ingredientRows.map((row, i) => (
+                <View key={row.id || i} style={styles.ddIngredientRow}>
+                  <View style={styles.ddIngredientLeft}>
+                    <Text style={styles.ddPlus}>+</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.ddIngredientName}>{row.name}</Text>
+                      {row.note || row.optional ? (
+                        <Text style={styles.ddIngredientNote}>
+                          {[row.note, row.optional ? 'optional' : null].filter(Boolean).join(' · ')}
+                        </Text>
+                      ) : null}
+                    </View>
                   </View>
-                  <Text style={styles.instructionText}>{step}</Text>
+                  {row.qtyText ? <Text style={styles.ddIngredientQty}>{row.qtyText}</Text> : null}
                 </View>
-              ))
+              ))}
+            </View>
+          )}
+
+          <Pressable style={styles.ddNutritionCard} onPress={() => setNutritionOpen((v) => !v)}>
+            <View style={styles.ddNutritionHead}>
+              <Text style={styles.ddNutritionTitle}>Nutrition Info</Text>
+              <Text style={styles.ddNutritionToggle}>
+                {nutritionOpen ? 'Hide Info −' : 'Show Info +'}
+              </Text>
+            </View>
+            {nutritionOpen && (
+              <View style={styles.ddNutritionBody}>
+                <Text style={styles.ddNutritionUnavailable}>
+                  Nutrition information isn't available for this recipe yet.
+                </Text>
+              </View>
             )}
-          </View>
+          </Pressable>
 
-          <View style={styles.ctaRow}>
-            <Button title="Start Cooking" variant="primary" style={{ flex: 1 }} onPress={startCooking} />
-            <Pressable style={styles.shareBtn} onPress={share}>
-              <Ionicons name="share-social-outline" size={19} color={colors.ink} />
-            </Pressable>
-          </View>
+          <Pressable
+            style={styles.ddActionRow}
+            onPress={() => navigation.navigate('MealPlan', { recipeId: recipe.id })}
+          >
+            <View style={styles.ddActionIcon}>
+              <Ionicons name="calendar-outline" size={16} color={colors.stone} />
+            </View>
+            <Text style={styles.ddActionText}>Add to meal plan</Text>
+            <Ionicons name="chevron-forward" size={15} color={colors.inkFaint} />
+          </Pressable>
 
-          <Button
-            title="Add All to Shopping List"
-            variant="outline"
-            style={{ marginTop: spacing.md }}
-            onPress={addToShoppingList}
-            loading={addingToShoppingList}
-            disabled={isMutating}
-          />
-          <Text style={styles.addAllNote}>
-            Adds ingredients for {baseServings} {baseServings === 1 ? 'serving' : 'servings'} — the
-            recipe's default. Changing servings above only affects what's shown here.
-          </Text>
+          <Pressable
+            style={styles.ddActionRow}
+            onPress={() => navigation.navigate('IngredientStudio')}
+          >
+            <View style={styles.ddActionIcon}>
+              <Ionicons name="swap-horizontal" size={16} color={colors.stone} />
+            </View>
+            <Text style={styles.ddActionText}>Need a substitute? Find swaps</Text>
+            <Ionicons name="chevron-forward" size={15} color={colors.inkFaint} />
+          </Pressable>
         </View>
       </ScrollView>
 
-      <SubstitutionsSheet
-        visible={!!swapIngredient}
-        ingredient={swapIngredient}
-        cacheRef={substitutesCacheRef}
-        onClose={closeSubstitutes}
-      />
+      <View style={[styles.ddCtaWrap, { paddingBottom: insets.bottom + spacing.lg }]}>
+        <Button
+          title="Start Cooking"
+          variant="primary"
+          onPress={startCooking}
+          icon={<Ionicons name="play" size={15} color={colors.onAccent} />}
+        />
+      </View>
     </View>
   );
 }
@@ -1101,6 +1144,198 @@ function makeStyles(colors, shadow) {
       textAlign: 'center',
       lineHeight: 16,
       marginTop: spacing.sm,
+    },
+
+    // ---- RecipeDetail (API mode) — teammate-final visual shell over our
+    // real data/actions. Namespaced `dd*` so these never touch the styles
+    // LegacyRecipeDetail / RecipeDetailNotice above still depend on. ----
+    ddHero: { position: 'relative', height: 280, backgroundColor: colors.creamDeep },
+    ddHeroImage: { width: '100%', height: '100%' },
+    ddTopRow: {
+      position: 'absolute',
+      left: spacing.lg,
+      right: spacing.lg,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+    },
+    ddCircleBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: 'rgba(18,22,14,0.55)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    ddRightIcons: { flexDirection: 'row', gap: spacing.sm },
+    ddBody: { padding: spacing.xl },
+    ddTitle: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 24,
+      lineHeight: 29,
+      color: colors.ink,
+    },
+    ddRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10 },
+    ddRatingText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 12.5,
+      color: colors.inkFaint,
+    },
+    // Honest inactive state (see final report §11) — a muted outline pill,
+    // never the teammate's filled/affirmative "Cooked" treatment, since no
+    // real per-user cook-history exists yet (M5).
+    ddCookedPill: {
+      marginLeft: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+    },
+    ddCookedPillText: { fontFamily: typography.body.bold, fontSize: 10.5, color: colors.inkFaint },
+    ddRateRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: spacing.md,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.sageLight,
+    },
+    ddRateLabel: { fontFamily: typography.body.semibold, fontSize: 12.5, color: colors.inkSoft },
+    ddStarRow: { flexDirection: 'row', gap: 4 },
+    ddMetaRow: { flexDirection: 'row', gap: 20, marginTop: 16 },
+    ddMetaValue: {
+      fontFamily: typography.body.semibold,
+      fontSize: 13.5,
+      color: colors.ink,
+    },
+    ddMetaLabel: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 11,
+      color: colors.inkFaint,
+      marginTop: 1,
+    },
+    ddSubStat: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: spacing.xs,
+    },
+    ddDescription: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 13.5,
+      lineHeight: 21,
+      color: colors.inkSoft,
+      marginTop: 16,
+    },
+    ddSectionHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 24,
+      marginBottom: spacing.md,
+    },
+    ddEyebrow: {
+      fontFamily: typography.body.bold,
+      fontSize: 11.5,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: colors.inkFaint,
+    },
+    ddStepper: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      backgroundColor: colors.creamDeep,
+      borderRadius: radius.pill,
+      paddingHorizontal: 6,
+      paddingVertical: 5,
+    },
+    ddStepperBtn: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      backgroundColor: colors.sagePale,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    ddStepperValue: {
+      fontFamily: typography.body.bold,
+      fontSize: 13,
+      color: colors.ink,
+      minWidth: 14,
+      textAlign: 'center',
+    },
+    ddIngredientRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+      paddingVertical: 11,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.hairline,
+    },
+    ddIngredientLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+    ddPlus: { fontFamily: typography.body.semibold, fontSize: 15, color: colors.sageDeep },
+    ddIngredientName: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 14,
+      color: colors.ink,
+    },
+    ddIngredientNote: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 11.5,
+      color: colors.inkFaint,
+      marginTop: 1,
+    },
+    ddIngredientQty: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 13,
+      color: colors.inkFaint,
+    },
+    ddNutritionCard: {
+      marginTop: spacing.xl,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.md,
+      padding: spacing.lg,
+    },
+    ddNutritionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    ddNutritionTitle: { fontFamily: typography.display.fontFamily, fontSize: 16, color: colors.ink },
+    ddNutritionToggle: { fontFamily: typography.body.bold, fontSize: 12.5, color: colors.sageDeep },
+    ddNutritionBody: { marginTop: spacing.md },
+    ddNutritionUnavailable: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 12.5,
+      color: colors.inkFaint,
+    },
+    ddActionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginTop: spacing.lg,
+      padding: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.sageLight,
+    },
+    ddActionIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: colors.stoneLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    ddActionText: { flex: 1, fontFamily: typography.body.semibold, fontSize: 13.5, color: colors.ink },
+    ddCtaWrap: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.md,
+      backgroundColor: colors.cream,
     },
   });
 }
