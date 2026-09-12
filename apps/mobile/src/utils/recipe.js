@@ -90,12 +90,73 @@ export function ingredientNames(recipe) {
     .filter(Boolean);
 }
 
-// View adapter: backend ordered instruction strings -> CookMode's step shape.
-// A pure view transform — no persisted Instruction entity or id is invented,
-// server order is preserved by array position.
-export function instructionsToSteps(instructions) {
-  return ((instructions) || []).map((text, index) => ({
-    title: `Step ${index + 1}`,
-    description: text,
-  }));
+// CookMode view adapter. Prefer the public API's structured, contiguous steps;
+// fall back to the persisted instruction strings exposed by older API payloads.
+// Neither path invents titles, durations, or another source of recipe data.
+export function cookModeSteps(recipe) {
+  const structured = Array.isArray(recipe && recipe.steps) ? [...recipe.steps] : [];
+  structured.sort((a, b) => Number(a && a.order) - Number(b && b.order));
+
+  const hasValidStructuredSteps =
+    structured.length > 0 &&
+    structured.every(
+      (step, index) =>
+        step &&
+        Number.isInteger(step.order) &&
+        step.order === index + 1 &&
+        typeof step.text === 'string' &&
+        step.text.trim().length > 0
+    );
+
+  if (hasValidStructuredSteps) {
+    return structured.map((step) => ({ order: step.order, text: step.text }));
+  }
+
+  return (Array.isArray(recipe && recipe.instructions) ? recipe.instructions : [])
+    .filter((text) => typeof text === 'string' && text.trim().length > 0)
+    .map((text, index) => ({ order: index + 1, text }));
+}
+
+// Builds the teammate-style two-column prep checklist from real structured
+// ingredient usage. The fallback strings preserve the existing route contract
+// for compatibility. Scaling is display-only and never mutates the recipe.
+export function cookModeIngredientChecklist(recipe, selectedServings, fallbackLines = []) {
+  const entries = Array.isArray(recipe && recipe.ingredients) ? recipe.ingredients : [];
+  const baseServings = Number(recipe && recipe.servings);
+  const displayServings = Number(selectedServings);
+
+  const structured = entries
+    .map((entry) => {
+      if (!entry || !entry.ingredient || !entry.ingredient.name) return null;
+
+      let name = entry.ingredient.name;
+      if (entry.note) name += ` (${entry.note})`;
+      if (entry.optional) name += ' · optional';
+
+      let qty = '';
+      if (entry.unit === 'toTaste') {
+        qty = 'To taste';
+      } else {
+        const quantity = scaleQuantity(entry.quantity, displayServings, baseServings);
+        qty = [formatQuantity(quantity), entry.unit ? unitLabel(entry.unit) : '']
+          .filter(Boolean)
+          .join(' ');
+      }
+
+      return { name, qty };
+    })
+    .filter(Boolean);
+
+  if (structured.length > 0) return structured;
+
+  return (Array.isArray(fallbackLines) ? fallbackLines : [])
+    .filter((line) => typeof line === 'string' && line.trim().length > 0)
+    .map((line) => ({ name: line, qty: '' }));
+}
+
+export function clampCookStepIndex(index, stepCount) {
+  const count = Number.isInteger(stepCount) && stepCount > 0 ? stepCount : 0;
+  if (count === 0) return 0;
+  const candidate = Number.isFinite(index) ? Math.trunc(index) : 0;
+  return Math.min(Math.max(candidate, 0), count - 1);
 }

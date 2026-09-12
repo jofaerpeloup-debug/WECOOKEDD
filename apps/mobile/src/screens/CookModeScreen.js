@@ -1,280 +1,475 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
-import { loadJSON, saveJSON } from '../utils/storage';
-import { instructionsToSteps } from '../utils/recipe';
-
-const TABS = [
-  { key: 'ingredients', label: 'Ingredients' },
-  { key: 'steps', label: 'Steps' },
-  { key: 'notes', label: 'Notes' },
-];
+import { notify } from '../utils/alert';
+import {
+  clampCookStepIndex,
+  cookModeIngredientChecklist,
+  cookModeSteps,
+} from '../utils/recipe';
 
 export default function CookModeScreen({ navigation, route }) {
-  const { recipe, ingredients, servings, recipeSource } = route.params;
-  // Backend recipes arrive as PublicRecipe (ordered `instructions: string[]`,
-  // `imageUrl`); legacy mock recipes carry `steps: [{title,description}]` and
-  // `image`. A view adapter bridges the two — no shape is silently mutated.
-  const isApi = recipeSource === 'api';
-  const { colors, shadow } = useTheme();
-  const styles = makeStyles(colors, shadow);
-  const [tab, setTab] = useState('steps');
-  const [notes, setNotes] = useState('');
-  const [cooked, setCooked] = useState(false);
-  const storageKey = `wecooked:cookmode:${recipe.id}`;
-  const hydrated = useRef(false);
+  const params = route.params || {};
+  const recipe = params.recipe || {};
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const styles = makeStyles(colors);
 
-  useEffect(() => {
-    (async () => {
-      const stored = await loadJSON(storageKey, null);
-      if (stored) {
-        setNotes(stored.notes || '');
-        setCooked(!!stored.cooked);
-      }
-      hydrated.current = true;
-    })();
-  }, [storageKey]);
-
-  useEffect(() => {
-    if (!hydrated.current) return;
-    saveJSON(storageKey, { notes, cooked });
-  }, [notes, cooked, storageKey]);
-
-  const steps = useMemo(
-    () => (isApi ? instructionsToSteps(recipe.instructions) : recipe.steps || []),
-    [isApi, recipe]
+  const steps = useMemo(() => cookModeSteps(recipe), [recipe]);
+  const cookServings =
+    Number.isFinite(params.servings) && params.servings > 0
+      ? params.servings
+      : Number.isFinite(recipe.servings) && recipe.servings > 0
+        ? recipe.servings
+        : 1;
+  const checklist = useMemo(
+    () => cookModeIngredientChecklist(recipe, cookServings, params.ingredients),
+    [recipe, cookServings, params.ingredients]
   );
-  const imageValue = recipe.imageUrl ?? recipe.image;
 
-  const markCooked = () => {
-    setCooked(true);
-    Alert.alert('Nicely done!', `${recipe.title} marked as cooked.`);
+  const [phase, setPhase] = useState('prep');
+  const [checked, setChecked] = useState({});
+  const [stepIndex, setStepIndex] = useState(0);
+
+  const safeStepIndex = clampCookStepIndex(stepIndex, steps.length);
+  const step = steps[safeStepIndex] || null;
+  const isLast = steps.length > 0 && safeStepIndex === steps.length - 1;
+  const gathered = checklist.reduce((count, _, index) => count + (checked[index] ? 1 : 0), 0);
+  const allChecked = checklist.length > 0 && gathered === checklist.length;
+
+  const toggleAll = () => {
+    setChecked(allChecked ? {} : Object.fromEntries(checklist.map((_, index) => [index, true])));
   };
+
+  const startCooking = () => {
+    if (steps.length === 0) return;
+    setStepIndex(0);
+    setPhase('cook');
+  };
+
+  const goPrevious = () => {
+    if (safeStepIndex === 0) {
+      setPhase('prep');
+      return;
+    }
+    setStepIndex((index) => clampCookStepIndex(index - 1, steps.length));
+  };
+
+  const finishCooking = () => {
+    notify('Nicely done!', 'Cook history is not available yet.', () => navigation.goBack());
+  };
+
+  const goNext = () => {
+    if (steps.length === 0) return;
+    if (isLast) {
+      finishCooking();
+      return;
+    }
+    setStepIndex((index) => clampCookStepIndex(index + 1, steps.length));
+  };
+
+  const showTimerGap = () => {
+    notify('Timer unavailable', 'This recipe does not include a timer for this step.');
+  };
+
+  const title = recipe.title || 'Cook Mode';
+
+  if (phase === 'prep') {
+    return (
+      <View style={styles.root}>
+        <CookHeader
+          title={title}
+          topInset={insets.top}
+          colors={colors}
+          styles={styles}
+          onBack={() => navigation.goBack()}
+        />
+
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.prepScroll}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.prepEyebrow}>Before you start</Text>
+          <Text style={styles.prepTitle}>Gather your ingredients</Text>
+          <Text style={styles.prepSub}>
+            {cookServings} {cookServings === 1 ? 'serving' : 'servings'} · {gathered} of{' '}
+            {checklist.length} ready
+          </Text>
+
+          <View style={styles.checkList}>
+            {checklist.map((ingredient, index) => {
+              const isChecked = !!checked[index];
+              return (
+                <Pressable
+                  key={`${ingredient.name}-${index}`}
+                  style={styles.checkRow}
+                  onPress={() =>
+                    setChecked((current) => ({ ...current, [index]: !current[index] }))
+                  }
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: isChecked }}
+                >
+                  <View style={[styles.checkbox, isChecked && styles.checkboxOn]}>
+                    {isChecked && (
+                      <Ionicons name="checkmark" size={13} color={colors.onAccent} />
+                    )}
+                  </View>
+                  <Text style={[styles.checkName, isChecked && styles.checkStruck]}>
+                    {ingredient.name}
+                  </Text>
+                  {!!ingredient.qty && (
+                    <Text style={[styles.checkQty, isChecked && styles.checkStruck]}>
+                      {ingredient.qty}
+                    </Text>
+                  )}
+                </Pressable>
+              );
+            })}
+
+            {checklist.length === 0 && (
+              <Text style={styles.emptyText}>No ingredient list is available for this recipe.</Text>
+            )}
+            {steps.length === 0 && (
+              <Text style={styles.emptyText}>No cooking steps are available for this recipe.</Text>
+            )}
+          </View>
+        </ScrollView>
+
+        <View style={[styles.prepFooter, { paddingBottom: insets.bottom + spacing.lg }]}>
+          {checklist.length > 0 && (
+            <Pressable style={styles.checkAllBtn} onPress={toggleAll}>
+              <Ionicons
+                name={allChecked ? 'ellipse-outline' : 'checkmark-done'}
+                size={15}
+                color={colors.ink}
+              />
+              <Text style={styles.checkAllText}>{allChecked ? 'Uncheck all' : 'Check all'}</Text>
+            </Pressable>
+          )}
+          <Pressable
+            style={[styles.startBtn, steps.length === 0 && styles.startBtnDisabled]}
+            onPress={startCooking}
+            disabled={steps.length === 0}
+          >
+            <Ionicons name="play" size={15} color={colors.onAccent} />
+            <Text style={styles.startText}>Start cooking</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
-      <TopBar
-        mode="back"
-        title={recipe.title}
+      <CookHeader
+        title={title}
+        topInset={insets.top}
+        colors={colors}
+        styles={styles}
         onBack={() => navigation.goBack()}
-        rightIcon="ellipsis-horizontal"
-        onRightPress={() => {}}
       />
 
-      <View style={styles.tabRow}>
-        {TABS.map((t) => {
-          const active = t.key === tab;
-          return (
-            <Pressable key={t.key} style={styles.tab} onPress={() => setTab(t.key)}>
-              <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t.label}</Text>
-              {active && <View style={styles.tabUnderline} />}
-            </Pressable>
-          );
-        })}
+      <View style={styles.dotsRow}>
+        {steps.map((item, index) => (
+          <View
+            key={item.order}
+            style={[
+              styles.dot,
+              index === safeStepIndex && styles.dotCurrent,
+              index < safeStepIndex && styles.dotDone,
+            ]}
+          >
+            <Text
+              style={[styles.dotText, index === safeStepIndex && styles.dotTextCurrent]}
+            >
+              {item.order}
+            </Text>
+          </View>
+        ))}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {tab === 'ingredients' && (
-          <>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>Ingredients</Text>
-              <Text style={styles.servingsBadge}>{servings || 4} servings</Text>
-            </View>
-            <View style={styles.ingredientsCard}>
-              {(ingredients || []).map((ing, i) => (
-                <View key={i} style={styles.ingredientRow}>
-                  <View style={styles.bullet} />
-                  <Text style={styles.ingredientText}>{ing}</Text>
-                </View>
-              ))}
-            </View>
-          </>
-        )}
-
-        {tab === 'steps' && (
-          <View style={styles.stepsList}>
-            {steps.length === 0 ? (
-              <Text style={styles.emptyText}>No steps available for this recipe yet.</Text>
-            ) : (
-              steps.map((step, i) => (
-                <View key={i} style={styles.stepRow}>
-                  <View style={styles.stepIndexCol}>
-                    <View style={styles.stepIndex}>
-                      <Text style={styles.stepIndexText}>{i + 1}</Text>
-                    </View>
-                    {i < steps.length - 1 && <View style={styles.stepLine} />}
-                  </View>
-                  <RecipeImage source={imageValue} style={styles.stepThumb} />
-                  <View style={styles.stepBody}>
-                    <Text style={styles.stepTitle}>{step.title}</Text>
-                    <Text style={styles.stepDesc}>{step.description}</Text>
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-        )}
-
-        {tab === 'notes' && (
-          <View style={styles.notesWrap}>
-            <Text style={styles.sectionLabel}>Your Notes</Text>
-            <TextInput
-              style={styles.notesInput}
-              placeholder="Add tweaks, timing notes, or anything you want to remember for next time..."
-              placeholderTextColor={colors.inkFaint}
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-              textAlignVertical="top"
-            />
-          </View>
-        )}
-
-        <Pressable
-          style={[styles.markBtn, cooked && styles.markBtnDone]}
-          onPress={markCooked}
-          disabled={cooked}
+      <View style={styles.normal}>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.stepScroll}
+          showsVerticalScrollIndicator={false}
         >
-          <Ionicons
-            name={cooked ? 'checkmark-circle' : 'checkmark-circle-outline'}
-            size={18}
-            color={cooked ? colors.onAccent : colors.sageDeep}
+          <RecipeImage
+            source={recipe.imageUrl ?? recipe.image}
+            style={styles.stepPhoto}
+            resizeMode="cover"
           />
-          <Text style={[styles.markBtnText, cooked && styles.markBtnTextDone]}>
-            {cooked ? 'Marked as Cooked' : 'Mark as Cooked'}
-          </Text>
-        </Pressable>
-      </ScrollView>
+
+          <Text style={styles.stepEyebrow}>Step {step.order}</Text>
+          <Text style={styles.instruction}>{step.text}</Text>
+
+          <Pressable
+            style={styles.timerReadout}
+            onPress={showTimerGap}
+            accessibilityRole="button"
+            accessibilityLabel="Step timer unavailable"
+          >
+            <Ionicons name="time-outline" size={16} color={colors.stone} />
+            <Text style={styles.timerText}>Timer unavailable</Text>
+          </Pressable>
+        </ScrollView>
+
+        <View style={[styles.btnRow, { paddingBottom: insets.bottom + spacing.lg }]}>
+          <Pressable style={styles.secondaryBtn} onPress={goPrevious}>
+            <Text style={styles.secondaryText}>Back</Text>
+          </Pressable>
+          <Pressable style={[styles.primaryBtn, styles.nextBtn]} onPress={goNext}>
+            <Text style={styles.primaryText}>{isLast ? 'Finish Cooking' : 'Next Step'}</Text>
+          </Pressable>
+        </View>
+      </View>
     </View>
   );
 }
 
-function makeStyles(colors, shadow) {
+function CookHeader({ title, topInset, colors, styles, onBack }) {
+  return (
+    <View style={[styles.header, { paddingTop: topInset + spacing.sm }]}>
+      <Pressable
+        style={styles.iconBtn}
+        hitSlop={8}
+        onPress={onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Back"
+      >
+        <Ionicons name="chevron-back" size={16} color={colors.ink} />
+      </Pressable>
+      <Text style={styles.headerTitle} numberOfLines={1}>
+        {title}
+      </Text>
+    </View>
+  );
+}
+
+function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
-    tabRow: {
+    flex: { flex: 1 },
+    header: {
       flexDirection: 'row',
-      paddingHorizontal: spacing.lg,
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: spacing.xl,
+      paddingBottom: spacing.sm,
+    },
+    iconBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.creamDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerTitle: {
+      flex: 1,
+      fontFamily: typography.display.fontFamily,
+      fontSize: 17,
+      color: colors.ink,
+    },
+    prepScroll: {
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.xxxl,
+    },
+    prepEyebrow: {
+      fontFamily: typography.body.bold,
+      fontSize: 11.5,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: colors.sageDeep,
+    },
+    prepTitle: {
+      marginTop: 6,
+      fontFamily: typography.display.fontFamily,
+      fontSize: 24,
+      color: colors.ink,
+    },
+    prepSub: {
+      marginTop: 6,
+      fontFamily: typography.body.fontFamily,
+      fontSize: 12.5,
+      color: colors.inkFaint,
+    },
+    checkList: {
+      marginTop: spacing.lg,
+      borderTopWidth: 1,
+      borderTopColor: colors.hairline,
+    },
+    checkRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 13,
       borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
     },
-    tab: { paddingVertical: spacing.md, marginRight: spacing.xl },
-    tabLabel: {
+    checkbox: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      borderWidth: 1.5,
+      borderColor: colors.hairline,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    checkboxOn: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
+    checkName: {
+      flex: 1,
       fontFamily: typography.body.medium,
-      fontSize: typography.sizes.base,
+      fontSize: 14,
+      color: colors.ink,
+    },
+    checkQty: {
+      maxWidth: '38%',
+      fontFamily: typography.body.fontFamily,
+      fontSize: 13,
+      color: colors.inkFaint,
+      textAlign: 'right',
+    },
+    checkStruck: { textDecorationLine: 'line-through', color: colors.inkFaint },
+    emptyText: {
+      paddingVertical: spacing.md,
+      fontFamily: typography.body.fontFamily,
+      fontSize: 12.5,
+      lineHeight: 19,
       color: colors.inkFaint,
     },
-    tabLabelActive: { color: colors.sageDeep, fontFamily: typography.body.semibold },
-    tabUnderline: {
-      position: 'absolute',
-      bottom: -1,
-      left: 0,
-      right: 0,
-      height: 2,
-      backgroundColor: colors.sageDeep,
-      borderRadius: 1,
-    },
-    scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
-    sectionHeaderRow: {
+    prepFooter: {
       flexDirection: 'row',
-      justifyContent: 'space-between',
       alignItems: 'center',
-      marginBottom: spacing.md,
+      gap: 10,
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.md,
+      borderTopWidth: 1,
+      borderTopColor: colors.hairline,
+      backgroundColor: colors.cream,
     },
-    sectionLabel: {
+    checkAllBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      height: 50,
+      paddingHorizontal: 16,
+      borderRadius: radius.pill,
+      backgroundColor: colors.creamDeep,
+    },
+    checkAllText: {
       fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.lg,
-      color: colors.ink,
-      marginBottom: spacing.md,
-    },
-    servingsBadge: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.xs,
-      color: colors.sageDeep,
-    },
-    ingredientsCard: {
-      backgroundColor: colors.paper,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: spacing.lg,
-    },
-    ingredientRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 6 },
-    bullet: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.sageDeep },
-    ingredientText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.base,
+      fontSize: 13,
       color: colors.ink,
     },
-    stepsList: { paddingTop: spacing.sm },
-    stepRow: { flexDirection: 'row', gap: spacing.md },
-    stepIndexCol: { alignItems: 'center', width: 26 },
-    stepIndex: {
+    startBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      height: 52,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sageDeep,
+    },
+    startBtnDisabled: { opacity: 0.45 },
+    startText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 14,
+      color: colors.onAccent,
+    },
+    dotsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.lg,
+    },
+    dot: {
       width: 26,
       height: 26,
       borderRadius: 13,
+      backgroundColor: colors.creamDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dotCurrent: { backgroundColor: colors.sageDeep },
+    dotDone: { backgroundColor: colors.sagePale },
+    dotText: {
+      fontFamily: typography.body.bold,
+      fontSize: 11,
+      color: colors.inkFaint,
+    },
+    dotTextCurrent: { color: colors.onAccent },
+    normal: { flex: 1, paddingHorizontal: spacing.xl },
+    stepScroll: { paddingBottom: spacing.xl },
+    stepPhoto: {
+      width: '100%',
+      height: 220,
+      borderRadius: 20,
+      backgroundColor: colors.creamDeep,
+    },
+    stepEyebrow: {
+      marginTop: spacing.xl,
+      fontFamily: typography.body.bold,
+      fontSize: 11.5,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: colors.sageDeep,
+    },
+    instruction: {
+      marginTop: 10,
+      fontFamily: typography.body.fontFamily,
+      fontSize: 14,
+      lineHeight: 22,
+      color: colors.inkSoft,
+    },
+    timerReadout: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: 8,
+      marginTop: 18,
+      paddingVertical: 6,
+    },
+    timerText: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 20,
+      color: colors.stone,
+    },
+    btnRow: { flexDirection: 'row', gap: 12, width: '100%', maxWidth: 320 },
+    secondaryBtn: {
+      flex: 1,
+      height: 50,
+      borderRadius: radius.pill,
+      backgroundColor: colors.creamDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    secondaryText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 14,
+      color: colors.ink,
+    },
+    primaryBtn: {
+      flex: 1,
+      height: 50,
+      borderRadius: radius.pill,
       backgroundColor: colors.sageDeep,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    stepIndexText: {
-      fontFamily: typography.body.bold,
-      fontSize: typography.sizes.sm,
+    nextBtn: { flex: 2 },
+    primaryText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 14,
       color: colors.onAccent,
     },
-    stepLine: { flex: 1, width: 2, backgroundColor: colors.hairline, marginVertical: 4 },
-    stepThumb: { width: 56, height: 56, borderRadius: radius.md, backgroundColor: colors.creamDeep },
-    stepBody: { flex: 1, paddingBottom: spacing.xl },
-    stepTitle: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.md,
-      color: colors.ink,
-      marginBottom: 4,
-    },
-    stepDesc: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      lineHeight: 19,
-      color: colors.inkSoft,
-    },
-    emptyText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkFaint,
-    },
-    notesWrap: { flex: 1 },
-    notesInput: {
-      minHeight: 160,
-      backgroundColor: colors.paper,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: spacing.lg,
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.base,
-      color: colors.ink,
-    },
-    markBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: spacing.sm,
-      marginTop: spacing.xl,
-      paddingVertical: 15,
-      borderRadius: radius.pill,
-      borderWidth: 1.5,
-      borderColor: colors.sageDeep,
-    },
-    markBtnDone: { backgroundColor: colors.sageDeep },
-    markBtnText: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.md,
-      color: colors.sageDeep,
-    },
-    markBtnTextDone: { color: colors.onAccent },
   });
 }
