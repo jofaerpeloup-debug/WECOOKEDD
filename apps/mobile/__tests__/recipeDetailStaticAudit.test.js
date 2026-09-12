@@ -227,7 +227,7 @@ describe('RecipeDetail (API mode) keeps real Favorites / Shopping List / CookMod
 
   it('CookMode still reads real instruction data off the recipe it receives', () => {
     const cookModeSrc = read('screens/CookModeScreen.js');
-    expect(cookModeSrc).toMatch(/instructionsToSteps\(recipe\.instructions\)/);
+    expect(cookModeSrc).toMatch(/cookModeSteps\(recipe\)/);
   });
 
   it('MealPlan and IngredientStudio use the current real routes, no mock payloads', () => {
