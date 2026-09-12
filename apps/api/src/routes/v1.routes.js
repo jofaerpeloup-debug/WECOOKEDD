@@ -8,6 +8,7 @@ const recipeRoutes = require('../modules/recipes/recipe.routes');
 const favoriteRoutes = require('../modules/favorites/favorite.routes');
 const shoppingListRoutes = require('../modules/shopping-lists/shopping-list.routes');
 const collectionRoutes = require('../modules/collections/collection.routes');
+const reviewRoutes = require('../modules/reviews/review.routes');
 
 const router = Router();
 
@@ -20,5 +21,8 @@ router.use('/recipes', recipeRoutes);
 router.use('/favorites', favoriteRoutes);
 router.use('/shopping-list', shoppingListRoutes);
 router.use('/collections', collectionRoutes);
+// Registers its own full paths (/recipes/:recipeId/reviews, /reviews/:reviewId)
+// rather than a single prefix — see review.routes.js.
+router.use(reviewRoutes);
 
 module.exports = router;

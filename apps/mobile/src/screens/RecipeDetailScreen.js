@@ -27,6 +27,8 @@ import { imageSource } from '../utils/image';
 import { ApiError } from '../api/client';
 import { getRecipe } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
+import { getRecipeReviews, createReview, updateReview } from '../api/reviewService';
+import { getReviewErrorMessage } from '../api/reviewErrors';
 import { difficultyLabel, unitLabel } from '../api/recipeOptions';
 import {
   formatMinutes,
@@ -338,6 +340,92 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const [swapIngredient, setSwapIngredient] = useState(null);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
 
+  // M5B: real server-backed rating for this recipe. Kept local to this
+  // screen rather than a global provider — RecipeDetail is the only surface
+  // that reads or writes reviews (teammate's final UI exposes a star rating
+  // only, never a review list — see final report), so a FavoritesContext-style
+  // provider would be unjustified complexity here.
+  const [reviewState, setReviewState] = useState({ status: 'loading', summary: null, myReview: null });
+  const [ratingPending, setRatingPending] = useState(false);
+  const reviewMountedRef = useRef(true);
+
+  useEffect(() => {
+    reviewMountedRef.current = true;
+    return () => {
+      reviewMountedRef.current = false;
+    };
+  }, []);
+
+  // limit: 1 — this screen only ever needs the aggregate summary + the
+  // caller's own review, never the review list itself (teammate has no
+  // review-list UI), so there is no reason to download many review rows.
+  useEffect(() => {
+    let cancelled = false;
+    setReviewState({ status: 'loading', summary: null, myReview: null });
+    (async () => {
+      try {
+        const { summary, currentUserReview } = await getRecipeReviews(recipe.id, { limit: 1 });
+        if (cancelled) return;
+        setReviewState({ status: 'ready', summary, myReview: currentUserReview });
+      } catch {
+        if (cancelled) return;
+        // Honest fallback, never a fabricated summary: reserved for a genuine
+        // request failure now, rather than "the backend doesn't exist yet".
+        setReviewState({ status: 'error', summary: null, myReview: null });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recipe.id]);
+
+  const myRating = reviewState.myReview ? reviewState.myReview.rating : 0;
+
+  // Tap-to-rate, matching teammate's direct tap-to-submit interaction (no
+  // confirm step, no comment UI — teammate exposes star rating only). POST
+  // creates the caller's first review; PATCH updates the existing one, so a
+  // user can never end up with two reviews for the same recipe. Optimistic
+  // star fill is rolled back on failure — never a faked success.
+  const submitRating = async (n) => {
+    if (ratingPending || reviewState.status === 'loading') return;
+    const previousReview = reviewState.myReview;
+    setRatingPending(true);
+    setReviewState((s) => ({
+      ...s,
+      myReview: previousReview ? { ...previousReview, rating: n } : { id: null, rating: n, comment: null },
+    }));
+
+    try {
+      if (previousReview && previousReview.id) {
+        await updateReview(previousReview.id, { rating: n });
+      } else {
+        await createReview(recipe.id, { rating: n });
+      }
+      // Refresh from the server rather than computing the new average
+      // locally — the aggregate is always authoritative/server-computed.
+      const refreshed = await getRecipeReviews(recipe.id, { limit: 1 });
+      if (reviewMountedRef.current) {
+        setReviewState({ status: 'ready', summary: refreshed.summary, myReview: refreshed.currentUserReview });
+      }
+    } catch (err) {
+      if (reviewMountedRef.current) {
+        setReviewState((s) => ({ ...s, myReview: previousReview }));
+        Alert.alert('Couldn’t save your rating', getReviewErrorMessage(err));
+      }
+    } finally {
+      if (reviewMountedRef.current) setRatingPending(false);
+    }
+  };
+
+  const ratingSummaryText = (() => {
+    if (reviewState.status === 'loading') return 'Loading ratings…';
+    if (reviewState.status === 'error') return 'Ratings unavailable';
+    const { averageRating, ratingCount } = reviewState.summary;
+    if (!ratingCount) return 'No ratings yet';
+    return `${averageRating} (${ratingCount} reviews)`;
+  })();
+  const hasRatings = reviewState.status === 'ready' && reviewState.summary.ratingCount > 0;
+
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
 
@@ -401,12 +489,9 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
     // (session changed): silently ignored.
   };
 
-  // Collections is real as of M5A (real CollectionPickerSheet, real API) —
-  // Ratings stays a backend-pending action boundary: M5 owns Ratings
-  // persistence, which neither writes any local/AsyncStorage state nor
-  // pretends to succeed, so an honest alert is the whole interaction for now.
+  // Collections is real as of M5A (real CollectionPickerSheet, real API).
+  // Ratings is real as of M5B (see submitRating above).
   const openCollections = () => setCollectionsOpen(true);
-  const rateRecipe = () => Alert.alert('Ratings are not available yet.');
   const openSubstitutes = (row) => {
     if (!row?.id || !row?.name) return;
     setSwapIngredient({ id: row.id, name: row.name });
@@ -457,14 +542,15 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
 
           <Text style={styles.ddTitle}>{recipe.title}</Text>
 
-          {/* Honest M5 placeholder: the real Review + Cook History backends
-              don't exist yet, so this keeps the teammate rating row's
-              placement/hierarchy (rating text + "cooked" pill together)
-              without ever showing a fabricated rating, review count, or
-              cooked=true. */}
+          {/* M5B: real server-backed rating summary. The average/count come
+              straight from the backend aggregate — never fabricated — and
+              read as "No ratings yet" (a real, confirmed zero) rather than
+              the old M5 "unavailable" placeholder, which meant no backend
+              existed to ask at all. Cook History stays the honest M5
+              placeholder — that backend is still M5C, out of scope here. */}
           <View style={styles.ddRatingRow}>
-            <Ionicons name="star-outline" size={13} color={colors.inkFaint} />
-            <Text style={styles.ddRatingText}>Ratings unavailable</Text>
+            <Ionicons name={hasRatings ? 'star' : 'star-outline'} size={13} color={hasRatings ? colors.stone : colors.inkFaint} />
+            <Text style={styles.ddRatingText}>{ratingSummaryText}</Text>
             <View style={styles.ddCookedPill}>
               {/* Deliberately short: the pill's compact geometry can't hold
                   "Cook history unavailable" without wrapping — "Cook history"
@@ -474,14 +560,25 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             </View>
           </View>
 
-          {/* Same honest-pending boundary as Collections above: five-star
-              teammate structure, no local persistence, no fake submission. */}
+          {/* M5B: tapping a star submits a real rating immediately — POST for
+              a first-time rating, PATCH once the caller already has one
+              (myRating > 0) — matching teammate's direct tap-to-rate
+              interaction exactly (no confirm step, no comment UI). */}
           <View style={styles.ddRateRow}>
-            <Text style={styles.ddRateLabel}>Rate this recipe</Text>
+            <Text style={styles.ddRateLabel}>{myRating ? 'Your rating' : 'Rate this recipe'}</Text>
             <View style={styles.ddStarRow}>
               {[1, 2, 3, 4, 5].map((n) => (
-                <Pressable key={n} hitSlop={4} onPress={rateRecipe}>
-                  <Ionicons name="star-outline" size={20} color={colors.inkFaint} />
+                <Pressable
+                  key={n}
+                  hitSlop={4}
+                  onPress={() => submitRating(n)}
+                  disabled={ratingPending || reviewState.status === 'loading'}
+                >
+                  <Ionicons
+                    name={n <= myRating ? 'star' : 'star-outline'}
+                    size={20}
+                    color={n <= myRating ? colors.stone : colors.inkFaint}
+                  />
                 </Pressable>
               ))}
             </View>

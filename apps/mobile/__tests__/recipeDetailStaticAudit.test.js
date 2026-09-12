@@ -119,17 +119,23 @@ describe('RecipeDetail (API mode) final visible structure matches teammate order
 });
 
 describe('RecipeDetail (API mode) never fabricates backend-pending data', () => {
-  it('rating/review summary asserts no aggregate fact the backend cannot know', () => {
+  it('rating/review summary is real (M5B): fetched from the Reviews API, never the old fake/local aggregate', () => {
+    // The teammate local-blend aggregate (`shown.rating`/`shown.reviews`/
+    // `useReviews`) must never come back — M5B replaces it with a real
+    // fetch, not a revival of the mock-blended local rating.
     expect(apiCode).not.toMatch(/shown\.rating|shown\.reviews|useReviews/);
-    expect(apiCode).not.toMatch(/\d(\.\d)?\s*\(?\d*\s*reviews?\)?/);
-    // "No ratings yet" implies the system knows the count is zero — an
-    // aggregate fact M5's Reviews backend doesn't exist to confirm. Only an
-    // honest unavailable-state copy is allowed.
-    expect(apiCode).not.toMatch(/No ratings yet/);
-    expect(apiCode).toMatch(/Ratings unavailable/);
+    expect(apiCode).not.toMatch(/AsyncStorage/);
+    expect(raw).toMatch(
+      /import \{ getRecipeReviews, createReview, updateReview \} from '\.\.\/api\/reviewService'/
+    );
+    expect(apiCode).toMatch(/await getRecipeReviews\(recipe\.id, \{ limit: 1 \}\)/);
+    // Real, confirmed states only — "No ratings yet" is a real zero the
+    // backend attested to, never a fabricated non-zero summary.
+    expect(apiCode).toMatch(/No ratings yet/);
+    expect(apiCode).not.toMatch(/\b5\.0\b/);
   });
 
-  it('cook-history pill asserts no per-user fact the backend cannot know', () => {
+  it('cook-history pill asserts no per-user fact the backend cannot know (M5C, unchanged by M5B)', () => {
     expect(apiCode).not.toMatch(/hasCooked|useCookedRecipes|cooked=\{?true/);
     // "Not cooked yet" implies the system knows this user never cooked it —
     // a fact M5's Cook History backend doesn't exist to confirm. Only an
@@ -139,11 +145,23 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).toMatch(/Cook history/);
   });
 
-  it('the five-star row renders but never persists or fakes a submission', () => {
+  it('the five-star row submits a real rating (M5B): POST first-time, PATCH thereafter, never a fake success', () => {
     expect(apiCode).toMatch(/Rate this recipe/);
+    expect(apiCode).toMatch(/Your rating/);
     expect(apiCode).toMatch(/\[1, 2, 3, 4, 5\]\.map/);
-    expect(apiCode).toMatch(/rateRecipe = \(\) => Alert\.alert\('Ratings are not available yet\.'\)/);
-    expect(apiCode).not.toMatch(/setRating|AsyncStorage/);
+    expect(apiCode).toMatch(/onPress=\{\(\) => submitRating\(n\)\}/);
+    expect(apiCode).toMatch(/await createReview\(recipe\.id, \{ rating: n \}\)/);
+    expect(apiCode).toMatch(/await updateReview\(previousReview\.id, \{ rating: n \}\)/);
+    // Rollback on failure — an optimistic star fill is never left standing
+    // as a fake success once the request actually failed.
+    expect(apiCode).toMatch(/myReview: previousReview/);
+    expect(apiCode).toMatch(/getReviewErrorMessage\(err\)/);
+    expect(apiCode).not.toMatch(/setRating\(|AsyncStorage/);
+  });
+
+  it('never sends a client-computed rating aggregate — averageRating/ratingCount are read-only from the server', () => {
+    expect(apiCode).not.toMatch(/averageRating\s*:\s*(?!refreshed|reviewState|summary)/);
+    expect(apiCode).not.toMatch(/ratingCount\s*:\s*(?!refreshed|reviewState|summary)/);
   });
 
   it('Collections is real (M5A): opens the real CollectionPickerSheet, no local/mock state', () => {
