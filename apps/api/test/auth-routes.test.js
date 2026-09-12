@@ -579,6 +579,67 @@ test('POST /api/v1/auth/login rejects a password whose UTF-8 byte length exceeds
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
 });
 
+test('POST /api/v1/auth/login for a Google-only account (no passwordHash) returns 401, not a 500 bcrypt crash', async (t) => {
+  // Regression: verifyCredentials used to call bcrypt.compare(password, undefined)
+  // for a truthy user with no local passwordHash, throwing "Illegal arguments:
+  // string, undefined" and surfacing as a raw 500 to the client.
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
+    fakeUserDoc({
+      email: 'google-only@example.com',
+      passwordHash: undefined,
+      authIdentities: [{ provider: 'google', subject: 'sub-1', linkedAt: new Date() }],
+    })
+  );
+  let sessionCreated = false;
+  t.mock.method(sessionRepository, 'createSession', async () => {
+    sessionCreated = true;
+    return fakeSessionDoc('u1');
+  });
+
+  const response = await request(app).post('/api/v1/auth/login').send({
+    email: 'google-only@example.com',
+    password: 'whatever-they-typed',
+  });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_INVALID_CREDENTIALS');
+  assert.equal(response.body.error.message, 'Invalid email or password.');
+  assert.equal(sessionCreated, false);
+  // Never reveal that the account is Google-only, and never leak an internal
+  // bcrypt/error message anywhere in the response.
+  const raw = JSON.stringify(response.body).toLowerCase();
+  assert.equal(raw.includes('google'), false);
+  assert.equal(raw.includes('bcrypt'), false);
+  assert.equal(raw.includes('illegal arguments'), false);
+});
+
+test('POST /api/v1/auth/login: admin credentials return role "admin" in the response, never downgraded', async (t) => {
+  const passwordHash = await hashPassword('correct-password');
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
+    fakeUserDoc({ passwordHash, role: 'admin' })
+  );
+  t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
+
+  const response = await request(app).post('/api/v1/auth/login').send({
+    email: 'ada@example.com',
+    password: 'correct-password',
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.user.role, 'admin');
+});
+
+test('GET /api/v1/users/me: an admin session round-trips role "admin", never defaulted to "user"', async (t) => {
+  const token = mockAuthenticatedUser(t, {
+    user: fakeUserDoc({ id: AUTH_USER_ID, role: 'admin' }),
+  });
+
+  const response = await request(app).get('/api/v1/users/me').set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.user.role, 'admin');
+});
+
 test('POST /api/v1/auth/refresh rotates the token and returns new tokens', async (t) => {
   t.mock.method(sessionRepository, 'findActiveByHash', async () => ({ _id: 'session-99', userId: 'u42' }));
   t.mock.method(sessionRepository, 'rotateByHash', async ({ newHash }) => ({

@@ -171,6 +171,62 @@ test('verifyCredentials returns null for an unknown email (same result shape as 
   assert.equal(user, null);
 });
 
+test('verifyCredentials returns null (never throws) for a provider-only user with no passwordHash', async (t) => {
+  // Google-only signups never get a passwordHash (see createSocialUser) —
+  // the field is simply absent, not an empty string. A previous bug here
+  // called bcrypt.compare(password, undefined), which throws
+  // "Illegal arguments: string, undefined" and surfaced as a 500.
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => ({
+    _id: 'user-1',
+    email: 'google-only@example.com',
+    passwordHash: undefined,
+    role: 'user',
+    status: 'active',
+    authIdentities: [{ provider: 'google', subject: 'sub-1', linkedAt: new Date() }],
+  }));
+
+  const user = await userService.verifyCredentials('google-only@example.com', 'whatever');
+  assert.equal(user, null);
+});
+
+test('verifyCredentials returns null for a user whose passwordHash is an empty/blank string', async (t) => {
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => ({
+    _id: 'user-1',
+    email: 'blank-hash@example.com',
+    passwordHash: '   ',
+    role: 'user',
+    status: 'active',
+  }));
+
+  const user = await userService.verifyCredentials('blank-hash@example.com', 'whatever');
+  assert.equal(user, null);
+});
+
+test('verifyCredentials never rejects/throws for any credential combination (no internal error leaks)', async (t) => {
+  const passwordHash = await hashPassword('correct-password');
+  const cases = [
+    { label: 'unknown email', mockUser: null, password: 'whatever' },
+    { label: 'wrong password', mockUser: { passwordHash }, password: 'wrong-password' },
+    { label: 'provider-only user', mockUser: { passwordHash: undefined }, password: 'whatever' },
+    { label: 'suspended user, correct password', mockUser: { passwordHash, status: 'suspended' }, password: 'correct-password' },
+  ];
+
+  for (const { mockUser, password } of cases) {
+    t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
+      mockUser
+        ? {
+            _id: 'user-1',
+            email: 'target@example.com',
+            role: 'user',
+            status: 'active',
+            ...mockUser,
+          }
+        : null
+    );
+    await assert.doesNotReject(() => userService.verifyCredentials('target@example.com', password));
+  }
+});
+
 test('getUserById delegates to the repository', async (t) => {
   t.mock.method(userRepository, 'findById', async (id) => ({ _id: id }));
   const user = await userService.getUserById('user-1');
