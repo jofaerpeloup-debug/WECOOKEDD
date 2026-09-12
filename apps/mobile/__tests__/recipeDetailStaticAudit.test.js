@@ -146,14 +146,17 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).not.toMatch(/setRating|AsyncStorage/);
   });
 
-  it('Collections is visible but only shows an honest pending alert, no local/mock state', () => {
+  it('Collections is real (M5A): opens the real CollectionPickerSheet, no local/mock state', () => {
     expect(apiCode).toMatch(/name="albums-outline"/);
-    expect(apiCode).toMatch(/openCollections = \(\) => Alert\.alert\('Collections are not available yet\.'\)/);
+    expect(apiCode).toMatch(/openCollections = \(\) => setCollectionsOpen\(true\)/);
+    expect(raw).toMatch(/import CollectionPickerSheet from '\.\.\/components\/CollectionPickerSheet'/);
+    expect(apiCode).toMatch(/<CollectionPickerSheet/);
+    expect(apiCode).toMatch(/recipeId=\{recipe\.id\}/);
     expect(apiCode).not.toMatch(/AsyncStorage/);
-    expect(apiCode).not.toMatch(/CollectionPicker|useSavedCollections|mockCollections/);
+    expect(apiCode).not.toMatch(/useSavedCollections|mockCollections/);
   });
 
-  it('Collections stays add-to-collection-pending — it is NOT repurposed to open Saved/CollectionDetail', () => {
+  it('Collections is NOT repurposed to open Saved/CollectionDetail — it opens an in-place picker', () => {
     // Saved's teammate-authoritative entry point is the Dashboard header
     // bookmark (see dashboardStaticAudit.test.js), not this icon — the
     // teammate's own albums-outline control opens an in-place add-to-collection

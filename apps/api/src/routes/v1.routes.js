@@ -7,6 +7,7 @@ const substitutionRoutes = require('../modules/substitutions/substitution.routes
 const recipeRoutes = require('../modules/recipes/recipe.routes');
 const favoriteRoutes = require('../modules/favorites/favorite.routes');
 const shoppingListRoutes = require('../modules/shopping-lists/shopping-list.routes');
+const collectionRoutes = require('../modules/collections/collection.routes');
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.use('/substitutions', substitutionRoutes);
 router.use('/recipes', recipeRoutes);
 router.use('/favorites', favoriteRoutes);
 router.use('/shopping-list', shoppingListRoutes);
+router.use('/collections', collectionRoutes);
 
 module.exports = router;
