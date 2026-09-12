@@ -77,17 +77,25 @@ async function registerUser({ name, email, password }) {
 
 /**
  * Verifies local-auth credentials. Returns the matching User document on
- * success, or null on any failure (unknown email or wrong password) —
- * callers must treat both cases identically to avoid leaking which emails
- * are registered.
+ * success, or null on any failure (unknown email, wrong password, or an
+ * account with no local password at all — e.g. a Google-only user) —
+ * callers must treat every case identically to avoid leaking which emails
+ * are registered or that an account is provider-only.
+ *
+ * A provider-only user is truthy but carries no `passwordHash` (the field is
+ * never set for social signups), so presence of a *usable* hash is checked
+ * explicitly rather than just presence of a user — comparePassword must never
+ * be called with anything but a real bcrypt hash or the dummy one.
  */
 async function verifyCredentials(email, password) {
   const normalizedEmail = normalizeEmail(email);
   const user = await userRepository.findByEmailWithPassword(normalizedEmail);
-  const hashToCompare = user ? user.passwordHash : await getDummyHash();
+  const hasPasswordHash =
+    !!user && typeof user.passwordHash === 'string' && user.passwordHash.trim().length > 0;
+  const hashToCompare = hasPasswordHash ? user.passwordHash : await getDummyHash();
   const isValid = await comparePassword(password, hashToCompare);
 
-  if (!user || !isValid) {
+  if (!hasPasswordHash || !isValid) {
     return null;
   }
   return user;
