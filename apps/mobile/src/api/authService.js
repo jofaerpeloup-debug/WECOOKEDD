@@ -152,8 +152,16 @@ async function establishSession(data) {
   // auth-response user only if that follow-up read is briefly unavailable.
   try {
     return await fetchCurrentUser();
-  } catch {
-    return data.user;
+  } catch (err) {
+    // The auth response remains server-authoritative enough for a temporary
+    // transport/5xx outage. A definitive client/auth rejection is different:
+    // the shared client may already have cleared the rejected session, so
+    // returning data.user would create an authenticated UI with no live tokens.
+    if (err instanceof ApiError && (err.isNetworkError || err.status >= 500)) {
+      return data.user;
+    }
+    await tokenStore.clearSession();
+    throw err;
   }
 }
 

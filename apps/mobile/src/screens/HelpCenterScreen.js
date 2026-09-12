@@ -1,11 +1,33 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Button from '../components/Button';
-import { faqs } from '../data/mockData';
+
+const FAQS = [
+  {
+    id: 'substitutions',
+    q: 'How do ingredient substitutions work?',
+    a: 'Open a recipe and tap Substitutes beside an ingredient. Suggestions come from the WeCooked catalog and are guidance only, not exact quantity conversions.',
+  },
+  {
+    id: 'offline',
+    q: 'Can I use WeCooked offline?',
+    a: 'Synced recipes, favorites, substitutions, and shopping lists require a connection to the WeCooked service.',
+  },
+  {
+    id: 'preferences',
+    q: 'How do I change my dietary preferences?',
+    a: 'Open Profile, choose Edit profile, then update Dietary Preferences or Allergies and save your changes.',
+  },
+  {
+    id: 'pending',
+    q: 'Which features are still in development?',
+    a: 'Assistant, Community, Meal Planning, Reviews, Collections, Cook History, notification feeds, and 2FA are not available yet.',
+  },
+];
 
 export default function HelpCenterScreen({ navigation }) {
   const { colors } = useTheme();
@@ -13,9 +35,7 @@ export default function HelpCenterScreen({ navigation }) {
   const [openId, setOpenId] = useState(null);
 
   const contactSupport = () =>
-    Linking.openURL('mailto:support@wecooked.app?subject=Help%20request').catch(() =>
-      Alert.alert('Contact Support', 'Reach us at support@wecooked.app')
-    );
+    Alert.alert('Support unavailable', 'A support contact has not been configured for this demo yet.');
 
   return (
     <View style={styles.root}>
@@ -24,10 +44,10 @@ export default function HelpCenterScreen({ navigation }) {
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.groupTitle}>FREQUENTLY ASKED QUESTIONS</Text>
         <View style={styles.card}>
-          {faqs.map((item, i) => {
+          {FAQS.map((item, i) => {
             const open = openId === item.id;
             return (
-              <View key={item.id} style={i < faqs.length - 1 && styles.rowBorder}>
+              <View key={item.id} style={i < FAQS.length - 1 && styles.rowBorder}>
                 <Pressable
                   style={styles.faqRow}
                   onPress={() => setOpenId(open ? null : item.id)}

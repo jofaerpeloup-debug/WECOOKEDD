@@ -66,6 +66,10 @@ describe('RecipeDetail (API mode) keeps our real recipe data architecture', () =
     expect(apiCode).toMatch(/if \(cancelled \|\| gen !== genRef\.current\) return;/);
   });
 
+  it('never renders a Favorites summary as full detail before hydration', () => {
+    expect(apiCode).toMatch(/hasRecipeDetailData\(initialRecipe\) \? initialRecipe : null/);
+  });
+
   it('renders recipe photography from the real backend imageUrl only', () => {
     expect(apiCode).toMatch(/<RecipeImage source=\{recipe\.imageUrl\}/);
     expect(apiCode).not.toMatch(/https?:\/\//);
@@ -167,17 +171,20 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
   });
 });
 
-describe('RecipeDetail (API mode) removed old visible UI per the correction pass', () => {
+describe('RecipeDetail (API mode) keeps current visible detail boundaries', () => {
   it('no visible Steps/Instructions section remains', () => {
     expect(apiCode).not.toMatch(/>Steps</);
     expect(apiCode).not.toMatch(/No instructions listed/);
     expect(apiCode).not.toMatch(/recipeSteps\(/);
   });
 
-  it('no per-ingredient Substitutes/Swap chip or sheet remains visible', () => {
-    expect(apiCode).not.toMatch(/SubstitutionsSheet/);
-    expect(apiCode).not.toMatch(/openSubstitutes|substitutesCacheRef|swapIngredient/);
-    expect(raw).not.toMatch(/import SubstitutionsSheet/);
+  it('restores the real per-ingredient substitution sheet without a mock data path', () => {
+    expect(raw).toMatch(/import SubstitutionsSheet from '\.\.\/components\/SubstitutionsSheet'/);
+    expect(apiCode).toMatch(/substitutesCacheRef = useRef\(new Map\(\)\)/);
+    expect(apiCode).toMatch(/openSubstitutes/);
+    expect(apiCode).toMatch(/<SubstitutionsSheet/);
+    expect(apiCode).toMatch(/<Text style=\{styles\.ddSubstituteText\}>Substitutes<\/Text>/);
+    expect(apiCode).not.toMatch(/ingredientSwaps|molecularSwap/);
   });
 
   it('ingredient rows use separate left (identity) / right (scaled qty+unit) presentation', () => {
@@ -230,10 +237,10 @@ describe('RecipeDetail (API mode) keeps real Favorites / Shopping List / CookMod
     expect(cookModeSrc).toMatch(/cookModeSteps\(recipe\)/);
   });
 
-  it('MealPlan and IngredientStudio use the current real routes, no mock payloads', () => {
+  it('MealPlan keeps its route while general swaps direct users to the live per-ingredient control', () => {
     expect(apiCode).toMatch(/navigation\.navigate\('MealPlan', \{ recipeId: recipe\.id \}\)/);
-    expect(apiCode).toMatch(/navigation\.navigate\('IngredientStudio'\)/);
-    expect(apiCode).not.toMatch(/navigate\('IngredientStudio', \{ recipe/);
+    expect(apiCode).toMatch(/Tap Substitutes beside an ingredient above/);
+    expect(apiCode).not.toMatch(/navigation\.navigate\('IngredientStudio'/);
   });
 });
 

@@ -273,7 +273,8 @@ export default function ShoppingListScreen({ navigation }) {
 
         {items.length === 0 ? (
           <Text style={styles.emptyText}>
-            Your shopping list is empty. Add items below, or add everything from a recipe.
+            Your shopping list is empty. Add ingredients from a recipe; custom items aren&apos;t
+            available yet.
           </Text>
         ) : (
           sections.map(({ category, rows }) => (
@@ -324,7 +325,7 @@ export default function ShoppingListScreen({ navigation }) {
         )}
         <Pressable style={styles.cta} onPress={() => setAdding((v) => !v)}>
           <Ionicons name={adding ? 'checkmark' : 'add'} size={16} color={colors.onAccent} />
-          <Text style={styles.ctaText}>{adding ? 'Done Adding' : 'Add Item'}</Text>
+          <Text style={styles.ctaText}>{adding ? 'Done' : 'Custom Item'}</Text>
         </Pressable>
       </View>
     </View>

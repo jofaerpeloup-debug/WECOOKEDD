@@ -43,12 +43,14 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
     expect(bookmarkBlock[0]).not.toMatch(/navigation\.navigate/);
   });
 
-  it('the swap-shortcut and notification bell behavior are unchanged', () => {
+  it('keeps the swap shortcut and makes notification-feed state explicitly unavailable', () => {
     expect(code).toMatch(/navigation\.navigate\('IngredientStudio'\)/);
     expect(code).toMatch(/name="swap-horizontal"/);
     expect(code).toMatch(/onPress=\{pressBell\}/);
     expect(code).toMatch(/name="notifications-outline"/);
     expect(code).toMatch(/showBellDot && <View style=\{styles\.bellDot\} \/>/);
+    expect(code).toMatch(/showBellDot = false/);
+    expect(raw).toMatch(/notifications feed isn&apos;t available yet/i);
   });
 
   it('holds no auth/session state or navigation reset of its own', () => {
@@ -59,10 +61,8 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
   });
 });
 
-describe('other mode="brand" TopBar callers do not opt in (unaffected by the Saved control)', () => {
+describe('other TopBar callers do not opt in to the Saved control', () => {
   const OTHER_BRAND_CALLERS = [
-    'screens/AssistantScreen.js',
-    'screens/IngredientStudioScreen.js',
     'screens/DiscoverScreen.js',
   ];
 
@@ -70,6 +70,22 @@ describe('other mode="brand" TopBar callers do not opt in (unaffected by the Sav
     const src = stripComments(read(rel));
     expect(src).toMatch(/<TopBar mode="brand"\s*\/>/);
     expect(src).not.toMatch(/onSavedPress/);
+  });
+
+  it('product-authority screens keep their intended title/back controls', () => {
+    const assistant = stripComments(read('screens/AssistantScreen.js'));
+    const community = stripComments(read('screens/CommunityScreen.js'));
+    const swaps = stripComments(read('screens/IngredientStudioScreen.js'));
+    expect(assistant).toMatch(/navigation\.goBack\(\)/);
+    expect(assistant).toMatch(/Ask the Chef/);
+    expect(community).toMatch(/<TopBar mode="title" title="Community"/);
+    expect(swaps).toMatch(/mode=\{asTab \? 'title' : 'back'\}/);
+    expect(swaps).not.toMatch(/onSavedPress/);
+  });
+
+  it('title mode reserves the back-control space without drawing a back arrow', () => {
+    expect(code).toMatch(/disabled=\{mode !== 'back' \|\| !onBack\}/);
+    expect(code).toMatch(/\{mode === 'back' && <Ionicons name="arrow-back"/);
   });
 
   it('Profile uses its teammate-local header and is no longer a TopBar consumer', () => {

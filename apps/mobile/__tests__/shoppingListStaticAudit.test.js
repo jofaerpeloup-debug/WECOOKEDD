@@ -122,10 +122,10 @@ describe('Manual add ports the teammate inline form without faking persistence',
     expect(code).not.toMatch(/addItem/);
   });
 
-  it('renders the teammate free-text name + qty inputs and Add Item/Done Adding toggle', () => {
+  it('renders the teammate free-text name + qty inputs with an explicit Custom Item label', () => {
     expect(code).toMatch(/<TextInput\b[\s\S]{0,120}placeholder="Item"/);
     expect(code).toMatch(/<TextInput\b[\s\S]{0,120}placeholder="Qty"/);
-    expect(code).toMatch(/\{adding \? 'Done Adding' : 'Add Item'\}/);
+    expect(code).toMatch(/\{adding \? 'Done' : 'Custom Item'\}/);
   });
 
   it('keeps the draft as transient component state only — no persistence call on submit', () => {

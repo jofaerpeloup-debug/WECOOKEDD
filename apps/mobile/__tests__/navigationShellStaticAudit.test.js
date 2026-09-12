@@ -133,7 +133,35 @@ describe('PlusMenu — teammate presentation + both verified actions', () => {
 describe('RootNavigator — non-tab destinations stay registered & reachable', () => {
   const stack = stackScreenNames(rootNav);
 
-  it.each(['MainTabs', 'Discover', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'RecipeDetail', 'CookMode', 'AccountDetails', 'Settings'])(
+  it('contains only the intended authenticated and guest stack routes', () => {
+    expect(stack).toEqual([
+      'MainTabs',
+      'Discover',
+      'Saved',
+      'CollectionDetail',
+      'Assistant',
+      'MealPlan',
+      'IngredientStudio',
+      'SwapDetail',
+      'RecipeDetail',
+      'CookMode',
+      'List',
+      'AccountDetails',
+      'Settings',
+      'Security',
+      'Notifications',
+      'HelpCenter',
+      'About',
+      'Terms',
+      'Privacy',
+      'Licenses',
+      'Landing',
+      'Login',
+      'Register',
+    ]);
+  });
+
+  it.each(['MainTabs', 'Discover', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'CookMode', 'AccountDetails', 'Settings'])(
     'registers the "%s" stack route',
     (name) => {
       expect(stack).toContain(name);
@@ -146,6 +174,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(rootNav).toMatch(/name="Assistant"\s+component=\{AssistantScreen\}/);
     expect(rootNav).toMatch(/name="MealPlan"\s+component=\{MealPlanScreen\}/);
     expect(rootNav).toMatch(/name="List"\s+component=\{ShoppingListScreen\}/);
+    expect(rootNav).toMatch(/name="SwapDetail"\s+component=\{SwapDetailScreen\}/);
   });
 });
 

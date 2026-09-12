@@ -33,6 +33,19 @@ export function recipeBadges(recipe) {
   return badges;
 }
 
+// A Favorites response contains only a recipe summary. It is useful for list
+// cards, but it must never be rendered as full Recipe Detail data: doing so can
+// seed servings to 1 and briefly expose empty ingredients/steps before GET
+// /recipes/:id finishes. Full PublicRecipe payloads always carry both arrays.
+export function hasRecipeDetailData(recipe) {
+  return (
+    !!recipe &&
+    Array.isArray(recipe.ingredients) &&
+    Array.isArray(recipe.instructions) &&
+    Array.isArray(recipe.steps)
+  );
+}
+
 // Structured quantity scaling: only when `quantity` is a finite number.
 // scaledQuantity = quantity * (selectedServings / baseServings). No unit math.
 export function scaleQuantity(quantity, selectedServings, baseServings) {
