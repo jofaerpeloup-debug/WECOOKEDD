@@ -17,15 +17,16 @@ describe('production-reachable deferred features remain honest', () => {
     expect(assistant).not.toMatch(/data\/mockData|AsyncStorage|loadJSON|saveJSON|setTimeout/);
   });
 
-  it('preserves the Community composer/feed shell without fabricated activity', () => {
+  it('preserves the Community shell while using the real M10A service without fabricated activity', () => {
     const community = read('screens/CommunityScreen.js');
     expect(community).toMatch(/styles\.composeCard/);
     expect(community).toMatch(/Tag a recipe \(optional\)/);
     expect(community).toMatch(/placeholder="Share what you're cooking\.\.\."/);
     expect(community).toMatch(/<Text style=\{styles\.postBtnText\}>Post<\/Text>/);
-    expect(community).toMatch(/Community feed unavailable/);
-    expect(community).toMatch(/draft was not published or saved/i);
-    expect(community).not.toMatch(/data\/mockData|CommunityContext|AsyncStorage|fake|posts\.map/);
+    expect(community).toMatch(/listCommunityPosts/);
+    expect(community).toMatch(/createCommunityPost/);
+    expect(community).toMatch(/No posts yet/);
+    expect(community).not.toMatch(/data\/mockData|CommunityContext|AsyncStorage|communityPosts/);
   });
 
   it('uses the live catalog in the teammate Substitute Finder shell', () => {

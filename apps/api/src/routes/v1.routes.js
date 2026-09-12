@@ -11,6 +11,7 @@ const collectionRoutes = require('../modules/collections/collection.routes');
 const reviewRoutes = require('../modules/reviews/review.routes');
 const cookHistoryRoutes = require('../modules/cook-history/cook-history.routes');
 const mealPlanRoutes = require('../modules/meal-plan/meal-plan.routes');
+const communityRoutes = require('../modules/community/community.routes');
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/collections', collectionRoutes);
 router.use(reviewRoutes);
 router.use('/cook-history', cookHistoryRoutes);
 router.use('/meal-plan', mealPlanRoutes);
+router.use('/community', communityRoutes);
 
 module.exports = router;
