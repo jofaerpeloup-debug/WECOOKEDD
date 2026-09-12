@@ -25,6 +25,7 @@ import {
 import RootNavigator from './src/navigation/RootNavigator';
 import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { FavoritesProvider } from './src/context/FavoritesContext';
+import { CollectionsProvider } from './src/context/CollectionsContext';
 import { ShoppingListProvider } from './src/context/ShoppingListContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 
@@ -71,9 +72,11 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <FavoritesProvider>
-            <ShoppingListProvider>
-              <AppGate fontsLoaded={fontsLoaded} />
-            </ShoppingListProvider>
+            <CollectionsProvider>
+              <ShoppingListProvider>
+                <AppGate fontsLoaded={fontsLoaded} />
+              </ShoppingListProvider>
+            </CollectionsProvider>
           </FavoritesProvider>
         </AuthProvider>
       </ThemeProvider>

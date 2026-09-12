@@ -1,16 +1,13 @@
 // Saved final-frontend port — static source validation.
 //
-// Saved is ONLY the teammate "My Collections" grid/header shell (commit
-// c1c86ed) — a collections BROWSER, not a favorites list. The teammate
-// screen's 5 hardcoded "smart" collections (scanning the whole mock recipe
-// catalog) and AsyncStorage-backed user collections have no WeCooked backend
-// (Collections proper is M5), so only ONE real system collection is shown:
-// "Favorites", backed exclusively by FavoritesContext/the real API. Tapping
-// it navigates to the real `CollectionDetail` stack route (own file, own
-// test) — Saved holds no in-screen pseudo-route/BackHandler workaround of its
-// own; back/edge-swipe between Saved and CollectionDetail is plain React
-// Navigation stack behavior. The mobile workspace has no RN renderer (see
-// jest.config.js), so these invariants are encoded as source assertions.
+// Saved is the teammate "My Collections" grid/header shell (commit c1c86ed) —
+// a collections BROWSER. It shows the real system collection "Favorites"
+// (backed exclusively by FavoritesContext/the real API) first, followed by
+// the user's real, backend-persisted Collections (M5A — CollectionsContext/
+// collectionService/collection.routes.js). There are no hardcoded "smart"
+// collections and no AsyncStorage-backed local collections. The mobile
+// workspace has no RN renderer (see jest.config.js), so these invariants are
+// encoded as source assertions.
 //
 // "Forbidden" checks run against a comment-stripped copy so a phrase that only
 // appears in an explanatory comment does not trip them; "must contain" checks
@@ -31,12 +28,11 @@ function stripComments(src) {
 const raw = read('screens/SavedScreen.js');
 const code = stripComments(raw);
 
-describe('Saved keeps real Favorites as the only data source (no teammate mock architecture)', () => {
+describe('Saved keeps real Favorites + real Collections as the only data sources', () => {
   it('imports no mock-data layer or teammate mock/local providers', () => {
     expect(code).not.toMatch(/data\/mockData/);
     expect(code).not.toMatch(/\bmockData\b/);
     expect(code).not.toMatch(/useSavedRecipes|SavedRecipesContext/);
-    expect(code).not.toMatch(/useCollections|CollectionsContext|CollectionsProvider/);
     expect(code).not.toMatch(/collectionRecipes\(/);
   });
 
@@ -49,21 +45,37 @@ describe('Saved keeps real Favorites as the only data source (no teammate mock a
   it('fetches favorites from the real FavoritesContext only', () => {
     expect(raw).toMatch(/import \{ useFavorites \} from '\.\.\/context\/FavoritesContext'/);
     expect(code).toMatch(/useFavorites\(\)/);
-    expect(code).toMatch(/\breload\(\)/);
   });
 
-  it('never fabricates smart collections or a recipe list of its own', () => {
+  it('fetches collections from the real CollectionsContext only', () => {
+    expect(raw).toMatch(/import \{ useCollections \} from '\.\.\/context\/CollectionsContext'/);
+    expect(code).toMatch(/useCollections\(\)/);
+    expect(code).toMatch(/reloadCollections/);
+  });
+
+  it('reloads both Favorites and Collections on focus', () => {
+    expect(code).toMatch(/useFocusEffect\(/);
+    expect(code).toMatch(/reloadFavorites\(\)/);
+    expect(code).toMatch(/reloadCollections\(\)/);
+  });
+
+  it('never fabricates hardcoded smart collections or a recipe list of its own', () => {
     expect(code).not.toMatch(/Quick Meals|Healthy Meals|Weekend Cooking|Dinner Ideas|\bBreakfast\b/);
     expect(code).not.toMatch(/const\s+(recipes|RECIPES|COLLECTIONS)\s*=\s*\[/);
   });
 
-  it('renders the Favorites card cover from the backend imageUrl only', () => {
+  it('renders card covers from backend imageUrl / coverImageUrls only', () => {
     expect(raw).toMatch(/import RecipeImage from '\.\.\/components\/RecipeImage'/);
-    expect(code).toMatch(/source=\{(cover\[0\]|entry)\.recipe\.imageUrl\}/);
+    expect(code).toMatch(/source=\{(favoritesCover\[0\]|entry)\.recipe\.imageUrl\}/);
+    expect(code).toMatch(/covers\[0\]/);
     expect(code).not.toMatch(/https?:\/\//);
     expect(code).not.toMatch(/unsplash|picsum|pravatar|gmanews/i);
     expect(code).not.toMatch(/\{\s*uri:\s*require\(/);
     expect(code).not.toMatch(/\brequire\(/);
+  });
+
+  it('renders real collection counts from recipeCount, never a fabricated count', () => {
+    expect(code).toMatch(/c\.recipeCount/);
   });
 
   it('does not render cuisine or vibe', () => {
@@ -101,6 +113,13 @@ describe('Saved is only the collections-browser shell — no nested Favorites vi
     );
     expect(code).not.toMatch(/collectionType:\s*'favorites'[\s\S]{0,40}(recipes|favorites):\s*\[/);
   });
+
+  it('a real collection card navigates to CollectionDetail with collectionType "user" and a real collectionId, not a fabricated one', () => {
+    expect(code).toMatch(
+      /navigation\.navigate\('CollectionDetail',\s*\{\s*collectionType:\s*'user',\s*collectionId\s*\}\)/
+    );
+    expect(code).not.toMatch(/collectionType:\s*'user'[\s\S]{0,80}(recipes):\s*\[/);
+  });
 });
 
 describe('Saved stays a stack destination with the real navigation contract', () => {
@@ -127,9 +146,27 @@ describe('Saved stays a stack destination with the real navigation contract', ()
   });
 });
 
-describe('collection creation is honest about being unavailable, not fake', () => {
-  it('the add-collection control shows a pending/unavailable message, not local persistence', () => {
-    expect(code).toMatch(/collectionsUnavailable/);
-    expect(code).toMatch(/Alert\.alert\(/);
+describe('collection creation is real, not a fake/pending placeholder', () => {
+  it('the "+" control opens a real inline create form, not an honest-unavailable alert', () => {
+    expect(code).not.toMatch(/collectionsUnavailable/);
+    expect(code).not.toMatch(/Collections are coming soon/);
+    expect(code).toMatch(/setAdding/);
+    expect(code).toMatch(/<TextInput/);
+  });
+
+  it('submitting calls the real CollectionsContext createCollection, never local/optimistic-only state', () => {
+    expect(code).toMatch(/const create = async \(\) => \{/);
+    expect(code).toMatch(/await createCollection\(\{ name: trimmed \}\)/);
+  });
+
+  it('a backend create failure is shown honestly, not silently swallowed', () => {
+    expect(code).toMatch(/setCreateError/);
+    expect(code).toMatch(/result\.error/);
+  });
+
+  it('a successful create clears the form instead of leaving fake local rows behind', () => {
+    expect(code).toMatch(/if \(result\.ok\) \{/);
+    expect(code).toMatch(/setName\(''\)/);
+    expect(code).toMatch(/setAdding\(false\)/);
   });
 });

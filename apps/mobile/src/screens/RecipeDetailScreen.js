@@ -19,6 +19,7 @@ import Button from '../components/Button';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
 import SubstitutionsSheet from '../components/SubstitutionsSheet';
+import CollectionPickerSheet from '../components/CollectionPickerSheet';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
@@ -335,6 +336,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const [nutritionOpen, setNutritionOpen] = useState(false);
   const substitutesCacheRef = useRef(new Map());
   const [swapIngredient, setSwapIngredient] = useState(null);
+  const [collectionsOpen, setCollectionsOpen] = useState(false);
 
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
@@ -399,10 +401,11 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
     // (session changed): silently ignored.
   };
 
-  // Backend-pending action boundaries: M5 owns Collections and Ratings
-  // persistence. Neither writes any local/AsyncStorage state and neither
-  // pretends to succeed — an honest alert is the whole interaction for now.
-  const openCollections = () => Alert.alert('Collections are not available yet.');
+  // Collections is real as of M5A (real CollectionPickerSheet, real API) —
+  // Ratings stays a backend-pending action boundary: M5 owns Ratings
+  // persistence, which neither writes any local/AsyncStorage state nor
+  // pretends to succeed, so an honest alert is the whole interaction for now.
+  const openCollections = () => setCollectionsOpen(true);
   const rateRecipe = () => Alert.alert('Ratings are not available yet.');
   const openSubstitutes = (row) => {
     if (!row?.id || !row?.name) return;
@@ -631,6 +634,12 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
         ingredient={swapIngredient}
         cacheRef={substitutesCacheRef}
         onClose={closeSubstitutes}
+      />
+
+      <CollectionPickerSheet
+        visible={collectionsOpen}
+        onClose={() => setCollectionsOpen(false)}
+        recipeId={recipe.id}
       />
     </View>
   );
