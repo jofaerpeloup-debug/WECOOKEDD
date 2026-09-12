@@ -2,7 +2,27 @@ const {
   clampCookStepIndex,
   cookModeIngredientChecklist,
   cookModeSteps,
+  hasRecipeDetailData,
 } = require('../src/utils/recipe');
+
+describe('Recipe Detail hydration boundary', () => {
+  it('accepts a full PublicRecipe payload', () => {
+    expect(
+      hasRecipeDetailData({ ingredients: [], instructions: [], steps: [] })
+    ).toBe(true);
+  });
+
+  it('rejects the Favorites summary shape', () => {
+    expect(
+      hasRecipeDetailData({
+        id: 'recipe-id',
+        title: 'Summary only',
+        prepTimeMinutes: 10,
+        cookTimeMinutes: 20,
+      })
+    ).toBe(false);
+  });
+});
 
 describe('CookMode real recipe step adapter', () => {
   it('prefers the public structured steps and respects their explicit order', () => {

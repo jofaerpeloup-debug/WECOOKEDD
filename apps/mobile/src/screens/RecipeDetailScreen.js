@@ -18,6 +18,7 @@ import Badge from '../components/Badge';
 import Button from '../components/Button';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
+import SubstitutionsSheet from '../components/SubstitutionsSheet';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
@@ -33,6 +34,7 @@ import {
   // — left untouched per scope rules, so the real M3 formatter gets its own
   // name here instead of colliding with it.
   formatQuantity as formatIngredientQuantity,
+  hasRecipeDetailData,
   ingredientDisplayText,
   recipeBadges,
   scaleQuantity,
@@ -243,7 +245,11 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
   }, [recipeId, nonce]);
 
   const retry = () => setNonce((n) => n + 1);
-  const recipe = fetched || initialRecipe;
+  // Favorites provide only a recipe summary. Render an initial list payload
+  // immediately only when it is a complete PublicRecipe; otherwise wait for
+  // the authoritative detail GET so servings/ingredients/steps cannot seed
+  // this component from incomplete data.
+  const recipe = fetched || (hasRecipeDetailData(initialRecipe) ? initialRecipe : null);
 
   if (notFound) {
     return (
@@ -327,6 +333,8 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const maxServings = Math.max(MAX_SERVINGS, baseServings);
   const [servings, setServings] = useState(baseServings);
   const [nutritionOpen, setNutritionOpen] = useState(false);
+  const substitutesCacheRef = useRef(new Map());
+  const [swapIngredient, setSwapIngredient] = useState(null);
 
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
@@ -396,6 +404,11 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   // pretends to succeed — an honest alert is the whole interaction for now.
   const openCollections = () => Alert.alert('Collections are not available yet.');
   const rateRecipe = () => Alert.alert('Ratings are not available yet.');
+  const openSubstitutes = (row) => {
+    if (!row?.id || !row?.name) return;
+    setSwapIngredient({ id: row.id, name: row.name });
+  };
+  const closeSubstitutes = () => setSwapIngredient(null);
 
   const decrementServings = () => setServings((s) => Math.max(MIN_SERVINGS, s - 1));
   const incrementServings = () => setServings((s) => Math.min(maxServings, s + 1));
@@ -541,6 +554,16 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
                           {[row.note, row.optional ? 'optional' : null].filter(Boolean).join(' · ')}
                         </Text>
                       ) : null}
+                      {row.id ? (
+                        <Pressable
+                          style={styles.ddSubstituteBtn}
+                          onPress={() => openSubstitutes(row)}
+                          hitSlop={6}
+                        >
+                          <Ionicons name="swap-horizontal" size={12} color={colors.sageDeep} />
+                          <Text style={styles.ddSubstituteText}>Substitutes</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   </View>
                   {row.qtyText ? <Text style={styles.ddIngredientQty}>{row.qtyText}</Text> : null}
@@ -578,7 +601,12 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
 
           <Pressable
             style={styles.ddActionRow}
-            onPress={() => navigation.navigate('IngredientStudio')}
+            onPress={() =>
+              Alert.alert(
+                'Choose an ingredient',
+                'Tap Substitutes beside an ingredient above to view live catalog suggestions.'
+              )
+            }
           >
             <View style={styles.ddActionIcon}>
               <Ionicons name="swap-horizontal" size={16} color={colors.stone} />
@@ -597,6 +625,13 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           icon={<Ionicons name="play" size={15} color={colors.onAccent} />}
         />
       </View>
+
+      <SubstitutionsSheet
+        visible={!!swapIngredient}
+        ingredient={swapIngredient}
+        cacheRef={substitutesCacheRef}
+        onClose={closeSubstitutes}
+      />
     </View>
   );
 }
@@ -1192,6 +1227,19 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline,
     },
     ddCookedPillText: { fontFamily: typography.body.bold, fontSize: 10.5, color: colors.inkFaint },
+    ddSubstituteBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: 4,
+      marginTop: 5,
+      paddingVertical: 3,
+    },
+    ddSubstituteText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 11.5,
+      color: colors.sageDeep,
+    },
     ddRateRow: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -48,7 +48,7 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
           <Text style={styles.headerText}>Notifications</Text>
         </View>
         <View style={styles.emptyRow}>
-          <Text style={styles.emptyText}>You're all caught up.</Text>
+          <Text style={styles.emptyText}>The notifications feed isn&apos;t available yet.</Text>
         </View>
       </Animated.View>
     </Modal>
@@ -56,7 +56,9 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
 }
 
 /**
- * mode: 'brand' (wordmark · [saved] · substitute finder · notification bell) | 'back' (back arrow · title · action)
+ * mode: 'brand' (wordmark · [saved] · substitute finder · notification bell)
+ *     | 'title' (centered title for a tab screen)
+ *     | 'back' (back arrow · title · action)
  *
  * `onSavedPress` is opt-in: only screens that pass it get the bookmark
  * affordance (teammate `c1c86ed` Dashboard header). Every other `mode="brand"`
@@ -70,7 +72,7 @@ export default function TopBar({
   onSavedPress,
   rightIcon,
   onRightPress,
-  showBellDot = true,
+  showBellDot = false,
   transparent = false,
 }) {
   const { colors } = useTheme();
@@ -133,8 +135,13 @@ export default function TopBar({
         </>
       ) : (
         <>
-          <Pressable onPress={onBack} hitSlop={10} style={styles.side}>
-            <Ionicons name="arrow-back" size={22} color={colors.ink} />
+          <Pressable
+            onPress={onBack}
+            hitSlop={10}
+            style={styles.side}
+            disabled={mode !== 'back' || !onBack}
+          >
+            {mode === 'back' && <Ionicons name="arrow-back" size={22} color={colors.ink} />}
           </Pressable>
           <Text style={styles.title} numberOfLines={1}>
             {title}

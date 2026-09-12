@@ -320,22 +320,16 @@ own `BASE_SERVINGS = 4` behavior for transitional compatibility.
 
 ## Instructions / Cook Mode adapter
 
-Backend `instructions` is an ordered `string[]` (no Instruction entity, no
-ids). API-mode Recipe Detail renders a numbered ordered list, in exact server
-order.
+MongoDB persists `instructions` as the ordered `string[]` source of truth. The
+public Recipe serializer also derives `steps: [{ order, text }]` from that same
+array, with contiguous one-based order values.
 
-Cook Mode expects `steps: [{ title, description }]`. A **view adapter** bridges
-it (`instructionsToSteps` in `src/utils/recipe.js`):
-
-```js
-recipe.instructions.map((text, index) => ({ title: `Step ${index + 1}`, description: text }))
-```
-
-`CookModeScreen` branches on the same `recipeSource === 'api'` flag: API →
-adapt `instructions`; legacy → use `recipe.steps` as before. Ingredient lines
-are passed in already-adapted from Recipe Detail (structured, scaled strings).
-The step thumbnail uses `recipe.imageUrl ?? recipe.image` through `RecipeImage`.
-No persisted step id/entity is invented.
+`CookModeScreen` uses `cookModeSteps` in `src/utils/recipe.js`: it prefers a
+valid structured `steps` array and falls back to legacy `instructions` strings.
+Neither path invents titles, durations, or a second recipe-data source.
+Ingredient checklist rows are built from the structured recipe ingredients and
+scaled for display only. The step thumbnail uses
+`recipe.imageUrl ?? recipe.image` through `RecipeImage`.
 
 ## Image handling
 

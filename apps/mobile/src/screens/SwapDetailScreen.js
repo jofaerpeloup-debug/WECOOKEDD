@@ -1,39 +1,47 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
-import { molecularSwap } from '../data/mockData';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-function MetricRow({ label, value, note, noteTone }) {
+function MetricRow({ label, value }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   return (
     <View style={styles.metricRow}>
       <Text style={styles.metricLabel}>{label}</Text>
-      <View style={styles.metricValueRow}>
-        <Text style={styles.metricValue}>{value}</Text>
-        {note && <Badge label={note} tone={noteTone || 'neutral'} style={{ marginLeft: spacing.sm }} />}
-      </View>
+      <Text style={styles.metricValue}>{value}</Text>
     </View>
   );
 }
 
-export default function SwapDetailScreen({ navigation }) {
+// Preserves the teammate-final detail composition while rendering only fields
+// that exist in the real substitution contract. Scientific metrics, match
+// confidence, images, and apply-to-recipe persistence are explicitly absent.
+export default function SwapDetailScreen({ navigation, route }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const data = molecularSwap;
   const insets = useSafeAreaInsets();
+  const sourceIngredient = route?.params?.sourceIngredient || null;
+  const substitution = route?.params?.substitution || null;
+  const substitute = substitution?.substitute || null;
+  const hasCatalogResult = !!sourceIngredient?.name && !!substitute?.name;
+
+  const applySubstitute = () =>
+    Alert.alert(
+      'Recipe editing unavailable',
+      'This catalog suggestion cannot be applied automatically yet. No recipe was changed.'
+    );
 
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable onPress={() => navigation.goBack()} style={styles.backRow} hitSlop={10}>
           <Ionicons name="arrow-back" size={16} color={colors.sageDeep} />
-          <Text style={styles.backText}>Return to Formula</Text>
+          <Text style={styles.backText}>Return to Swaps</Text>
         </Pressable>
       </View>
 
@@ -44,18 +52,25 @@ export default function SwapDetailScreen({ navigation }) {
         </Text>
 
         <View style={styles.matchPill}>
-          <Ionicons name="analytics-outline" size={13} color={colors.sageDeep} />
-          <Text style={styles.matchText}>SYSTEM MATCH: {data.systemMatch}</Text>
+          <Ionicons
+            name={hasCatalogResult ? 'server-outline' : 'information-circle-outline'}
+            size={13}
+            color={colors.sageDeep}
+          />
+          <Text style={styles.matchText}>
+            {hasCatalogResult ? 'LIVE CATALOG RESULT' : 'RESULT UNAVAILABLE'}
+          </Text>
         </View>
 
-        {/* Target */}
-        <Text style={styles.blockLabel}>TARGET METRIC</Text>
-        <Text style={styles.itemName}>{data.targetName}</Text>
+        <Text style={styles.blockLabel}>ORIGINAL INGREDIENT</Text>
+        <Text style={styles.itemName}>{sourceIngredient?.name || 'No ingredient selected'}</Text>
 
         <View style={styles.imageCard}>
-          <Image source={{ uri: data.targetImage }} style={styles.image} />
+          <Ionicons name="leaf-outline" size={44} color={colors.sageDeep} />
           <View style={styles.idBadge}>
-            <Text style={styles.idBadgeText}>ID: {data.targetId}</Text>
+            <Text style={styles.idBadgeText}>
+              {sourceIngredient?.id ? 'CATALOG INGREDIENT' : 'NO CATALOG DATA'}
+            </Text>
           </View>
         </View>
 
@@ -64,60 +79,59 @@ export default function SwapDetailScreen({ navigation }) {
             <Text style={styles.dataCardTitle}>COOKING SCIENCE</Text>
             <Ionicons name="flask-outline" size={14} color={colors.inkFaint} />
           </View>
-          <MetricRow label="pH Level" value={data.targetMetrics.pHLevel} />
-          <MetricRow label="Moisture" value={data.targetMetrics.moisture} />
-          <MetricRow label="Coagulation Temp" value={data.targetMetrics.coagulationTemp} />
-          <MetricRow label="Function" value={data.targetMetrics.function} />
+          <MetricRow label="pH Level" value="Not provided" />
+          <MetricRow label="Moisture" value="Not provided" />
+          <MetricRow label="Coagulation Temp" value="Not provided" />
+          <MetricRow label="Function" value="Not provided" />
+          <Text style={styles.disclosure}>
+            The substitution API does not currently provide scientific measurements.
+          </Text>
         </View>
 
-        {/* Substitute */}
         <View style={styles.optimizedHeader}>
           <View style={styles.optimizedLeft}>
             <View style={styles.dotSage} />
-            <Text style={styles.optimizedLabel}>OPTIMIZED SUBSTITUTE</Text>
+            <Text style={styles.optimizedLabel}>CATALOG SUBSTITUTE</Text>
           </View>
-          <Text style={styles.confidenceText}>{data.substitute.confidence}</Text>
+          <Text style={styles.guidanceOnly}>GUIDANCE ONLY</Text>
         </View>
-        <Text style={styles.itemName}>{data.substitute.name}</Text>
+        <Text style={styles.itemName}>{substitute?.name || 'No substitute selected'}</Text>
 
         <View style={styles.imageCard}>
-          <Image source={{ uri: data.substitute.image }} style={styles.image} />
+          <Ionicons name="swap-horizontal" size={44} color={colors.sageDeep} />
         </View>
 
-        <View style={styles.statsRow}>
-          {data.substitute.stats.map((stat, i) => (
-            <Badge key={i} label={stat.label} tone={stat.tone} style={styles.statBadge} />
-          ))}
-        </View>
+        {substitution?.contexts?.length ? (
+          <View style={styles.statsRow}>
+            {substitution.contexts.map((context) => (
+              <Badge key={context} label={context} tone="sage" style={styles.statBadge} />
+            ))}
+          </View>
+        ) : null}
 
         <View style={[styles.dataCard, styles.dataCardHighlight]}>
           <View style={styles.dataCardHeader}>
-            <Text style={styles.dataCardTitle}>COOKING SCIENCE</Text>
-            <Ionicons name="checkmark-circle" size={15} color={colors.sageDeep} />
+            <Text style={styles.dataCardTitle}>CATALOG GUIDANCE</Text>
+            <Ionicons
+              name={hasCatalogResult ? 'checkmark-circle' : 'information-circle-outline'}
+              size={15}
+              color={colors.sageDeep}
+            />
           </View>
-          <MetricRow
-            label="pH Level"
-            value={data.substitute.metrics.pHLevel.value}
-            note={data.substitute.metrics.pHLevel.note}
-            noteTone={data.substitute.metrics.pHLevel.noteTone}
-          />
-          <MetricRow
-            label="Moisture"
-            value={data.substitute.metrics.moisture.value}
-            note={data.substitute.metrics.moisture.note}
-            noteTone={data.substitute.metrics.moisture.noteTone}
-          />
-          <MetricRow
-            label="Coagulation Temp"
-            value={data.substitute.metrics.coagulationTemp.value}
-          />
-          <MetricRow label="Function" value={data.substitute.metrics.function.value} />
+          <Text style={styles.notesText}>
+            {substitution?.notes ||
+              'No additional notes are available for this catalog substitution.'}
+          </Text>
+          <Text style={styles.disclosure}>
+            No replacement ratio, confidence score, or automatic recipe conversion is assumed.
+          </Text>
         </View>
 
         <Button
           title="Apply Substitute to Formula"
           variant="primary"
-          onPress={() => navigation.goBack()}
+          onPress={applySubstitute}
+          disabled={!hasCatalogResult}
           style={{ marginTop: spacing.lg }}
         />
       </ScrollView>
@@ -180,12 +194,15 @@ function makeStyles(colors) {
       marginBottom: spacing.md,
     },
     imageCard: {
+      height: 150,
       borderRadius: radius.lg,
       overflow: 'hidden',
       marginBottom: spacing.md,
       position: 'relative',
+      backgroundColor: colors.sagePale,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
-    image: { width: '100%', height: 150, backgroundColor: colors.creamDeep },
     idBadge: {
       position: 'absolute',
       top: spacing.sm,
@@ -228,17 +245,24 @@ function makeStyles(colors) {
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingVertical: 7,
+      gap: spacing.md,
     },
     metricLabel: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
       color: colors.inkSoft,
     },
-    metricValueRow: { flexDirection: 'row', alignItems: 'center' },
     metricValue: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
-      color: colors.ink,
+      color: colors.inkFaint,
+    },
+    disclosure: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      lineHeight: 17,
+      color: colors.inkFaint,
+      marginTop: spacing.md,
     },
     optimizedHeader: {
       flexDirection: 'row',
@@ -254,12 +278,23 @@ function makeStyles(colors) {
       color: colors.sageDeep,
       letterSpacing: 0.6,
     },
-    confidenceText: {
+    guidanceOnly: {
       fontFamily: typography.body.bold,
       fontSize: 10,
-      color: colors.error,
+      color: colors.inkFaint,
     },
-    statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
+    statsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: spacing.sm,
+      marginBottom: spacing.md,
+    },
     statBadge: { paddingHorizontal: spacing.sm },
+    notesText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      lineHeight: 19,
+      color: colors.ink,
+    },
   });
 }

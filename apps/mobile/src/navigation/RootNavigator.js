@@ -70,12 +70,14 @@ export default function RootNavigator() {
                 - Assistant — PlusMenu "Ask the Chef".
                 - MealPlan  — PlusMenu "Meal Plan" (minimal placeholder screen;
                   real feature is a later milestone).
+                - IngredientStudio — the brand-header shortcut; the same screen
+                  is also the Swaps tab.
+                - SwapDetail — real catalog result cards from IngredientStudio.
 
-              Community is NOT registered here: it is a MainTabs route. Its only
-              caller, ProfileScreen's menu (navigation.navigate('Community')),
-              runs inside MainTabs and resolves to the sibling Community tab. A
-              duplicate root-stack "Community" would only trigger React
-              Navigation's nested same-name warning.
+              Community is NOT registered here: it is intentionally reachable
+              only through its MainTabs tab. A duplicate root-stack
+              "Community" would trigger React Navigation's nested same-name
+              warning.
             */}
             <Stack.Screen name="Discover" component={DiscoverScreen} />
             <Stack.Screen name="Saved" component={SavedScreen} />

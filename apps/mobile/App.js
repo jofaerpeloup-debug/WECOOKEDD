@@ -25,9 +25,7 @@ import {
 import RootNavigator from './src/navigation/RootNavigator';
 import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { FavoritesProvider } from './src/context/FavoritesContext';
-import { SavedRecipesProvider } from './src/context/SavedRecipesContext';
 import { ShoppingListProvider } from './src/context/ShoppingListContext';
-import { CommunityProvider } from './src/context/CommunityContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 
 SplashScreen.preventAutoHideAsync();
@@ -73,13 +71,9 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <FavoritesProvider>
-            <SavedRecipesProvider>
-              <ShoppingListProvider>
-                <CommunityProvider>
-                  <AppGate fontsLoaded={fontsLoaded} />
-                </CommunityProvider>
-              </ShoppingListProvider>
-            </SavedRecipesProvider>
+            <ShoppingListProvider>
+              <AppGate fontsLoaded={fontsLoaded} />
+            </ShoppingListProvider>
           </FavoritesProvider>
         </AuthProvider>
       </ThemeProvider>
