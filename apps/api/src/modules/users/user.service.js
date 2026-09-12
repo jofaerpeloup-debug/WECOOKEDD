@@ -105,6 +105,12 @@ function getUserById(id) {
   return userRepository.findById(id);
 }
 
+async function getPublicUsersByIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const users = await userRepository.findPublicByIds([...new Set(ids.map(String))]);
+  return users.map((user) => ({ id: String(user._id), name: user.name }));
+}
+
 function getUserByAuthIdentity(provider, subject) {
   return userRepository.findByAuthIdentity(provider, subject);
 }
@@ -426,6 +432,7 @@ module.exports = {
   registerUser,
   verifyCredentials,
   getUserById,
+  getPublicUsersByIds,
   getUserByAuthIdentity,
   getUserByEmail,
   createSocialUser,

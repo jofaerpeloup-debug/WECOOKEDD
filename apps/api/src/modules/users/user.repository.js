@@ -43,6 +43,13 @@ function findById(id) {
   return User.findById(id);
 }
 
+// Narrow bulk lookup for cross-module public-author presentation. Projection
+// prevents email/role/status/preferences/auth identities from reaching the
+// caller even accidentally.
+function findPublicByIds(ids) {
+  return User.find({ _id: { $in: ids } }).select('_id name');
+}
+
 function findByEmail(email) {
   return User.findOne({ email });
 }
@@ -135,6 +142,7 @@ module.exports = {
   createSocialUser,
   linkAuthIdentity,
   findById,
+  findPublicByIds,
   findByEmail,
   findByEmailWithPassword,
   findByIdWithPassword,
