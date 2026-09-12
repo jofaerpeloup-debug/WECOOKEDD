@@ -14,9 +14,8 @@ import { useTheme } from '../theme/ThemeContext';
 //   - bottom sheet: paper surface, rounded top, grabber pill, safe-area padding
 //   - the tab bar stays visible underneath (transparent modal + partial sheet)
 //
-// Both teammate action rows are preserved exactly. `MealPlan` currently resolves
-// to a minimal placeholder screen (see screens/MealPlanScreen.js) — the real
-// Meal Plan feature is a later milestone. `navigation` here is the bottom-tab
+// Both teammate action rows are preserved exactly. `MealPlan` resolves to the
+// real server-backed weekly planner. `navigation` here is the bottom-tab
 // navigator's prop; navigate('Assistant' | 'MealPlan') bubbles up to the root
 // stack, where both are registered.
 const ITEMS = [

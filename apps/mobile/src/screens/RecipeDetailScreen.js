@@ -21,6 +21,7 @@ import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
 import SubstitutionsSheet from '../components/SubstitutionsSheet';
 import CollectionPickerSheet from '../components/CollectionPickerSheet';
+import MealPlanSheet from '../components/MealPlanSheet';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
@@ -341,6 +342,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   const substitutesCacheRef = useRef(new Map());
   const [swapIngredient, setSwapIngredient] = useState(null);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
+  const [mealPlanOpen, setMealPlanOpen] = useState(false);
 
   // M5B: real server-backed rating for this recipe. Kept local to this
   // screen rather than a global provider — RecipeDetail is the only surface
@@ -744,7 +746,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
 
           <Pressable
             style={styles.ddActionRow}
-            onPress={() => navigation.navigate('MealPlan', { recipeId: recipe.id })}
+            onPress={() => setMealPlanOpen(true)}
           >
             <View style={styles.ddActionIcon}>
               <Ionicons name="calendar-outline" size={16} color={colors.stone} />
@@ -790,6 +792,12 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
       <CollectionPickerSheet
         visible={collectionsOpen}
         onClose={() => setCollectionsOpen(false)}
+        recipeId={recipe.id}
+      />
+
+      <MealPlanSheet
+        visible={mealPlanOpen}
+        onClose={() => setMealPlanOpen(false)}
         recipeId={recipe.id}
       />
     </View>

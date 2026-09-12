@@ -10,6 +10,7 @@ const shoppingListRoutes = require('../modules/shopping-lists/shopping-list.rout
 const collectionRoutes = require('../modules/collections/collection.routes');
 const reviewRoutes = require('../modules/reviews/review.routes');
 const cookHistoryRoutes = require('../modules/cook-history/cook-history.routes');
+const mealPlanRoutes = require('../modules/meal-plan/meal-plan.routes');
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use('/collections', collectionRoutes);
 // rather than a single prefix — see review.routes.js.
 router.use(reviewRoutes);
 router.use('/cook-history', cookHistoryRoutes);
+router.use('/meal-plan', mealPlanRoutes);
 
 module.exports = router;
