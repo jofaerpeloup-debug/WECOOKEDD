@@ -68,8 +68,7 @@ export default function RootNavigator() {
                   internal route name stays "Discover" (user-facing title may be
                   "Search"). SavedScreen also navigate('Discover').
                 - Assistant — PlusMenu "Ask the Chef".
-                - MealPlan  — PlusMenu "Meal Plan" (minimal placeholder screen;
-                  real feature is a later milestone).
+                - MealPlan  — PlusMenu "Meal Plan" (real server-backed planner).
                 - IngredientStudio — the brand-header shortcut; the same screen
                   is also the Swaps tab.
                 - SwapDetail — real catalog result cards from IngredientStudio.

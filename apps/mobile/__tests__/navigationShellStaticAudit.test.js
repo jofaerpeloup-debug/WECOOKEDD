@@ -271,23 +271,24 @@ describe('shell files carry no mock data or secrets', () => {
   });
 });
 
-describe('MealPlan placeholder — deliberately minimal & honest', () => {
-  it('renders a real screen so the route resolves', () => {
+describe('MealPlan real M7 destination', () => {
+  it('renders the real screen so the route resolves', () => {
     expect(mealPlanRaw).toMatch(/export default function MealPlanScreen/);
-    expect(mealPlan).toMatch(/<TopBar mode="back" title="Meal Plan"/);
+    expect(mealPlan).toMatch(/<Text style=\{styles\.title\}>Meal Plan<\/Text>/);
   });
 
-  it('ports NONE of the teammate Meal Plan feature machinery', () => {
-    expect(mealPlan).not.toMatch(/MealPlanContext|useMealPlan/);
-    expect(mealPlan).not.toMatch(/MealPlanSheet|TimePickerSheet/);
-    expect(mealPlan).not.toMatch(/useShoppingList|ShoppingListContext/);
-    expect(mealPlan).not.toMatch(/\brecipes\b|PLAN_DAYS|addFromRecipe/);
+  it('uses real services and no local/mock persistence', () => {
+    expect(mealPlan).toMatch(/getMealPlan|removeMealPlanEntry|clearMealPlanRange/);
+    expect(mealPlan).toMatch(/MealPlanSheet/);
+    expect(mealPlan).toMatch(/useShoppingList/);
     expect(mealPlan).not.toMatch(/AsyncStorage|SecureStore/);
-    expect(mealPlan).not.toMatch(/useState|useEffect/); // no fake state / persistence
+    expect(mealPlan).not.toMatch(/mockData|MealPlanContext|useMealPlan/);
   });
 
-  it('communicates that meal planning is not implemented yet', () => {
-    expect(mealPlanRaw).toMatch(/on the way|not available yet|future update/i);
+  it('preserves the day presentation and approved week navigation', () => {
+    expect(mealPlan).toMatch(/weekDays\(weekAnchor\)/);
+    expect(mealPlan).toMatch(/Previous week/);
+    expect(mealPlan).toMatch(/Next week/);
   });
 });
 

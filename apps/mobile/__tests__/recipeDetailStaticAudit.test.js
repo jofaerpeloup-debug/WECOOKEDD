@@ -321,8 +321,9 @@ describe('RecipeDetail (API mode) keeps real Favorites / Shopping List / CookMod
     expect(cookModeSrc).toMatch(/cookModeSteps\(recipe\)/);
   });
 
-  it('MealPlan keeps its route while general swaps direct users to the live per-ingredient control', () => {
-    expect(apiCode).toMatch(/navigation\.navigate\('MealPlan', \{ recipeId: recipe\.id \}\)/);
+  it('MealPlan opens the real current-week day picker while general swaps use the live per-ingredient control', () => {
+    expect(apiCode).toMatch(/setMealPlanOpen\(true\)/);
+    expect(apiCode).toMatch(/<MealPlanSheet[\s\S]*?recipeId=\{recipe\.id\}/);
     expect(apiCode).toMatch(/Tap Substitutes beside an ingredient above/);
     expect(apiCode).not.toMatch(/navigation\.navigate\('IngredientStudio'/);
   });
