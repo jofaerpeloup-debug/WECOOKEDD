@@ -6,12 +6,19 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useFavorites } from '../context/FavoritesContext';
+import { useCookHistory } from '../context/CookHistoryContext';
 
 // Teammate final Profile (c1c86ed) shows three stats: Recipes saved,
-// Collections, Cooked. Only "saved" has a real backend — FavoritesContext.
-// Collections and cook-history are M5 backends that don't exist yet, so they
-// render an honest "—" rather than a fabricated 0 (a 0 would still claim the
-// concept "collections" exists for this account today, which it does not).
+// Collections, Cooked. "Saved" (FavoritesContext) and "Cooked"
+// (CookHistoryContext, M5C) both have real backends now. Collections is
+// still an M5 backend that doesn't exist yet, so it renders an honest "—"
+// rather than a fabricated 0 (a 0 would still claim the concept
+// "collections" exists for this account today, which it does not).
+//
+// Teammate's CookedRecipesContext (c1c86ed) exposes `cookedCount` as
+// `cookedIds.size` — the number of DISTINCT recipes ever marked cooked, not
+// the number of times Finish was tapped. The real backend stat that matches
+// that semantics is `uniqueRecipesCooked`, not `totalCooks`.
 const UNAVAILABLE_STAT = '—';
 
 export default function ProfileScreen({ navigation }) {
@@ -20,8 +27,11 @@ export default function ProfileScreen({ navigation }) {
   const styles = makeStyles(colors);
   const { user, signOut } = useAuth();
   const { favoriteIds, isInitializing } = useFavorites();
+  const { stats: cookStats, isInitializing: cookStatsInitializing } = useCookHistory();
 
   const savedCount = isInitializing ? UNAVAILABLE_STAT : favoriteIds.size;
+  const cookedCount =
+    cookStatsInitializing || !cookStats ? UNAVAILABLE_STAT : cookStats.uniqueRecipesCooked;
   const initial = (user?.name || 'A').trim().charAt(0).toUpperCase();
   const allergies = user?.preferences?.allergies || [];
 
@@ -89,7 +99,7 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.statsRow}>
           <Stat n={savedCount} label="Recipes saved" styles={styles} />
           <Stat n={UNAVAILABLE_STAT} label="Collections" styles={styles} />
-          <Stat n={UNAVAILABLE_STAT} label="Cooked" styles={styles} />
+          <Stat n={cookedCount} label="Cooked" styles={styles} />
         </View>
 
         <Text style={styles.eyebrow}>Preferences</Text>

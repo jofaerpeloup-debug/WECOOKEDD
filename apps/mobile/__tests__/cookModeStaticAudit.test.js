@@ -72,16 +72,53 @@ describe('CookMode preserves the teammate guided structure', () => {
   });
 });
 
-describe('CookMode does not fake unsupported state', () => {
-  it('never persists notes, cooked status, completion, or history', () => {
+describe('CookMode Finish is real, M5C Cook History backend', () => {
+  it('never uses the teammate\'s local mock cooked persistence', () => {
     expect(code).not.toMatch(/AsyncStorage|loadJSON|saveJSON|storageKey/);
     expect(code).not.toMatch(/markCooked|useCookedRecipes|CookedRecipesContext/);
-    expect(code).not.toMatch(/setCooked|cookedAt|completedAt|streak|achievement|\bXP\b/);
+    expect(code).not.toMatch(/setCooked|streak|achievement|\bXP\b/);
   });
 
-  it('keeps completion visible, reports the backend gap honestly, then pops normally', () => {
-    expect(code).toMatch(/'Cook history is not available yet\.'/);
-    expect(code).toMatch(/notify\('Nicely done!',[\s\S]*navigation\.goBack\(\)\)/);
+  it('records a completion through the real CookHistoryContext, not a fabricated local state', () => {
+    expect(raw).toMatch(/import \{ useCookHistory \} from '\.\.\/context\/CookHistoryContext'/);
+    expect(code).toMatch(/const \{ recordCompletion \} = useCookHistory\(\)/);
+    expect(code).toMatch(/await recordCompletion\(\{ recipeId: recipe\.id, servings: cookServings \}\)/);
+  });
+
+  it('only attempts to record a completion for a real backend recipe (recipeSource === \'api\')', () => {
+    expect(code).toMatch(/const isApiRecipe = params\.recipeSource === 'api'/);
+    expect(code).toMatch(/if \(!isApiRecipe\) \{/);
+    expect(code).toMatch(/Cook history isn.t available for this recipe\./);
+  });
+
+  it('serializes Finish with a synchronous ref guard so a rapid double-tap can never fire a second POST', () => {
+    // A ref, not just state: state updates are async, so two onPress calls in
+    // the same tick could both read a stale `isFinishing` closure. The ref is
+    // set/read synchronously and is the actual guard; `isFinishing` state
+    // only drives the disabled/opacity UI.
+    expect(code).toMatch(/const isFinishingRef = useRef\(false\)/);
+    expect(code).toMatch(/if \(isFinishingRef\.current\) return;/);
+    expect(code).toMatch(/isFinishingRef\.current = true;/);
+    expect(code).toMatch(/isFinishingRef\.current = false;/);
+    expect(code).toMatch(/const \[isFinishing, setIsFinishing\] = useState\(false\)/);
+    expect(code).toMatch(/setIsFinishing\(true\)/);
+    expect(code).toMatch(/setIsFinishing\(false\)/);
+    expect(code).toMatch(/disabled=\{isLast && isFinishing\}/);
+  });
+
+  it('on success, shows real completion feedback then pops normally — never before the request resolves', () => {
+    expect(code).toMatch(
+      /await recordCompletion\([\s\S]*?notify\('Nicely done! 👏',[\s\S]*?navigation\.goBack\(\)\)/
+    );
+  });
+
+  it('on failure, shows an honest error and never fakes success, fake local state, or a silent navigation', () => {
+    expect(code).toMatch(/catch \(err\) \{[\s\S]*?notify\('Could not save', getCookHistoryErrorMessage\(err\)\)/);
+    // The catch block must not itself navigate or mark anything cooked.
+    const catchBlock = code.match(/catch \(err\) \{([\s\S]*?)\} finally/);
+    expect(catchBlock).toBeTruthy();
+    expect(catchBlock[1]).not.toMatch(/navigation\.(goBack|reset|replace)/);
+    expect(catchBlock[1]).not.toMatch(/markCooked|setCooked/);
   });
 
   it('does not port mock per-step timers or native timer side effects', () => {

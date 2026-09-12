@@ -27,6 +27,7 @@ import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { FavoritesProvider } from './src/context/FavoritesContext';
 import { CollectionsProvider } from './src/context/CollectionsContext';
 import { ShoppingListProvider } from './src/context/ShoppingListContext';
+import { CookHistoryProvider } from './src/context/CookHistoryContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 
 SplashScreen.preventAutoHideAsync();
@@ -74,7 +75,9 @@ export default function App() {
           <FavoritesProvider>
             <CollectionsProvider>
               <ShoppingListProvider>
-                <AppGate fontsLoaded={fontsLoaded} />
+                <CookHistoryProvider>
+                  <AppGate fontsLoaded={fontsLoaded} />
+                </CookHistoryProvider>
               </ShoppingListProvider>
             </CollectionsProvider>
           </FavoritesProvider>
