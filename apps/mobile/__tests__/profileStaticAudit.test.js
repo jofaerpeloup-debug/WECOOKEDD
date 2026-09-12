@@ -72,13 +72,24 @@ describe('Profile stats are honest, never fabricated', () => {
     expect(code).toMatch(/favoriteIds\.size/);
   });
 
-  it('never fabricates a Collections or Cooked count — both render the unavailable marker', () => {
+  it('draws the Cooked count from the real CookHistoryContext (M5C) — uniqueRecipesCooked, not totalCooks', () => {
+    expect(raw).toMatch(/import \{ useCookHistory \} from '\.\.\/context\/CookHistoryContext'/);
+    expect(code).toMatch(/const \{ stats: cookStats, isInitializing: cookStatsInitializing \} = useCookHistory\(\)/);
+    expect(code).toMatch(/cookStats\.uniqueRecipesCooked/);
+    expect(code).not.toMatch(/cookStats\.totalCooks/);
+  });
+
+  it('never fabricates a Collections count — it alone still renders the unavailable marker', () => {
     expect(code).not.toMatch(/COLLECTIONS\.length/);
     expect(code).not.toMatch(/collections\.length \+ /);
-    expect(code).not.toMatch(/cookedCount/);
     const unavailableUses = code.match(/UNAVAILABLE_STAT/g) || [];
-    // One definition + at least two render sites (Collections, Cooked).
+    // Definition + savedCount/cookedCount loading fallbacks + the Collections
+    // stat render site itself.
     expect(unavailableUses.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('never shows the previous stats while Cooked is still loading, and never a raw 0 before data arrives', () => {
+    expect(code).toMatch(/cookStatsInitializing \|\| !cookStats \? UNAVAILABLE_STAT/);
   });
 
   it('renders exactly three stats, matching the teammate stat row', () => {

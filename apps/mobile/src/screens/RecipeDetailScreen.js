@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
@@ -29,6 +30,7 @@ import { getRecipe } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { getRecipeReviews, createReview, updateReview } from '../api/reviewService';
 import { getReviewErrorMessage } from '../api/reviewErrors';
+import { getRecipeStatus } from '../api/cookHistoryService';
 import { difficultyLabel, unitLabel } from '../api/recipeOptions';
 import {
   formatMinutes,
@@ -381,6 +383,57 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
 
   const myRating = reviewState.myReview ? reviewState.myReview.rating : 0;
 
+  // M5C: real server-backed "has the current user ever cooked this recipe"
+  // status for the teammate "Cooked" pill (boolean existence only — never a
+  // count, never local/fake state). Kept as a small screen-local fetch, NOT
+  // folded into CookHistoryContext: that context exists to sync the Profile
+  // aggregate stat, and turning it into an unbounded per-recipe cooked-id
+  // cache just to render one pill on one screen is unjustified complexity —
+  // a focused request scoped to this recipe is the smaller architecture.
+  //
+  // Refetched on every screen FOCUS (not just on recipe.id change) so
+  // finishing CookMode and tapping back onto this screen picks up the new
+  // status immediately — CookMode's Finish -> navigation.goBack() lands
+  // right back here and refires this effect.
+  const [cookedState, setCookedState] = useState({ status: 'loading', hasCooked: false });
+  const cookedMountedRef = useRef(true);
+
+  useEffect(() => {
+    cookedMountedRef.current = true;
+    return () => {
+      cookedMountedRef.current = false;
+    };
+  }, []);
+
+  const loadCookedStatus = useCallback(async () => {
+    setCookedState((s) => ({ ...s, status: 'loading' }));
+    try {
+      const { hasCooked } = await getRecipeStatus(recipe.id);
+      if (!cookedMountedRef.current) return;
+      setCookedState({ status: 'ready', hasCooked });
+    } catch {
+      if (!cookedMountedRef.current) return;
+      // A failed refresh means UNKNOWN, not "not cooked" — never overwrite a
+      // previously confirmed hasCooked with a fabricated false. Preserving
+      // `s.hasCooked` can't fabricate true either: it only ever became true
+      // via a prior successful response for this exact recipe.id (a
+      // recipe/account change always remounts this component — see
+      // `key={params.recipeId}` and RootNavigator's auth-gated stack swap —
+      // so there is no stale value to leak from a different recipe or user).
+      setCookedState((s) => ({ status: 'error', hasCooked: s.hasCooked }));
+    }
+  }, [recipe.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadCookedStatus();
+    }, [loadCookedStatus])
+  );
+
+  // Deliberately not gated on `status === 'ready'` — a failed refresh
+  // (status 'error') must not hide a previously confirmed hasCooked:true.
+  const cooked = cookedState.hasCooked;
+
   // Tap-to-rate, matching teammate's direct tap-to-submit interaction (no
   // confirm step, no comment UI — teammate exposes star rating only). POST
   // creates the caller's first review; PATCH updates the existing one, so a
@@ -545,19 +598,20 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           {/* M5B: real server-backed rating summary. The average/count come
               straight from the backend aggregate — never fabricated — and
               read as "No ratings yet" (a real, confirmed zero) rather than
-              the old M5 "unavailable" placeholder, which meant no backend
-              existed to ask at all. Cook History stays the honest M5
-              placeholder — that backend is still M5C, out of scope here. */}
+              an "unavailable" placeholder.
+              M5C: teammate-authoritative "Cooked" pill (c1c86ed), now real —
+              rendered only once the server confirms this user has completed
+              this recipe at least once; hidden while loading/unknown/false,
+              exactly like the teammate's `{cooked && <View>...}` guard. */}
           <View style={styles.ddRatingRow}>
             <Ionicons name={hasRatings ? 'star' : 'star-outline'} size={13} color={hasRatings ? colors.stone : colors.inkFaint} />
             <Text style={styles.ddRatingText}>{ratingSummaryText}</Text>
-            <View style={styles.ddCookedPill}>
-              {/* Deliberately short: the pill's compact geometry can't hold
-                  "Cook history unavailable" without wrapping — "Cook history"
-                  plus the pill's already-neutral outline treatment is the
-                  short honest variant the correction asked for. */}
-              <Text style={styles.ddCookedPillText}>Cook history</Text>
-            </View>
+            {cooked && (
+              <View style={styles.ddCookedPill}>
+                <Ionicons name="checkmark" size={11} color={colors.success} />
+                <Text style={styles.ddCookedPillText}>Cooked</Text>
+              </View>
+            )}
           </View>
 
           {/* M5B: tapping a star submits a real rating immediately — POST for
@@ -1321,18 +1375,20 @@ function makeStyles(colors, shadow) {
       fontSize: 12.5,
       color: colors.inkFaint,
     },
-    // Honest inactive state (see final report §11) — a muted outline pill,
-    // never the teammate's filled/affirmative "Cooked" treatment, since no
-    // real per-user cook-history exists yet (M5).
+    // Teammate's exact filled/affirmative "Cooked" treatment (c1c86ed's
+    // cookedPill/cookedPillText) — now backed by the real M5C Cook History
+    // status, rendered only when the server confirms `hasCooked`.
     ddCookedPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
       marginLeft: 6,
       paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: radius.pill,
-      borderWidth: 1,
-      borderColor: colors.hairline,
+      backgroundColor: colors.successBg,
     },
-    ddCookedPillText: { fontFamily: typography.body.bold, fontSize: 10.5, color: colors.inkFaint },
+    ddCookedPillText: { fontFamily: typography.body.bold, fontSize: 10.5, color: colors.success },
     ddSubstituteBtn: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -135,14 +135,77 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).not.toMatch(/\b5\.0\b/);
   });
 
-  it('cook-history pill asserts no per-user fact the backend cannot know (M5C, unchanged by M5B)', () => {
-    expect(apiCode).not.toMatch(/hasCooked|useCookedRecipes|cooked=\{?true/);
-    // "Not cooked yet" implies the system knows this user never cooked it —
-    // a fact M5's Cook History backend doesn't exist to confirm. Only an
-    // honest unavailable/neutral label is allowed, "Cooked" never appears.
+  it('the teammate "Cooked" pill (c1c86ed) is real, M5C server-backed, boolean existence only', () => {
+    // Real data path: a focused GET status call, never the teammate's mock
+    // CookedRecipesContext, never a fabricated per-user fact.
+    expect(raw).toMatch(/import \{ getRecipeStatus \} from '\.\.\/api\/cookHistoryService'/);
+    expect(apiCode).not.toMatch(/useCookedRecipes|CookedRecipesContext|markCooked/);
+    expect(apiCode).toMatch(/await getRecipeStatus\(recipe\.id\)/);
+
+    // Rendered only when the server confirms it — exactly the teammate's
+    // `{cooked && <View>...}` guard, never an unconditional/"unavailable"
+    // placeholder pill.
+    expect(apiCode).toMatch(/const cooked = cookedState\.hasCooked/);
+    expect(apiCode).toMatch(/\{cooked && \(/);
+    expect(apiCode).toMatch(/>Cooked</);
+    expect(apiCode).not.toMatch(/Cook history/);
     expect(apiCode).not.toMatch(/Not cooked yet/);
-    expect(apiCode).not.toMatch(/>Cooked</);
-    expect(apiCode).toMatch(/Cook history/);
+  });
+
+  it('the Cooked pill refetches status on every screen focus, so returning from CookMode refreshes it', () => {
+    expect(raw).toMatch(/import \{ useFocusEffect \} from '@react-navigation\/native'/);
+    expect(apiCode).toMatch(/useFocusEffect\(\s*useCallback\(\(\) => \{\s*loadCookedStatus\(\);/);
+  });
+
+  it('a failed refresh means UNKNOWN, not false — a previously confirmed hasCooked:true survives a later failed refresh', () => {
+    const loadFnMatch = apiCode.match(/const loadCookedStatus = useCallback\(async \(\) => \{([\s\S]*?)\}, \[recipe\.id\]\)/);
+    expect(loadFnMatch).toBeTruthy();
+    const body = loadFnMatch[1];
+    expect(body).toMatch(/catch \{/);
+    // The catch block must carry the PREVIOUS hasCooked forward via a
+    // functional update — never hardcode `hasCooked: false`, which would
+    // erase a prior true.
+    expect(body).toMatch(/setCookedState\(\(s\) => \(\{ status: 'error', hasCooked: s\.hasCooked \}\)\)/);
+    expect(body).not.toMatch(/setCookedState\(\{ status: 'error', hasCooked: false \}\)/);
+  });
+
+  it('the pill derivation is not gated on status === \'ready\', so an error after a success still shows it', () => {
+    // Cold load default is still `hasCooked: false` — an error with nothing
+    // ever confirmed still renders no pill (see the initial useState below).
+    expect(apiCode).toMatch(/useState\(\{ status: 'loading', hasCooked: false \}\)/);
+    expect(apiCode).not.toMatch(/cookedState\.status === 'ready' && cookedState\.hasCooked/);
+  });
+
+  it('a legitimate successful hasCooked:false response still clears a stale pill (only failure is preserved, not every non-true response)', () => {
+    // The success branch always installs the server's own value verbatim —
+    // never merged with the previous state — so a real false overwrites a
+    // stale true exactly as a real true overwrites a stale false.
+    expect(apiCode).toMatch(/setCookedState\(\{ status: 'ready', hasCooked \}\)/);
+  });
+
+  it('cannot leak cooked state across a recipe or account change — cookedState is local, unpersisted component state', () => {
+    // No AsyncStorage, no module-level cache, no global variable: the only
+    // place `hasCooked` lives is this component instance's own useState, so
+    // it cannot outlive that instance. A recipe change remounts this whole
+    // component via `key={params.recipeId}` (asserted in "treats recipeId as
+    // authoritative and remounts on change" above); an account change
+    // remounts the entire authenticated stack via RootNavigator's
+    // `{isLoggedIn ? (...) : (...)}` swap (see
+    // navigationShellStaticAudit.test.js's "auth architecture untouched").
+    // Neither boundary leaves this component instance — or its cookedState —
+    // alive to leak into the next recipe or the next signed-in user.
+    expect(apiCode).toMatch(/const \[cookedState, setCookedState\] = useState\(\{ status: 'loading', hasCooked: false \}\)/);
+    expect(apiCode).not.toMatch(/AsyncStorage|loadJSON|saveJSON/);
+    expect(code).not.toMatch(/globalThis\.|global\.__|moduleCookedCache|let\s+cachedCooked/);
+  });
+
+  it('does not cache cooked ids globally — no CookHistoryContext import, just a screen-local focused fetch', () => {
+    // Checked against comment-stripped `code`: the surrounding source has an
+    // explanatory comment that names CookHistoryContext by way of explaining
+    // why it is deliberately NOT used here — that mention alone must not
+    // trip this assertion.
+    expect(code).not.toMatch(/CookHistoryContext/);
+    expect(code).not.toMatch(/useCookHistory/);
   });
 
   it('the five-star row submits a real rating (M5B): POST first-time, PATCH thereafter, never a fake success', () => {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,6 +6,8 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import RecipeImage from '../components/RecipeImage';
 import { notify } from '../utils/alert';
+import { useCookHistory } from '../context/CookHistoryContext';
+import { getCookHistoryErrorMessage } from '../api/cookHistoryErrors';
 import {
   clampCookStepIndex,
   cookModeIngredientChecklist,
@@ -15,9 +17,22 @@ import {
 export default function CookModeScreen({ navigation, route }) {
   const params = route.params || {};
   const recipe = params.recipe || {};
+  // Only a real backend recipe (RecipeDetailScreen's ApiRecipeDetail path)
+  // has a Recipe id Cook History can record against. LegacyRecipeDetail's
+  // mock recipes (ids like "r1") never carry this flag and can never be
+  // tracked — there is no backend identity for them to attach an event to.
+  const isApiRecipe = params.recipeSource === 'api';
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
+  const { recordCompletion } = useCookHistory();
+  const [isFinishing, setIsFinishing] = useState(false);
+  // A ref, not just the `isFinishing` state: state updates are async, so two
+  // onPress calls dispatched in the same tick could both read the same stale
+  // `isFinishing` closure. The ref is set/read synchronously, so it is the
+  // actual guard against a double-tap firing two POSTs; `isFinishing` only
+  // drives the disabled/opacity UI.
+  const isFinishingRef = useRef(false);
 
   const steps = useMemo(() => cookModeSteps(recipe), [recipe]);
   const cookServings =
@@ -59,8 +74,32 @@ export default function CookModeScreen({ navigation, route }) {
     setStepIndex((index) => clampCookStepIndex(index - 1, steps.length));
   };
 
-  const finishCooking = () => {
-    notify('Nicely done!', 'Cook history is not available yet.', () => navigation.goBack());
+  // A cook-history event is recorded ONLY here — the intentional Finish tap
+  // at the end of the guided flow. Opening CookMode, viewing the prep
+  // checklist, advancing a step, or exiting early must never create one.
+  const finishCooking = async () => {
+    if (isFinishingRef.current) return; // serializes Finish: a rapid double-tap is ignored, never a second POST.
+
+    if (!isApiRecipe) {
+      // No real backend recipe id to attach an event to — honest, not a
+      // failure retry loop.
+      notify('Nicely done!', 'Cook history isn’t available for this recipe.', () => navigation.goBack());
+      return;
+    }
+
+    isFinishingRef.current = true;
+    setIsFinishing(true);
+    try {
+      await recordCompletion({ recipeId: recipe.id, servings: cookServings });
+      notify('Nicely done! 👏', `${recipe.title} is cooked. Enjoy your meal.`, () => navigation.goBack());
+    } catch (err) {
+      // Never pretend it saved: no navigation, no local "cooked" state — the
+      // user stays on this step and can tap Finish again to retry.
+      notify('Could not save', getCookHistoryErrorMessage(err));
+    } finally {
+      isFinishingRef.current = false;
+      setIsFinishing(false);
+    }
   };
 
   const goNext = () => {
@@ -223,7 +262,11 @@ export default function CookModeScreen({ navigation, route }) {
           <Pressable style={styles.secondaryBtn} onPress={goPrevious}>
             <Text style={styles.secondaryText}>Back</Text>
           </Pressable>
-          <Pressable style={[styles.primaryBtn, styles.nextBtn]} onPress={goNext}>
+          <Pressable
+            style={[styles.primaryBtn, styles.nextBtn, isLast && isFinishing && styles.nextBtnDisabled]}
+            onPress={goNext}
+            disabled={isLast && isFinishing}
+          >
             <Text style={styles.primaryText}>{isLast ? 'Finish Cooking' : 'Next Step'}</Text>
           </Pressable>
         </View>
@@ -466,6 +509,7 @@ function makeStyles(colors) {
       justifyContent: 'center',
     },
     nextBtn: { flex: 2 },
+    nextBtnDisabled: { opacity: 0.45 },
     primaryText: {
       fontFamily: typography.body.semibold,
       fontSize: 14,
