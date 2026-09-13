@@ -50,9 +50,8 @@ function buildPasswordResetEmail({ resetUrl, expiresInMinutes }) {
   };
 }
 
-async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
+async function sendViaResend({ to, subject, text, html, idempotencyPrefix }) {
   const { resendApiKey, emailFrom } = loadEnv();
-  const content = buildPasswordResetEmail({ resetUrl, expiresInMinutes });
 
   let response;
   try {
@@ -62,14 +61,14 @@ async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
         Authorization: `Bearer ${resendApiKey}`,
         'Content-Type': 'application/json',
         'User-Agent': 'wecooked-api/1.0',
-        'Idempotency-Key': `password-reset/${crypto.randomUUID()}`,
+        'Idempotency-Key': `${idempotencyPrefix}/${crypto.randomUUID()}`,
       },
       body: JSON.stringify({
         from: emailFrom,
         to: [to],
-        subject: content.subject,
-        text: content.text,
-        html: content.html,
+        subject,
+        text,
+        html,
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -85,4 +84,47 @@ async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
   }
 }
 
-module.exports = { sendPasswordResetEmail, buildPasswordResetEmail };
+async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
+  const content = buildPasswordResetEmail({ resetUrl, expiresInMinutes });
+  await sendViaResend({ to, ...content, idempotencyPrefix: 'password-reset' });
+}
+
+function buildVerificationEmail({ verifyUrl, expiresInMinutes }) {
+  const expiryText =
+    expiresInMinutes % 60 === 0
+      ? `${expiresInMinutes / 60} hours`
+      : `${expiresInMinutes} minutes`;
+  const safeUrl = escapeHtml(verifyUrl);
+  const safeExpiry = escapeHtml(expiryText);
+
+  return {
+    subject: 'Verify your WeCooked email address',
+    text: [
+      'Verify your WeCooked email',
+      '',
+      `Use this link to verify your email address: ${verifyUrl}`,
+      `This link expires in ${expiryText}.`,
+      '',
+      'If you did not create a WeCooked account, you can ignore this email.',
+    ].join('\n'),
+    html: [
+      '<h1>Verify your WeCooked email</h1>',
+      '<p>Use the link below to verify your email address.</p>',
+      `<p><a href="${safeUrl}">Verify your email</a></p>`,
+      `<p>This link expires in ${safeExpiry}.</p>`,
+      '<p>If you did not create a WeCooked account, you can ignore this email.</p>',
+    ].join(''),
+  };
+}
+
+async function sendVerificationEmail({ to, verifyUrl, expiresInMinutes }) {
+  const content = buildVerificationEmail({ verifyUrl, expiresInMinutes });
+  await sendViaResend({ to, ...content, idempotencyPrefix: 'verify-email' });
+}
+
+module.exports = {
+  sendPasswordResetEmail,
+  buildPasswordResetEmail,
+  sendVerificationEmail,
+  buildVerificationEmail,
+};

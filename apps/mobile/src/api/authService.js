@@ -8,6 +8,9 @@
 //   POST /auth/register   -> { user, accessToken, refreshToken }
 //   POST /auth/login      -> { user, accessToken, refreshToken }
 //   POST /auth/forgot-password -> { passwordResetRequested: true } (no session change)
+//   POST /auth/reset-password  -> { passwordReset: true }         (revokes every session)
+//   POST /auth/verify-email    -> { emailVerified: true }         (no session change)
+//   POST /auth/resend-verification -> { verificationEmailRequested: true } (no session change)
 //   POST /auth/refresh    -> { accessToken, refreshToken }        (rotating; no user)
 //   POST /auth/logout     -> { loggedOut: true }                  (needs access token)
 //   POST /auth/logout-all -> { revokedCount }                     (needs access token)
@@ -186,6 +189,56 @@ export async function login({ email, password }) {
 // Completing the reset happens off-device via that emailed link.
 export function forgotPassword(email) {
   return api.post('/auth/forgot-password', {
+    auth: false,
+    body: { email },
+  });
+}
+
+// --- password reset completion ----------------------------------------
+//
+//   POST /auth/reset-password  body { token, newPassword }
+//        -> { passwordReset: true }                          (public)
+//
+// The backend revokes EVERY session for the account on success. This device
+// may or may not currently hold one of those sessions (the link is usually
+// opened signed-out, but a stale link opened while still signed in is
+// possible) — either way, clearLocalSession() below is called unconditionally
+// afterward so the app can never keep appearing authenticated with
+// server-revoked credentials. `auth: false`: the token itself is the
+// credential, not the caller's session.
+export function resetPassword({ token, newPassword }) {
+  return api.post('/auth/reset-password', {
+    auth: false,
+    body: { token, newPassword },
+  });
+}
+
+// Clears local token storage without calling /auth/logout — used after a
+// password reset, where the server session (if any existed on this device)
+// is already revoked by the reset itself, so hitting /auth/logout again would
+// just be a pointless extra request against an already-dead session.
+export function clearLocalSession() {
+  return tokenStore.clearSession();
+}
+
+// --- email verification -------------------------------------------------
+//
+//   POST /auth/verify-email        body { token }    -> { emailVerified: true }
+//   POST /auth/resend-verification body { email }     -> { verificationEmailRequested: true }
+//
+// Both are public and unauthenticated like forgot/reset-password: the token
+// (or, for resend, the generic public response) carries no session identity.
+// Neither touches tokenStore or the session — verifying an email changes no
+// credential and the caller's session (if any) is left exactly as it was.
+export function verifyEmail(token) {
+  return api.post('/auth/verify-email', {
+    auth: false,
+    body: { token },
+  });
+}
+
+export function resendVerification(email) {
+  return api.post('/auth/resend-verification', {
     auth: false,
     body: { email },
   });

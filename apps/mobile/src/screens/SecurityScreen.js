@@ -67,6 +67,29 @@ export default function SecurityScreen({ navigation }) {
     }
   };
 
+  // --- email verification: does NOT gate login or any feature — this is an
+  // honest status readout plus a real resend action, nothing more. The
+  // backend's resend-verification response is deliberately generic (identical
+  // for eligible/ineligible), so this never learns or shows anything beyond
+  // "a link was requested" — it cannot report send failure or ineligibility.
+  const [resendState, setResendState] = useState('idle'); // idle | sending | sent
+  const [resendError, setResendError] = useState(null);
+
+  const handleResendVerification = async () => {
+    if (resendState === 'sending' || !user?.email) return;
+    setResendError(null);
+    setResendState('sending');
+    try {
+      await authService.resendVerification(user.email);
+      if (mountedRef.current) setResendState('sent');
+    } catch (err) {
+      if (mountedRef.current) {
+        setResendState('idle');
+        setResendError(getAuthErrorMessage(err));
+      }
+    }
+  };
+
   // --- linked accounts: real (B4.3A) — user.authIdentities is server truth.
   // No unlink endpoint exists, so a linked provider is shown, never offered
   // an "Unlink" action that would fake a capability the backend doesn't have.
@@ -159,6 +182,35 @@ export default function SecurityScreen({ navigation }) {
           disabled={pwSaving}
           style={{ marginTop: spacing.sm }}
         />
+
+        <Text style={[styles.groupTitle, { marginTop: spacing.xl }]}>EMAIL VERIFICATION</Text>
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>{user?.email}</Text>
+              <Text style={styles.rowSub}>
+                {user?.emailVerified ? 'Verified.' : 'Not verified yet.'}
+              </Text>
+            </View>
+            {user?.emailVerified ? (
+              <Ionicons name="checkmark-circle" size={20} color={colors.sageDeep} />
+            ) : resendState === 'sending' ? (
+              <ActivityIndicator size="small" color={colors.sageDeep} />
+            ) : (
+              <Pressable onPress={handleResendVerification} hitSlop={8}>
+                <Text style={styles.linkAction}>
+                  {resendState === 'sent' ? 'Link sent' : 'Resend'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+        {resendError ? <Text style={styles.fieldError}>{resendError}</Text> : null}
+        {!user?.emailVerified && resendState === 'sent' ? (
+          <Text style={styles.caption}>
+            If that address can receive mail, a verification link is on its way.
+          </Text>
+        ) : null}
 
         <Text style={[styles.groupTitle, { marginTop: spacing.xl }]}>LINKED ACCOUNTS</Text>
         <View style={styles.card}>
@@ -262,6 +314,12 @@ function makeStyles(colors) {
       color: colors.error,
       marginTop: spacing.xs,
       marginBottom: spacing.sm,
+    },
+    caption: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
+      marginTop: spacing.xs,
     },
   });
 }

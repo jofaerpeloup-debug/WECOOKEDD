@@ -117,6 +117,49 @@ function resetPasswordByTokenHash({ tokenHash, passwordHash, now }) {
   );
 }
 
+// Shared by post-registration issuance and resend: overwrites any prior
+// verification credential with a fresh one. Scoped to active, password-bearing,
+// not-yet-verified accounts so a stale/racing call can never re-arm a token for
+// a suspended, provider-only, or already-verified user.
+function setEmailVerificationTokenForUser(id, tokenHash, expiresAt) {
+  return User.updateOne(
+    {
+      _id: id,
+      status: 'active',
+      passwordHash: { $exists: true, $type: 'string', $ne: '' },
+      emailVerified: { $ne: true },
+    },
+    {
+      $set: {
+        emailVerificationTokenHash: tokenHash,
+        emailVerificationExpiresAt: expiresAt,
+      },
+    }
+  );
+}
+
+// Atomically verifies and consumes an email-verification credential in one
+// write. Only one concurrent request presenting a digest can match; a replay
+// finds no document (the fields are already unset) and fails identically to a
+// wrong/expired token.
+function verifyEmailByTokenHash({ tokenHash, now }) {
+  return User.findOneAndUpdate(
+    {
+      emailVerificationTokenHash: tokenHash,
+      emailVerificationExpiresAt: { $gt: now },
+      status: 'active',
+    },
+    {
+      $set: { emailVerified: true },
+      $unset: {
+        emailVerificationTokenHash: 1,
+        emailVerificationExpiresAt: 1,
+      },
+    },
+    { returnDocument: 'after', projection: { _id: 1 } }
+  );
+}
+
 // Admin user-management list. Pure query mechanics — the caller (service)
 // owns the filter/sort/skip/limit values and every policy decision. The
 // model's `select: false` on passwordHash means the digest is never in the
@@ -152,4 +195,6 @@ module.exports = {
   replacePasswordById,
   setPasswordResetTokenForEligibleUser,
   resetPasswordByTokenHash,
+  setEmailVerificationTokenForUser,
+  verifyEmailByTokenHash,
 };

@@ -3,6 +3,15 @@ process.env.PORT = '4015';
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/wecooked_test';
 process.env.CORS_ORIGINS = 'http://localhost:5173';
 process.env.JWT_ACCESS_SECRET = 'test-suite-access-secret-at-least-32-chars-long';
+// Pinned explicitly (not left to TEST_EMAIL_DEFAULTS) so these tests' fragment-
+// vs-query URL-shape assertions stay deterministic regardless of a developer's
+// own local .env — dotenv.config() (inside loadEnv()) never overrides a
+// process.env key that is already set, so setting these here BEFORE anything
+// requires config/env.js wins over any ambient PASSWORD_RESET_URL /
+// EMAIL_VERIFICATION_URL on this machine. Same pattern already used by
+// email-service.test.js.
+process.env.PASSWORD_RESET_URL = 'http://localhost:5173/reset-password';
+process.env.EMAIL_VERIFICATION_URL = 'http://localhost:5173/verify-email';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -56,6 +65,8 @@ function fakeSession(overrides = {}) {
 
 test('register creates the user and issues tokens tied to a new session', async (t) => {
   t.mock.method(userService, 'registerUser', async () => fakeUser());
+  t.mock.method(userService, 'startEmailVerification', async () => {});
+  t.mock.method(emailService, 'sendVerificationEmail', async () => {});
   t.mock.method(sessionService, 'createSession', async () => ({
     session: fakeSession(),
     refreshToken: 'raw-refresh-token',
@@ -73,6 +84,89 @@ test('register creates the user and issues tokens tied to a new session', async 
   assert.equal(payload.sub, 'user-1');
   assert.equal(payload.sessionId, 'session-1');
   assert.equal(payload.role, 'user');
+});
+
+test('register issues a verification token for the new user and emails a fragment link', async (t) => {
+  t.mock.method(userService, 'registerUser', async () => fakeUser());
+  let started;
+  t.mock.method(userService, 'startEmailVerification', async (args) => {
+    started = args;
+  });
+  let emailed;
+  t.mock.method(emailService, 'sendVerificationEmail', async (args) => {
+    emailed = args;
+  });
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'raw-refresh-token',
+  }));
+
+  await authService.register({
+    name: 'Ada',
+    email: 'ada@example.com',
+    password: 'a-good-password',
+  });
+
+  assert.equal(started.userId, 'user-1');
+  assert.match(started.tokenHash, /^[a-f0-9]{64}$/);
+  assert.ok(started.expiresAt instanceof Date);
+  assert.equal(emailed.to, 'ada@example.com');
+  const url = new URL(emailed.verifyUrl);
+  assert.equal(url.search, '');
+  assert.match(url.hash, /^#token=[A-Za-z0-9_-]{43}$/);
+});
+
+test('register succeeds and issues a session even when verification email delivery fails', async (t) => {
+  t.mock.method(userService, 'registerUser', async () => fakeUser());
+  t.mock.method(userService, 'startEmailVerification', async () => {});
+  t.mock.method(emailService, 'sendVerificationEmail', async () => {
+    const error = new Error('provider failed');
+    error.name = 'EmailDeliveryError';
+    error.providerStatus = 503;
+    throw error;
+  });
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'raw-refresh-token',
+  }));
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args));
+
+  const result = await authService.register({
+    name: 'Ada',
+    email: 'ada@example.com',
+    password: 'a-good-password',
+  });
+
+  assert.equal(result.user.email, 'ada@example.com');
+  assert.ok(result.accessToken);
+  assert.ok(result.refreshToken);
+  const serialized = JSON.stringify(logged);
+  assert.equal(serialized.includes('ada@example.com'), false);
+  assert.ok(serialized.includes('503'));
+});
+
+test('register never exposes a raw verification token in its result', async (t) => {
+  t.mock.method(userService, 'registerUser', async () => fakeUser());
+  let capturedToken;
+  t.mock.method(emailService, 'sendVerificationEmail', async (args) => {
+    capturedToken = new URL(args.verifyUrl).hash;
+  });
+  t.mock.method(userService, 'startEmailVerification', async () => {});
+  t.mock.method(sessionService, 'createSession', async () => ({
+    session: fakeSession(),
+    refreshToken: 'raw-refresh-token',
+  }));
+
+  const result = await authService.register({
+    name: 'Ada',
+    email: 'ada@example.com',
+    password: 'a-good-password',
+  });
+
+  const serialized = JSON.stringify(result);
+  assert.ok(capturedToken);
+  assert.equal(serialized.includes(capturedToken.replace('#token=', '')), false);
 });
 
 test('login rejects with AUTH_INVALID_CREDENTIALS when credentials do not match', async (t) => {
@@ -376,6 +470,45 @@ test('googleLink links only the authenticated active normal user and issues no s
   assert.equal(linkedWith.identity.subject, 'google-subject-1');
   assert.equal(result.email, 'stored@example.com');
   assert.equal(createSession.mock.callCount(), 0);
+});
+
+test('googleLink never sets or touches emailVerified on the existing password account', async (t) => {
+  // A different email on the Google side than the WeCooked account's own —
+  // deliberately, since googleLink's contract is that email equality is never
+  // consulted. If linking silently trusted "the identity is Google-verified"
+  // to also mean "this WeCooked email is now verified", an attacker who
+  // controls a Google account (any Google account, any email) could flip
+  // emailVerified on someone else's unverified WeCooked account merely by
+  // linking it — this test locks in that no such write ever happens.
+  mockGoogleCredential(t, { identity: fakeGoogleIdentity({ email: 'unrelated@example.com' }) });
+  const target = fakeUser({
+    _id: 'authenticated-user',
+    email: 'stored@example.com',
+    emailVerified: false,
+  });
+  t.mock.method(userService, 'getUserById', async () => target);
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  let linkedWith;
+  t.mock.method(userService, 'linkAuthIdentity', async (id, identity) => {
+    linkedWith = { id, identity };
+    // The repository layer only ever receives {provider, subject, linkedAt} —
+    // asserted here structurally rather than by reading past it.
+    return fakeUser({
+      _id: id,
+      email: target.email,
+      emailVerified: target.emailVerified,
+      authIdentities: [identity],
+    });
+  });
+
+  const result = await authService.googleLink({
+    userId: 'authenticated-user',
+    idToken: 'token',
+    challengeId: 'challenge',
+  });
+
+  assert.deepEqual(Object.keys(linkedWith.identity).sort(), ['linkedAt', 'provider', 'subject']);
+  assert.equal(result.emailVerified, false);
 });
 
 test('googleLink is idempotent for the same owner and rejects another owner', async (t) => {
@@ -860,4 +993,86 @@ test('resetPassword does not revoke sessions when token consumption fails', asyn
     { code: 'AUTH_PASSWORD_RESET_TOKEN_INVALID' }
   );
   assert.equal(revoke.mock.callCount(), 0);
+});
+
+test('verifyEmail consumes the token and never revokes sessions', async (t) => {
+  t.mock.method(userService, 'verifyEmailWithToken', async () => ({ userId: 'user-1' }));
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+
+  const result = await authService.verifyEmail('A'.repeat(43));
+
+  assert.deepEqual(result, { emailVerified: true });
+  assert.equal(revoke.mock.callCount(), 0);
+});
+
+test('verifyEmail propagates the generic invalid/expired/replayed error unchanged', async (t) => {
+  t.mock.method(userService, 'verifyEmailWithToken', async () => {
+    throw new AppError('Email verification token is invalid or expired.', {
+      statusCode: 400,
+      code: 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID',
+    });
+  });
+
+  await assert.rejects(
+    () => authService.verifyEmail('B'.repeat(43)),
+    { code: 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID' }
+  );
+});
+
+test('resendVerification stores a fresh credential, emails a fragment link, and enforces the response floor', async (t) => {
+  let prepared;
+  let emailed;
+  t.mock.method(userService, 'prepareEmailVerification', async (args) => {
+    prepared = args;
+    return { userId: 'user-1', email: 'ada@example.com' };
+  });
+  t.mock.method(emailService, 'sendVerificationEmail', async (args) => {
+    emailed = args;
+  });
+  const startedAt = Date.now();
+
+  const result = await authService.resendVerification('ada@example.com');
+
+  assert.deepEqual(result, { verificationEmailRequested: true });
+  assert.match(prepared.tokenHash, /^[a-f0-9]{64}$/);
+  assert.ok(prepared.expiresAt instanceof Date);
+  const url = new URL(emailed.verifyUrl);
+  assert.equal(url.search, '');
+  assert.match(url.hash, /^#token=[A-Za-z0-9_-]{43}$/);
+  assert.equal(emailed.to, 'ada@example.com');
+  assert.ok(Date.now() - startedAt >= 700);
+});
+
+test('resendVerification returns the identical generic result for an unknown/ineligible account and sends nothing', async (t) => {
+  t.mock.method(userService, 'prepareEmailVerification', async () => null);
+  const send = t.mock.method(emailService, 'sendVerificationEmail', async () => {});
+
+  const result = await authService.resendVerification('unknown@example.com');
+
+  assert.deepEqual(result, { verificationEmailRequested: true });
+  assert.equal(send.mock.callCount(), 0);
+});
+
+test('resendVerification hides email delivery failure and logs no recipient, token, or verification URL', async (t) => {
+  t.mock.method(userService, 'prepareEmailVerification', async () => ({
+    userId: 'user-1',
+    email: 'ada@example.com',
+  }));
+  t.mock.method(emailService, 'sendVerificationEmail', async () => {
+    const error = new Error('provider failed');
+    error.name = 'EmailDeliveryError';
+    error.providerStatus = 503;
+    throw error;
+  });
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args));
+
+  const result = await authService.resendVerification('ada@example.com');
+
+  assert.deepEqual(result, { verificationEmailRequested: true });
+  const serialized = JSON.stringify(logged);
+  assert.equal(serialized.includes('ada@example.com'), false);
+  assert.equal(serialized.includes('#token='), false);
+  assert.equal(serialized.includes('provider failed'), false);
+  assert.ok(serialized.includes('503'));
 });

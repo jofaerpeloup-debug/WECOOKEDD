@@ -47,6 +47,15 @@ export function getAuthErrorMessage(err, fallback = FALLBACK) {
     case 'RATE_LIMIT_EXCEEDED':
       return 'Too many attempts. Please wait a few minutes and try again.';
 
+    // --- password reset completion / email verification ---
+    // Fixed, generic wording for both: never distinguishes malformed, expired,
+    // or already-used — that distinction is exactly what the backend's own
+    // single error code already withholds.
+    case 'AUTH_PASSWORD_RESET_TOKEN_INVALID':
+      return 'This password reset link is invalid or has expired. Request a new one and try again.';
+    case 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID':
+      return 'This verification link is invalid or has expired. Request a new one and try again.';
+
     // --- authenticated password change (Security screen) ---
     case 'AUTH_CURRENT_PASSWORD_INVALID':
       return 'Current password is incorrect.';
