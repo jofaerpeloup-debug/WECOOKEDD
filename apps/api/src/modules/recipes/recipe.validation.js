@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { objectIdSchema } = require('../../shared/validation/object-id');
 const { SLUG_MAX_LENGTH, SLUG_PATTERN, normalizeSlug } = require('../../shared/validation/slug');
+const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
 const {
   DIFFICULTIES,
   UNITS,
@@ -15,6 +16,7 @@ const {
   MAX_INSTRUCTION_LENGTH,
   MAX_INGREDIENT_NOTE_LENGTH,
   MAX_IMAGE_URL_LENGTH,
+  MAX_IMAGE_ASSET_ID_LENGTH,
 } = require('./recipe.model');
 
 const titleSchema = z
@@ -183,10 +185,38 @@ const ingredientsArraySchema = z
 const imageUrlSchema = z
   .string()
   .trim()
-  .url('imageUrl must be a valid URL.')
   .max(MAX_IMAGE_URL_LENGTH, `imageUrl must be ${MAX_IMAGE_URL_LENGTH} characters or fewer.`)
+  .refine(isPublicHttpsUrl, 'imageUrl must be a public HTTPS URL without credentials.')
   .nullable()
   .optional();
+
+const imageAssetIdSchema = z
+  .string()
+  .trim()
+  .min(1, 'imageAssetId cannot be empty.')
+  .max(
+    MAX_IMAGE_ASSET_ID_LENGTH,
+    `imageAssetId must be ${MAX_IMAGE_ASSET_ID_LENGTH} characters or fewer.`
+  )
+  .nullable()
+  .optional();
+
+function refineImageConsistency(body, ctx, { update = false } = {}) {
+  if (body.imageAssetId != null && body.imageUrl == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['imageAssetId'],
+      message: 'imageAssetId requires a non-null imageUrl.',
+    });
+  }
+  if (update && body.imageAssetId !== undefined && body.imageUrl === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['imageUrl'],
+      message: 'imageUrl must be provided when imageAssetId is changed.',
+    });
+  }
+}
 
 const statusSchema = z.enum(['active', 'inactive', 'all'], 'Invalid status.').default('active');
 const sortSchema = z
@@ -236,6 +266,7 @@ const createRecipeSchema = z.object({
       steps: stepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.default([]),
       imageUrl: imageUrlSchema,
+      imageAssetId: imageAssetIdSchema,
     })
     .strict()
     .superRefine((body, ctx) => {
@@ -247,6 +278,7 @@ const createRecipeSchema = z.object({
         });
       }
       refineStepConsistency(body, ctx);
+      refineImageConsistency(body, ctx);
     }),
 });
 
@@ -270,10 +302,14 @@ const updateRecipeSchema = z.object({
       steps: stepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.optional(),
       imageUrl: imageUrlSchema,
+      imageAssetId: imageAssetIdSchema,
       isActive: z.boolean().optional(),
     })
     .strict()
-    .superRefine(refineStepConsistency)
+    .superRefine((body, ctx) => {
+      refineStepConsistency(body, ctx);
+      refineImageConsistency(body, ctx, { update: true });
+    })
     .refine((body) => Object.keys(body).length > 0, {
       message: 'At least one field must be provided.',
     }),

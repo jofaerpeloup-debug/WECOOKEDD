@@ -81,6 +81,13 @@ const envSchema = z
     // Bounded 5 minutes .. 7 days; default 1440 (24 hours).
     EMAIL_VERIFICATION_TTL_MINUTES: z.coerce.number().int().min(5).max(10080).default(1440),
     GOOGLE_OAUTH_CLIENT_IDS: googleOAuthClientIdsSchema,
+    // Recipe uploads are optional. Partial or absent provider configuration
+    // never prevents the API from booting; the upload endpoint checks that all
+    // three values are present and otherwise returns UPLOADS_NOT_CONFIGURED.
+    CLOUDINARY_CLOUD_NAME: z.string().trim().optional().default(''),
+    CLOUDINARY_API_KEY: z.string().trim().optional().default(''),
+    CLOUDINARY_API_SECRET: z.string().trim().optional().default(''),
+    CLOUDINARY_RECIPE_FOLDER: z.string().trim().max(255).optional().default('wecooked/recipes'),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === 'production' && requiresHttpsUpgrade(value.PASSWORD_RESET_URL)) {
@@ -156,6 +163,12 @@ function parseEnv(source) {
     emailVerificationUrl: parsed.EMAIL_VERIFICATION_URL,
     emailVerificationTtlMinutes: parsed.EMAIL_VERIFICATION_TTL_MINUTES,
     googleOAuthClientIds: parsed.GOOGLE_OAUTH_CLIENT_IDS,
+    cloudinary: {
+      cloudName: parsed.CLOUDINARY_CLOUD_NAME,
+      apiKey: parsed.CLOUDINARY_API_KEY,
+      apiSecret: parsed.CLOUDINARY_API_SECRET,
+      recipeFolder: parsed.CLOUDINARY_RECIPE_FOLDER || 'wecooked/recipes',
+    },
   };
 }
 

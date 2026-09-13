@@ -95,7 +95,7 @@ export function toIngredientUsagePayload(row) {
  *   region?: string, category?: string,
  *   prepTimeMinutes: number, cookTimeMinutes: number, servings: number,
  *   ingredients: object[], instructions: string[],
- *   dietaryTags?: string[], imageUrl?: string|null,
+ *   dietaryTags?: string[], imageUrl?: string|null, imageAssetId?: string|null,
  * }} input
  *   `ingredients` entries must already be in the `toIngredientUsagePayload`
  *   shape. Every referenced ingredient must exist and be active. `region` /
@@ -115,6 +115,7 @@ export function createRecipe({
   instructions,
   dietaryTags = [],
   imageUrl = null,
+  imageAssetId = null,
 }) {
   const body = {
     title,
@@ -127,6 +128,7 @@ export function createRecipe({
     instructions,
     dietaryTags,
     imageUrl,
+    imageAssetId,
   };
   if (region) body.region = region;
   if (category) body.category = category;
@@ -161,4 +163,13 @@ export function archiveRecipe(id) {
 /** Convenience wrapper over updateRecipe for restoring an archived record. */
 export function restoreRecipe(id) {
   return updateRecipe(id, { isActive: true });
+}
+
+/** POST /api/v1/admin/uploads/recipe-image (admin only, multipart field `image`). */
+export function uploadRecipeImage(file) {
+  const body = new FormData();
+  body.append('image', file);
+  return api
+    .post('/admin/uploads/recipe-image', { body })
+    .then((data) => data.image);
 }

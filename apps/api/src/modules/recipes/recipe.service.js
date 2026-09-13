@@ -1,6 +1,7 @@
 const recipeRepository = require('./recipe.repository');
 const ingredientService = require('../ingredients/ingredient.service');
 const { AppError } = require('../../shared/errors/app-error');
+const imageProvider = require('../uploads/cloudinary-image.provider');
 
 const SORT_MAP = {
   titleAsc: { title: 1 },
@@ -150,6 +151,7 @@ async function createRecipe({
   steps,
   dietaryTags = [],
   imageUrl,
+  imageAssetId,
 }) {
   await assertIngredientsActive(ingredients);
 
@@ -164,6 +166,7 @@ async function createRecipe({
     instructions: toInstructionsList({ instructions, steps }),
     dietaryTags: normalizeDietaryTags(dietaryTags),
     imageUrl: imageUrl ?? null,
+    imageAssetId: imageAssetId ?? null,
   };
   // region/category are optional canonical slugs (already normalized by the
   // validation layer). Never fabricated from cuisine/title/anything else.
@@ -320,7 +323,26 @@ async function updateRecipe(id, patch) {
     update.instructions = toInstructionsList({ instructions: patch.instructions, steps: patch.steps });
   }
   if (patch.dietaryTags !== undefined) update.dietaryTags = normalizeDietaryTags(patch.dietaryTags);
-  if (patch.imageUrl !== undefined) update.imageUrl = patch.imageUrl;
+  const oldImageAssetId = existing.imageAssetId ?? null;
+  let nextImageAssetId = oldImageAssetId;
+  let shouldSetImageAssetId = false;
+  if (patch.imageUrl !== undefined) {
+    update.imageUrl = patch.imageUrl;
+    if (patch.imageUrl === null) {
+      nextImageAssetId = null;
+      shouldSetImageAssetId = true;
+    } else if (patch.imageAssetId !== undefined) {
+      nextImageAssetId = patch.imageAssetId;
+      shouldSetImageAssetId = true;
+    } else if (patch.imageUrl !== existing.imageUrl) {
+      // A changed URL without managed metadata is a manual external image.
+      nextImageAssetId = null;
+      shouldSetImageAssetId = true;
+    }
+    if (shouldSetImageAssetId) {
+      update.imageAssetId = nextImageAssetId;
+    }
+  }
 
   const reactivating = patch.isActive === true && existing.isActive === false;
 
@@ -345,6 +367,16 @@ async function updateRecipe(id, patch) {
   const updated = await recipeRepository.updateById(id, ops);
   if (!updated) {
     throw notFoundError();
+  }
+
+  // Database state changes first. Cleanup is best-effort and can never roll
+  // back a successful recipe update or delete an unmanaged external image.
+  if (oldImageAssetId && oldImageAssetId !== nextImageAssetId) {
+    try {
+      await imageProvider.deleteByAssetId(oldImageAssetId);
+    } catch {
+      console.warn('Previous managed recipe image cleanup failed.');
+    }
   }
   return updated;
 }

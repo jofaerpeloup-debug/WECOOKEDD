@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { UNITS, validateQuantityForUnit } = require('../../shared/constants/measurement-units');
 const { SLUG_MAX_LENGTH, SLUG_PATTERN } = require('../../shared/validation/slug');
+const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 
@@ -16,6 +17,7 @@ const MAX_INSTRUCTIONS = 50;
 const MAX_INSTRUCTION_LENGTH = 1000;
 const MAX_INGREDIENT_NOTE_LENGTH = 200;
 const MAX_IMAGE_URL_LENGTH = 2000;
+const MAX_IMAGE_ASSET_ID_LENGTH = 255;
 
 // One entry per (ingredientId, use) pair — the same canonical Ingredient may
 // legitimately appear twice in the same recipe (e.g. garlic for a marinade
@@ -158,6 +160,17 @@ const recipeSchema = new mongoose.Schema(
       type: String,
       trim: true,
       maxlength: MAX_IMAGE_URL_LENGTH,
+      validate: {
+        validator: (value) => value == null || isPublicHttpsUrl(value),
+        message: 'imageUrl must be a public HTTPS URL without credentials.',
+      },
+    },
+    // Internal Cloudinary management metadata. It is intentionally absent
+    // from recipe.serializer.js and requires no migration for legacy records.
+    imageAssetId: {
+      type: String,
+      trim: true,
+      maxlength: MAX_IMAGE_ASSET_ID_LENGTH,
     },
     isActive: {
       type: Boolean,
@@ -166,6 +179,12 @@ const recipeSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+recipeSchema.pre('validate', function validateManagedImageConsistency() {
+  if (this.imageAssetId != null && !this.imageUrl) {
+    this.invalidate('imageAssetId', 'imageAssetId requires imageUrl.');
+  }
+});
 
 // Primary list-filtering shapes; ingredients.ingredientId backs the
 // "recipes using this ingredient" lookup (also useful for later
@@ -194,3 +213,4 @@ module.exports.MAX_INSTRUCTIONS = MAX_INSTRUCTIONS;
 module.exports.MAX_INSTRUCTION_LENGTH = MAX_INSTRUCTION_LENGTH;
 module.exports.MAX_INGREDIENT_NOTE_LENGTH = MAX_INGREDIENT_NOTE_LENGTH;
 module.exports.MAX_IMAGE_URL_LENGTH = MAX_IMAGE_URL_LENGTH;
+module.exports.MAX_IMAGE_ASSET_ID_LENGTH = MAX_IMAGE_ASSET_ID_LENGTH;
