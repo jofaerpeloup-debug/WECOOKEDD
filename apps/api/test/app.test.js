@@ -54,3 +54,59 @@ test('requests with no Origin header (e.g. native clients) are allowed', async (
 
   assert.equal(response.status, 200);
 });
+
+// Body parsing runs ahead of routing (app.use(express.json()) precedes
+// app.use('/api/v1', v1Routes)), so a malformed/oversized body is rejected
+// before any route or rate limiter is consulted — any path exercises it.
+test('malformed JSON body returns a safe 400 without echoing the body or leaking parser internals', async () => {
+  const response = await request(app)
+    .post('/api/v1/does-not-exist')
+    .set('Content-Type', 'application/json')
+    .send('{"unterminated": ');
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.success, false);
+  assert.equal(response.body.error.code, 'REQUEST_BODY_INVALID');
+  assert.equal(response.body.error.message, 'Request body is invalid.');
+  const raw = JSON.stringify(response.body);
+  assert.equal(raw.includes('unterminated'), false);
+  assert.equal(raw.includes('SyntaxError'), false);
+  assert.equal(raw.includes('at JSON.parse'), false);
+});
+
+// Regression: body-parser attaches the raw, unparsed payload as `err.body`
+// (body-parser/lib/read.js) so its own handlers can inspect it. Passing that
+// error straight to console.error would print the raw payload — including a
+// plaintext password from a malformed /auth/login body — to the server log.
+test('malformed JSON body never logs the raw request payload (e.g. a submitted password) to the server console', async (t) => {
+  const logged = [];
+  t.mock.method(console, 'error', (...args) => logged.push(args));
+
+  const response = await request(app)
+    .post('/api/v1/auth/login')
+    .set('Content-Type', 'application/json')
+    .send('{"email":"ada@example.com","password":"SuperSecret123');
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'REQUEST_BODY_INVALID');
+  const serialized = JSON.stringify(logged);
+  assert.equal(serialized.includes('SuperSecret123'), false);
+  assert.equal(serialized.includes('ada@example.com'), false);
+});
+
+test('a JSON body over the 1mb limit returns a safe 413 without leaking parser internals', async () => {
+  const oversizedPayload = JSON.stringify({ padding: 'a'.repeat(2 * 1024 * 1024) });
+
+  const response = await request(app)
+    .post('/api/v1/does-not-exist')
+    .set('Content-Type', 'application/json')
+    .send(oversizedPayload);
+
+  assert.equal(response.status, 413);
+  assert.equal(response.body.success, false);
+  assert.equal(response.body.error.code, 'REQUEST_BODY_TOO_LARGE');
+  assert.equal(response.body.error.message, 'Request body is too large.');
+  const raw = JSON.stringify(response.body);
+  assert.equal(raw.includes('entity.too.large'), false);
+  assert.equal(raw.includes('limit'), false);
+});

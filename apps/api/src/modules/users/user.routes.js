@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { authenticate } = require('../../middleware/authenticate.middleware');
 const { authorize } = require('../../middleware/authorize.middleware');
 const { validate } = require('../../middleware/validate.middleware');
+const { noStore } = require('../../middleware/no-store.middleware');
 const userController = require('./user.controller');
 const {
   listUsersSchema,
@@ -12,7 +13,7 @@ const {
 const router = Router();
 
 // Declared first so it can never be shadowed by /:userId.
-router.get('/me', authenticate, userController.getCurrentUser);
+router.get('/me', authenticate, noStore, userController.getCurrentUser);
 
 // Self-profile mutation. authenticate ONLY (no authorize) — any active user may
 // edit their own name/preferences; role/status stay admin-only on PATCH /:userId.
