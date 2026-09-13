@@ -342,6 +342,7 @@ test('POST /api/v1/auth/social/google returns ordinary WeCooked tokens without G
   assert.equal(consumeFilter.provider, 'google');
   assert.match(consumeFilter.nonceHash, /^[a-f0-9]{64}$/);
   assert.ok(consumeFilter.now instanceof Date);
+  assert.equal(response.headers['cache-control'], 'no-store');
 });
 
 test('Google login exposes sanitized provider and challenge errors through the normal envelope', async (t) => {
@@ -494,6 +495,7 @@ test('POST /api/v1/auth/register creates a user, issues tokens, and never return
   assert.ok(response.body.data.accessToken);
   assert.ok(response.body.data.refreshToken);
   assert.equal('passwordHash' in response.body.data.user, false);
+  assert.equal(response.headers['cache-control'], 'no-store');
 });
 
 test('POST /api/v1/auth/register rejects a duplicate email with 409 USER_EMAIL_ALREADY_EXISTS', async (t) => {
@@ -566,6 +568,7 @@ test('POST /api/v1/auth/login succeeds with valid credentials and creates a sess
   assert.equal(sessionCreated, true);
   assert.ok(response.body.data.accessToken);
   assert.ok(response.body.data.refreshToken);
+  assert.equal(response.headers['cache-control'], 'no-store');
 });
 
 test('POST /api/v1/auth/login returns the identical error for a wrong password and an unknown email', async (t) => {
@@ -585,6 +588,11 @@ test('POST /api/v1/auth/login returns the identical error for a wrong password a
   assert.equal(unknownEmail.status, 401);
   assert.deepEqual(wrongPassword.body.error, unknownEmail.body.error);
   assert.equal(wrongPassword.body.error.code, 'AUTH_INVALID_CREDENTIALS');
+  // noStore is wired in ahead of the controller (validate -> noStore ->
+  // login), so a controller/service-level failure like invalid credentials
+  // still carries the header, same as a successful login would.
+  assert.equal(wrongPassword.headers['cache-control'], 'no-store');
+  assert.equal(unknownEmail.headers['cache-control'], 'no-store');
 });
 
 test('POST /api/v1/auth/login rejects a suspended account without creating a session', async (t) => {
@@ -616,6 +624,24 @@ test('POST /api/v1/auth/login rejects a password whose UTF-8 byte length exceeds
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+// Adversarial: a NoSQL operator object in place of the email string (the
+// classic `{"$ne": null}` login bypass) must never reach the repository
+// layer — emailSchema is z.string(), so validate.middleware rejects it
+// before the controller/service/repository ever run.
+test('POST /api/v1/auth/login rejects a Mongo-operator object in the email field before it reaches the credential lookup', async (t) => {
+  const lookup = t.mock.method(userRepository, 'findByEmailWithPassword', async () => {
+    throw new Error('must not be called with an operator payload');
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/login')
+    .send({ email: { $ne: null }, password: 'whatever' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(lookup.mock.callCount(), 0);
 });
 
 test('POST /api/v1/auth/login for a Google-only account (no passwordHash) returns 401, not a 500 bcrypt crash', async (t) => {
@@ -696,6 +722,7 @@ test('POST /api/v1/auth/refresh rotates the token and returns new tokens', async
   assert.ok(response.body.data.accessToken);
   assert.ok(response.body.data.refreshToken);
   assert.notEqual(response.body.data.refreshToken, 'some-raw-refresh-token');
+  assert.equal(response.headers['cache-control'], 'no-store');
 });
 
 test('POST /api/v1/auth/refresh rejects a token with no matching active session', async (t) => {

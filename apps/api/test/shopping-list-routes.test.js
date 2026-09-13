@@ -25,9 +25,11 @@ const USER_SESSION_ID = '507f1f77bcf86cd799439004';
 const CHICKEN_ID = '507f1f77bcf86cd799439011';
 const GARLIC_ID = '507f1f77bcf86cd799439012';
 const RECIPE_ID = '507f1f77bcf86cd799439099';
+const OTHER_USER_ID = '507f1f77bcf86cd799439088';
+const OTHER_SESSION_ID = '507f1f77bcf86cd799439089';
 
-function buildList(items = []) {
-  return new ShoppingList({ userId: USER_ID, items });
+function buildList(items = [], userId = USER_ID) {
+  return new ShoppingList({ userId, items });
 }
 
 function activeIngredientDoc(id, name = 'Ingredient') {
@@ -35,16 +37,20 @@ function activeIngredientDoc(id, name = 'Ingredient') {
 }
 
 function mockAuth(t) {
-  t.mock.method(sessionRepository, 'findActiveById', async () => ({
-    _id: USER_SESSION_ID,
-    userId: USER_ID,
+  t.mock.method(sessionRepository, 'findActiveById', async (id) => ({
+    _id: id,
+    userId: id === OTHER_SESSION_ID ? OTHER_USER_ID : USER_ID,
     revokedAt: null,
   }));
-  t.mock.method(userRepository, 'findById', async () => ({ _id: USER_ID, role: 'user', status: 'active' }));
+  t.mock.method(userRepository, 'findById', async (id) => ({ _id: id, role: 'user', status: 'active' }));
 }
 
 function token() {
   return signAccessToken({ userId: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+}
+
+function otherUserToken() {
+  return signAccessToken({ userId: OTHER_USER_ID, role: 'user', sessionId: OTHER_SESSION_ID });
 }
 
 function mockNoSave(t) {
@@ -108,6 +114,31 @@ test('GET /api/v1/shopping-list never leaks userId or __v', async (t) => {
 
   assert.equal('userId' in response.body.data.shoppingList, false);
   assert.equal('__v' in response.body.data.shoppingList, false);
+});
+
+// BOLA regression: the list is looked up by req.auth.userId only, so User B's
+// token must always resolve to User B's own (empty) list, never User A's.
+test('GET /api/v1/shopping-list is scoped to the authenticated caller and never returns another user\'s list (BOLA)', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (userId) =>
+    buildList(
+      userId === USER_ID ? [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }] : [],
+      userId
+    )
+  );
+
+  const asOwner = await request(app)
+    .get('/api/v1/shopping-list')
+    .set('Authorization', `Bearer ${token()}`);
+  assert.equal(asOwner.status, 200);
+  assert.equal(asOwner.body.data.shoppingList.items.length, 1);
+
+  const asOtherUser = await request(app)
+    .get('/api/v1/shopping-list')
+    .set('Authorization', `Bearer ${otherUserToken()}`);
+  assert.equal(asOtherUser.status, 200);
+  assert.equal(asOtherUser.body.data.shoppingList.items.length, 0);
 });
 
 test('POST /api/v1/shopping-list/items adds a manual item for an active ingredient', async (t) => {
@@ -337,6 +368,59 @@ test('DELETE /api/v1/shopping-list/items/:itemId returns 404 for a missing item'
 
   assert.equal(response.status, 404);
   assert.equal(response.body.error.code, 'SHOPPING_LIST_ITEM_NOT_FOUND');
+});
+
+// BOLA regression: patchItem/removeItem both resolve the list via
+// findOrCreateByUserId(req.auth.userId) and then look up the itemId inside
+// that caller-scoped list only (list.items.id(itemId)) — never a global
+// items collection — so User B supplying User A's itemId can only ever miss
+// inside User B's own list. Covers DELETE only: PATCH shares the identical
+// lookup (same findOrCreateByUserId + list.items.id call), so it carries no
+// separate ownership path to regress.
+test('DELETE /api/v1/shopping-list/items/:itemId does not let User B delete User A\'s item by id (BOLA)', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  const userAList = buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }], USER_ID);
+  const userAItemId = String(userAList.items[0]._id);
+  const userBList = buildList([], OTHER_USER_ID);
+
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (userId) =>
+    userId === OTHER_USER_ID ? userBList : userAList
+  );
+  const saveCalls = [];
+  t.mock.method(shoppingListRepository, 'save', async (list) => {
+    saveCalls.push(list);
+    return list;
+  });
+
+  const crossUserAttempt = await request(app)
+    .delete(`/api/v1/shopping-list/items/${userAItemId}`)
+    .set('Authorization', `Bearer ${otherUserToken()}`);
+
+  assert.equal(crossUserAttempt.status, 404);
+  assert.equal(crossUserAttempt.body.error.code, 'SHOPPING_LIST_ITEM_NOT_FOUND');
+  // Same authorization-safe semantics as any other missing item: no 403/200
+  // that would confirm the id's existence to a non-owner.
+  assert.equal(crossUserAttempt.body.data, undefined);
+  // User A's list was never persisted (and thus never mutated) by User B's attempt.
+  assert.equal(saveCalls.length, 0);
+  assert.equal(userAList.items.length, 1);
+
+  // User A can still see the item...
+  const ownerListCheck = await request(app)
+    .get('/api/v1/shopping-list')
+    .set('Authorization', `Bearer ${token()}`);
+  assert.equal(ownerListCheck.status, 200);
+  assert.equal(ownerListCheck.body.data.shoppingList.items.length, 1);
+  assert.equal(ownerListCheck.body.data.shoppingList.items[0].id, userAItemId);
+
+  // ...and can still perform the same mutation on their own item successfully.
+  const ownerDelete = await request(app)
+    .delete(`/api/v1/shopping-list/items/${userAItemId}`)
+    .set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(ownerDelete.status, 200);
+  assert.equal(ownerDelete.body.data.shoppingList.items.length, 0);
 });
 
 test('DELETE /api/v1/shopping-list/items/:itemId still works when the item\'s ingredient is stale', async (t) => {

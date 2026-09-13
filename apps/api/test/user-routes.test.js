@@ -609,6 +609,7 @@ test('GET /api/v1/users/me still returns the current user (regression, includes 
   assert.equal(res.body.data.user.id, USER_ID);
   assert.equal('passwordHash' in res.body.data.user, false);
   assert.ok(res.body.data.user.preferences, 'the self view still carries preferences');
+  assert.equal(res.headers['cache-control'], 'no-store');
 });
 
 test('GET /api/v1/users/me exposes provider + linkedAt and never the Google subject', async (t) => {
@@ -691,6 +692,7 @@ test('PATCH /api/v1/users/me rejects an admin-managed / unknown field with 400 (
     { authIdentities: [{ provider: 'google', subject: 'attacker-controlled' }] },
     { authProviders: ['google'] },
     { _id: USER_ID },
+    { userId: USER_ID },
     { createdAt: '2020-01-01' },
     { nickname: 'x' },
   ]) {

@@ -20,14 +20,24 @@ const USER_ID = '507f1f77bcf86cd799439003';
 const SESSION_ID = '507f1f77bcf86cd799439004';
 const RECIPE_ID = '507f1f77bcf86cd799439099';
 const ENTRY_ID = '507f1f77bcf86cd799439077';
+const OTHER_USER_ID = '507f1f77bcf86cd799439088';
+const OTHER_SESSION_ID = '507f1f77bcf86cd799439089';
 
 function mockAuth(t, role = 'user') {
-  t.mock.method(sessionRepository, 'findActiveById', async () => ({ _id: SESSION_ID, userId: USER_ID, revokedAt: null }));
-  t.mock.method(userRepository, 'findById', async () => ({ _id: USER_ID, role, status: 'active' }));
+  t.mock.method(sessionRepository, 'findActiveById', async (id) => ({
+    _id: id,
+    userId: id === OTHER_SESSION_ID ? OTHER_USER_ID : USER_ID,
+    revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async (id) => ({ _id: id, role, status: 'active' }));
 }
 
 function token(role = 'user') {
   return signAccessToken({ userId: USER_ID, role, sessionId: SESSION_ID });
+}
+
+function otherUserToken(role = 'user') {
+  return signAccessToken({ userId: OTHER_USER_ID, role, sessionId: OTHER_SESSION_ID });
 }
 
 function entry(overrides = {}) {
@@ -115,6 +125,30 @@ test('DELETE by id remains owner-scoped for both user and admin accounts', async
   assert.equal(response.status, 404);
   assert.equal(response.body.error.code, 'MEAL_PLAN_ENTRY_NOT_FOUND');
   assert.deepEqual(args, [ENTRY_ID, USER_ID]);
+});
+
+// BOLA regression: User B's token must never let them delete User A's entry.
+// The repository is the real ownership boundary (deleteByIdAndUser scopes its
+// query by both id AND userId) — this stubs it to behave that way and proves
+// User B's request is scoped to User B's id, so it can only ever "find"
+// (and therefore delete) an entry that is also User B's.
+test('DELETE /api/v1/meal-plan/:entryId never lets User B delete User A\'s entry (BOLA)', async (t) => {
+  mockAuth(t);
+  t.mock.method(mealPlanRepository, 'deleteByIdAndUser', async (entryId, userId) =>
+    userId === USER_ID ? entry({ _id: entryId, userId }) : null
+  );
+
+  const asOtherUser = await request(app)
+    .delete(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${otherUserToken()}`);
+  assert.equal(asOtherUser.status, 404);
+  assert.equal(asOtherUser.body.error.code, 'MEAL_PLAN_ENTRY_NOT_FOUND');
+
+  const asOwner = await request(app)
+    .delete(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`);
+  assert.equal(asOwner.status, 200);
+  assert.equal(asOwner.body.data.deleted, true);
 });
 
 test('DELETE range clears only the authenticated owner and returns an exact count', async (t) => {

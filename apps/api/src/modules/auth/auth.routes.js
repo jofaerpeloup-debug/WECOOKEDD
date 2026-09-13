@@ -2,6 +2,7 @@ const { Router } = require('express');
 const authController = require('./auth.controller');
 const { validate } = require('../../middleware/validate.middleware');
 const { authenticate } = require('../../middleware/authenticate.middleware');
+const { noStore } = require('../../middleware/no-store.middleware');
 const {
   createRateLimiter,
   socialChallengeRateLimiter,
@@ -44,8 +45,14 @@ const resendVerificationRateLimiter = createRateLimiter({
   limit: 5,
 });
 
-router.post('/register', authRateLimiter, validate(registerSchema), authController.register);
-router.post('/login', authRateLimiter, validate(loginSchema), authController.login);
+router.post(
+  '/register',
+  authRateLimiter,
+  validate(registerSchema),
+  noStore,
+  authController.register
+);
+router.post('/login', authRateLimiter, validate(loginSchema), noStore, authController.login);
 router.post(
   '/social/challenge',
   socialChallengeRateLimiter,
@@ -72,6 +79,7 @@ router.post(
   '/social/google',
   socialGoogleLoginRateLimiter,
   validate(googleSocialSchema),
+  noStore,
   authController.googleLogin
 );
 router.post(
@@ -82,7 +90,13 @@ router.post(
   validate(googleSocialSchema),
   authController.googleLink
 );
-router.post('/refresh', authRateLimiter, validate(refreshSchema), authController.refresh);
+router.post(
+  '/refresh',
+  authRateLimiter,
+  validate(refreshSchema),
+  noStore,
+  authController.refresh
+);
 router.post(
   '/forgot-password',
   forgotPasswordRateLimiter,
