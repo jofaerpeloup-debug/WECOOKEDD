@@ -86,7 +86,10 @@ async function parseBody(res) {
 
 async function request(path, { method = 'GET', body, query, auth = true, _retried = false } = {}) {
   const headers = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  // Never set multipart Content-Type ourselves: the browser supplies its
+  // generated boundary. Existing JSON calls keep their original behavior.
+  if (body !== undefined && !isFormData) headers['Content-Type'] = 'application/json';
   if (auth) {
     const token = authAdapter.getAccessToken();
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -97,7 +100,7 @@ async function request(path, { method = 'GET', body, query, auth = true, _retrie
     res = await fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? (isFormData ? body : JSON.stringify(body)) : undefined,
     });
   } catch {
     throw new ApiError(

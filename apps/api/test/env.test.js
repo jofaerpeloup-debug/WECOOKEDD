@@ -40,6 +40,40 @@ test('parseEnv applies defaults for NODE_ENV, PORT, and CORS_ORIGINS', () => {
   assert.equal(result.nodeEnv, 'development');
   assert.equal(result.port, 5000);
   assert.deepEqual(result.corsOrigins, []);
+  assert.deepEqual(result.cloudinary, {
+    cloudName: '',
+    apiKey: '',
+    apiSecret: '',
+    recipeFolder: 'wecooked/recipes',
+  });
+});
+
+test('parseEnv accepts optional Cloudinary recipe-upload configuration', () => {
+  const result = parseEnv({
+    ...REQUIRED_EMAIL_ENV,
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    CLOUDINARY_CLOUD_NAME: 'demo',
+    CLOUDINARY_API_KEY: 'key',
+    CLOUDINARY_API_SECRET: 'secret',
+    CLOUDINARY_RECIPE_FOLDER: 'custom/recipes',
+  });
+  assert.deepEqual(result.cloudinary, {
+    cloudName: 'demo',
+    apiKey: 'key',
+    apiSecret: 'secret',
+    recipeFolder: 'custom/recipes',
+  });
+});
+
+test('parseEnv treats a blank optional Cloudinary folder as the safe default', () => {
+  const result = parseEnv({
+    ...REQUIRED_EMAIL_ENV,
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    CLOUDINARY_RECIPE_FOLDER: '   ',
+  });
+  assert.equal(result.cloudinary.recipeFolder, 'wecooked/recipes');
 });
 
 test('parseEnv rejects a configuration missing MONGODB_URI', () => {

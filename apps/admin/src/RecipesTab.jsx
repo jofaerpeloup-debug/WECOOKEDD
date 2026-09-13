@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Search, Plus, Pencil, X, Check, AlertCircle, ChefHat, Trash2,
   Archive, ArchiveRestore, ChevronLeft, ChevronRight, ChevronUp, ChevronDown,
+  Upload, ImageOff,
 } from 'lucide-react';
 import { ApiError } from './apiClient.js';
 import {
   listRecipes, createRecipe, updateRecipe, archiveRecipe, restoreRecipe,
-  toIngredientUsagePayload,
+  toIngredientUsagePayload, uploadRecipeImage,
 } from './recipeApi.js';
 import IngredientPicker from './IngredientPicker.jsx';
 import {
@@ -21,6 +22,12 @@ import {
 } from './recipeOptions.js';
 
 const PAGE_LIMIT = 20;
+const MAX_IMAGE_FILE_SIZE = 5 * 1024 * 1024;
+const IMAGE_FILE_TYPES = Object.freeze({
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+  'image/webp': ['.webp'],
+});
 
 // Turns any thrown error into one safe, human sentence. Backend `AppError`
 // messages are already safe to show (the API maps Mongo internals like E11000
@@ -52,14 +59,39 @@ function collapseWhitespace(value) {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function isValidUrl(value) {
+function isPublicHttpsUrl(value) {
   try {
-    // eslint-disable-next-line no-new
-    new URL(value);
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password) return false;
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) return false;
+    if (hostname === '::' || hostname === '::1' || hostname.startsWith('::ffff:')) return false;
+    if (hostname.startsWith('fc') || hostname.startsWith('fd') || /^fe[89ab]/.test(hostname)) return false;
+    const parts = hostname.split('.');
+    if (parts.length === 4 && parts.every((part) => /^\d+$/.test(part))) {
+      const [a, b] = parts.map(Number);
+      if (
+        a === 0 || a === 10 || a === 127 ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168)
+      ) return false;
+    }
     return true;
   } catch {
     return false;
   }
+}
+
+function validateLocalImage(file) {
+  if (!file) return 'Choose an image file.';
+  if (file.size > MAX_IMAGE_FILE_SIZE) return 'Image must be 5 MiB or smaller.';
+  const extension = `.${file.name.split('.').pop() || ''}`.toLowerCase();
+  const extensions = IMAGE_FILE_TYPES[file.type];
+  if (!extensions || !extensions.includes(extension)) {
+    return 'Choose a JPEG, PNG, or WebP file whose extension matches its type.';
+  }
+  return '';
 }
 
 function isIntInRange(value, min, max) {
@@ -386,6 +418,25 @@ export default function RecipesTab() {
         .wc-rcp-step-actions button:hover { background: var(--parchment); color: var(--ink); }
         .wc-rcp-step-actions button:disabled { opacity: 0.3; cursor: default; }
         .wc-rcp-tag-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .wc-rcp-image-box {
+          border: 1px solid var(--stone-light); border-radius: 10px;
+          padding: 12px; background: var(--field-bg);
+        }
+        .wc-rcp-image-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .wc-rcp-file-input { max-width: 100%; font-size: 13px; color: var(--ink); }
+        .wc-rcp-file-name { margin-top: 7px; font-size: 12.5px; color: var(--stone); }
+        .wc-rcp-image-preview {
+          width: 100%; max-height: 230px; object-fit: cover; margin-top: 10px;
+          border-radius: 8px; border: 1px solid var(--stone-light); background: var(--parchment);
+        }
+        .wc-rcp-preview-error {
+          display: flex; align-items: center; gap: 7px; margin-top: 10px;
+          color: var(--clay); font-size: 12.5px;
+        }
+        .wc-rcp-link-button {
+          border: none; background: none; color: var(--sage-deep); padding: 7px 0;
+          font-size: 12.5px; text-decoration: underline;
+        }
 
         /* Canonical ingredient picker (src/IngredientPicker.jsx) */
         .wc-ipick { position: relative; }
@@ -720,12 +771,69 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const [savePhase, setSavePhase] = useState('idle'); // idle | uploading | saving
+  const [imageMode, setImageMode] = useState('upload');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [localPreviewUrl, setLocalPreviewUrl] = useState('');
+  const [uploadedImage, setUploadedImage] = useState(null);
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const [previewBroken, setPreviewBroken] = useState(false);
   // Synchronous lock — see rowBusyRef note above. Prevents a rapid double-click
   // (or Enter + click) from firing two POST/PATCH requests, which for create
   // would produce a duplicate recipe (titles are not unique).
   const submittingRef = useRef(false);
 
+  useEffect(() => () => {
+    if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
+  }, [localPreviewUrl]);
+
+  const previewUrl = localPreviewUrl || uploadedImage?.url || form.imageUrl.trim();
+  useEffect(() => setPreviewBroken(false), [previewUrl]);
+
   const setField = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+  const chooseImage = (event) => {
+    const file = event.target.files?.[0] || null;
+    const error = validateLocalImage(file);
+    if (error) {
+      setSelectedFile(null);
+      setLocalPreviewUrl('');
+      setUploadedImage(null);
+      setFieldErrors((current) => ({ ...current, imageFile: error }));
+      return;
+    }
+    setSelectedFile(file);
+    setLocalPreviewUrl(URL.createObjectURL(file));
+    setUploadedImage(null);
+    setImageRemoved(false);
+    setFieldErrors((current) => ({ ...current, imageFile: undefined }));
+  };
+
+  const useExternalUrl = () => {
+    setImageMode('external');
+    setSelectedFile(null);
+    setLocalPreviewUrl('');
+    setUploadedImage(null);
+    setImageRemoved(false);
+    setFieldErrors((current) => ({ ...current, imageFile: undefined }));
+  };
+
+  const useUpload = () => {
+    setImageMode('upload');
+    setField({ imageUrl: recipe?.imageUrl || '' });
+    setImageRemoved(false);
+    setFieldErrors((current) => ({ ...current, imageUrl: undefined }));
+  };
+
+  const removeImage = () => {
+    setImageMode('upload');
+    setSelectedFile(null);
+    setLocalPreviewUrl('');
+    setUploadedImage(null);
+    setImageRemoved(true);
+    setField({ imageUrl: '' });
+    setFieldErrors((current) => ({ ...current, imageFile: undefined, imageUrl: undefined }));
+  };
 
   const toggleTag = (tag) => {
     setForm((f) => ({
@@ -811,10 +919,16 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
     if (!isIntInRange(form.servings, 1, MAX_SERVINGS)) {
       errs.servings = `Whole number, 1–${MAX_SERVINGS}.`;
     }
-    if (form.imageUrl.trim() && !isValidUrl(form.imageUrl.trim())) {
-      errs.imageUrl = 'Enter a full URL (https://…) or leave blank.';
-    } else if (form.imageUrl.trim().length > MAX_IMAGE_URL_LENGTH) {
-      errs.imageUrl = `URL must be ${MAX_IMAGE_URL_LENGTH} characters or fewer.`;
+    if (imageMode === 'external') {
+      if (form.imageUrl.trim().length > MAX_IMAGE_URL_LENGTH) {
+        errs.imageUrl = `URL must be ${MAX_IMAGE_URL_LENGTH} characters or fewer.`;
+      } else if (form.imageUrl.trim() && !isPublicHttpsUrl(form.imageUrl.trim())) {
+        errs.imageUrl = 'Use a public HTTPS URL without credentials or a local/private host.';
+      }
+    }
+    if (selectedFile) {
+      const fileError = validateLocalImage(selectedFile);
+      if (fileError) errs.imageFile = fileError;
     }
 
     for (const field of ['region', 'category']) {
@@ -863,14 +977,14 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
       note: row.note,
     }));
 
-  const buildPayload = () => {
+  const buildPayload = (resolvedUpload) => {
     const title = collapseWhitespace(form.title);
     const description = form.description.trim();
     const prepTimeMinutes = Number(form.prepTimeMinutes);
     const cookTimeMinutes = Number(form.cookTimeMinutes);
     const servings = Number(form.servings);
     const dietaryTags = [...new Set(form.dietaryTags)];
-    const imageUrl = form.imageUrl.trim() || null;
+    const manualImageUrl = form.imageUrl.trim() || null;
     const instructions = form.instructions.map((row) => row.text.trim()).filter(Boolean);
     const region = normalizeSlugInput(form.region);
     const category = normalizeSlugInput(form.category);
@@ -879,7 +993,9 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
       const payload = {
         title, description, difficulty: form.difficulty,
         prepTimeMinutes, cookTimeMinutes, servings,
-        ingredients: buildIngredientPayload(), instructions, dietaryTags, imageUrl,
+        ingredients: buildIngredientPayload(), instructions, dietaryTags,
+        imageUrl: resolvedUpload?.url ?? (imageMode === 'external' ? manualImageUrl : null),
+        imageAssetId: resolvedUpload?.assetId ?? null,
       };
       if (region) payload.region = region;
       if (category) payload.category = category;
@@ -909,7 +1025,18 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
     const prevTags = [...(recipe.dietaryTags || [])].sort();
     if (!arraysEqual(nextTags, prevTags)) patch.dietaryTags = dietaryTags;
 
-    if (imageUrl !== (recipe.imageUrl ?? null)) patch.imageUrl = imageUrl;
+    if (resolvedUpload) {
+      patch.imageUrl = resolvedUpload.url;
+      patch.imageAssetId = resolvedUpload.assetId;
+    } else if (imageMode === 'external') {
+      // Entering manual mode is explicit: even an unchanged URL becomes
+      // unmanaged, so stale provider metadata is cleared by the API.
+      patch.imageUrl = manualImageUrl;
+      patch.imageAssetId = null;
+    } else if (imageRemoved && recipe.imageUrl != null) {
+      patch.imageUrl = null;
+      patch.imageAssetId = null;
+    }
 
     if (!arraysEqual(instructions, recipe.instructions || [])) patch.instructions = instructions;
 
@@ -933,19 +1060,34 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
       return;
     }
 
-    const payload = buildPayload();
-    if (editing && Object.keys(payload).length === 0) {
-      onClose();
-      return;
-    }
-
     submittingRef.current = true;
     setSaving(true);
     try {
+      let resolvedUpload = uploadedImage;
+      if (imageMode === 'upload' && selectedFile && !resolvedUpload) {
+        setSavePhase('uploading');
+        resolvedUpload = await uploadRecipeImage(selectedFile);
+        // Persist this result before attempting the recipe mutation. If that
+        // mutation fails, the next Save reuses it instead of creating a duplicate.
+        setUploadedImage(resolvedUpload);
+      }
+
+      setSavePhase('saving');
+      const payload = buildPayload(resolvedUpload);
+      if (editing && Object.keys(payload).length === 0) {
+        onClose();
+        return;
+      }
       await onSubmit(payload);
       onClose();
     } catch (err) {
-      if (err instanceof ApiError && err.isValidationError) {
+      if (
+        err instanceof ApiError &&
+        (err.code.startsWith('IMAGE_') || err.code === 'UPLOADS_NOT_CONFIGURED')
+      ) {
+        setFieldErrors((current) => ({ ...current, imageFile: err.message }));
+        setFormError(err.message);
+      } else if (err instanceof ApiError && err.isValidationError) {
         setFieldErrors(fieldErrorsFromDetails(err.details));
         setFormError('Please fix the highlighted fields.');
       } else {
@@ -956,17 +1098,18 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
     } finally {
       submittingRef.current = false;
       setSaving(false);
+      setSavePhase('idle');
     }
   };
 
   const hasUnavailable = editing && form.ingredients.some((row) => row.unavailable);
 
   return (
-    <div className="wc-modal-overlay" onClick={onClose}>
+    <div className="wc-modal-overlay" onClick={saving ? undefined : onClose}>
       <div className="wc-modal wc-rcp-modal" onClick={(e) => e.stopPropagation()}>
         <div className="wc-modal-header">
           <h2 className="wc-serif">{editing ? 'Edit recipe' : 'Add recipe'}</h2>
-          <button className="wc-modal-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          <button className="wc-modal-close" onClick={onClose} aria-label="Close" disabled={saving}><X size={18} /></button>
         </div>
 
         {editing && !recipe.isActive && (
@@ -1089,16 +1232,83 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
           </div>
 
           <div className="wc-field">
-            <label>Image URL</label>
-            <input
-              value={form.imageUrl}
-              onChange={(e) => setField({ imageUrl: e.target.value })}
-              placeholder="https://example.com/adobo.jpg"
-            />
-            <div className="wc-rcp-modal-hint">
-              Optional. A stored URL reference only — there is no image upload.
+            <label>Recipe Image</label>
+            <div className="wc-rcp-image-box">
+              {imageMode === 'upload' ? (
+                <>
+                  <div className="wc-rcp-image-actions">
+                    <Upload size={16} />
+                    <input
+                      className="wc-rcp-file-input"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                      onChange={chooseImage}
+                      disabled={saving}
+                      aria-label={previewUrl ? 'Replace recipe image' : 'Choose recipe image'}
+                    />
+                    {previewUrl && (
+                      <button
+                        type="button"
+                        className="wc-btn-secondary"
+                        onClick={removeImage}
+                        disabled={saving}
+                      >
+                        <ImageOff size={14} /> Remove image
+                      </button>
+                    )}
+                  </div>
+                  {selectedFile && <div className="wc-rcp-file-name">Selected: {selectedFile.name}</div>}
+                  <div className="wc-rcp-modal-hint">JPEG, PNG, or WebP. Maximum 5 MiB.</div>
+                  <button
+                    type="button"
+                    className="wc-rcp-link-button"
+                    onClick={useExternalUrl}
+                    disabled={saving}
+                  >
+                    Use external image URL instead
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    value={form.imageUrl}
+                    onChange={(e) => {
+                      setField({ imageUrl: e.target.value });
+                      setImageRemoved(false);
+                    }}
+                    placeholder="https://example.com/adobo.jpg"
+                    disabled={saving}
+                  />
+                  <div className="wc-rcp-modal-hint">
+                    Optional public HTTPS URL. Local/private hosts and embedded credentials are rejected.
+                  </div>
+                  <button
+                    type="button"
+                    className="wc-rcp-link-button"
+                    onClick={useUpload}
+                    disabled={saving}
+                  >
+                    Upload a local image instead
+                  </button>
+                </>
+              )}
+
+              {previewUrl && !previewBroken && (
+                <img
+                  className="wc-rcp-image-preview"
+                  src={previewUrl}
+                  alt="Recipe preview"
+                  onError={() => setPreviewBroken(true)}
+                />
+              )}
+              {previewUrl && previewBroken && (
+                <div className="wc-rcp-preview-error">
+                  <AlertCircle size={14} /> Image preview is unavailable. Check the file or URL.
+                </div>
+              )}
+              {fieldErrors.imageFile && <div className="wc-rcp-field-error">{fieldErrors.imageFile}</div>}
+              {fieldErrors.imageUrl && <div className="wc-rcp-field-error">{fieldErrors.imageUrl}</div>}
             </div>
-            {fieldErrors.imageUrl && <div className="wc-rcp-field-error">{fieldErrors.imageUrl}</div>}
           </div>
 
           <div className="wc-field">
@@ -1283,9 +1493,15 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
           )}
 
           <div className="wc-modal-actions">
-            <button type="button" className="wc-btn-secondary" onClick={onClose}>Cancel</button>
+            <button type="button" className="wc-btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
             <button type="submit" className="wc-btn-primary" disabled={saving}>
-              <Check size={15} /> {saving ? 'Saving…' : editing ? 'Save changes' : 'Add recipe'}
+              <Check size={15} /> {
+                savePhase === 'uploading'
+                  ? 'Uploading image…'
+                  : savePhase === 'saving'
+                    ? 'Saving…'
+                    : editing ? 'Save changes' : 'Add recipe'
+              }
             </button>
           </div>
         </form>
