@@ -4,6 +4,11 @@ process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/wecooked_test';
 process.env.CORS_ORIGINS = 'http://localhost:5173';
 process.env.JWT_ACCESS_SECRET = 'test-suite-access-secret-at-least-32-chars-long';
 process.env.BCRYPT_ROUNDS = '10';
+// Pinned explicitly so the fragment-shape URL assertions below stay
+// deterministic regardless of a developer's own local .env — see the matching
+// comment in auth-service.test.js.
+process.env.PASSWORD_RESET_URL = 'http://localhost:5173/reset-password';
+process.env.EMAIL_VERIFICATION_URL = 'http://localhost:5173/verify-email';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -26,6 +31,7 @@ const authRoutes = require('../src/modules/auth/auth.routes');
 const {
   authRateLimiter,
   forgotPasswordRateLimiter,
+  resendVerificationRateLimiter,
   socialChallengeRateLimiter,
   socialGoogleLoginRateLimiter,
   socialGoogleLinkIpRateLimiter,
@@ -46,6 +52,10 @@ function resetAuthLimiter() {
 
 function resetForgotPasswordLimiter() {
   return forgotPasswordRateLimiter.resetKey('127.0.0.1');
+}
+
+function resetResendVerificationLimiter() {
+  return resendVerificationRateLimiter.resetKey('127.0.0.1');
 }
 
 const SOCIAL_LIMITER_USER_IDS = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439077'];
@@ -76,6 +86,7 @@ function fakeUserDoc({
   role = 'user',
   status = 'active',
   authIdentities = [],
+  emailVerified = false,
 } = {}) {
   return {
     _id: id,
@@ -86,7 +97,7 @@ function fakeUserDoc({
     status,
     authIdentities,
     preferences: { dietaryPreferences: [], allergies: [], notifications: { enabled: true } },
-    emailVerified: false,
+    emailVerified,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -463,6 +474,10 @@ test('POST /api/v1/auth/register creates a user, issues tokens, and never return
   t.mock.method(userRepository, 'createUser', async (args) =>
     fakeUserDoc({ email: args.email, passwordHash: args.passwordHash })
   );
+  t.mock.method(userRepository, 'setEmailVerificationTokenForUser', async () => ({
+    matchedCount: 1,
+  }));
+  t.mock.method(emailService, 'sendVerificationEmail', async () => {});
   t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
 
   const response = await request(app).post('/api/v1/auth/register').send({
@@ -475,6 +490,7 @@ test('POST /api/v1/auth/register creates a user, issues tokens, and never return
   assert.equal(response.body.success, true);
   assert.equal(response.body.data.user.email, 'ada@example.com');
   assert.equal(response.body.data.user.role, 'user');
+  assert.equal(response.body.data.user.emailVerified, false);
   assert.ok(response.body.data.accessToken);
   assert.ok(response.body.data.refreshToken);
   assert.equal('passwordHash' in response.body.data.user, false);
@@ -507,6 +523,29 @@ test('POST /api/v1/auth/register rejects a client-supplied role field before it 
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/auth/register still succeeds when verification email delivery fails', async (t) => {
+  t.mock.method(userRepository, 'createUser', async (args) =>
+    fakeUserDoc({ email: args.email, passwordHash: args.passwordHash })
+  );
+  t.mock.method(userRepository, 'setEmailVerificationTokenForUser', async () => ({
+    matchedCount: 1,
+  }));
+  t.mock.method(emailService, 'sendVerificationEmail', async () => {
+    throw new Error('provider unavailable');
+  });
+  t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
+  t.mock.method(console, 'error', () => {});
+
+  const response = await request(app).post('/api/v1/auth/register').send({
+    name: 'Ada',
+    email: 'reliable@example.com',
+    password: 'a-good-password',
+  });
+
+  assert.equal(response.status, 201);
+  assert.ok(response.body.data.accessToken);
 });
 
 test('POST /api/v1/auth/login succeeds with valid credentials and creates a session', async (t) => {
@@ -1172,4 +1211,150 @@ test('forgot-password uses its dedicated five-request limiter', async () => {
     .send({ email: 'not-an-email' });
   assert.equal(limited.status, 429);
   assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
+});
+
+test('POST /api/v1/auth/verify-email atomically verifies and does not revoke sessions', async (t) => {
+  await resetAuthLimiter();
+  let verifyArgs;
+  t.mock.method(userRepository, 'verifyEmailByTokenHash', async (args) => {
+    verifyArgs = args;
+    return { _id: AUTH_USER_ID };
+  });
+  const revoke = t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
+
+  const response = await request(app)
+    .post('/api/v1/auth/verify-email')
+    .send({ token: 'A'.repeat(43) });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { success: true, data: { emailVerified: true } });
+  assert.match(verifyArgs.tokenHash, /^[a-f0-9]{64}$/);
+  assert.equal(revoke.mock.callCount(), 0);
+});
+
+test('POST /api/v1/auth/verify-email rejects invalid, expired, or replayed tokens identically', async (t) => {
+  await resetAuthLimiter();
+  t.mock.method(userRepository, 'verifyEmailByTokenHash', async () => null);
+
+  for (const token of ['B'.repeat(43), 'C'.repeat(43)]) {
+    const response = await request(app).post('/api/v1/auth/verify-email').send({ token });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID');
+    assert.equal(response.body.error.message, 'Email verification token is invalid or expired.');
+  }
+});
+
+test('POST /api/v1/auth/verify-email rejects malformed and extra fields', async () => {
+  await resetAuthLimiter();
+  const malformed = await request(app)
+    .post('/api/v1/auth/verify-email')
+    .send({ token: 'too-short' });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error.code, 'VALIDATION_ERROR');
+
+  const extra = await request(app)
+    .post('/api/v1/auth/verify-email')
+    .send({ token: 'A'.repeat(43), userId: AUTH_USER_ID });
+  assert.equal(extra.status, 400);
+  assert.equal(extra.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/auth/resend-verification returns generic success and emails only an eligible account', async (t) => {
+  await resetResendVerificationLimiter();
+  const passwordHash = await hashPassword('current-secret');
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
+    fakeUserDoc({ id: AUTH_USER_ID, email: 'ada@example.com', passwordHash, emailVerified: false })
+  );
+  let stored;
+  t.mock.method(
+    userRepository,
+    'setEmailVerificationTokenForUser',
+    async (userId, tokenHash, expiresAt) => {
+      stored = { userId, tokenHash, expiresAt };
+      return { matchedCount: 1 };
+    }
+  );
+  let email;
+  t.mock.method(emailService, 'sendVerificationEmail', async (args) => {
+    email = args;
+  });
+
+  const response = await request(app)
+    .post('/api/v1/auth/resend-verification')
+    .send({ email: '  ADA@EXAMPLE.COM ' });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    success: true,
+    data: { verificationEmailRequested: true },
+  });
+  assert.equal(stored.userId, AUTH_USER_ID);
+  assert.match(stored.tokenHash, /^[a-f0-9]{64}$/);
+  assert.ok(stored.expiresAt instanceof Date);
+  assert.equal(email.to, 'ada@example.com');
+  assert.match(new URL(email.verifyUrl).hash, /^#token=[A-Za-z0-9_-]{43}$/);
+});
+
+test('POST /api/v1/auth/resend-verification gives the identical generic response for unknown, already-verified, provider-only, and suspended accounts', async (t) => {
+  await resetResendVerificationLimiter();
+  const passwordHash = await hashPassword('current-secret');
+  const candidates = [
+    null,
+    fakeUserDoc({ email: 'ada@example.com', passwordHash, emailVerified: true }),
+    fakeUserDoc({ email: 'ada@example.com', passwordHash, status: 'suspended', emailVerified: false }),
+    { ...fakeUserDoc({ email: 'ada@example.com', emailVerified: false }), passwordHash: undefined },
+  ];
+  let index = 0;
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => candidates[index++]);
+  const send = t.mock.method(emailService, 'sendVerificationEmail', async () => {});
+
+  for (const ignored of candidates) {
+    void ignored;
+    const response = await request(app)
+      .post('/api/v1/auth/resend-verification')
+      .send({ email: 'ada@example.com' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, {
+      success: true,
+      data: { verificationEmailRequested: true },
+    });
+  }
+  assert.equal(send.mock.callCount(), 0);
+});
+
+test('POST /api/v1/auth/resend-verification rejects malformed and extra fields', async () => {
+  await resetResendVerificationLimiter();
+  const malformed = await request(app)
+    .post('/api/v1/auth/resend-verification')
+    .send({ email: 'not-an-email' });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error.code, 'VALIDATION_ERROR');
+
+  const extra = await request(app)
+    .post('/api/v1/auth/resend-verification')
+    .send({ email: 'ada@example.com', client: 'admin' });
+  assert.equal(extra.status, 400);
+  assert.equal(extra.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('resend-verification uses its own dedicated five-request limiter, independent of forgot-password', async () => {
+  await resetResendVerificationLimiter();
+  await resetForgotPasswordLimiter();
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const response = await request(app)
+      .post('/api/v1/auth/resend-verification')
+      .send({ email: 'not-an-email' });
+    assert.equal(response.status, 400);
+  }
+  const limited = await request(app)
+    .post('/api/v1/auth/resend-verification')
+    .send({ email: 'not-an-email' });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
+
+  // forgot-password's separate budget is untouched by resend-verification's.
+  const forgot = await request(app)
+    .post('/api/v1/auth/forgot-password')
+    .send({ email: 'not-an-email' });
+  assert.equal(forgot.status, 400);
 });

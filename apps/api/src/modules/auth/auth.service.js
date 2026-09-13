@@ -5,6 +5,10 @@ const {
   generatePasswordResetToken,
   hashPasswordResetToken,
 } = require('../../shared/security/password-reset-token');
+const {
+  generateEmailVerificationToken,
+  hashEmailVerificationToken,
+} = require('../../shared/security/email-verification-token');
 const emailService = require('../../shared/email/email.service');
 const { loadEnv } = require('../../config/env');
 const { AppError } = require('../../shared/errors/app-error');
@@ -14,16 +18,48 @@ const socialAuthChallengeService = require('./social-auth-challenge.service');
 const { CHALLENGE_INTENT } = socialAuthChallengeService;
 
 const FORGOT_PASSWORD_MIN_RESPONSE_MS = 750;
+const RESEND_VERIFICATION_MIN_RESPONSE_MS = 750;
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function passwordResetUrl(baseUrl, rawToken) {
+/**
+ * Appends the one-time token to a fixed base URL. Scheme-aware:
+ *
+ *  - `wecooked:` (the mobile app's own deep-link scheme — see
+ *    RootNavigator's `linking` config) gets the token as a QUERY param
+ *    (`wecooked://verify-email?token=...`), because that is what React
+ *    Navigation's default linking resolution parses into `route.params` —
+ *    a fragment would never reach the screen.
+ *  - `http:`/`https:` (a possible future web landing page) keep the token as
+ *    a URL FRAGMENT (`https://.../reset-password#token=...`), which is never
+ *    sent to a server in the request line, keeping the token out of access
+ *    logs on that path.
+ *
+ * Either way the BASE url (PASSWORD_RESET_URL / EMAIL_VERIFICATION_URL) is
+ * validated at startup to carry no query/fragment/credentials of its own —
+ * see buildAuthLinkUrlSchema in config/env.js — so this only ever adds the
+ * one param it's given.
+ */
+function buildAuthLinkUrl(baseUrl, rawToken) {
   const url = new URL(baseUrl);
-  url.hash = new URLSearchParams({ token: rawToken }).toString();
+  const tokenParam = new URLSearchParams({ token: rawToken }).toString();
+  if (url.protocol === 'wecooked:') {
+    url.search = tokenParam;
+  } else {
+    url.hash = tokenParam;
+  }
   return url.toString();
+}
+
+function passwordResetUrl(baseUrl, rawToken) {
+  return buildAuthLinkUrl(baseUrl, rawToken);
+}
+
+function emailVerificationUrl(baseUrl, rawToken) {
+  return buildAuthLinkUrl(baseUrl, rawToken);
 }
 
 function logForgotPasswordFailure(stage, error) {
@@ -41,6 +77,51 @@ function logForgotPasswordFailure(stage, error) {
   console.error('[auth] forgot-password processing failed', details);
 }
 
+// Shared by post-registration issuance and resend. Never logs the recipient,
+// raw token, or verification URL — only the stage and a safe provider
+// status/request-id, matching logForgotPasswordFailure's shape.
+function logVerificationEmailFailure(stage, error) {
+  const details = {
+    event: 'verification_email_processing_failed',
+    stage,
+    errorName: error?.name || 'Error',
+  };
+  if (Number.isInteger(error?.providerStatus)) {
+    details.providerStatus = error.providerStatus;
+  }
+  if (typeof error?.providerRequestId === 'string') {
+    details.providerRequestId = error.providerRequestId;
+  }
+  console.error('[auth] verification email processing failed', details);
+}
+
+/**
+ * Issues a fresh verification token for a JUST-CREATED user and best-effort
+ * emails it. Eligibility is guaranteed by construction (a brand-new local
+ * account is active, password-bearing, and unverified), so unlike
+ * resendVerification this never needs to consult an eligibility result before
+ * sending. Delivery/storage failure is swallowed (logged, no recipient/token)
+ * and never propagates — register must not fail or roll back the just-created
+ * account or its session just because Resend was briefly unavailable.
+ */
+async function sendRegistrationVerificationEmail(user) {
+  try {
+    const { emailVerificationTtlMinutes, emailVerificationUrl: verifyUrlBase } = loadEnv();
+    const rawToken = generateEmailVerificationToken();
+    const tokenHash = hashEmailVerificationToken(rawToken);
+    const expiresAt = new Date(Date.now() + emailVerificationTtlMinutes * 60 * 1000);
+
+    await userService.startEmailVerification({ userId: user._id, tokenHash, expiresAt });
+    await emailService.sendVerificationEmail({
+      to: user.email,
+      verifyUrl: emailVerificationUrl(verifyUrlBase, rawToken),
+      expiresInMinutes: emailVerificationTtlMinutes,
+    });
+  } catch (error) {
+    logVerificationEmailFailure('register', error);
+  }
+}
+
 async function issueTokensForUser(user) {
   const { session, refreshToken } = await sessionService.createSession(user._id);
   const accessToken = signAccessToken({
@@ -53,6 +134,11 @@ async function issueTokensForUser(user) {
 
 async function register({ name, email, password }) {
   const user = await userService.registerUser({ name, email, password });
+  // Best-effort, fire-and-awaited-but-never-throwing: a Resend outage must
+  // never fail registration or withhold the session issued below. The new
+  // account starts emailVerified:false (the User schema default); the user
+  // can always request a fresh link via resendVerification later.
+  await sendRegistrationVerificationEmail(user);
   const tokens = await issueTokensForUser(user);
   return { user, ...tokens };
 }
@@ -419,6 +505,58 @@ async function resetPassword({ rawToken, newPassword }) {
   return { passwordReset: true };
 }
 
+/**
+ * Consumes a raw verification token. Unlike resetPassword, this never
+ * revokes sessions — verifying an email address changes no credential and
+ * carries no session-hijack risk, so the caller keeps whatever session (if
+ * any) they arrived with.
+ */
+async function verifyEmail(rawToken) {
+  await userService.verifyEmailWithToken({ rawToken });
+  return { emailVerified: true };
+}
+
+/**
+ * Public, enumeration-safe resend. Mirrors forgotPassword's shape exactly:
+ * one generic response and one response-time floor regardless of whether the
+ * email is unknown, already verified, provider-only, suspended, or genuinely
+ * eligible — and regardless of whether delivery itself then fails.
+ */
+async function resendVerification(email) {
+  const startedAt = Date.now();
+  let stage = 'prepare';
+
+  try {
+    const { emailVerificationTtlMinutes, emailVerificationUrl: verifyUrlBase } = loadEnv();
+    const rawToken = generateEmailVerificationToken();
+    const tokenHash = hashEmailVerificationToken(rawToken);
+    const expiresAt = new Date(Date.now() + emailVerificationTtlMinutes * 60 * 1000);
+    const eligible = await userService.prepareEmailVerification({ email, tokenHash, expiresAt });
+
+    if (eligible) {
+      stage = 'email';
+      await emailService.sendVerificationEmail({
+        to: eligible.email,
+        verifyUrl: emailVerificationUrl(verifyUrlBase, rawToken),
+        expiresInMinutes: emailVerificationTtlMinutes,
+      });
+    }
+  } catch (error) {
+    // Same stance as forgotPassword: never expose account eligibility or
+    // provider/storage failures. The credential is intentionally retained
+    // after an ambiguous delivery failure — a timeout may still have
+    // delivered it.
+    logVerificationEmailFailure(stage, error);
+  }
+
+  const remainingDelay = RESEND_VERIFICATION_MIN_RESPONSE_MS - (Date.now() - startedAt);
+  if (remainingDelay > 0) {
+    await delay(remainingDelay);
+  }
+
+  return { verificationEmailRequested: true };
+}
+
 async function logout(sessionId) {
   await sessionService.revokeSession(sessionId);
 }
@@ -437,6 +575,16 @@ module.exports = {
   changePassword,
   forgotPassword,
   resetPassword,
+  verifyEmail,
+  resendVerification,
   googleLogin,
   googleLink,
 };
+// Exposed for tests only: loadEnv() caches PASSWORD_RESET_URL/
+// EMAIL_VERIFICATION_URL per-process, so a test can't exercise the
+// http(s)-vs-wecooked branching through forgotPassword/resendVerification
+// alone without also controlling the cached env. buildAuthLinkUrl is pure
+// (no env access, no side effects) and safe to unit test directly. Not used
+// by app code — every real call site above builds the URL via
+// passwordResetUrl/emailVerificationUrl, reading the base from loadEnv().
+module.exports.buildAuthLinkUrl = buildAuthLinkUrl;

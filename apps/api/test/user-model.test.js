@@ -35,6 +35,25 @@ test('password reset credentials are hidden and the digest has a unique sparse i
   assert.equal(expiryIndex, undefined, 'reset expiry must never be a TTL index on User');
 });
 
+test('email verification credentials are hidden and the digest has a unique sparse index without TTL', () => {
+  assert.equal(User.schema.path('emailVerificationTokenHash').options.select, false);
+  assert.equal(User.schema.path('emailVerificationExpiresAt').options.select, false);
+
+  const indexes = User.schema.indexes();
+  const digestIndex = indexes.find(([spec]) => spec.emailVerificationTokenHash === 1);
+  assert.ok(digestIndex);
+  assert.equal(digestIndex[1].unique, true);
+  assert.equal(digestIndex[1].sparse, true);
+
+  const expiryIndex = indexes.find(([spec]) => spec.emailVerificationExpiresAt === 1);
+  assert.equal(expiryIndex, undefined, 'verification expiry must never be a TTL index on User');
+});
+
+test('emailVerified defaults to false on a new user', () => {
+  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
+  assert.equal(user.emailVerified, false);
+});
+
 test('authProviders is removed and authIdentities defaults to an empty array', () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
 

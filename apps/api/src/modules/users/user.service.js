@@ -3,6 +3,7 @@ const userRepository = require('./user.repository');
 const sessionService = require('../sessions/session.service');
 const { hashPassword, comparePassword } = require('../../shared/security/password');
 const { hashPasswordResetToken } = require('../../shared/security/password-reset-token');
+const { hashEmailVerificationToken } = require('../../shared/security/email-verification-token');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
@@ -428,6 +429,73 @@ async function resetPasswordWithToken({ rawToken, newPassword }) {
   return { userId: String(user._id) };
 }
 
+/**
+ * Issues a fresh email-verification credential for a user this call already
+ * knows the identity of (the account it just registered). No eligibility
+ * lookup by email is needed — the caller supplies the id of an account it just
+ * created, which is by construction active, password-bearing, and unverified —
+ * but the repository write still repeats those predicates (see
+ * setEmailVerificationTokenForUser) so this can never re-arm a token for an
+ * account that has since changed state.
+ */
+async function startEmailVerification({ userId, tokenHash, expiresAt }) {
+  await userRepository.setEmailVerificationTokenForUser(userId, tokenHash, expiresAt);
+}
+
+/**
+ * Resend path: looks the account up by email and issues a new verification
+ * credential ONLY for an active, password-bearing, not-yet-verified user.
+ * Returns null for every other case (unknown email, provider-only, already
+ * verified, suspended) so the caller (AuthService.resendVerification) can
+ * answer with one identical generic response regardless of why the send was
+ * skipped.
+ */
+async function prepareEmailVerification({ email, tokenHash, expiresAt }) {
+  const normalizedEmail = normalizeEmail(email);
+  const user = await userRepository.findByEmailWithPassword(normalizedEmail);
+
+  if (
+    !user ||
+    user.status !== 'active' ||
+    user.emailVerified === true ||
+    typeof user.passwordHash !== 'string' ||
+    user.passwordHash.trim().length === 0
+  ) {
+    return null;
+  }
+
+  const result = await userRepository.setEmailVerificationTokenForUser(
+    user._id,
+    tokenHash,
+    expiresAt
+  );
+  if (!result || result.matchedCount === 0) {
+    return null;
+  }
+
+  return { userId: String(user._id), email: user.email };
+}
+
+/**
+ * Consumes a raw verification token: hashes it, atomically matches + flips
+ * emailVerified + clears the credential in one write. Any failure (malformed,
+ * unknown, expired, already-used) collapses to the same generic error — the
+ * caller must never learn which case it was.
+ */
+async function verifyEmailWithToken({ rawToken }) {
+  const tokenHash = hashEmailVerificationToken(rawToken);
+  const user = await userRepository.verifyEmailByTokenHash({ tokenHash, now: new Date() });
+
+  if (!user) {
+    throw new AppError('Email verification token is invalid or expired.', {
+      statusCode: 400,
+      code: 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID',
+    });
+  }
+
+  return { userId: String(user._id) };
+}
+
 module.exports = {
   registerUser,
   verifyCredentials,
@@ -443,4 +511,7 @@ module.exports = {
   changePassword,
   preparePasswordReset,
   resetPasswordWithToken,
+  startEmailVerification,
+  prepareEmailVerification,
+  verifyEmailWithToken,
 };

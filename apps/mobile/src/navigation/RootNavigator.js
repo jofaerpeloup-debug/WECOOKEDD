@@ -27,6 +27,27 @@ import AboutScreen from '../screens/AboutScreen';
 import TermsScreen from '../screens/TermsScreen';
 import PrivacyScreen from '../screens/PrivacyScreen';
 import LicensesScreen from '../screens/LicensesScreen';
+import ResetPasswordScreen from '../screens/ResetPasswordScreen';
+import VerifyEmailScreen from '../screens/VerifyEmailScreen';
+
+// Deep-link routes only. `wecooked://reset-password?token=...` and
+// `wecooked://verify-email?token=...` map by REGISTERED route name — both
+// names exist in BOTH the authenticated and unauthenticated stacks below (see
+// each stack's own comment), so this single config resolves correctly
+// regardless of which stack is currently mounted. React Navigation extracts
+// `?token=...` into route.params automatically; no custom parse function is
+// needed. Deliberately narrow: only these two screens are linkable, and there
+// is no catch-all/wildcard route, so an unmatched link is simply ignored
+// rather than routed somewhere arbitrary.
+const linking = {
+  prefixes: ['wecooked://'],
+  config: {
+    screens: {
+      ResetPassword: 'reset-password',
+      VerifyEmail: 'verify-email',
+    },
+  },
+};
 
 const Stack = createNativeStackNavigator();
 
@@ -49,8 +70,22 @@ export default function RootNavigator() {
   };
 
   return (
-    <NavigationContainer theme={navTheme}>
-      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+    <NavigationContainer theme={navTheme} linking={linking}>
+      {/*
+        NOT keyed off isLoggedIn. A whole-Navigator React `key` here was tried
+        and reverted: on remount, React Navigation rehydrates the previous
+        state via router.getRehydratedState(), which keeps any route whose
+        NAME still exists in the new branch's routeNames — so "ResetPassword"
+        and "VerifyEmail" (registered under the same name in both branches)
+        survived the "reset" and became the sole/active route again. A plain
+        re-render (no key) goes through getStateForRouteNamesChange instead,
+        which additionally drops routes whose `navigationKey` changed since
+        the last render — see the two ResetPassword/VerifyEmail screens below,
+        which use exactly that to get discarded on every auth-state flip.
+      */}
+      <Stack.Navigator
+        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
+      >
         {isLoggedIn ? (
           // --- authenticated stack ---
           // React Navigation swaps the whole screen set when `isLoggedIn`
@@ -121,6 +156,35 @@ export default function RootNavigator() {
             <Stack.Screen name="Terms" component={TermsScreen} />
             <Stack.Screen name="Privacy" component={PrivacyScreen} />
             <Stack.Screen name="Licenses" component={LicensesScreen} />
+            {/*
+              Deep-link-only routes, reachable while authenticated too (an
+              already-signed-in device can still receive a verify-email link;
+              a stale reset-password link opened while signed in must still
+              render the form, then ResetPasswordScreen's own
+              endLocalSession() handles dropping the session on success). Not
+              a fake third auth state — these are ordinary registered routes
+              present in both stacks, exactly like every other screen here.
+
+              `navigationKey` is what makes each of these get DROPPED (not
+              preserved) by React Navigation when isLoggedIn flips: it differs
+              from its counterpart in the other branch below, so
+              getStateForRouteNamesChange sees this route's key change and
+              removes it, instead of matching it by name and keeping it
+              mounted/focused across the swap. Without this, a ResetPassword
+              (or VerifyEmail) pushed while on one side of the swap survives
+              into the other side as the sole remaining — and therefore
+              active — route.
+            */}
+            <Stack.Screen
+              name="ResetPassword"
+              component={ResetPasswordScreen}
+              navigationKey="reset-authed"
+            />
+            <Stack.Screen
+              name="VerifyEmail"
+              component={VerifyEmailScreen}
+              navigationKey="verify-authed"
+            />
           </>
         ) : (
           // --- unauthenticated stack ---
@@ -128,6 +192,17 @@ export default function RootNavigator() {
             <Stack.Screen name="Landing" component={LandingScreen} />
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
+            {/* See the authenticated stack's own comment above. */}
+            <Stack.Screen
+              name="ResetPassword"
+              component={ResetPasswordScreen}
+              navigationKey="reset-guest"
+            />
+            <Stack.Screen
+              name="VerifyEmail"
+              component={VerifyEmailScreen}
+              navigationKey="verify-guest"
+            />
           </>
         )}
       </Stack.Navigator>

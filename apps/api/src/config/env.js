@@ -1,17 +1,49 @@
 const dotenv = require('dotenv');
 const { z } = require('zod');
 
-const passwordResetUrlSchema = z
-  .string()
-  .url('PASSWORD_RESET_URL must be an absolute URL')
-  .refine((value) => {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  }, 'PASSWORD_RESET_URL must use http or https')
-  .refine((value) => {
-    const url = new URL(value);
-    return !url.username && !url.password && !url.search && !url.hash;
-  }, 'PASSWORD_RESET_URL must not contain credentials, a query, or a fragment');
+// WeCooked ships ONE consumer of these links today — the mobile app — whose
+// app.json declares `"scheme": "wecooked"` unconditionally, for every build
+// (dev client and production alike; there is no separate per-environment
+// scheme). A `wecooked://verify-email` / `wecooked://reset-password` base URL
+// is therefore not a "custom protocol someone might set by mistake" — it is
+// this project's own verified, already-shipped mobile deep-link scheme, exactly
+// as consumed by RootNavigator's `linking` config (apps/mobile/src/navigation/
+// RootNavigator.js) — and is accepted in EVERY environment, production
+// included. `http:`/`https:` remain for a possible future web landing page;
+// production still requires `https:` specifically for that case (plain `http:`
+// stays rejected in production). No other scheme is ever accepted, in any
+// environment — this is an exact allow-list of three protocols, not "anything
+// non-http".
+const ALLOWED_AUTH_LINK_PROTOCOLS = Object.freeze(['http:', 'https:', 'wecooked:']);
+
+// Shared by PASSWORD_RESET_URL and EMAIL_VERIFICATION_URL so the two env vars
+// can never drift apart on what counts as a valid/safe base URL. Both are a
+// FIXED landing target that the API appends a one-time token to at send time
+// (see buildAuthLinkUrl in auth.service.js) — never a query or fragment of
+// their own, and never carrying inline credentials.
+function buildAuthLinkUrlSchema(envVarName) {
+  return z
+    .string()
+    .url(`${envVarName} must be an absolute URL`)
+    .refine(
+      (value) => ALLOWED_AUTH_LINK_PROTOCOLS.includes(new URL(value).protocol),
+      `${envVarName} must use http, https, or the wecooked mobile scheme`
+    )
+    .refine((value) => {
+      const url = new URL(value);
+      return !url.username && !url.password && !url.search && !url.hash;
+    }, `${envVarName} must not contain credentials, a query, or a fragment`);
+}
+
+const passwordResetUrlSchema = buildAuthLinkUrlSchema('PASSWORD_RESET_URL');
+const emailVerificationUrlSchema = buildAuthLinkUrlSchema('EMAIL_VERIFICATION_URL');
+
+// Only a plain `http:` base is downgraded in production — `https:` already
+// satisfies it and `wecooked:` was never an http(s) URL to begin with, so it
+// is never subject to a TLS requirement in the first place.
+function requiresHttpsUpgrade(value) {
+  return new URL(value).protocol === 'http:';
+}
 
 const googleOAuthClientIdsSchema = z
   .string()
@@ -45,14 +77,25 @@ const envSchema = z
     EMAIL_FROM: z.string().trim().min(1, 'EMAIL_FROM is required').max(500),
     PASSWORD_RESET_URL: passwordResetUrlSchema,
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(30),
+    EMAIL_VERIFICATION_URL: emailVerificationUrlSchema,
+    // Bounded 5 minutes .. 7 days; default 1440 (24 hours).
+    EMAIL_VERIFICATION_TTL_MINUTES: z.coerce.number().int().min(5).max(10080).default(1440),
     GOOGLE_OAUTH_CLIENT_IDS: googleOAuthClientIdsSchema,
   })
   .superRefine((value, ctx) => {
-    if (value.NODE_ENV === 'production' && !value.PASSWORD_RESET_URL.startsWith('https://')) {
+    if (value.NODE_ENV === 'production' && requiresHttpsUpgrade(value.PASSWORD_RESET_URL)) {
       ctx.addIssue({
         code: 'custom',
         path: ['PASSWORD_RESET_URL'],
-        message: 'PASSWORD_RESET_URL must use https in production',
+        message: 'PASSWORD_RESET_URL must use https (or the wecooked mobile scheme) in production',
+      });
+    }
+    if (value.NODE_ENV === 'production' && requiresHttpsUpgrade(value.EMAIL_VERIFICATION_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_VERIFICATION_URL'],
+        message:
+          'EMAIL_VERIFICATION_URL must use https (or the wecooked mobile scheme) in production',
       });
     }
   });
@@ -61,6 +104,7 @@ const TEST_EMAIL_DEFAULTS = {
   RESEND_API_KEY: 'test-resend-api-key',
   EMAIL_FROM: 'WeCooked <no-reply@example.com>',
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
+  EMAIL_VERIFICATION_URL: 'http://localhost:5173/verify-email',
 };
 
 const TEST_GOOGLE_DEFAULTS = {
@@ -109,6 +153,8 @@ function parseEnv(source) {
     emailFrom: parsed.EMAIL_FROM,
     passwordResetUrl: parsed.PASSWORD_RESET_URL,
     passwordResetTtlMinutes: parsed.PASSWORD_RESET_TTL_MINUTES,
+    emailVerificationUrl: parsed.EMAIL_VERIFICATION_URL,
+    emailVerificationTtlMinutes: parsed.EMAIL_VERIFICATION_TTL_MINUTES,
     googleOAuthClientIds: parsed.GOOGLE_OAUTH_CLIENT_IDS,
   };
 }

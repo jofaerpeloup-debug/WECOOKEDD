@@ -37,6 +37,58 @@ test('sendPasswordResetEmail sends text/html through Resend with safe transport 
   assert.ok(body.text.includes('30 minutes'));
 });
 
+test('sendVerificationEmail sends text/html through Resend with safe transport headers', async (t) => {
+  let request;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    request = { url, options };
+    return { ok: true, status: 200, headers: new Headers() };
+  });
+
+  const verifyUrl = `https://accounts.example/verify-email#token=${'A'.repeat(43)}`;
+  await emailService.sendVerificationEmail({
+    to: 'ada@example.com',
+    verifyUrl,
+    expiresInMinutes: 1440,
+  });
+
+  assert.equal(request.url, 'https://api.resend.com/emails');
+  assert.equal(request.options.method, 'POST');
+  assert.equal(request.options.headers.Authorization, 'Bearer test-resend-key');
+  assert.equal(request.options.headers['User-Agent'], 'wecooked-api/1.0');
+  assert.match(request.options.headers['Idempotency-Key'], /^verify-email\/[0-9a-f-]+$/);
+  const body = JSON.parse(request.options.body);
+  assert.deepEqual(body.to, ['ada@example.com']);
+  assert.equal(body.from, 'WeCooked <no-reply@example.com>');
+  assert.ok(body.text.includes(verifyUrl));
+  assert.ok(body.html.includes('Verify your email'));
+  assert.ok(body.text.includes('24 hours'));
+});
+
+test('sendVerificationEmail converts provider failures into a sanitized error', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: false,
+    status: 429,
+    headers: new Headers({ 'x-request-id': 'safe-request-id' }),
+  }));
+
+  await assert.rejects(
+    () =>
+      emailService.sendVerificationEmail({
+        to: 'ada@example.com',
+        verifyUrl: `https://accounts.example/verify-email#token=${'B'.repeat(43)}`,
+        expiresInMinutes: 1440,
+      }),
+    (error) => {
+      assert.equal(error.name, 'EmailDeliveryError');
+      assert.equal(error.providerStatus, 429);
+      assert.equal(error.providerRequestId, 'safe-request-id');
+      assert.equal(JSON.stringify(error).includes('ada@example.com'), false);
+      assert.equal(JSON.stringify(error).includes('BBBB'), false);
+      return true;
+    }
+  );
+});
+
 test('sendPasswordResetEmail converts provider failures into a sanitized error', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => ({
     ok: false,

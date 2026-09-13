@@ -17,6 +17,8 @@ const {
   changePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
   socialChallengeSchema,
   googleSocialSchema,
 } = require('./auth.validation');
@@ -31,6 +33,13 @@ const authRateLimiter = createRateLimiter({
 });
 
 const forgotPasswordRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+});
+
+// Same shape as forgotPasswordRateLimiter — resend-verification is the same
+// class of risk (a public, enumeration-sensitive, email-triggering endpoint).
+const resendVerificationRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 5,
 });
@@ -86,6 +95,21 @@ router.post(
   validate(resetPasswordSchema),
   authController.resetPassword
 );
+// Public and unauthenticated, like reset-password: the token itself is the
+// credential. Reuses authRateLimiter's shape (a bare token-consumption call,
+// not an email-triggering one) rather than a dedicated limiter.
+router.post(
+  '/verify-email',
+  authRateLimiter,
+  validate(verifyEmailSchema),
+  authController.verifyEmail
+);
+router.post(
+  '/resend-verification',
+  resendVerificationRateLimiter,
+  validate(resendVerificationSchema),
+  authController.resendVerification
+);
 router.post('/logout', authenticate, authController.logout);
 router.post('/logout-all', authenticate, authController.logoutAll);
 
@@ -107,6 +131,7 @@ module.exports = router;
 // (v1.routes.js consumes the default router export).
 module.exports.authRateLimiter = authRateLimiter;
 module.exports.forgotPasswordRateLimiter = forgotPasswordRateLimiter;
+module.exports.resendVerificationRateLimiter = resendVerificationRateLimiter;
 module.exports.socialChallengeRateLimiter = socialChallengeRateLimiter;
 module.exports.socialGoogleLoginRateLimiter = socialGoogleLoginRateLimiter;
 module.exports.socialGoogleLinkIpRateLimiter = socialGoogleLinkIpRateLimiter;

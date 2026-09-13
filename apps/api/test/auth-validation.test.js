@@ -8,6 +8,8 @@ const {
   changePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
   socialChallengeSchema,
   googleSocialSchema,
 } = require('../src/modules/auth/auth.validation');
@@ -247,6 +249,28 @@ test('resetPasswordSchema enforces token shape, shared password policy, and a st
     resetPasswordSchema.safeParse({
       body: { token, newPassword: 'a-new-password', confirmPassword: 'a-new-password' },
     }).success,
+    false
+  );
+});
+
+test('verifyEmailSchema enforces the token shape and a strict body', () => {
+  const token = 'A'.repeat(43);
+  assert.equal(verifyEmailSchema.safeParse({ body: { token } }).success, true);
+  assert.equal(verifyEmailSchema.safeParse({ body: { token: 'short' } }).success, false);
+  assert.equal(
+    verifyEmailSchema.safeParse({ body: { token, userId: 'attacker-controlled' } }).success,
+    false
+  );
+});
+
+test('resendVerificationSchema normalizes email and enforces a strict body', () => {
+  const valid = resendVerificationSchema.safeParse({ body: { email: '  Ada@Example.com ' } });
+  assert.equal(valid.success, true);
+  assert.equal(valid.data.body.email, 'ada@example.com');
+  assert.equal(resendVerificationSchema.safeParse({ body: { email: 'not-an-email' } }).success, false);
+  assert.equal(
+    resendVerificationSchema.safeParse({ body: { email: 'ada@example.com', client: 'admin' } })
+      .success,
     false
   );
 });

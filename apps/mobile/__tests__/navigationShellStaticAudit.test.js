@@ -41,6 +41,7 @@ const tabScreenNames = (src) =>
   [...src.matchAll(/<Tab\.Screen\s+name="([^"]+)"/g)].map((m) => m[1]);
 const stackScreenNames = (src) =>
   [...src.matchAll(/<Stack\.Screen\s+name="([^"]+)"/g)].map((m) => m[1]);
+const stack = stackScreenNames(rootNav);
 
 describe('MainTabs — the verified teammate 4-tab set, in order', () => {
   it('registers exactly Home, Community, Swaps, Profile as Tab.Screens', () => {
@@ -131,8 +132,6 @@ describe('PlusMenu — teammate presentation + both verified actions', () => {
 });
 
 describe('RootNavigator — non-tab destinations stay registered & reachable', () => {
-  const stack = stackScreenNames(rootNav);
-
   it('contains only the intended authenticated and guest stack routes', () => {
     expect(stack).toEqual([
       'MainTabs',
@@ -155,9 +154,14 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
       'Terms',
       'Privacy',
       'Licenses',
+      // Deep-link-only routes, present in BOTH stacks — see below.
+      'ResetPassword',
+      'VerifyEmail',
       'Landing',
       'Login',
       'Register',
+      'ResetPassword',
+      'VerifyEmail',
     ]);
   });
 
@@ -175,6 +179,35 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(rootNav).toMatch(/name="MealPlan"\s+component=\{MealPlanScreen\}/);
     expect(rootNav).toMatch(/name="List"\s+component=\{ShoppingListScreen\}/);
     expect(rootNav).toMatch(/name="SwapDetail"\s+component=\{SwapDetailScreen\}/);
+  });
+});
+
+describe('deep-link routes — ResetPassword / VerifyEmail reachable regardless of auth state', () => {
+  it('registers ResetPassword and VerifyEmail in BOTH the authenticated and unauthenticated stacks', () => {
+    const counts = {};
+    for (const name of stack) counts[name] = (counts[name] || 0) + 1;
+    expect(counts.ResetPassword).toBe(2);
+    expect(counts.VerifyEmail).toBe(2);
+  });
+
+  it('maps both routes to their real screens', () => {
+    expect(rootNav).toMatch(/name="ResetPassword"\s+component=\{ResetPasswordScreen\}/);
+    expect(rootNav).toMatch(/name="VerifyEmail"\s+component=\{VerifyEmailScreen\}/);
+  });
+
+  it('NavigationContainer carries a linking config for exactly these two routes, on the wecooked:// scheme', () => {
+    expect(rootNavRaw).toMatch(/<NavigationContainer\s+theme=\{navTheme\}\s+linking=\{linking\}>/);
+    const linkingBlock = rootNavRaw.match(/const linking = \{[\s\S]*?\n\};/);
+    expect(linkingBlock).not.toBeNull();
+    expect(linkingBlock[0]).toMatch(/prefixes:\s*\['wecooked:\/\/'\]/);
+    expect(linkingBlock[0]).toMatch(/ResetPassword:\s*'reset-password'/);
+    expect(linkingBlock[0]).toMatch(/VerifyEmail:\s*'verify-email'/);
+  });
+
+  it('adds no catch-all/wildcard linking route', () => {
+    const linkingBlock = rootNavRaw.match(/const linking = \{[\s\S]*?\n\};/)[0];
+    expect(linkingBlock).not.toMatch(/\*/);
+    expect(linkingBlock).not.toMatch(/NotFound/);
   });
 });
 

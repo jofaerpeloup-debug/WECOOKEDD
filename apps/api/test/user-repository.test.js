@@ -207,3 +207,48 @@ test('resetPasswordByTokenHash atomically matches, replaces password, and consum
   assert.deepEqual(captured.options, { new: true, projection: { _id: 1 } });
   assert.equal(User.findOneAndUpdate.mock.callCount(), 1);
 });
+
+test('setEmailVerificationTokenForUser re-checks active, usable-hash, unverified eligibility', async (t) => {
+  let captured;
+  t.mock.method(User, 'updateOne', (filter, update) => {
+    captured = { filter, update };
+    return Promise.resolve({ matchedCount: 1 });
+  });
+  const expiresAt = new Date();
+
+  await userRepository.setEmailVerificationTokenForUser('user-1', 'digest', expiresAt);
+
+  assert.equal(captured.filter._id, 'user-1');
+  assert.equal(captured.filter.status, 'active');
+  assert.deepEqual(captured.filter.passwordHash, {
+    $exists: true,
+    $type: 'string',
+    $ne: '',
+  });
+  assert.deepEqual(captured.filter.emailVerified, { $ne: true });
+  assert.deepEqual(captured.update.$set, {
+    emailVerificationTokenHash: 'digest',
+    emailVerificationExpiresAt: expiresAt,
+  });
+});
+
+test('verifyEmailByTokenHash atomically matches, flips emailVerified, and clears the credential', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return Promise.resolve({ _id: 'user-1' });
+  });
+  const now = new Date();
+
+  await userRepository.verifyEmailByTokenHash({ tokenHash: 'digest', now });
+
+  assert.equal(captured.filter.emailVerificationTokenHash, 'digest');
+  assert.deepEqual(captured.filter.emailVerificationExpiresAt, { $gt: now });
+  assert.equal(captured.filter.status, 'active');
+  assert.deepEqual(captured.update, {
+    $set: { emailVerified: true },
+    $unset: { emailVerificationTokenHash: 1, emailVerificationExpiresAt: 1 },
+  });
+  assert.deepEqual(captured.options, { returnDocument: 'after', projection: { _id: 1 } });
+  assert.equal(User.findOneAndUpdate.mock.callCount(), 1);
+});

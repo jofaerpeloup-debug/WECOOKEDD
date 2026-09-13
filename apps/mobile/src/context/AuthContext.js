@@ -122,6 +122,21 @@ export function AuthProvider({ children }) {
     return u;
   }, []);
 
+  // Ends the session LOCALLY only — no /auth/logout call. Used after a
+  // password reset: the backend already revoked every session for the
+  // account as part of the reset itself, so a device that happened to be
+  // signed in (an edge case — the ordinary path is opening the reset link
+  // signed out) must stop appearing authenticated, but hitting /auth/logout
+  // again would just be a pointless request against an already-dead session.
+  // A no-op if there was no local session to begin with.
+  const endLocalSession = useCallback(async () => {
+    await authService.clearLocalSession();
+    if (mountedRef.current) {
+      setUser(null);
+      setStatus('unauthenticated');
+    }
+  }, []);
+
   // Reconcile the context with a server-authoritative public-user payload that
   // a self-mutation already returned (PATCH /users/me responds with the same
   // `toPublicUser` shape as GET /users/me — no follow-up read is needed). This
@@ -160,6 +175,7 @@ export function AuthProvider({ children }) {
     signOut,
     signOutEverywhere,
     refreshUser,
+    endLocalSession,
     syncUser,
     linkGoogle,
   };

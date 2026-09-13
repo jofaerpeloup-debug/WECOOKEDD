@@ -119,11 +119,23 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Email-verification credentials follow the exact same shape as the
+    // password-reset pair above: opaque, one-time, select:false, digest-only,
+    // no TTL index (that would delete the whole User document on expiry).
+    emailVerificationTokenHash: {
+      type: String,
+      select: false,
+    },
+    emailVerificationExpiresAt: {
+      type: Date,
+      select: false,
+    },
   },
   { timestamps: true }
 );
 
 userSchema.index({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
+userSchema.index({ emailVerificationTokenHash: 1 }, { unique: true, sparse: true });
 
 const User = mongoose.model('User', userSchema);
 

@@ -13,6 +13,9 @@ const userService = require('../src/modules/users/user.service');
 const sessionService = require('../src/modules/sessions/session.service');
 const { hashPassword, comparePassword } = require('../src/shared/security/password');
 const { hashPasswordResetToken } = require('../src/shared/security/password-reset-token');
+const {
+  hashEmailVerificationToken,
+} = require('../src/shared/security/email-verification-token');
 const { AppError } = require('../src/shared/errors/app-error');
 
 const ACTING_ADMIN_ID = '507f1f77bcf86cd799439001';
@@ -1168,6 +1171,114 @@ test('resetPasswordWithToken gives one safe error when the atomic token match lo
     (error) => {
       assert.equal(error.statusCode, 400);
       assert.equal(error.code, 'AUTH_PASSWORD_RESET_TOKEN_INVALID');
+      return true;
+    }
+  );
+});
+
+test('startEmailVerification writes the token/expiry for the given user id', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'setEmailVerificationTokenForUser', async (id, tokenHash, expiresAt) => {
+    captured = { id, tokenHash, expiresAt };
+    return { matchedCount: 1 };
+  });
+  const expiresAt = new Date(Date.now() + 1440 * 60 * 1000);
+
+  await userService.startEmailVerification({
+    userId: PW_USER_ID,
+    tokenHash: 'stored-digest',
+    expiresAt,
+  });
+
+  assert.deepEqual(captured, { id: PW_USER_ID, tokenHash: 'stored-digest', expiresAt });
+});
+
+test('prepareEmailVerification stores a digest only for an eligible unverified local account', async (t) => {
+  const user = await fakePasswordUser('current-secret', {
+    email: 'ada@example.com',
+    emailVerified: false,
+  });
+  let lookupEmail;
+  let stored;
+  t.mock.method(userRepository, 'findByEmailWithPassword', async (email) => {
+    lookupEmail = email;
+    return user;
+  });
+  t.mock.method(
+    userRepository,
+    'setEmailVerificationTokenForUser',
+    async (userId, tokenHash, expiresAt) => {
+      stored = { userId, tokenHash, expiresAt };
+      return { matchedCount: 1 };
+    }
+  );
+  const expiresAt = new Date(Date.now() + 1440 * 60 * 1000);
+
+  const result = await userService.prepareEmailVerification({
+    email: '  ADA@EXAMPLE.COM ',
+    tokenHash: 'stored-digest',
+    expiresAt,
+  });
+
+  assert.equal(lookupEmail, 'ada@example.com');
+  assert.deepEqual(stored, { userId: PW_USER_ID, tokenHash: 'stored-digest', expiresAt });
+  assert.deepEqual(result, { userId: PW_USER_ID, email: 'ada@example.com' });
+});
+
+test('prepareEmailVerification returns the same null result for nonexistent, suspended, already-verified, and provider-only accounts', async (t) => {
+  const candidates = [
+    null,
+    await fakePasswordUser('current-secret', { status: 'suspended', emailVerified: false }),
+    await fakePasswordUser('current-secret', { emailVerified: true }),
+    {
+      ...(await fakePasswordUser('current-secret', { emailVerified: false })),
+      authIdentities: [{ provider: 'google', subject: 'stable-subject' }],
+      passwordHash: undefined,
+    },
+  ];
+  let index = 0;
+  t.mock.method(userRepository, 'findByEmailWithPassword', async () => candidates[index++]);
+  const store = t.mock.method(
+    userRepository,
+    'setEmailVerificationTokenForUser',
+    async () => ({ matchedCount: 1 })
+  );
+
+  for (const ignored of candidates) {
+    void ignored;
+    const result = await userService.prepareEmailVerification({
+      email: 'ada@example.com',
+      tokenHash: 'digest',
+      expiresAt: new Date(),
+    });
+    assert.equal(result, null);
+  }
+  assert.equal(store.mock.callCount(), 0);
+});
+
+test('verifyEmailWithToken hashes the raw token and returns the matched user id', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'verifyEmailByTokenHash', async (args) => {
+    captured = args;
+    return { _id: PW_USER_ID };
+  });
+  const rawToken = 'A'.repeat(43);
+
+  const result = await userService.verifyEmailWithToken({ rawToken });
+
+  assert.equal(captured.tokenHash, hashEmailVerificationToken(rawToken));
+  assert.ok(captured.now instanceof Date);
+  assert.deepEqual(result, { userId: PW_USER_ID });
+});
+
+test('verifyEmailWithToken gives one safe error when the atomic token match loses', async (t) => {
+  t.mock.method(userRepository, 'verifyEmailByTokenHash', async () => null);
+
+  await assert.rejects(
+    () => userService.verifyEmailWithToken({ rawToken: 'B'.repeat(43) }),
+    (error) => {
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID');
       return true;
     }
   );
