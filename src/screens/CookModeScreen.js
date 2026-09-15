@@ -1,15 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, Vibration } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
+import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import { fmtTimer, scaleQty, applySpice, spiceLevel } from '../utils/recipe';
+import { fmtTimer, scaleQty, applySpice, spiceLevel, cookTimeFactor } from '../utils/recipe';
 import { SPICE_LEVELS } from '../data/mockData';
 import { imageSource } from '../utils/image';
+import AppImage from '../components/AppImage';
 import { notify } from '../utils/alert';
+import { tapLight, tapMedium, notifySuccess } from '../utils/haptics';
+import useChime from '../hooks/useChime';
 import { useCookedRecipes } from '../context/CookedRecipesContext';
+import { useNotifications } from '../context/NotificationsContext';
+import { loadJSON, saveJSON, removeItem } from '../utils/storage';
 
 export default function CookModeScreen({ navigation, route }) {
   const { recipe, servings } = route.params;
@@ -17,10 +23,24 @@ export default function CookModeScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
   const { markCooked } = useCookedRecipes();
+  const { pushNotification } = useNotifications();
+  const playChime = useChime();
+  useKeepAwake(); // don't let the screen sleep mid-recipe
 
-  const steps = recipe.steps || [];
   const cookServings = servings || recipe.servings || 4;
   const ratio = cookServings / (recipe.servings || 4);
+  // Step durations scale with servings too — a bigger batch takes a little
+  // longer to simmer/heat through — using the same factor as the recipe's
+  // displayed total time, so Cook Mode stays consistent with it.
+  const timeFactor = cookTimeFactor(ratio);
+  const steps = useMemo(
+    () =>
+      (recipe.steps || []).map((s) => ({
+        ...s,
+        seconds: s.seconds ? Math.max(5, Math.round(s.seconds * timeFactor)) : s.seconds,
+      })),
+    [recipe.steps, timeFactor]
+  );
 
   const [phase, setPhase] = useState('prep'); // 'prep' -> ingredient checklist, then 'cook'
   const [spice, setSpice] = useState(recipe.spice?.default || 'medium');
@@ -40,11 +60,42 @@ export default function CookModeScreen({ navigation, route }) {
   const tick = useRef(null);
   const alertedFor = useRef(-1);
 
+  // Resume where you left off if you backed out mid-recipe.
+  const progressKey = `wecooked:cookProgress:${recipe.id}`;
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    loadJSON(progressKey, null).then((saved) => {
+      if (!alive) return;
+      if (saved) {
+        setPhase(saved.phase || 'prep');
+        setChecked(saved.checked || {});
+        setSpice(saved.spice || recipe.spice?.default || 'medium');
+        const idx = saved.stepIndex || 0;
+        setStepIndex(idx);
+        setTimeLeft(steps[idx]?.seconds || 0);
+      }
+      setRestored(true);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!restored) return;
+    saveJSON(progressKey, { phase, checked, stepIndex, spice });
+  }, [restored, progressKey, phase, checked, stepIndex, spice]);
+
   const gathered = Object.values(checked).filter(Boolean).length;
   const allChecked = checklist.length > 0 && gathered === checklist.length;
-  const toggleAll = () =>
+  const toggleAll = () => {
+    tapLight();
     setChecked(allChecked ? {} : Object.fromEntries(checklist.map((_, i) => [i, true])));
+  };
   const startCooking = () => {
+    tapMedium();
     setPhase('cook');
     setRunning(true);
   };
@@ -61,27 +112,30 @@ export default function CookModeScreen({ navigation, route }) {
     return () => clearInterval(tick.current);
   }, [running]);
 
-  // One-time "step timer done" nudge.
+  // One-time "step timer done" nudge — chime + haptic + banner.
   useEffect(() => {
     if (timerDone && alertedFor.current !== stepIndex) {
       alertedFor.current = stepIndex;
       setRunning(false);
-      try {
-        Vibration.vibrate(400);
-      } catch {}
+      playChime();
+      notifySuccess();
       notify('Timer done', `Step ${stepIndex + 1}: ${step.title}`);
     }
   }, [timerDone, stepIndex]);
 
   const goStep = (idx) => {
     if (idx < 0) return navigation.goBack();
+    tapLight();
     setStepIndex(idx);
     setTimeLeft(steps[idx].seconds || 0);
     setRunning(true);
   };
 
   const finish = () => {
+    notifySuccess();
     markCooked(recipe.id);
+    removeItem(progressKey);
+    pushNotification({ title: 'Nicely done! 👏', body: `You cooked ${recipe.title}.` });
     notify('Nicely done! 👏', `${recipe.title} is cooked. Enjoy your meal.`, () => navigation.goBack());
   };
 
@@ -91,7 +145,13 @@ export default function CookModeScreen({ navigation, route }) {
     return (
       <View style={styles.root}>
         <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-          <Pressable style={styles.iconBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+          <Pressable
+            style={styles.iconBtn}
+            hitSlop={8}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Exit cook mode"
+          >
             <Ionicons name="chevron-back" size={16} color={colors.ink} />
           </Pressable>
           <Text style={styles.headerTitle} numberOfLines={1}>{recipe.title}</Text>
@@ -123,7 +183,10 @@ export default function CookModeScreen({ navigation, route }) {
                       key={lvl.key}
                       style={styles.flameBtn}
                       hitSlop={4}
-                      onPress={() => setSpice(lvl.key)}
+                      onPress={() => {
+                        tapLight();
+                        setSpice(lvl.key);
+                      }}
                       accessibilityRole="button"
                       accessibilityState={{ selected: active }}
                       accessibilityLabel={`${lvl.label} spice`}
@@ -151,7 +214,10 @@ export default function CookModeScreen({ navigation, route }) {
                 <Pressable
                   key={i}
                   style={styles.checkRow}
-                  onPress={() => setChecked((c) => ({ ...c, [i]: !c[i] }))}
+                  onPress={() => {
+                    tapLight();
+                    setChecked((c) => ({ ...c, [i]: !c[i] }));
+                  }}
                 >
                   <View style={[styles.checkbox, on && styles.checkboxOn]}>
                     {on && <Ionicons name="checkmark" size={13} color={colors.onAccent} />}
@@ -192,7 +258,13 @@ export default function CookModeScreen({ navigation, route }) {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable style={styles.iconBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+        <Pressable
+          style={styles.iconBtn}
+          hitSlop={8}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Exit cook mode"
+        >
           <Ionicons name="chevron-back" size={16} color={colors.ink} />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>{recipe.title}</Text>
@@ -255,7 +327,7 @@ export default function CookModeScreen({ navigation, route }) {
       ) : (
         <View style={styles.normal}>
           <Pressable style={styles.stepPhoto} onPress={() => setImmersive(true)}>
-            <Image source={imageSource(recipe.image)} style={styles.stepPhotoImg} />
+            <AppImage source={imageSource(recipe.image)} style={styles.stepPhotoImg} />
           </Pressable>
 
           <Text style={styles.stepEyebrow}>Step {stepIndex + 1}</Text>

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { recipes, savedRecipeIds } from '../data/mockData';
 import { loadJSON, saveJSON } from '../utils/storage';
+import { tapMedium, tapLight } from '../utils/haptics';
 
 const STORAGE_KEY = 'wecooked:savedRecipeIds';
 
@@ -24,13 +25,14 @@ export function SavedRecipesProvider({ children }) {
   }, [savedIds]);
 
   const toggleSaved = (id) => {
+    // Haptic decided here (not in the updater) so it fires once even if React
+    // re-invokes the updater in dev StrictMode.
+    if (savedIds.has(id)) tapLight();
+    else tapMedium();
     setSavedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };

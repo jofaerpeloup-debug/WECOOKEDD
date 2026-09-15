@@ -41,34 +41,48 @@ export function ShoppingListProvider({ children }) {
 
   const remove = (id) => setItems((prev) => prev.filter((i) => i.id !== id));
 
-  // Adds a user-typed item; category is guessed from the name.
-  const addCustom = (name, qty = '') => {
+  const clearChecked = () => setItems((prev) => prev.filter((i) => !i.checked));
+  const clearAll = () => setItems([]);
+
+  // Adds a user-typed item; category is guessed from the name. The grocery
+  // list is a plain checklist — no measurements/quantities, by design.
+  const addCustom = (name) => {
     const n = String(name).trim();
     if (!n) return;
-    setItems((prev) => [
-      ...prev,
-      { id: genId(), cat: catFor(n), name: n, qty: String(qty).trim(), checked: false },
-    ]);
+    setItems((prev) => [...prev, { id: genId(), cat: catFor(n), name: n, checked: false }]);
   };
 
+  // Adds a recipe's ingredients, tagging each with the recipe it came from
+  // so the list can show "from <recipe>". Returns how many were actually
+  // added vs. already on the list, so the caller can tell the user which
+  // happened (e.g. "already added" if this recipe's ingredients are all in).
   const addFromRecipe = (recipe) => {
+    let added = 0;
+    let alreadyAdded = 0;
     setItems((prev) => {
       const have = new Set(prev.map((i) => i.name.toLowerCase()));
-      const additions = (recipe.ingredients || [])
-        .filter((ing) => !have.has(String(ing.name).toLowerCase()))
-        .map((ing) => ({
+      const additions = [];
+      for (const ing of recipe.ingredients || []) {
+        if (have.has(String(ing.name).toLowerCase())) {
+          alreadyAdded++;
+          continue;
+        }
+        additions.push({
           id: genId(),
           cat: catFor(ing.name),
           name: ing.name,
-          qty: ing.qty || '',
+          recipeTitle: recipe.title,
           checked: false,
-        }));
+        });
+        added++;
+      }
       return additions.length ? [...prev, ...additions] : prev;
     });
+    return { added, alreadyAdded };
   };
 
   const value = useMemo(
-    () => ({ items, toggle, remove, addCustom, addFromRecipe }),
+    () => ({ items, toggle, remove, clearChecked, clearAll, addCustom, addFromRecipe }),
     [items]
   );
 

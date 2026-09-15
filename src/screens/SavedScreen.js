@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Image, TextInput } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
@@ -7,8 +7,11 @@ import { useTheme } from '../theme/ThemeContext';
 import { COLLECTIONS, recipes } from '../data/mockData';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useCollections } from '../context/CollectionsContext';
+import { useNotifications } from '../context/NotificationsContext';
 import { collectionRecipes } from '../utils/recipe';
 import { imageSource } from '../utils/image';
+import AppImage from '../components/AppImage';
+import useFakeRefresh from '../hooks/useFakeRefresh';
 
 export default function SavedScreen({ navigation }) {
   const { colors } = useTheme();
@@ -16,12 +19,17 @@ export default function SavedScreen({ navigation }) {
   const styles = makeStyles(colors);
   const { savedIds } = useSavedRecipes();
   const { collections: userCollections, addCollection } = useCollections();
+  const { pushNotification } = useNotifications();
   const [name, setName] = useState('');
   const [adding, setAdding] = useState(false);
+  const { refreshing, onRefresh } = useFakeRefresh();
 
   const create = () => {
     const t = name.trim();
-    if (t) addCollection(t);
+    if (t) {
+      addCollection(t);
+      pushNotification({ title: 'New collection', body: `"${t}" is ready for recipes.` });
+    }
     setName('');
     setAdding(false);
   };
@@ -39,82 +47,107 @@ export default function SavedScreen({ navigation }) {
     })),
   ];
 
+  const renderCard = ({ item: c }) => {
+    const covers = c.recipeList.slice(0, 4);
+    return (
+      <Pressable
+        style={styles.card}
+        onPress={() =>
+          navigation.navigate('CollectionDetail', { collection: { id: c.id, title: c.title } })
+        }
+      >
+        <View style={styles.cardImg}>
+          {covers.length === 0 ? (
+            <Ionicons name="bookmark-outline" size={18} color={colors.inkFaint} />
+          ) : covers.length === 1 ? (
+            <AppImage source={imageSource(covers[0].image)} style={styles.coverFull} />
+          ) : (
+            <View style={styles.coverGrid}>
+              {covers.map((r, i) => (
+                <AppImage key={r.id + i} source={imageSource(r.image)} style={styles.coverQuad} />
+              ))}
+            </View>
+          )}
+        </View>
+        <Text style={styles.cardTitle}>{c.title}</Text>
+        <Text style={styles.cardCount}>
+          {c.recipeList.length} {c.recipeList.length === 1 ? 'recipe' : 'recipes'}
+        </Text>
+      </Pressable>
+    );
+  };
+
   return (
     <View style={styles.root}>
-      <ScrollView
+      <FlatList
         style={styles.flex}
+        data={cards}
+        keyExtractor={(c) => c.id}
+        renderItem={renderCard}
+        numColumns={2}
+        columnWrapperStyle={styles.gridRow}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => navigation.goBack()}>
-              <Ionicons name="arrow-back" size={18} color={colors.ink} />
-            </Pressable>
-            <Text style={styles.title}>My Collections</Text>
-          </View>
-          <View style={styles.headerActions}>
-            <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => navigation.navigate('Grocery')}>
-              <Ionicons name="cart-outline" size={16} color={colors.ink} />
-            </Pressable>
-            <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => setAdding((v) => !v)}>
-              <Ionicons name={adding ? 'close' : 'add'} size={18} color={colors.ink} />
-            </Pressable>
-          </View>
-        </View>
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        ListHeaderComponent={
+          <>
+            <View style={styles.header}>
+              <View style={styles.headerLeft}>
+                <Pressable
+                  style={styles.iconBtn}
+                  hitSlop={6}
+                  onPress={() => navigation.goBack()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back"
+                >
+                  <Ionicons name="arrow-back" size={18} color={colors.ink} />
+                </Pressable>
+                <Text style={styles.title} accessibilityRole="header">My Collections</Text>
+              </View>
+              <View style={styles.headerActions}>
+                <Pressable
+                  style={styles.iconBtn}
+                  hitSlop={6}
+                  onPress={() => navigation.navigate('Grocery')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Grocery list"
+                >
+                  <Ionicons name="cart-outline" size={16} color={colors.ink} />
+                </Pressable>
+                <Pressable
+                  style={styles.iconBtn}
+                  hitSlop={6}
+                  onPress={() => setAdding((v) => !v)}
+                  accessibilityRole="button"
+                  accessibilityLabel={adding ? 'Cancel new collection' : 'New collection'}
+                >
+                  <Ionicons name={adding ? 'close' : 'add'} size={18} color={colors.ink} />
+                </Pressable>
+              </View>
+            </View>
 
-        {adding && (
-          <View style={styles.newRow}>
-            <TextInput
-              style={styles.input}
-              placeholder="New collection name"
-              placeholderTextColor={colors.inkFaint}
-              value={name}
-              onChangeText={setName}
-              autoFocus
-              onSubmitEditing={create}
-              returnKeyType="done"
-            />
-            <Pressable style={styles.createBtn} onPress={create}>
-              <Text style={styles.createText}>Create</Text>
-            </Pressable>
-          </View>
-        )}
-
-        <View style={styles.grid}>
-          {cards.map((c) => {
-            const covers = c.recipeList.slice(0, 4);
-            return (
-              <Pressable
-                key={c.id}
-                style={styles.card}
-                onPress={() =>
-                  navigation.navigate('CollectionDetail', { collection: { id: c.id, title: c.title } })
-                }
-              >
-                <View style={styles.cardImg}>
-                  {covers.length === 0 ? (
-                    <Ionicons name="bookmark-outline" size={18} color={colors.inkFaint} />
-                  ) : covers.length === 1 ? (
-                    <Image source={imageSource(covers[0].image)} style={styles.coverFull} />
-                  ) : (
-                    <View style={styles.coverGrid}>
-                      {covers.map((r, i) => (
-                        <Image key={r.id + i} source={imageSource(r.image)} style={styles.coverQuad} />
-                      ))}
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.cardTitle}>{c.title}</Text>
-                <Text style={styles.cardCount}>
-                  {c.recipeList.length} {c.recipeList.length === 1 ? 'recipe' : 'recipes'}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </ScrollView>
+            {adding && (
+              <View style={styles.newRow}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="New collection name"
+                  placeholderTextColor={colors.inkFaint}
+                  value={name}
+                  onChangeText={setName}
+                  autoFocus
+                  onSubmitEditing={create}
+                  returnKeyType="done"
+                />
+                <Pressable style={styles.createBtn} onPress={create}>
+                  <Text style={styles.createText}>Create</Text>
+                </Pressable>
+              </View>
+            )}
+          </>
+        }
+      />
     </View>
   );
 }
@@ -163,7 +196,7 @@ function makeStyles(colors) {
       justifyContent: 'center',
     },
     createText: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.onAccent },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 14 },
+    gridRow: { justifyContent: 'space-between', marginBottom: 14 },
     card: { width: '47.5%' },
     cardImg: {
       height: 96,

@@ -30,13 +30,27 @@ export default function TopBar({
         transparent && { backgroundColor: 'transparent', borderBottomWidth: 0 },
       ]}
     >
-      <Pressable onPress={onBack} hitSlop={10} style={styles.side} disabled={!onBack}>
+      <Pressable
+        onPress={onBack}
+        hitSlop={10}
+        style={styles.side}
+        disabled={!onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+      >
         {!!onBack && <Ionicons name="arrow-back" size={22} color={colors.ink} />}
       </Pressable>
-      <Text style={styles.title} numberOfLines={1}>
+      <Text style={styles.title} numberOfLines={1} accessibilityRole="header">
         {title}
       </Text>
-      <Pressable onPress={onRightPress} hitSlop={10} style={styles.side} disabled={!rightIcon}>
+      <Pressable
+        onPress={onRightPress}
+        hitSlop={10}
+        style={styles.side}
+        disabled={!rightIcon}
+        accessibilityRole="button"
+        accessibilityLabel={rightIcon ? `${title} action` : undefined}
+      >
         {rightIcon && <Ionicons name={rightIcon} size={20} color={colors.ink} />}
       </Pressable>
     </View>

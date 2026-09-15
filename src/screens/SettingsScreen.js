@@ -5,6 +5,8 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import { settingsGroups } from '../data/mockData';
+import { useAi } from '../context/AiContext';
+import { tapLight } from '../utils/haptics';
 
 const ROUTES = {
   personal: 'AccountDetails',
@@ -20,11 +22,11 @@ const ROUTES = {
 const APPEARANCE_OPTIONS = [
   { id: 'light', label: 'Light', icon: 'sunny-outline' },
   { id: 'dark', label: 'Dark', icon: 'moon-outline' },
-  { id: 'system', label: 'System', icon: 'phone-portrait-outline' },
 ];
 
 export default function SettingsScreen({ navigation }) {
   const { colors, mode, setMode } = useTheme();
+  const { hasKey } = useAi();
   const styles = makeStyles(colors);
 
   return (
@@ -46,7 +48,13 @@ export default function SettingsScreen({ navigation }) {
                 <Pressable
                   key={opt.id}
                   style={[styles.segment, active && styles.segmentActive]}
-                  onPress={() => setMode(opt.id)}
+                  onPress={() => {
+                    if (!active) tapLight();
+                    setMode(opt.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`${opt.label} appearance`}
                 >
                   <Ionicons
                     name={opt.icon}
@@ -59,6 +67,29 @@ export default function SettingsScreen({ navigation }) {
                 </Pressable>
               );
             })}
+          </View>
+        </View>
+
+        <View style={styles.group}>
+          <Text style={styles.groupTitle}>INTELLIGENCE</Text>
+          <View style={styles.card}>
+            <Pressable
+              style={styles.row}
+              onPress={() => navigation.navigate('AiSettings')}
+              accessibilityRole="button"
+              accessibilityLabel="Ask the Chef AI settings"
+            >
+              <View style={styles.iconWrap}>
+                <Ionicons name="sparkles-outline" size={17} color={colors.sageDeep} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowLabel}>Ask the Chef</Text>
+                <Text style={styles.rowSub}>
+                  {hasKey ? 'Answering with ChatGPT' : 'Using the built-in assistant'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={17} color={colors.inkFaint} />
+            </Pressable>
           </View>
         </View>
 
@@ -76,6 +107,8 @@ export default function SettingsScreen({ navigation }) {
                   onPress={() => {
                     if (ROUTES[item.id]) navigation.navigate(ROUTES[item.id]);
                   }}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
                 >
                   <View style={styles.iconWrap}>
                     <Ionicons name={item.icon} size={17} color={colors.sageDeep} />

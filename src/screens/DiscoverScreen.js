@@ -1,13 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, TextInput } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import { recipes, TIME_BUCKETS, DIFFICULTIES, DIETARIES } from '../data/mockData';
+import { recipes, TIME_BUCKETS, DIFFICULTIES, DIETARIES, CUISINES, VIBES } from '../data/mockData';
 import { metaLine, timeBucket } from '../utils/recipe';
+import { recipeSearchScore } from '../utils/fuzzy';
 import { imageSource } from '../utils/image';
+import AppImage from '../components/AppImage';
+import EmptyState from '../components/EmptyState';
+import FadeInView from '../components/FadeInView';
 import { useSearchHistory } from '../context/SearchHistoryContext';
+import useFakeRefresh from '../hooks/useFakeRefresh';
+
+const SORT_OPTIONS = [
+  { key: 'relevance', label: 'Relevance' },
+  { key: 'rating', label: 'Top Rated' },
+  { key: 'quick', label: 'Quickest' },
+];
 
 export default function DiscoverScreen({ navigation, route }) {
   const { colors } = useTheme();
@@ -15,54 +26,93 @@ export default function DiscoverScreen({ navigation, route }) {
   const styles = makeStyles(colors);
   const scrollRef = useRef(null);
   const { recent, addRecent, clearRecent, filters, setFilters } = useSearchHistory();
+  const { refreshing, onRefresh } = useFakeRefresh();
 
   const [query, setQuery] = useState('');
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  // "See all" / craving shortcuts land straight on the results list; only the
+  // filter icon (no param) opens with the filter panel expanded.
+  const [filtersOpen, setFiltersOpen] = useState(route?.params?.filtersOpen ?? true);
+  // "Browse by craving"'s bare "See all" wants a plain, unfiltered catalog
+  // browse — no filter row at all, not just collapsed.
+  const hideFilters = route?.params?.hideFilters === true;
 
-  const { timeBkt, difficulty, dietary, category } = filters;
+  const { timeBkt, difficulty, dietary, category, cuisine, vibe, sort } = filters;
   const setTimeBkt = (v) => setFilters((f) => ({ ...f, timeBkt: v }));
   const setDifficulty = (v) => setFilters((f) => ({ ...f, difficulty: v }));
+  const setCuisine = (v) => setFilters((f) => ({ ...f, cuisine: v }));
+  const setSort = (v) => setFilters((f) => ({ ...f, sort: v }));
   const setDietary = (updater) =>
     setFilters((f) => ({ ...f, dietary: typeof updater === 'function' ? updater(f.dietary) : updater }));
+  const setVibe = (updater) =>
+    setFilters((f) => ({ ...f, vibe: typeof updater === 'function' ? updater(f.vibe) : updater }));
 
   const routeCategory = route?.params?.category;
   useEffect(() => {
     if (routeCategory) {
-      setFilters({ timeBkt: null, difficulty: null, dietary: [], category: routeCategory });
+      setFilters((f) => ({
+        timeBkt: null,
+        difficulty: null,
+        dietary: [],
+        category: routeCategory,
+        cuisine: null,
+        vibe: [],
+        sort: f.sort,
+      }));
     }
   }, [routeCategory]);
 
   const toggleIn = (arr, setArr, v) => setArr(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
 
   const clearAll = () => {
-    setFilters({ timeBkt: null, difficulty: null, dietary: [], category: null });
+    setFilters((f) => ({
+      timeBkt: null,
+      difficulty: null,
+      dietary: [],
+      category: null,
+      cuisine: null,
+      vibe: [],
+      sort: f.sort,
+    }));
     setQuery('');
   };
 
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return recipes.filter((r) => {
-      if (q) {
-        const hit =
-          r.title.toLowerCase().includes(q) ||
-          (r.description || '').toLowerCase().includes(q) ||
-          r.ingredients.some((ing) => ing.name.toLowerCase().includes(q));
-        if (!hit) return false;
-      }
-      if (category && r.category !== category) return false;
-      if (timeBkt && timeBucket(r.minutes) !== timeBkt) return false;
-      if (difficulty && r.difficulty !== difficulty) return false;
-      if (dietary.length && !dietary.every((d) => r.dietary.includes(d))) return false;
-      return true;
-    });
-  }, [query, category, timeBkt, difficulty, dietary]);
+    const q = query.trim();
+    const scored = [];
+    for (const r of recipes) {
+      if (category && r.category !== category) continue;
+      if (timeBkt && timeBucket(r.minutes) !== timeBkt) continue;
+      if (difficulty && r.difficulty !== difficulty) continue;
+      if (dietary.length && !dietary.every((d) => r.dietary.includes(d))) continue;
+      if (cuisine && r.cuisine !== cuisine) continue;
+      // Vibe is a mood, not a requirement — match any selected mood, not all.
+      if (vibe.length && !vibe.some((v) => r.vibe.includes(v))) continue;
+      // Fuzzy: tolerates typos ("adbo") and accents, ranks by match quality.
+      const score = q ? recipeSearchScore(q, r) : 1;
+      if (score <= 0) continue;
+      scored.push({ r, score });
+    }
+    if (sort === 'rating') {
+      scored.sort((a, b) => b.r.rating - a.r.rating || b.r.reviews - a.r.reviews);
+    } else if (sort === 'quick') {
+      scored.sort((a, b) => a.r.minutes - b.r.minutes);
+    } else if (q) {
+      scored.sort((a, b) => b.score - a.score);
+    }
+    return scored.map((x) => x.r);
+  }, [query, category, timeBkt, difficulty, dietary, cuisine, vibe, sort]);
 
   const activeCount =
-    (timeBkt ? 1 : 0) + (difficulty ? 1 : 0) + dietary.length + (category ? 1 : 0);
+    (timeBkt ? 1 : 0) +
+    (difficulty ? 1 : 0) +
+    dietary.length +
+    (category ? 1 : 0) +
+    (cuisine ? 1 : 0) +
+    vibe.length;
 
   const showResults = () => {
     setFiltersOpen(false);
-    setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 30);
+    setTimeout(() => scrollRef.current?.scrollToOffset({ offset: 0, animated: true }), 30);
   };
 
   const Chip = ({ label, active, onPress }) => (
@@ -73,107 +123,155 @@ export default function DiscoverScreen({ navigation, route }) {
 
   return (
     <View style={styles.root}>
-      <ScrollView
+      <FlatList
         ref={scrollRef}
         style={styles.flex}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.headerRow}>
-          <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}>
-            <Ionicons name="chevron-back" size={18} color={colors.ink} />
-          </Pressable>
-          <Text style={styles.title}>Search</Text>
-        </View>
-
-        <View style={styles.searchRow}>
-          <View style={styles.searchField}>
-            <Ionicons name="search" size={15} color={colors.inkSoft} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search recipes..."
-              placeholderTextColor={colors.inkFaint}
-              value={query}
-              onChangeText={setQuery}
-              onEndEditing={(e) => addRecent(e.nativeEvent.text)}
-              autoCapitalize="none"
-              returnKeyType="search"
-            />
-          </View>
-          <Pressable onPress={clearAll} hitSlop={8}>
-            <Text style={styles.clear}>Clear</Text>
-          </Pressable>
-        </View>
-
-        {!query && recent.length > 0 && (
-          <View style={styles.recentWrap}>
-            <View style={styles.recentHead}>
-              <Text style={styles.groupLabel}>Recent</Text>
-              <Pressable hitSlop={8} onPress={clearRecent}>
-                <Text style={styles.clear}>Clear</Text>
-              </Pressable>
-            </View>
-            <View style={styles.chipWrap}>
-              {recent.map((r) => (
-                <Pressable key={r} style={styles.recentChip} onPress={() => setQuery(r)}>
-                  <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
-                  <Text style={styles.recentChipText}>{r}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        )}
-
-        <Pressable style={styles.filterToggle} onPress={() => setFiltersOpen((v) => !v)}>
-          <Ionicons name="options-outline" size={15} color={colors.inkSoft} />
-          <Text style={styles.filterToggleText}>
-            Filters{activeCount ? ` · ${activeCount}` : ''}
-          </Text>
-          <Ionicons name={filtersOpen ? 'chevron-up' : 'chevron-down'} size={14} color={colors.inkFaint} />
-        </Pressable>
-
-        {filtersOpen && (
-          <View>
-            <Text style={styles.groupLabel}>Cooking Time</Text>
-            <View style={styles.chipWrap}>
-              {TIME_BUCKETS.map((t) => (
-                <Chip key={t.key} label={t.label} active={timeBkt === t.key} onPress={() => setTimeBkt(timeBkt === t.key ? null : t.key)} />
-              ))}
-            </View>
-
-            <Text style={styles.groupLabel}>Difficulty</Text>
-            <View style={styles.chipWrap}>
-              {DIFFICULTIES.map((d) => (
-                <Chip key={d} label={d} active={difficulty === d} onPress={() => setDifficulty(difficulty === d ? null : d)} />
-              ))}
-            </View>
-
-            <Text style={styles.groupLabel}>Dietary</Text>
-            <View style={styles.chipWrap}>
-              {DIETARIES.map((d) => (
-                <Chip key={d.key} label={d.label} active={dietary.includes(d.key)} onPress={() => toggleIn(dietary, setDietary, d.key)} />
-              ))}
-            </View>
-          </View>
-        )}
-
-        <Text style={styles.groupLabel}>{results.length} recipes found</Text>
-        <View style={{ gap: 10 }}>
-          {results.map((r) => (
-            <Pressable key={r.id} style={styles.resultCard} onPress={() => navigation.navigate('RecipeDetail', { recipe: r })}>
-              <Image source={imageSource(r.image)} style={styles.resultThumb} />
+        data={results}
+        keyExtractor={(r) => r.id}
+        renderItem={({ item: r, index: i }) => (
+          <FadeInView delay={Math.min(i, 8) * 35}>
+            <Pressable
+              style={styles.resultCard}
+              onPress={() => navigation.navigate('RecipeDetail', { recipe: r })}
+            >
+              <AppImage source={imageSource(r.image)} style={styles.resultThumb} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.resultTitle}>{r.title}</Text>
                 <Text style={styles.resultMeta}>{metaLine(r)}</Text>
               </View>
             </Pressable>
-          ))}
-          {results.length === 0 && (
-            <Text style={styles.empty}>No recipes match these filters.</Text>
-          )}
-        </View>
-      </ScrollView>
+          </FadeInView>
+        )}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        ListHeaderComponent={
+          <>
+            <View style={styles.headerRow}>
+              <Pressable
+                style={styles.backBtn}
+                hitSlop={8}
+                onPress={() => navigation.goBack()}
+                accessibilityRole="button"
+                accessibilityLabel="Go back"
+              >
+                <Ionicons name="chevron-back" size={18} color={colors.ink} />
+              </Pressable>
+              <Text style={styles.title} accessibilityRole="header">Search</Text>
+            </View>
+
+            <View style={styles.searchRow}>
+              <View style={styles.searchField}>
+                <Ionicons name="search" size={15} color={colors.inkSoft} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search recipes..."
+                  placeholderTextColor={colors.inkFaint}
+                  value={query}
+                  onChangeText={setQuery}
+                  onEndEditing={(e) => addRecent(e.nativeEvent.text)}
+                  autoCapitalize="none"
+                  returnKeyType="search"
+                />
+              </View>
+              <Pressable onPress={clearAll} hitSlop={8}>
+                <Text style={styles.clear}>Clear</Text>
+              </Pressable>
+            </View>
+
+            {!query && recent.length > 0 && (
+              <View style={styles.recentWrap}>
+                <View style={styles.recentHead}>
+                  <Text style={styles.groupLabel}>Recent</Text>
+                  <Pressable hitSlop={8} onPress={clearRecent}>
+                    <Text style={styles.clear}>Clear</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.chipWrap}>
+                  {recent.map((r) => (
+                    <Pressable key={r} style={styles.recentChip} onPress={() => setQuery(r)}>
+                      <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
+                      <Text style={styles.recentChipText}>{r}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {!hideFilters && (
+              <Pressable style={styles.filterToggle} onPress={() => setFiltersOpen((v) => !v)}>
+                <Ionicons name="options-outline" size={15} color={colors.inkSoft} />
+                <Text style={styles.filterToggleText}>
+                  Filters{activeCount ? ` · ${activeCount}` : ''}
+                </Text>
+                <Ionicons name={filtersOpen ? 'chevron-up' : 'chevron-down'} size={14} color={colors.inkFaint} />
+              </Pressable>
+            )}
+
+            {!hideFilters && filtersOpen && (
+              <View>
+                <Text style={styles.groupLabel}>Cooking Time</Text>
+                <View style={styles.chipWrap}>
+                  {TIME_BUCKETS.map((t) => (
+                    <Chip key={t.key} label={t.label} active={timeBkt === t.key} onPress={() => setTimeBkt(timeBkt === t.key ? null : t.key)} />
+                  ))}
+                </View>
+
+                <Text style={styles.groupLabel}>Difficulty</Text>
+                <View style={styles.chipWrap}>
+                  {DIFFICULTIES.map((d) => (
+                    <Chip key={d} label={d} active={difficulty === d} onPress={() => setDifficulty(difficulty === d ? null : d)} />
+                  ))}
+                </View>
+
+                <Text style={styles.groupLabel}>Dietary</Text>
+                <View style={styles.chipWrap}>
+                  {DIETARIES.map((d) => (
+                    <Chip key={d.key} label={d.label} active={dietary.includes(d.key)} onPress={() => toggleIn(dietary, setDietary, d.key)} />
+                  ))}
+                </View>
+
+                <Text style={styles.groupLabel}>Cuisine</Text>
+                <View style={styles.chipWrap}>
+                  {CUISINES.map((c) => (
+                    <Chip key={c} label={c} active={cuisine === c} onPress={() => setCuisine(cuisine === c ? null : c)} />
+                  ))}
+                </View>
+
+                <Text style={styles.groupLabel}>Mood</Text>
+                <View style={styles.chipWrap}>
+                  {VIBES.map((v) => (
+                    <Chip key={v.key} label={v.label} active={vibe.includes(v.key)} onPress={() => toggleIn(vibe, setVibe, v.key)} />
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {!hideFilters && (
+              <>
+                <Text style={styles.groupLabel}>Sort</Text>
+                <View style={styles.chipWrap}>
+                  {SORT_OPTIONS.map((s) => (
+                    <Chip key={s.key} label={s.label} active={sort === s.key} onPress={() => setSort(s.key)} />
+                  ))}
+                </View>
+              </>
+            )}
+
+            <Text style={styles.groupLabel}>{results.length} recipes found</Text>
+          </>
+        }
+        ListEmptyComponent={
+          <EmptyState
+            icon="search-outline"
+            title="Nothing matches"
+            message="Try removing a filter or searching for a different ingredient."
+          />
+        }
+      />
 
       {filtersOpen && (
         <View style={styles.ctaWrap}>

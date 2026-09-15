@@ -8,6 +8,8 @@ const CommunityContext = createContext(null);
 
 let nextId = 0;
 const genId = () => `post-${Date.now()}-${nextId++}`;
+let nextCommentId = 0;
+const genCommentId = () => `comment-${Date.now()}-${nextCommentId++}`;
 
 export function CommunityProvider({ children }) {
   const [posts, setPosts] = useState(initialPosts);
@@ -44,7 +46,31 @@ export function CommunityProvider({ children }) {
     setPosts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  const value = useMemo(() => ({ posts, addPost, removePost }), [posts]);
+  // Persisted per-post state — survives app restart, unlike the old
+  // component-local `liked` map it replaces.
+  const toggleLike = (id) => {
+    setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, likedByMe: !p.likedByMe } : p)));
+  };
+
+  // Real comments you actually write. Seed posts ship with a baseline
+  // `comments` count (other cooks' pre-existing activity) but no individual
+  // text for those — only what's added here is ever shown.
+  const addComment = (postId, text) => {
+    const t = String(text).trim();
+    if (!t) return;
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId
+          ? { ...p, myComments: [...(p.myComments || []), { id: genCommentId(), text: t, ts: Date.now() }] }
+          : p
+      )
+    );
+  };
+
+  const value = useMemo(
+    () => ({ posts, addPost, removePost, toggleLike, addComment }),
+    [posts]
+  );
 
   return (
     <CommunityContext.Provider value={value}>{children}</CommunityContext.Provider>

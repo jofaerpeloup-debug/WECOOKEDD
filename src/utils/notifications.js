@@ -129,3 +129,36 @@ export async function scheduledCount() {
     return 0;
   }
 }
+
+// Mirrors every real OS notification WeCooked actually delivers (a cook
+// reminder firing, the test reminder) into the in-app bell feed, so what you
+// see there matches what was really sent — not a guess at what "might" have
+// happened. Listens for both delivery (app foregrounded) and the user tapping
+// one (from the notification center); a notification's own identifier is used
+// to dedupe, since both listeners can fire for the same one. Returns an
+// unsubscribe function.
+const mirroredIds = new Set();
+export function subscribeToDeliveries(onNotification) {
+  const mirror = (content, id) => {
+    if (id) {
+      if (mirroredIds.has(id)) return;
+      mirroredIds.add(id);
+    }
+    onNotification({ title: content?.title || 'Reminder', body: content?.body || '' });
+  };
+
+  try {
+    const received = Notifications.addNotificationReceivedListener((event) => {
+      mirror(event.request.content, event.request.identifier);
+    });
+    const responded = Notifications.addNotificationResponseReceivedListener((response) => {
+      mirror(response.notification.request.content, response.notification.request.identifier);
+    });
+    return () => {
+      received.remove();
+      responded.remove();
+    };
+  } catch {
+    return () => {};
+  }
+}

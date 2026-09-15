@@ -1,23 +1,15 @@
 import React, { useMemo, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  Image,
-  Animated,
-  useWindowDimensions,
-} from 'react-native';
+import { View, Text, Pressable, StyleSheet, Image, Animated, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useAuth } from '../context/AuthContext';
+import { tapLight, tapMedium } from '../utils/haptics';
 
-// Swipeable carousel. Each slide: a photo up top, a headline block over the
-// fade, and a floating "preview card" lower down sketching what that part of
-// the app actually looks like — built from WeCooked's own screens, not a
-// literal screenshot.
+// Swipeable carousel. Each slide: a full-bleed food photo, a headline block over
+// the scrim, and a floating "preview card" that sketches what that part of the
+// app actually looks like — built from WeCooked's own UI, not a screenshot.
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 const SLIDES = [
@@ -25,51 +17,46 @@ const SLIDES = [
     image: require('../../assets/recipe-chicken-adobo.jpg'),
     tag: 'Discover',
     title: 'One search,\nevery recipe',
-    desc: 'A feed tuned to your taste, with filters for time, difficulty and diet — so you always know what to cook next.',
+    desc: 'Filters for time, difficulty and diet — tuned to your taste.',
     mock: 'search',
     caption: 'Popular Recipes',
-    captionNote: 'Matched to your taste',
-    panelDesc: 'Search by time, difficulty or diet and see what fits.',
+    note: '247 recipes',
   },
   {
     image: require('../../assets/recipe-sisig.jpg'),
     tag: 'Cook Mode',
     title: 'Cook it\nhands-free',
-    desc: 'Full-screen guided steps with built-in timers keep you moving without touching the screen.',
+    desc: 'Full-screen guided steps, with a timer built into each one.',
     mock: 'cook',
-    caption: 'Now Cooking',
-    captionNote: 'Step 3 of 7',
-    panelDesc: 'Follow along hands-free, with a timer built into every step.',
+    caption: 'Chicken Adobo',
+    note: 'Step 3 of 7',
   },
   {
     image: require('../../assets/recipe-ginataang-gulay.jpg'),
     tag: 'Ingredient Swaps',
     title: 'Out of something?\nSwap it',
-    desc: 'Get a substitute in the right ratio, with quick tasting notes, for any ingredient you’re missing.',
+    desc: 'A substitute in the right ratio, with a quick tasting note.',
     mock: 'swap',
-    caption: 'Suggested Swap',
-    captionNote: 'Ratios included',
-    panelDesc: "Swap ratios and tasting notes for anything you're missing.",
+    caption: 'Find a swap',
+    note: '1 : 1 ratio',
   },
   {
     image: require('../../assets/recipe-kare-kare.jpg'),
     tag: 'Meal Plan',
     title: 'Plan the week,\nshop once',
-    desc: 'Drop recipes onto a weekly plan and auto-build the grocery list from what you picked.',
+    desc: 'Add recipes to your week and the grocery list builds itself.',
     mock: 'plan',
     caption: 'This Week',
-    captionNote: '3 meals planned',
-    panelDesc: 'Drag recipes onto your week — the grocery list builds itself.',
+    note: '3 meals planned',
   },
   {
     image: require('../../assets/recipe-turon.jpg'),
     tag: 'Community',
     title: 'Cook with\neveryone',
-    desc: "Share what you're making, get inspired by other home cooks, and ask the Chef anytime.",
+    desc: 'Share what you make, get inspired, and ask the Chef anytime.',
     mock: 'community',
     caption: 'Latest Post',
-    captionNote: 'From the community',
-    panelDesc: 'See what other home cooks are making right now.',
+    note: '2h ago',
   },
 ];
 
@@ -79,16 +66,18 @@ const TOTAL = SLIDES.length;
 const C = {
   ink: '#FAF9F6',
   bodyDim: 'rgba(250,249,246,0.72)',
-  skip: 'rgba(250,249,246,0.78)',
+  faint: 'rgba(250,249,246,0.5)',
+  skip: 'rgba(250,249,246,0.82)',
   accent: '#D9A64B',
   dark: '#15180F',
-  seg: 'rgba(250,249,246,0.3)',
+  seg: 'rgba(250,249,246,0.28)',
   btn: '#FAF9F6',
   btnInk: '#26332B',
-  panel: 'rgba(19,22,15,0.92)',
+  panel: 'rgba(18,21,14,0.94)',
   panelLine: 'rgba(250,249,246,0.14)',
-  mockFill: 'rgba(250,249,246,0.09)',
+  mockFill: 'rgba(250,249,246,0.08)',
   mockLine: 'rgba(250,249,246,0.16)',
+  mockText: 'rgba(250,249,246,0.9)',
 };
 
 // --- mini feature "mockups" shown inside the preview card ------------------
@@ -97,18 +86,29 @@ function SearchMock() {
   return (
     <>
       <View style={mockStyles.searchRow}>
-        <Ionicons name="search" size={13} color={C.bodyDim} />
-        <View style={mockStyles.searchBar} />
+        <Ionicons name="search" size={13} color={C.faint} />
+        <Text style={mockStyles.searchText}>Chicken Adobo</Text>
         <View style={mockStyles.filterDot}>
           <Ionicons name="options" size={11} color={C.btnInk} />
         </View>
       </View>
-      {[0.62, 0.44].map((w, i) => (
-        <View key={i} style={mockStyles.listRow}>
+      <View style={mockStyles.chipRow}>
+        <View style={mockStyles.chip}>
+          <Text style={mockStyles.chipText}>Under 30 min</Text>
+        </View>
+        <View style={mockStyles.chip}>
+          <Text style={mockStyles.chipText}>Easy</Text>
+        </View>
+      </View>
+      {[
+        { name: 'Pork Sinigang', meta: '45 min · Easy' },
+        { name: 'Pancit Canton', meta: '25 min · Easy' },
+      ].map((r) => (
+        <View key={r.name} style={mockStyles.listRow}>
           <View style={mockStyles.thumb} />
-          <View style={{ flex: 1, gap: 6 }}>
-            <View style={[mockStyles.textBar, { width: `${w * 100}%` }]} />
-            <View style={[mockStyles.textBar, mockStyles.textBarSm, { width: '35%' }]} />
+          <View style={{ flex: 1, gap: 5 }}>
+            <Text style={mockStyles.rowTitle}>{r.name}</Text>
+            <Text style={mockStyles.rowMeta}>{r.meta}</Text>
           </View>
         </View>
       ))}
@@ -125,15 +125,15 @@ function CookMock() {
         </View>
       </View>
       <View style={mockStyles.rowBetween}>
-        <View style={[mockStyles.textBar, { width: 90 }]} />
+        <Text style={mockStyles.rowTitle}>Simmer the sauce</Text>
         <View style={mockStyles.timerChip}>
           <Ionicons name="time-outline" size={11} color={C.accent} />
           <Text style={mockStyles.timerText}>2:45</Text>
         </View>
       </View>
       <View style={mockStyles.dotsRow}>
-        {[0, 1, 2, 3, 4].map((i) => (
-          <View key={i} style={[mockStyles.stepDot, i === 2 && mockStyles.stepDotOn]} />
+        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+          <View key={i} style={[mockStyles.stepDot, i < 2 && mockStyles.stepDotDone, i === 2 && mockStyles.stepDotOn]} />
         ))}
       </View>
     </>
@@ -149,31 +149,38 @@ function SwapMock() {
         </View>
         <Ionicons name="swap-horizontal" size={16} color={C.accent} />
         <View style={[mockStyles.swapChip, mockStyles.swapChipOn]}>
-          <Text style={mockStyles.swapChipText}>Coconut Oil</Text>
+          <Text style={mockStyles.swapChipText}>Coconut oil</Text>
         </View>
       </View>
+      <Text style={mockStyles.ratioText}>1 tbsp → 1 tbsp</Text>
       <View style={mockStyles.noteRow}>
         <Ionicons name="checkmark-circle" size={13} color={C.accent} />
-        <View style={[mockStyles.textBar, mockStyles.textBarSm, { width: '58%' }]} />
+        <Text style={mockStyles.noteText}>Adds a light coconut note</Text>
       </View>
     </>
   );
 }
 
 function PlanMock() {
+  const planned = new Set([1, 3, 5]);
   return (
     <>
       <View style={mockStyles.weekRow}>
         {DAY_LABELS.map((d, i) => (
           <View key={i} style={mockStyles.dayCol}>
             <Text style={mockStyles.dayLabel}>{d}</Text>
-            <View style={[mockStyles.dayDot, (i === 1 || i === 3 || i === 5) && mockStyles.dayDotOn]} />
+            <View style={[mockStyles.dayDot, planned.has(i) && mockStyles.dayDotOn]} />
           </View>
         ))}
       </View>
+      <View style={mockStyles.mealChip}>
+        <View style={mockStyles.mealThumb} />
+        <Text style={mockStyles.rowTitle}>Kare-Kare</Text>
+        <Text style={mockStyles.rowMeta}>Wed</Text>
+      </View>
       <View style={mockStyles.noteRow}>
         <Ionicons name="cart-outline" size={13} color={C.accent} />
-        <View style={[mockStyles.textBar, mockStyles.textBarSm, { width: '50%' }]} />
+        <Text style={mockStyles.noteText}>18 items on your list</Text>
       </View>
     </>
   );
@@ -184,19 +191,20 @@ function CommunityMock() {
     <>
       <View style={mockStyles.postHead}>
         <View style={mockStyles.avatar} />
-        <View style={{ gap: 6 }}>
-          <View style={[mockStyles.textBar, { width: 84 }]} />
-          <View style={[mockStyles.textBar, mockStyles.textBarSm, { width: 50 }]} />
+        <View style={{ gap: 3 }}>
+          <Text style={mockStyles.rowTitle}>Maria Santos</Text>
+          <Text style={mockStyles.rowMeta}>2 hours ago</Text>
         </View>
       </View>
       <View style={mockStyles.postPhoto} />
+      <Text style={mockStyles.noteText}>First try at sisig — nailed it.</Text>
       <View style={mockStyles.rowBetween}>
         <View style={mockStyles.iconCount}>
           <Ionicons name="heart" size={13} color={C.accent} />
           <Text style={mockStyles.timerText}>128</Text>
         </View>
         <View style={mockStyles.iconCount}>
-          <Ionicons name="chatbubble-outline" size={12} color={C.bodyDim} />
+          <Ionicons name="chatbubble-outline" size={12} color={C.faint} />
           <Text style={mockStyles.timerText}>24</Text>
         </View>
       </View>
@@ -214,27 +222,41 @@ export default function OnboardingScreen({ navigation, route }) {
   const scrollRef = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
   const [step, setStep] = useState(0);
+  const stepRef = useRef(0);
 
   const replay = route?.params?.replay;
 
-  const finish = () => {
+  const leave = (dest) => {
     if (replay) {
       navigation.goBack();
       return;
     }
     markOnboardingSeen();
-    navigation.replace(isLoggedIn ? 'MainTabs' : 'Login');
+    navigation.replace(dest);
   };
+  const finish = () => leave(isLoggedIn ? 'MainTabs' : 'Login');
+
   const goTo = (i) => {
     const t = Math.max(0, Math.min(TOTAL - 1, i));
     scrollRef.current?.scrollTo({ x: t * width, animated: true });
+  };
+  const next = () => {
+    tapLight();
+    goTo(stepRef.current + 1);
   };
 
   const onScroll = useMemo(
     () =>
       Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
         useNativeDriver: true,
-        listener: (e) => setStep(Math.round(e.nativeEvent.contentOffset.x / width)),
+        listener: (e) => {
+          const s = Math.round(e.nativeEvent.contentOffset.x / width);
+          if (s !== stepRef.current) {
+            stepRef.current = s;
+            setStep(s);
+            tapLight();
+          }
+        },
       }),
     [width, scrollX]
   );
@@ -262,7 +284,7 @@ export default function OnboardingScreen({ navigation, route }) {
               {
                 translateY: scrollX.interpolate({
                   inputRange,
-                  outputRange: [16, 0, 16],
+                  outputRange: [14, 0, 14],
                   extrapolate: 'clamp',
                 }),
               },
@@ -270,7 +292,7 @@ export default function OnboardingScreen({ navigation, route }) {
           };
 
           // The ScrollView mounts every page up front (it isn't virtualized), so
-          // without this every slide's photo would fetch at once on first paint.
+          // this keeps only the visible photo + its neighbours loaded.
           const nearby = Math.abs(i - step) <= 1;
           const Mock = MOCKS[s.mock];
 
@@ -279,29 +301,37 @@ export default function OnboardingScreen({ navigation, route }) {
               {nearby && <Image source={s.image} style={styles.fill} resizeMode="cover" />}
 
               <LinearGradient
-                colors={['rgba(21,24,15,0.75)', 'rgba(21,24,15,0.15)', 'rgba(21,24,15,0.55)', 'rgba(21,24,15,0.97)']}
-                locations={[0, 0.28, 0.5, 1]}
+                colors={[
+                  'rgba(18,21,14,0.82)',
+                  'rgba(18,21,14,0.04)',
+                  'rgba(18,21,14,0.5)',
+                  'rgba(18,21,14,0.98)',
+                ]}
+                locations={[0, 0.3, 0.56, 1]}
                 style={styles.fill}
                 pointerEvents="none"
               />
 
-              <Animated.View
-                style={[styles.topBlock, { top: insets.top + spacing.xxl, width }, anim]}
-              >
-                <Text style={styles.eyebrow}>{`STEP ${i + 1} — ${s.tag.toUpperCase()}`}</Text>
+              <Animated.View style={[styles.topBlock, { top: insets.top + spacing.xxl, width }, anim]}>
+                <Text style={styles.eyebrow}>{s.tag.toUpperCase()}</Text>
                 <Text style={styles.headline}>{s.title}</Text>
                 <View style={styles.rule} />
-                <Text style={styles.lead}>{s.desc}</Text>
+                <Text style={styles.lead} numberOfLines={2}>
+                  {s.desc}
+                </Text>
               </Animated.View>
 
-              <View style={[styles.bottomBlock, { width, paddingBottom: insets.bottom + spacing.lg }]}>
+              <Animated.View
+                style={[styles.bottomBlock, { width, paddingBottom: insets.bottom + spacing.lg }, anim]}
+              >
                 <View style={styles.panel}>
-                  <View style={styles.handle} />
+                  <View style={styles.notch} />
                   <View style={styles.captionRow}>
                     <Text style={styles.caption}>{s.caption}</Text>
-                    <Text style={styles.captionNote}>{s.captionNote}</Text>
+                    <View style={styles.notePill}>
+                      <Text style={styles.noteText}>{s.note}</Text>
+                    </View>
                   </View>
-                  <Text style={styles.panelDesc}>{s.panelDesc}</Text>
                   <Mock />
                 </View>
 
@@ -312,17 +342,43 @@ export default function OnboardingScreen({ navigation, route }) {
                     ))}
                   </View>
                   {isLast ? (
-                    <Pressable style={styles.cta} onPress={finish}>
+                    <Pressable
+                      style={styles.cta}
+                      onPress={() => {
+                        tapMedium();
+                        finish();
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Get started"
+                    >
                       <Text style={styles.ctaText}>Get Started</Text>
                       <Ionicons name="arrow-forward" size={16} color={C.btnInk} />
                     </Pressable>
                   ) : (
-                    <Pressable hitSlop={12} onPress={() => goTo(i + 1)} style={styles.chevronBtn}>
+                    <Pressable
+                      hitSlop={12}
+                      onPress={next}
+                      style={styles.chevronBtn}
+                      accessibilityRole="button"
+                      accessibilityLabel="Next"
+                    >
                       <Ionicons name="chevron-forward" size={20} color={C.ink} />
                     </Pressable>
                   )}
                 </View>
-              </View>
+
+                {isLast && !replay && (
+                  <Pressable
+                    style={styles.loginLink}
+                    hitSlop={8}
+                    onPress={() => leave('Login')}
+                    accessibilityRole="button"
+                    accessibilityLabel="I already have an account"
+                  >
+                    <Text style={styles.loginLinkText}>I already have an account</Text>
+                  </Pressable>
+                )}
+              </Animated.View>
             </View>
           );
         })}
@@ -333,9 +389,14 @@ export default function OnboardingScreen({ navigation, route }) {
         <Pressable
           style={[styles.skipBtn, { top: insets.top + spacing.sm }]}
           hitSlop={10}
-          onPress={finish}
+          onPress={() => {
+            tapLight();
+            finish();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={replay ? 'Close the tour' : 'Skip onboarding'}
         >
-          <Text style={styles.skipText}>Skip</Text>
+          <Text style={styles.skipText}>{replay ? 'Done' : 'Skip'}</Text>
         </Pressable>
       )}
     </View>
@@ -346,59 +407,58 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.dark },
   fill: { ...StyleSheet.absoluteFillObject },
   // Both blocks are absolutely positioned and anchored (top-left / bottom-left)
-  // rather than stretched to fill a flex container — sized purely by their own
-  // content, the same technique already proven reliable on-device.
+  // rather than stretched inside a flex container — sized purely by their own
+  // content, the technique proven reliable on-device for this screen.
   topBlock: { position: 'absolute', left: 0, paddingHorizontal: spacing.xl },
   bottomBlock: { position: 'absolute', left: 0, bottom: 0, paddingHorizontal: spacing.xl },
 
   eyebrow: {
     fontFamily: typography.body.bold,
     fontSize: 12,
-    letterSpacing: 1.6,
+    letterSpacing: 1.8,
     color: C.bodyDim,
   },
   headline: {
-    fontFamily: typography.display.fontFamily,
-    fontSize: 30,
-    lineHeight: 36,
+    fontFamily: typography.display.fontFamilyBold,
+    fontSize: 33,
+    lineHeight: 39,
     color: C.accent,
     marginTop: spacing.sm,
   },
-  rule: { width: 44, height: 3, borderRadius: 2, backgroundColor: C.accent, marginVertical: spacing.sm },
-  lead: { fontFamily: typography.body.fontFamily, fontSize: 13.5, lineHeight: 20, color: C.bodyDim },
+  rule: { width: 44, height: 3, borderRadius: 2, backgroundColor: C.accent, marginVertical: spacing.md },
+  lead: { fontFamily: typography.body.fontFamily, fontSize: 14, lineHeight: 21, color: C.bodyDim },
 
   panel: {
     backgroundColor: C.panel,
-    borderRadius: 22,
+    borderRadius: 24,
     borderWidth: 1,
     borderColor: C.panelLine,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
     gap: spacing.md,
   },
-  handle: {
+  notch: {
     alignSelf: 'center',
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: C.panelLine,
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(250,249,246,0.2)',
     marginBottom: spacing.xs,
   },
   captionRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 2,
   },
-  caption: { fontFamily: typography.display.fontFamily, fontSize: 15, color: C.ink },
-  captionNote: { fontFamily: typography.body.medium, fontSize: 11, color: C.accent },
-  panelDesc: {
-    fontFamily: typography.body.fontFamily,
-    fontSize: 12.5,
-    lineHeight: 18,
-    color: C.bodyDim,
-    marginTop: -4,
+  caption: { fontFamily: typography.display.fontFamily, fontSize: 16, color: C.ink },
+  notePill: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(217,166,75,0.16)',
   },
+  noteText: { fontFamily: typography.body.semibold, fontSize: 10.5, color: C.accent, letterSpacing: 0.2 },
 
   footerRow: {
     flexDirection: 'row',
@@ -408,12 +468,12 @@ const styles = StyleSheet.create({
   },
   dots: { flexDirection: 'row', gap: 6 },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.seg },
-  dotOn: { width: 20, backgroundColor: C.accent },
+  dotOn: { width: 22, backgroundColor: C.accent },
   chevronBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(250,249,246,0.14)',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(250,249,246,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -422,12 +482,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 46,
+    height: 48,
     paddingHorizontal: spacing.xl,
     borderRadius: radius.pill,
     backgroundColor: C.btn,
   },
   ctaText: { fontFamily: typography.body.semibold, fontSize: 14, letterSpacing: 0.3, color: C.btnInk },
+  loginLink: { alignSelf: 'center', marginTop: spacing.md, paddingVertical: 4 },
+  loginLinkText: {
+    fontFamily: typography.body.semibold,
+    fontSize: 12.5,
+    color: C.bodyDim,
+    textDecorationLine: 'underline',
+  },
 
   wordmark: {
     position: 'absolute',
@@ -438,7 +505,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     letterSpacing: 0.5,
     color: C.ink,
-    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowColor: 'rgba(0,0,0,0.4)',
     textShadowRadius: 8,
   },
   skipBtn: { position: 'absolute', right: spacing.xl, paddingVertical: 2 },
@@ -446,7 +513,7 @@ const styles = StyleSheet.create({
     fontFamily: typography.body.semibold,
     fontSize: 13,
     color: C.skip,
-    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowColor: 'rgba(0,0,0,0.4)',
     textShadowRadius: 8,
   },
 });
@@ -461,7 +528,7 @@ const mockStyles = StyleSheet.create({
     paddingHorizontal: 12,
     height: 38,
   },
-  searchBar: { flex: 1, height: 6, borderRadius: 3, backgroundColor: C.mockLine },
+  searchText: { flex: 1, fontFamily: typography.body.fontFamily, fontSize: 12, color: C.mockText },
   filterDot: {
     width: 22,
     height: 22,
@@ -470,10 +537,18 @@ const mockStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  chipRow: { flexDirection: 'row', gap: 6 },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: C.mockFill,
+  },
+  chipText: { fontFamily: typography.body.medium, fontSize: 10.5, color: C.bodyDim },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   thumb: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.mockFill },
-  textBar: { height: 8, borderRadius: 4, backgroundColor: C.mockLine },
-  textBarSm: { height: 6, opacity: 0.7 },
+  rowTitle: { fontFamily: typography.body.semibold, fontSize: 12.5, color: C.mockText },
+  rowMeta: { fontFamily: typography.body.fontFamily, fontSize: 10.5, color: C.faint },
 
   stepPhoto: {
     height: 84,
@@ -504,9 +579,10 @@ const mockStyles = StyleSheet.create({
   timerText: { fontFamily: typography.body.semibold, fontSize: 11, color: C.ink },
   dotsRow: { flexDirection: 'row', gap: 5 },
   stepDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.mockLine },
-  stepDotOn: { backgroundColor: C.accent },
+  stepDotDone: { backgroundColor: 'rgba(217,166,75,0.5)' },
+  stepDotOn: { backgroundColor: C.accent, width: 16 },
 
-  swapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  swapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   swapChip: {
     flex: 1,
     paddingVertical: 10,
@@ -516,13 +592,36 @@ const mockStyles = StyleSheet.create({
   },
   swapChipOn: { backgroundColor: 'rgba(217,166,75,0.18)' },
   swapChipText: { fontFamily: typography.body.semibold, fontSize: 12, color: C.ink },
+  ratioText: {
+    fontFamily: typography.body.medium,
+    fontSize: 11,
+    color: C.faint,
+    textAlign: 'center',
+    marginTop: -2,
+  },
   noteRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  noteText: {
+    fontFamily: typography.body.fontFamily,
+    fontSize: 11,
+    lineHeight: 15,
+    color: C.bodyDim,
+    flexShrink: 1,
+  },
 
   weekRow: { flexDirection: 'row', justifyContent: 'space-between' },
   dayCol: { alignItems: 'center', gap: 6 },
   dayLabel: { fontFamily: typography.body.semibold, fontSize: 10.5, color: C.bodyDim },
   dayDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.mockLine },
   dayDotOn: { backgroundColor: C.accent },
+  mealChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: C.mockFill,
+    borderRadius: radius.md,
+    padding: 7,
+  },
+  mealThumb: { width: 26, height: 26, borderRadius: 7, backgroundColor: C.mockLine },
 
   postHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   avatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: C.mockFill },

@@ -8,7 +8,10 @@ import OnboardingScreen from '../screens/OnboardingScreen';
 import LoginScreen from '../screens/LoginScreen';
 import MainTabs from './MainTabs';
 import AssistantScreen from '../screens/AssistantScreen';
+import AiSettingsScreen from '../screens/AiSettingsScreen';
 import DiscoverScreen from '../screens/DiscoverScreen';
+import TrendingScreen from '../screens/TrendingScreen';
+import CookingHistoryScreen from '../screens/CookingHistoryScreen';
 import RecipeDetailScreen from '../screens/RecipeDetailScreen';
 import CookModeScreen from '../screens/CookModeScreen';
 import MealPlanScreen from '../screens/MealPlanScreen';
@@ -16,7 +19,6 @@ import CollectionDetailScreen from '../screens/CollectionDetailScreen';
 import ShoppingListScreen from '../screens/ShoppingListScreen';
 import SavedScreen from '../screens/SavedScreen';
 import IngredientStudioScreen from '../screens/IngredientStudioScreen';
-import SwapDetailScreen from '../screens/SwapDetailScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import AccountDetailsScreen from '../screens/AccountDetailsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -32,7 +34,7 @@ const Stack = createNativeStackNavigator();
 
 export default function RootNavigator() {
   const { colors, isDark } = useTheme();
-  const { isLoggedIn, onboardingSeen } = useAuth();
+  const { isLoggedIn, isGuest, onboardingSeen } = useAuth();
 
   const navTheme = {
     ...(isDark ? DarkTheme : DefaultTheme),
@@ -49,14 +51,19 @@ export default function RootNavigator() {
   return (
     <NavigationContainer theme={navTheme}>
       <Stack.Navigator
-        initialRouteName={isLoggedIn ? 'MainTabs' : onboardingSeen ? 'Login' : 'Onboarding'}
+        initialRouteName={
+          isLoggedIn || isGuest ? 'MainTabs' : onboardingSeen ? 'Login' : 'Onboarding'
+        }
         screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
       >
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen name="Assistant" component={AssistantScreen} />
+        <Stack.Screen name="AiSettings" component={AiSettingsScreen} />
         <Stack.Screen name="Search" component={DiscoverScreen} />
+        <Stack.Screen name="Trending" component={TrendingScreen} />
+        <Stack.Screen name="CookingHistory" component={CookingHistoryScreen} />
         <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
         <Stack.Screen
           name="CookMode"
@@ -67,11 +74,6 @@ export default function RootNavigator() {
         <Stack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
         <Stack.Screen name="Saved" component={SavedScreen} />
         <Stack.Screen name="Grocery" component={ShoppingListScreen} />
-        <Stack.Screen
-          name="SwapDetail"
-          component={SwapDetailScreen}
-          options={{ animation: 'slide_from_bottom' }}
-        />
         <Stack.Screen name="IngredientStudio" component={IngredientStudioScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="AccountDetails" component={AccountDetailsScreen} />

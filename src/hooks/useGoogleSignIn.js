@@ -215,5 +215,8 @@ function useGoogleSignInDevice() {
 // Authorization Grant instead, since Expo Go can't receive a redirect back
 // from Google (see .env.example for why, and which client IDs each needs).
 export default function useGoogleSignIn() {
+  // Platform.OS is fixed for the app's lifetime, so this branch never flips
+  // between renders — the hooks-order rule doesn't actually apply here.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   return Platform.OS === 'web' ? useGoogleSignInWeb() : useGoogleSignInDevice();
 }

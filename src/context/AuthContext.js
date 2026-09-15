@@ -2,22 +2,26 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { loadJSON, saveJSON, removeItem } from '../utils/storage';
 
 const AUTH_KEY = 'wecooked:isLoggedIn';
+const GUEST_KEY = 'wecooked:isGuest';
 const ONBOARDED_KEY = 'wecooked:onboardingSeen';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
   const [onboardingSeen, setOnboardingSeen] = useState(false);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const [stored, seen] = await Promise.all([
+      const [stored, guest, seen] = await Promise.all([
         loadJSON(AUTH_KEY, false),
+        loadJSON(GUEST_KEY, false),
         loadJSON(ONBOARDED_KEY, false),
       ]);
       setIsLoggedIn(!!stored);
+      setIsGuest(!!guest);
       setOnboardingSeen(!!seen);
       setIsReady(true);
     })();
@@ -25,13 +29,22 @@ export function AuthProvider({ children }) {
 
   const login = async () => {
     setIsLoggedIn(true);
-    await saveJSON(AUTH_KEY, true);
+    setIsGuest(false);
+    await Promise.all([saveJSON(AUTH_KEY, true), removeItem(GUEST_KEY)]);
+  };
+
+  // Browse-only entry — no account, no persisted sign-in.
+  const continueAsGuest = async () => {
+    setIsGuest(true);
+    setIsLoggedIn(false);
+    await Promise.all([saveJSON(GUEST_KEY, true), removeItem(AUTH_KEY)]);
   };
 
   const logout = async () => {
     setIsLoggedIn(false);
+    setIsGuest(false);
     setOnboardingSeen(false);
-    await Promise.all([removeItem(AUTH_KEY), removeItem(ONBOARDED_KEY)]);
+    await Promise.all([removeItem(AUTH_KEY), removeItem(GUEST_KEY), removeItem(ONBOARDED_KEY)]);
   };
 
   const markOnboardingSeen = async () => {
@@ -41,7 +54,16 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ isLoggedIn, isReady, onboardingSeen, login, logout, markOnboardingSeen }}
+      value={{
+        isLoggedIn,
+        isGuest,
+        isReady,
+        onboardingSeen,
+        login,
+        continueAsGuest,
+        logout,
+        markOnboardingSeen,
+      }}
     >
       {children}
     </AuthContext.Provider>

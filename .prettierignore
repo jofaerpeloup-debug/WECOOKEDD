@@ -1,0 +1,7 @@
+dist
+node_modules
+android
+ios
+.expo
+assets/design_handoff_wecooked
+package-lock.json

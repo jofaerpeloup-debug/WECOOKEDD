@@ -12,7 +12,6 @@ export function confirm(
 ) {
   if (Platform.OS === 'web') {
     const text = message ? `${title}\n\n${message}` : title;
-    // eslint-disable-next-line no-alert
     if (typeof window !== 'undefined' && window.confirm(text)) onConfirm?.();
     return;
   }
@@ -25,7 +24,6 @@ export function confirm(
 export function notify(title, message, onDismiss) {
   if (Platform.OS === 'web') {
     const text = message ? `${title}\n\n${message}` : title;
-    // eslint-disable-next-line no-alert
     if (typeof window !== 'undefined') window.alert(text);
     onDismiss?.();
     return;

@@ -6,6 +6,7 @@ import {
   scheduleMealReminder,
   cancelMealReminder,
 } from '../utils/notifications';
+import { tapMedium } from '../utils/haptics';
 
 const STORAGE_KEY = 'wecooked:mealPlan';
 
@@ -48,12 +49,14 @@ export function MealPlanProvider({ children }) {
     if (hydrated.current) saveJSON(STORAGE_KEY, plan);
   }, [plan]);
 
-  const addToPlan = (day, recipeId) =>
+  const addToPlan = (day, recipeId) => {
+    if (!plan[day]?.some((it) => it.recipeId === recipeId)) tapMedium();
     setPlan((p) =>
       p[day].some((it) => it.recipeId === recipeId)
         ? p
         : { ...p, [day]: [...p[day], { recipeId, time: null, notifId: null }] }
     );
+  };
 
   const removeFromPlan = (day, recipeId) =>
     setPlan((p) => {
@@ -61,6 +64,28 @@ export function MealPlanProvider({ children }) {
       if (it?.notifId) cancelMealReminder(it.notifId);
       return { ...p, [day]: p[day].filter((x) => x.recipeId !== recipeId) };
     });
+
+  // Moves a planned meal from one day to another (drag-and-drop in
+  // MealPlanScreen). Cancels any cook reminder — it was scheduled for the old
+  // day of week, so it's no longer valid on the new one.
+  const moveMeal = (fromDay, toDay, recipeId) => {
+    if (fromDay === toDay) return;
+    setPlan((p) => {
+      const item = p[fromDay].find((it) => it.recipeId === recipeId);
+      if (!item) return p;
+      if (item.notifId) cancelMealReminder(item.notifId);
+      const fromList = p[fromDay].filter((it) => it.recipeId !== recipeId);
+      if (p[toDay].some((it) => it.recipeId === recipeId)) {
+        return { ...p, [fromDay]: fromList };
+      }
+      tapMedium();
+      return {
+        ...p,
+        [fromDay]: fromList,
+        [toDay]: [...p[toDay], { recipeId, time: null, notifId: null }],
+      };
+    });
+  };
 
   const clearDay = (day) =>
     setPlan((p) => {
@@ -118,7 +143,7 @@ export function MealPlanProvider({ children }) {
   const plannedCount = PLAN_DAYS.reduce((n, d) => n + plan[d].length, 0);
 
   const value = useMemo(
-    () => ({ plan, addToPlan, removeFromPlan, clearDay, clearAll, setMealTime, plannedCount }),
+    () => ({ plan, addToPlan, removeFromPlan, moveMeal, clearDay, clearAll, setMealTime, plannedCount }),
     [plan]
   );
 

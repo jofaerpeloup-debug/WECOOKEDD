@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, Modal, ScrollView, Image, TextInput } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Modal, ScrollView, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
@@ -7,6 +7,7 @@ import { useTheme } from '../theme/ThemeContext';
 import { recipes } from '../data/mockData';
 import { metaLine } from '../utils/recipe';
 import { imageSource } from '../utils/image';
+import AppImage from './AppImage';
 import { useMealPlan, PLAN_DAYS } from '../context/MealPlanContext';
 
 /**
@@ -59,7 +60,7 @@ export default function MealPlanSheet({ visible, onClose, day, recipeId }) {
                     onClose();
                   }}
                 >
-                  <Image source={imageSource(r.image)} style={styles.thumb} />
+                  <AppImage source={imageSource(r.image)} style={styles.thumb} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.recTitle}>{r.title}</Text>
                     <Text style={styles.recMeta}>{metaLine(r)}</Text>

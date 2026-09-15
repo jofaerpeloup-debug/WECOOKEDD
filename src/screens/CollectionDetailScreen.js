@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing } from '../theme/theme';
@@ -7,6 +7,8 @@ import { useTheme } from '../theme/ThemeContext';
 import { recipes } from '../data/mockData';
 import { metaLine, collectionRecipes } from '../utils/recipe';
 import { imageSource } from '../utils/image';
+import AppImage from '../components/AppImage';
+import EmptyState from '../components/EmptyState';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useCollections } from '../context/CollectionsContext';
 import { confirm } from '../utils/alert';
@@ -39,7 +41,13 @@ export default function CollectionDetailScreen({ navigation, route }) {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+        <Pressable
+          style={styles.backBtn}
+          hitSlop={8}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="chevron-back" size={18} color={colors.ink} />
         </Pressable>
         <View style={{ flex: 1 }}>
@@ -49,7 +57,12 @@ export default function CollectionDetailScreen({ navigation, route }) {
           </Text>
         </View>
         {userCollection && (
-          <Pressable hitSlop={8} onPress={confirmDelete}>
+          <Pressable
+            hitSlop={8}
+            onPress={confirmDelete}
+            accessibilityRole="button"
+            accessibilityLabel="Delete collection"
+          >
             <Ionicons name="trash-outline" size={18} color={colors.error} />
           </Pressable>
         )}
@@ -57,9 +70,15 @@ export default function CollectionDetailScreen({ navigation, route }) {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {list.length === 0 ? (
-          <Text style={styles.empty}>
-            {userCollection ? 'Add recipes from any recipe page.' : 'Nothing here yet.'}
-          </Text>
+          <EmptyState
+            icon="bookmark-outline"
+            title="Nothing saved here yet"
+            message={
+              userCollection
+                ? 'Open any recipe and tap the collection icon to add it here.'
+                : 'Recipes you save will show up in this collection automatically.'
+            }
+          />
         ) : (
           list.map((r) => (
             <View key={r.id} style={styles.row}>
@@ -67,14 +86,20 @@ export default function CollectionDetailScreen({ navigation, route }) {
                 style={styles.rowMain}
                 onPress={() => navigation.navigate('RecipeDetail', { recipe: r })}
               >
-                <Image source={imageSource(r.image)} style={styles.thumb} />
+                <AppImage source={imageSource(r.image)} style={styles.thumb} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle}>{r.title}</Text>
                   <Text style={styles.rowMeta}>{metaLine(r)}</Text>
                 </View>
               </Pressable>
               {userCollection && (
-                <Pressable hitSlop={8} onPress={() => toggleInCollection(collection.id, r.id)} style={styles.remove}>
+                <Pressable
+                  hitSlop={8}
+                  onPress={() => toggleInCollection(collection.id, r.id)}
+                  style={styles.remove}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${r.title} from collection`}
+                >
                   <Ionicons name="remove-circle-outline" size={20} color={colors.inkFaint} />
                 </Pressable>
               )}
@@ -107,7 +132,6 @@ function makeStyles(colors) {
     title: { fontFamily: typography.display.fontFamily, fontSize: 20, color: colors.ink },
     count: { fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.inkFaint, marginTop: 1 },
     scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl, gap: 10 },
-    empty: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkFaint, textAlign: 'center', paddingVertical: 32 },
     row: {
       flexDirection: 'row',
       alignItems: 'center',

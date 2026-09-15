@@ -66,6 +66,21 @@ export function scaleQty(qty, ratio) {
   return scaled === null ? qty : `${scaled}${m[2]}`;
 }
 
+// A bigger batch takes a bit longer to cook (more volume to heat through,
+// simmer, or fit in a pan) but not linearly — prep work and most step times
+// barely change. Only 25% of the total time scales with the serving ratio;
+// the rest stays fixed. Doubling servings adds ~12.5% to the time; halving
+// them shaves off ~6%. Shared by the recipe's displayed total time and Cook
+// Mode's individual step timers, so both stay consistent with each other.
+export function cookTimeFactor(ratio) {
+  return 0.75 + 0.25 * ratio;
+}
+
+export function scaleMinutes(minutes, ratio) {
+  if (ratio === 1) return minutes;
+  return Math.max(1, Math.round(minutes * cookTimeFactor(ratio)));
+}
+
 // ---- spice / chili heat -----------------------------------------------------
 
 // Resolve a SPICE_LEVELS entry by key, falling back to "medium".

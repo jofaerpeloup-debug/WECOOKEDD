@@ -17,15 +17,19 @@ import {
 } from '@expo-google-fonts/work-sans';
 
 import RootNavigator from './src/navigation/RootNavigator';
+import ErrorBoundary from './src/components/ErrorBoundary';
 import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { AiProvider } from './src/context/AiContext';
 import { ProfileProvider } from './src/context/ProfileContext';
 import { SavedRecipesProvider } from './src/context/SavedRecipesContext';
 import { CookedRecipesProvider } from './src/context/CookedRecipesContext';
+import { RecentlyViewedProvider } from './src/context/RecentlyViewedContext';
 import { CollectionsProvider } from './src/context/CollectionsContext';
 import { ReviewsProvider } from './src/context/ReviewsContext';
 import { MealPlanProvider } from './src/context/MealPlanContext';
-import { NotificationsProvider } from './src/context/NotificationsContext';
+import { NotificationsProvider, useNotifications } from './src/context/NotificationsContext';
+import { subscribeToDeliveries } from './src/utils/notifications';
 import { ShoppingListProvider } from './src/context/ShoppingListContext';
 import { SearchHistoryProvider } from './src/context/SearchHistoryContext';
 import { CommunityProvider } from './src/context/CommunityContext';
@@ -51,9 +55,11 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
 // Data providers, applied outermost-first.
 const PROVIDERS = [
   AuthProvider,
+  AiProvider,
   ProfileProvider,
   SavedRecipesProvider,
   CookedRecipesProvider,
+  RecentlyViewedProvider,
   CollectionsProvider,
   ReviewsProvider,
   MealPlanProvider,
@@ -70,11 +76,18 @@ function withProviders(children) {
 function AppGate({ fontsLoaded }) {
   const { colors, isDark } = useTheme();
   const { isReady } = useAuth();
+  const { pushNotification } = useNotifications();
   const ready = fontsLoaded && isReady;
 
   useEffect(() => {
     if (ready) SplashScreen.hideAsync();
   }, [ready]);
+
+  // Mirrors real cook-reminder deliveries into the in-app bell feed, so it
+  // reflects exactly what was actually sent to this device.
+  useEffect(() => {
+    return subscribeToDeliveries(pushNotification);
+  }, [pushNotification]);
 
   // Paint the web page canvas with the theme background so any area the app
   // doesn't cover (or briefly, before layout) never flashes as a bare gap.
@@ -89,7 +102,9 @@ function AppGate({ fontsLoaded }) {
   return (
     <View style={{ flex: 1, backgroundColor: colors.cream }}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
-      <RootNavigator />
+      <ErrorBoundary>
+        <RootNavigator />
+      </ErrorBoundary>
     </View>
   );
 }

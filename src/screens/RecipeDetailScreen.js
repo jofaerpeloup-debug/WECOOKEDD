@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, Share } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Share } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
@@ -8,9 +8,12 @@ import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { useCookedRecipes } from '../context/CookedRecipesContext';
 import { useReviews } from '../context/ReviewsContext';
+import { useNotifications } from '../context/NotificationsContext';
+import { useRecentlyViewed } from '../context/RecentlyViewedContext';
 import CollectionPickerSheet from '../components/CollectionPickerSheet';
 import MealPlanSheet from '../components/MealPlanSheet';
-import { scaleQty, estimateNutrition } from '../utils/recipe';
+import AppImage from '../components/AppImage';
+import { scaleQty, scaleMinutes, estimateNutrition } from '../utils/recipe';
 import { imageSource } from '../utils/image';
 import { notify } from '../utils/alert';
 
@@ -26,10 +29,17 @@ export default function RecipeDetailScreen({ navigation, route }) {
   const { addFromRecipe } = useShoppingList();
   const { hasCooked } = useCookedRecipes();
   const { setRating, getRating, displayFor } = useReviews();
+  const { pushNotification } = useNotifications();
+  const { addRecentlyViewed } = useRecentlyViewed();
   const saved = isSaved(recipe.id);
   const cooked = hasCooked(recipe.id);
   const myRating = getRating(recipe.id);
   const shown = displayFor(recipe);
+
+  useEffect(() => {
+    addRecentlyViewed(recipe.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipe.id]);
 
   const baseServings = recipe.servings || 4;
   const [servings, setServings] = useState(baseServings);
@@ -37,10 +47,26 @@ export default function RecipeDetailScreen({ navigation, route }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const ratio = servings / baseServings;
+  const scaledTime = scaleMinutes(recipe.minutes, ratio);
 
   const addToList = () => {
-    addFromRecipe(recipe);
-    notify('Added to Grocery List', `${recipe.ingredients.length} ingredients from ${recipe.title}.`);
+    const { added, alreadyAdded } = addFromRecipe(recipe);
+    if (added === 0) {
+      notify('Already on your list', `${recipe.title}'s ingredients are already in your grocery list.`);
+      return;
+    }
+    notify(
+      'Added to Grocery List',
+      alreadyAdded > 0
+        ? `${added} new ingredient${added === 1 ? '' : 's'} from ${recipe.title} (${alreadyAdded} already on your list).`
+        : `${added} ingredient${added === 1 ? '' : 's'} from ${recipe.title}.`
+    );
+  };
+
+  const handleToggleSaved = () => {
+    const wasSaved = saved;
+    toggleSaved(recipe.id);
+    if (!wasSaved) pushNotification({ title: 'Saved to your recipes', body: recipe.title });
   };
 
   const scaledIngredients = useMemo(
@@ -70,26 +96,52 @@ export default function RecipeDetailScreen({ navigation, route }) {
     <View style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
         <View style={styles.hero}>
-          <Image source={imageSource(recipe.image)} style={styles.heroImg} />
+          <AppImage source={imageSource(recipe.image)} style={styles.heroImg} />
           <View style={[styles.heroBtns, { top: insets.top + spacing.sm }]}>
-            <Pressable style={styles.circleBtn} onPress={() => navigation.goBack()}>
+            <Pressable
+              style={styles.circleBtn}
+              onPress={() => navigation.goBack()}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
               <Ionicons name="chevron-back" size={16} color="#FAF9F6" />
             </Pressable>
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable style={styles.circleBtn} onPress={() => toggleSaved(recipe.id)}>
+              <Pressable
+                style={styles.circleBtn}
+                onPress={handleToggleSaved}
+                accessibilityRole="button"
+                accessibilityLabel={saved ? 'Remove from saved' : 'Save recipe'}
+                accessibilityState={{ selected: saved }}
+              >
                 <Ionicons
                   name={saved ? 'heart' : 'heart-outline'}
                   size={16}
                   color={saved ? colors.favorite : '#FAF9F6'}
                 />
               </Pressable>
-              <Pressable style={styles.circleBtn} onPress={() => setPickerOpen(true)}>
+              <Pressable
+                style={styles.circleBtn}
+                onPress={() => setPickerOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Add to a collection"
+              >
                 <Ionicons name="albums-outline" size={15} color="#FAF9F6" />
               </Pressable>
-              <Pressable style={styles.circleBtn} onPress={addToList}>
+              <Pressable
+                style={styles.circleBtn}
+                onPress={addToList}
+                accessibilityRole="button"
+                accessibilityLabel="Add ingredients to grocery list"
+              >
                 <Ionicons name="cart-outline" size={15} color="#FAF9F6" />
               </Pressable>
-              <Pressable style={styles.circleBtn} onPress={share}>
+              <Pressable
+                style={styles.circleBtn}
+                onPress={share}
+                accessibilityRole="button"
+                accessibilityLabel="Share recipe"
+              >
                 <Ionicons name="share-social-outline" size={15} color="#FAF9F6" />
               </Pressable>
             </View>
@@ -115,7 +167,14 @@ export default function RecipeDetailScreen({ navigation, route }) {
             <Text style={styles.rateLabel}>{myRating ? 'Your rating' : 'Rate this recipe'}</Text>
             <View style={{ flexDirection: 'row', gap: 4 }}>
               {[1, 2, 3, 4, 5].map((n) => (
-                <Pressable key={n} hitSlop={4} onPress={() => setRating(recipe.id, n)}>
+                <Pressable
+                  key={n}
+                  hitSlop={4}
+                  onPress={() => setRating(recipe.id, n)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Rate ${n} star${n === 1 ? '' : 's'}`}
+                  accessibilityState={{ selected: n <= myRating }}
+                >
                   <Ionicons
                     name={n <= myRating ? 'star' : 'star-outline'}
                     size={20}
@@ -127,7 +186,7 @@ export default function RecipeDetailScreen({ navigation, route }) {
           </View>
 
           <View style={styles.metaRow}>
-            <Meta value={`${recipe.minutes} min`} label="Time" styles={styles} />
+            <Meta value={`${scaledTime} min`} label="Time" styles={styles} />
             <Meta value={recipe.difficulty} label="Difficulty" styles={styles} />
             <Meta value={`${servings}`} label="Servings" styles={styles} />
           </View>
@@ -137,11 +196,25 @@ export default function RecipeDetailScreen({ navigation, route }) {
           <View style={styles.ingHeader}>
             <Text style={styles.eyebrow}>Ingredients</Text>
             <View style={styles.stepper}>
-              <Pressable style={styles.stepBtn} onPress={dec} hitSlop={8} disabled={servings <= MIN_SERVINGS}>
+              <Pressable
+                style={styles.stepBtn}
+                onPress={dec}
+                hitSlop={8}
+                disabled={servings <= MIN_SERVINGS}
+                accessibilityRole="button"
+                accessibilityLabel="Decrease servings"
+              >
                 <Ionicons name="remove" size={15} color={servings <= MIN_SERVINGS ? colors.inkFaint : colors.sageDeep} />
               </Pressable>
               <Text style={styles.stepValue}>{servings}</Text>
-              <Pressable style={styles.stepBtn} onPress={inc} hitSlop={8} disabled={servings >= MAX_SERVINGS}>
+              <Pressable
+                style={styles.stepBtn}
+                onPress={inc}
+                hitSlop={8}
+                disabled={servings >= MAX_SERVINGS}
+                accessibilityRole="button"
+                accessibilityLabel="Increase servings"
+              >
                 <Ionicons name="add" size={15} color={servings >= MAX_SERVINGS ? colors.inkFaint : colors.sageDeep} />
               </Pressable>
             </View>

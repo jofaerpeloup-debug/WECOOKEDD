@@ -1,16 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import NotificationsDropdown from '../components/NotificationsDropdown';
+import { useTabBarScroll, TAB_BAR_CLEARANCE } from '../components/TabBarContext';
+import AppImage from '../components/AppImage';
 import { DIETARY_PREF_OPTIONS, COOKING_LEVELS, COLLECTIONS } from '../data/mockData';
 import { useAuth } from '../context/AuthContext';
 import { useProfile } from '../context/ProfileContext';
 import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useCollections } from '../context/CollectionsContext';
 import { useCookedRecipes } from '../context/CookedRecipesContext';
+import { useNotifications } from '../context/NotificationsContext';
 import { loadJSON, saveJSON } from '../utils/storage';
 import { confirm } from '../utils/alert';
 
@@ -20,11 +23,13 @@ export default function ProfileScreen({ navigation }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
-  const { logout } = useAuth();
+  const { logout, isGuest } = useAuth();
   const { profile, avatar, bio } = useProfile();
   const { savedIds } = useSavedRecipes();
   const { collections } = useCollections();
   const { cookedCount } = useCookedRecipes();
+  const { unreadCount } = useNotifications();
+  const tabScroll = useTabBarScroll();
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [dietOpen, setDietOpen] = useState(false);
@@ -50,6 +55,10 @@ export default function ProfileScreen({ navigation }) {
     setLevel((l) => COOKING_LEVELS[(COOKING_LEVELS.indexOf(l) + 1) % COOKING_LEVELS.length]);
 
   const handleLogout = () => {
+    if (isGuest) {
+      navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+      return;
+    }
     confirm(
       'Log Out',
       'Are you sure you want to log out?',
@@ -71,20 +80,34 @@ export default function ProfileScreen({ navigation }) {
         style={styles.flex}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
         showsVerticalScrollIndicator={false}
+        {...tabScroll}
       >
         <View style={styles.header}>
-          <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => navigation.navigate('Settings')}>
+          <Pressable
+            style={styles.iconBtn}
+            hitSlop={6}
+            onPress={() => navigation.navigate('Settings')}
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+          >
             <Ionicons name="settings-outline" size={16} color={colors.ink} />
           </Pressable>
-          <Text style={styles.headerTitle}>Profile</Text>
-          <Pressable style={styles.iconBtn} hitSlop={6} onPress={() => setNotifOpen(true)}>
+          <Text style={styles.headerTitle} accessibilityRole="header">Profile</Text>
+          <Pressable
+            style={styles.iconBtn}
+            hitSlop={6}
+            onPress={() => setNotifOpen((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+          >
             <Ionicons name="notifications-outline" size={16} color={colors.ink} />
+            {unreadCount > 0 && <View style={styles.bellDot} />}
           </Pressable>
         </View>
 
         <View style={styles.identity}>
           {avatar ? (
-            <Image source={{ uri: avatar }} style={styles.avatar} />
+            <AppImage source={{ uri: avatar }} style={styles.avatar} />
           ) : (
             <View style={styles.avatar}>
               <Text style={styles.avatarInitial}>{initial}</Text>
@@ -101,7 +124,12 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.statsRow}>
           <Stat n={savedCount} label="Recipes saved" styles={styles} />
           <Stat n={collectionsCount} label="Collections" styles={styles} />
-          <Stat n={cookedCount} label="Cooked" styles={styles} />
+          <Stat
+            n={cookedCount}
+            label="Cooked"
+            styles={styles}
+            onPress={() => navigation.navigate('CookingHistory')}
+          />
         </View>
 
         <Text style={styles.eyebrow}>Preferences</Text>
@@ -140,6 +168,11 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.prefValue}>›</Text>
           </Pressable>
 
+          <Pressable style={styles.prefRow} onPress={() => navigation.navigate('CookingHistory')}>
+            <Text style={styles.prefLabel}>Cooking History</Text>
+            <Text style={styles.prefValue}>{cookedCount} ›</Text>
+          </Pressable>
+
           <Pressable style={styles.prefRow} onPress={cycleLevel}>
             <Text style={styles.prefLabel}>Cooking Level</Text>
             <Text style={styles.prefValue}>{level} ›</Text>
@@ -152,8 +185,14 @@ export default function ProfileScreen({ navigation }) {
         </View>
 
         <Pressable style={styles.logout} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={17} color={colors.error} />
-          <Text style={styles.logoutText}>Log out</Text>
+          <Ionicons
+            name={isGuest ? 'log-in-outline' : 'log-out-outline'}
+            size={17}
+            color={isGuest ? colors.sageDeep : colors.error}
+          />
+          <Text style={[styles.logoutText, isGuest && styles.loginText]}>
+            {isGuest ? 'Log in or sign up' : 'Log out'}
+          </Text>
         </Pressable>
       </ScrollView>
 
@@ -166,12 +205,18 @@ export default function ProfileScreen({ navigation }) {
   );
 }
 
-function Stat({ n, label, styles }) {
+function Stat({ n, label, styles, onPress }) {
+  const Container = onPress ? Pressable : View;
   return (
-    <View style={{ alignItems: 'center' }}>
+    <Container
+      style={{ alignItems: 'center' }}
+      onPress={onPress}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={onPress ? `${n} ${label.toLowerCase()}` : undefined}
+    >
       <Text style={styles.statN}>{n}</Text>
       <Text style={styles.statLabel}>{label}</Text>
-    </View>
+    </Container>
   );
 }
 
@@ -179,7 +224,7 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     flex: { flex: 1 },
-    scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
+    scroll: { paddingHorizontal: spacing.xl, paddingBottom: TAB_BAR_CLEARANCE },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     iconBtn: {
       width: 36,
@@ -188,6 +233,15 @@ function makeStyles(colors) {
       backgroundColor: colors.creamDeep,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    bellDot: {
+      position: 'absolute',
+      top: 8,
+      right: 9,
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: colors.stone,
     },
     headerTitle: { fontFamily: typography.display.fontFamilyItalic, fontSize: 18, color: colors.ink },
     identity: { alignItems: 'center', marginTop: spacing.lg },
@@ -257,5 +311,6 @@ function makeStyles(colors) {
     pickerTextOn: { color: colors.onAccent },
     logout: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 18, marginTop: spacing.sm },
     logoutText: { fontFamily: typography.body.semibold, fontSize: 14, color: colors.error },
+    loginText: { color: colors.sageDeep },
   });
 }

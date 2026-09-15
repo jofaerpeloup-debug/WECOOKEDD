@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  Image,
   Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,10 +13,13 @@ import TopBar from '../components/TopBar';
 import Input from '../components/Input';
 import Button from '../components/Button';
 import Badge from '../components/Badge';
+import AppImage from '../components/AppImage';
 import { chef } from '../data/mockData';
 import { useProfile } from '../context/ProfileContext';
+import { confirm, notify } from '../utils/alert';
 
 const ALLERGY_CHOICES = ['Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free', 'Nut Allergy', 'Shellfish Allergy'];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const AVATAR_CHOICES = [
   chef.avatar,
@@ -39,6 +41,7 @@ export default function AccountDetailsScreen({ navigation }) {
   const [dietary, setDietary] = useState(profile.dietary || []);
   const [addingChip, setAddingChip] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [emailError, setEmailError] = useState('');
 
   const initial = (username || 'A').trim().charAt(0).toUpperCase();
 
@@ -48,26 +51,68 @@ export default function AccountDetailsScreen({ navigation }) {
     setAddingChip(false);
   };
 
+  // Snapshot of what's actually saved, so backing out can warn about
+  // unsaved edits instead of silently discarding them.
+  const original = useRef({
+    username: profile.name,
+    email: profile.email,
+    bio: profile.bio || '',
+    avatar: profile.avatar || '',
+    dietary: profile.dietary || [],
+  }).current;
+
+  const isDirty =
+    username !== original.username ||
+    email !== original.email ||
+    bio !== original.bio ||
+    avatar !== original.avatar ||
+    dietary.length !== original.dietary.length ||
+    [...dietary].sort().join('|') !== [...original.dietary].sort().join('|');
+
+  const goBack = () => {
+    if (isDirty) {
+      confirm(
+        'Discard changes?',
+        "You've edited your account details but haven't saved.",
+        () => navigation.goBack(),
+        { confirmLabel: 'Discard', destructive: true }
+      );
+    } else {
+      navigation.goBack();
+    }
+  };
+
   const saveChanges = () => {
+    const trimmedEmail = email.trim();
+    if (trimmedEmail && !EMAIL_RE.test(trimmedEmail)) {
+      setEmailError('Enter a valid email address.');
+      return;
+    }
+    setEmailError('');
     updateProfile({
       name: username.trim() || profile.name,
-      email: email.trim(),
+      email: trimmedEmail,
       bio: bio.trim(),
       avatar,
       dietary,
     });
-    navigation.goBack();
+    notify('Profile updated', 'Your account details were saved.', () => navigation.goBack());
   };
 
   return (
     <View style={styles.root}>
-      <TopBar mode="back" title="Account Details" onBack={() => navigation.goBack()} />
+      <TopBar mode="back" title="Account Details" onBack={goBack} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.avatarSection}>
-          <Pressable onPress={() => setAvatarOpen((v) => !v)}>
+          <Pressable
+            onPress={() => setAvatarOpen((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel="Change avatar"
+            accessibilityState={{ expanded: avatarOpen }}
+          >
             {avatar ? (
-              <Image source={{ uri: avatar }} style={styles.avatar} />
+              <AppImage source={{ uri: avatar }} style={styles.avatar} />
             ) : (
               <View style={[styles.avatar, styles.avatarInitialWrap]}>
                 <Text style={styles.avatarInitial}>{initial}</Text>
@@ -90,8 +135,11 @@ export default function AccountDetailsScreen({ navigation }) {
                   setAvatar(uri);
                   setAvatarOpen(false);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel="Use this avatar"
+                accessibilityState={{ selected: avatar === uri }}
               >
-                <Image
+                <AppImage
                   source={{ uri }}
                   style={[styles.avatarOption, avatar === uri && styles.avatarOptionOn]}
                 />
@@ -103,6 +151,9 @@ export default function AccountDetailsScreen({ navigation }) {
                 setAvatar('');
                 setAvatarOpen(false);
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Remove avatar"
+              accessibilityState={{ selected: !avatar }}
             >
               <Text style={styles.avatarNoneText}>{initial}</Text>
             </Pressable>
@@ -114,9 +165,13 @@ export default function AccountDetailsScreen({ navigation }) {
           label="Email"
           icon="mail-outline"
           value={email}
-          onChangeText={setEmail}
+          onChangeText={(v) => {
+            setEmail(v);
+            if (emailError) setEmailError('');
+          }}
           autoCapitalize="none"
           keyboardType="email-address"
+          error={emailError}
         />
         <Input
           label="Bio"
@@ -138,19 +193,37 @@ export default function AccountDetailsScreen({ navigation }) {
         <Text style={styles.label}>Dietary Preferences & Allergies</Text>
         <View style={styles.chipRow}>
           {dietary.map((item) => (
-            <Pressable key={item} style={styles.chip} onPress={() => removeChip(item)}>
+            <Pressable
+              key={item}
+              style={styles.chip}
+              onPress={() => removeChip(item)}
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${item}`}
+            >
               <Text style={styles.chipText}>{item}</Text>
               <Ionicons name="close" size={13} color={colors.sageDeep} />
             </Pressable>
           ))}
-          <Pressable style={styles.chipAdd} onPress={() => setAddingChip((v) => !v)}>
+          <Pressable
+            style={styles.chipAdd}
+            onPress={() => setAddingChip((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={addingChip ? 'Cancel adding a dietary preference' : 'Add a dietary preference'}
+            accessibilityState={{ expanded: addingChip }}
+          >
             <Ionicons name={addingChip ? 'close' : 'add'} size={16} color={colors.inkSoft} />
           </Pressable>
         </View>
         {addingChip && (
           <View style={styles.chipRow}>
             {ALLERGY_CHOICES.filter((c) => !dietary.includes(c)).map((c) => (
-              <Pressable key={c} style={styles.chipChoice} onPress={() => addChip(c)}>
+              <Pressable
+                key={c}
+                style={styles.chipChoice}
+                onPress={() => addChip(c)}
+                accessibilityRole="button"
+                accessibilityLabel={`Add ${c}`}
+              >
                 <Text style={styles.chipChoiceText}>{c}</Text>
               </Pressable>
             ))}

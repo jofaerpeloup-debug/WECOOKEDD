@@ -1,18 +1,30 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { lightColors, darkColors, typography, spacing, radius, buildShadow } from './theme';
+import { loadJSON, saveJSON } from '../utils/storage';
 
 const ThemeContext = createContext(null);
+const MODE_KEY = 'wecooked:themeMode';
 
-// mode: 'system' | 'light' | 'dark' — 'system' follows the OS setting via
-// useColorScheme() and updates live if the user flips their phone's
-// appearance while the app is open.
+// mode: 'light' | 'dark' — an explicit choice only. No "System" option: the
+// app doesn't follow the OS appearance, it remembers whatever you picked in
+// Settings (persisted across launches).
 export function ThemeProvider({ children }) {
-  const systemScheme = useColorScheme();
-  const [mode, setMode] = useState('system');
+  const [mode, setModeState] = useState('light');
 
-  const resolvedScheme = mode === 'system' ? systemScheme || 'light' : mode;
-  const isDark = resolvedScheme === 'dark';
+  useEffect(() => {
+    (async () => {
+      const stored = await loadJSON(MODE_KEY, null);
+      if (stored === 'light' || stored === 'dark') setModeState(stored);
+    })();
+  }, []);
+
+  const setMode = (next) => {
+    const v = next === 'dark' ? 'dark' : 'light';
+    setModeState(v);
+    saveJSON(MODE_KEY, v);
+  };
+
+  const isDark = mode === 'dark';
   const colors = isDark ? darkColors : lightColors;
 
   const value = useMemo(

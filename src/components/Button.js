@@ -20,7 +20,7 @@ export default function Button({
 }) {
   const { colors } = useTheme();
   const isPrimary = variant === 'primary';
-  const styles = makeStyles(colors);
+  const styles = makeStyles();
   const variantStyles = makeVariantStyles(colors);
 
   return (
@@ -68,7 +68,7 @@ function makeVariantStyles(colors) {
   });
 }
 
-function makeStyles(colors) {
+function makeStyles() {
   return StyleSheet.create({
     base: {
       borderRadius: radius.pill,

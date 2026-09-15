@@ -4,7 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
+import EmptyState from '../components/EmptyState';
+import SwipeToDelete from '../components/SwipeToDelete';
 import { useShoppingList } from '../context/ShoppingListContext';
+import { confirm } from '../utils/alert';
+import { tapLight, tapMedium } from '../utils/haptics';
 
 const GROUPS = ['Produce', 'Meat', 'Pantry'];
 
@@ -12,39 +16,83 @@ export default function ShoppingListScreen({ navigation }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
-  const { items, toggle, remove, addCustom } = useShoppingList();
+  const { items, toggle, remove, clearChecked, clearAll, addCustom } = useShoppingList();
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
-  const [qty, setQty] = useState('');
+
+  const checkedCount = items.filter((i) => i.checked).length;
 
   const submitAdd = () => {
     if (!name.trim()) return;
-    addCustom(name, qty);
+    addCustom(name);
     setName('');
-    setQty('');
   };
+
+  const onClearChecked = () => {
+    tapMedium();
+    clearChecked();
+  };
+  const onClearAll = () =>
+    confirm('Clear the whole list?', `Remove all ${items.length} items?`, () => {
+      tapMedium();
+      clearAll();
+      setEditing(false);
+    }, { confirmLabel: 'Clear all', destructive: true });
 
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <View style={styles.headerLeft}>
-          <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+          <Pressable
+            style={styles.backBtn}
+            hitSlop={8}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
             <Ionicons name="chevron-back" size={18} color={colors.ink} />
           </Pressable>
           <Text style={styles.title}>Grocery List</Text>
         </View>
-        <Pressable hitSlop={8} onPress={() => setEditing((v) => !v)}>
-          <Text style={styles.edit}>{editing ? 'Done' : 'Edit'}</Text>
-        </Pressable>
+        <View style={styles.headerRight}>
+          {editing && items.length > 0 && (
+            <Pressable hitSlop={8} onPress={onClearAll}>
+              <Text style={styles.clearAll}>Clear all</Text>
+            </Pressable>
+          )}
+          {items.length > 0 && (
+            <Pressable
+              hitSlop={8}
+              onPress={() => {
+                tapLight();
+                setEditing((v) => !v);
+              }}
+            >
+              <Text style={styles.edit}>{editing ? 'Done' : 'Edit'}</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {items.length === 0 && (
-          <Text style={styles.emptyList}>
-            Your grocery list is empty. Add items below, or tap the cart icon on any recipe.
-          </Text>
+          <EmptyState
+            icon="cart-outline"
+            title="Your list is empty"
+            message="Add items below, or tap the cart icon on any recipe to pull in its ingredients."
+          />
         )}
+
+        {checkedCount > 0 && !editing && (
+          <Pressable style={styles.clearCheckedBar} onPress={onClearChecked}>
+            <Ionicons name="checkmark-done" size={15} color={colors.sageDeep} />
+            <Text style={styles.clearCheckedText}>
+              Clear {checkedCount} checked {checkedCount === 1 ? 'item' : 'items'}
+            </Text>
+          </Pressable>
+        )}
+
         {GROUPS.map((cat) => {
           const rows = items.filter((i) => i.cat === cat);
           if (rows.length === 0) return null;
@@ -52,25 +100,28 @@ export default function ShoppingListScreen({ navigation }) {
             <View key={cat} style={styles.group}>
               <Text style={styles.groupLabel}>{cat}</Text>
               {rows.map((it) => (
-                <Pressable
-                  key={it.id}
-                  style={styles.row}
-                  onPress={() => (editing ? remove(it.id) : toggle(it.id))}
-                >
-                  <View style={styles.rowLeft}>
-                    {editing ? (
-                      <View style={styles.trash}>
-                        <Ionicons name="remove" size={14} color={colors.onAccent} />
+                <SwipeToDelete key={`${it.id}-${editing}`} disabled={editing} onDelete={() => remove(it.id)}>
+                  <Pressable
+                    style={styles.row}
+                    onPress={() => (editing ? remove(it.id) : toggle(it.id))}
+                  >
+                    <View style={styles.rowLeft}>
+                      {editing ? (
+                        <View style={styles.trash}>
+                          <Ionicons name="remove" size={14} color={colors.onAccent} />
+                        </View>
+                      ) : (
+                        <View style={[styles.check, it.checked && styles.checkOn]}>
+                          {it.checked && <Ionicons name="checkmark" size={12} color={colors.onAccent} />}
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.name, !editing && it.checked && styles.nameChecked]}>{it.name}</Text>
+                        {!!it.recipeTitle && <Text style={styles.source}>from {it.recipeTitle}</Text>}
                       </View>
-                    ) : (
-                      <View style={[styles.check, it.checked && styles.checkOn]}>
-                        {it.checked && <Ionicons name="checkmark" size={12} color={colors.onAccent} />}
-                      </View>
-                    )}
-                    <Text style={[styles.name, !editing && it.checked && styles.nameChecked]}>{it.name}</Text>
-                  </View>
-                  <Text style={styles.qty}>{it.qty}</Text>
-                </Pressable>
+                    </View>
+                  </Pressable>
+                </SwipeToDelete>
               ))}
             </View>
           );
@@ -81,7 +132,7 @@ export default function ShoppingListScreen({ navigation }) {
         {adding && (
           <View style={styles.addRow}>
             <TextInput
-              style={[styles.addInput, { flex: 2 }]}
+              style={[styles.addInput, { flex: 1 }]}
               placeholder="Item"
               placeholderTextColor={colors.inkFaint}
               value={name}
@@ -90,16 +141,12 @@ export default function ShoppingListScreen({ navigation }) {
               onSubmitEditing={submitAdd}
               returnKeyType="done"
             />
-            <TextInput
-              style={[styles.addInput, { flex: 1 }]}
-              placeholder="Qty"
-              placeholderTextColor={colors.inkFaint}
-              value={qty}
-              onChangeText={setQty}
-              onSubmitEditing={submitAdd}
-              returnKeyType="done"
-            />
-            <Pressable style={styles.addConfirm} onPress={submitAdd}>
+            <Pressable
+              style={styles.addConfirm}
+              onPress={submitAdd}
+              accessibilityRole="button"
+              accessibilityLabel="Confirm add item"
+            >
               <Ionicons name="checkmark" size={18} color={colors.onAccent} />
             </Pressable>
           </View>
@@ -124,6 +171,7 @@ function makeStyles(colors) {
       paddingBottom: spacing.md,
     },
     headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
     backBtn: {
       width: 36,
       height: 36,
@@ -134,14 +182,23 @@ function makeStyles(colors) {
     },
     title: { fontFamily: typography.display.fontFamily, fontSize: 22, color: colors.ink },
     edit: { fontFamily: typography.body.medium, fontSize: 13, color: colors.stone },
+    clearAll: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.error },
     scroll: { paddingHorizontal: spacing.xl, paddingBottom: 120, paddingTop: spacing.sm },
-    emptyList: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: 13,
-      color: colors.inkFaint,
-      textAlign: 'center',
-      lineHeight: 20,
-      paddingVertical: 40,
+    clearCheckedBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      alignSelf: 'flex-start',
+      paddingHorizontal: spacing.md,
+      paddingVertical: 8,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sagePale,
+      marginBottom: spacing.md,
+    },
+    clearCheckedText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
     },
     group: { marginBottom: spacing.lg },
     groupLabel: {
@@ -181,7 +238,7 @@ function makeStyles(colors) {
     },
     name: { fontFamily: typography.body.fontFamily, fontSize: 14, color: colors.ink },
     nameChecked: { color: colors.inkFaint, textDecorationLine: 'line-through' },
-    qty: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkFaint },
+    source: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 1 },
     ctaWrap: {
       position: 'absolute',
       left: 0,

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,10 +17,51 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { recipes } from '../data/mockData';
 import { metaLine, scaleQty } from '../utils/recipe';
-import { loadJSON, saveJSON } from '../utils/storage';
+import { useAi } from '../context/AiContext';
+import { useProfile } from '../context/ProfileContext';
+import { askChef, recipesMentioned } from '../utils/aiChef';
 
-const CHAT_KEY = 'wecooked:assistantChat';
-const GREETING = { id: 'g', from: 'ai', text: "Hi! I'm your kitchen assistant. What are you in the mood to cook?" };
+// The chat is intentionally not persisted — every time you open Ask the Chef
+// it starts fresh with one of these openers.
+const GREETINGS = [
+  "Hi! I'm your kitchen assistant. What are you in the mood to cook?",
+  "Hey there — hungry? Tell me what you're craving.",
+  "What's cooking? Ask me for a recipe, a swap, or a quick idea.",
+  'Ready when you are. What should we make today?',
+  'Fresh start. What are you thinking of cooking?',
+  "Let's find you something good to eat — what sounds nice?",
+];
+
+const PROMPT_POOL = [
+  'What can I cook fast?',
+  'Substitute for coconut milk',
+  'Something cozy for dinner',
+  'I have chicken and garlic',
+  'What goes well with rice?',
+  'Give me a recipe for 6 people',
+  'Something fresh and light',
+  'I only have 20 minutes',
+  'What can I make with pork?',
+  'A dish to impress guests',
+];
+
+// Fisher–Yates, returns the first `n`.
+function sample(arr, n) {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, n);
+}
+
+function freshGreeting() {
+  return {
+    id: `g${Date.now()}`,
+    from: 'ai',
+    text: GREETINGS[Math.floor(Math.random() * GREETINGS.length)],
+  };
+}
 
 const SWAPS = {
   'soy sauce': 'Use tamari or coconut aminos 1:1, or a mix of Worcestershire + water in a pinch.',
@@ -31,13 +73,6 @@ const SWAPS = {
   butter: 'Neutral oil or margarine 1:1 for cooking.',
   garlic: 'Garlic powder — about 1/8 tsp per clove.',
 };
-
-const QUICK_PROMPTS = [
-  'What can I cook fast?',
-  'Substitute for coconut milk',
-  'Something cozy for dinner',
-  'I have chicken and garlic',
-];
 
 // Words too generic to identify a dish on their own.
 const COMMON_TITLE_WORDS = new Set([
@@ -189,20 +224,16 @@ export default function AssistantScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
   const scrollRef = useRef(null);
-  const [messages, setMessages] = useState([GREETING]);
+  const { hasKey, apiKey } = useAi();
+  const { profile } = useProfile();
+  const [messages, setMessages] = useState(() => [freshGreeting()]);
   const [input, setInput] = useState('');
   const [kbVisible, setKbVisible] = useState(false);
-  const hydrated = useRef(false);
-
+  const [sending, setSending] = useState(false);
+  const messagesRef = useRef(messages);
+  const quickPrompts = useMemo(() => sample(PROMPT_POOL, 4), []);
   useEffect(() => {
-    (async () => {
-      const stored = await loadJSON(CHAT_KEY, null);
-      if (Array.isArray(stored) && stored.length) setMessages(stored);
-      hydrated.current = true;
-    })();
-  }, []);
-  useEffect(() => {
-    if (hydrated.current) saveJSON(CHAT_KEY, messages.slice(-40));
+    messagesRef.current = messages;
   }, [messages]);
 
   useEffect(() => {
@@ -219,22 +250,61 @@ export default function AssistantScreen({ navigation }) {
     };
   }, []);
 
-  const clearChat = () => setMessages([GREETING]);
+  const clearChat = () => setMessages([freshGreeting()]);
 
-  const send = (raw) => {
+  const scrollSoon = () => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
+
+  const send = async (raw) => {
     const text = (raw ?? input).trim();
-    if (!text) return;
+    if (!text || sending) return;
     setInput('');
     const userMsg = { id: `u${Date.now()}`, from: 'user', text };
+    const history = [...messagesRef.current, userMsg];
     setMessages((m) => [...m, userMsg]);
-    setTimeout(() => {
-      setMessages((m) => {
-        const r = respond(text, lastSingleRecipe(m));
-        return [...m, { id: `a${Date.now()}`, from: 'ai', ...r }];
-      });
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
-    }, 450);
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
+    scrollSoon();
+
+    // No key → the built-in rule-based assistant, with a tiny "thinking" beat.
+    if (!hasKey) {
+      setTimeout(() => {
+        setMessages((m) => [
+          ...m,
+          { id: `a${Date.now()}`, from: 'ai', ...respond(text, lastSingleRecipe(m)) },
+        ]);
+        scrollSoon();
+      }, 450);
+      return;
+    }
+
+    setSending(true);
+    scrollSoon();
+    try {
+      const { text: aiText } = await askChef({ history, apiKey, profile });
+      setMessages((m) => [
+        ...m,
+        { id: `a${Date.now()}`, from: 'ai', text: aiText, recipes: recipesMentioned(aiText) },
+      ]);
+    } catch (e) {
+      // Surface the real reason instead of a generic "unreachable" note —
+      // the vague message was masking specific, actionable errors (wrong
+      // key, no billing/quota, bad model name) that OpenAI already tells us.
+      const note =
+        e?.status === 401
+          ? 'Your API key was rejected — check it in Settings › Intelligence.'
+          : e?.status === 429
+            ? "OpenAI rate-limited or blocked this request — likely no billing/credits set up on your account yet. Check Settings → Billing on platform.openai.com."
+            : e?.status === 404
+              ? "The model isn't available on your account (check EXPO_PUBLIC_OPENAI_MODEL)."
+              : e?.message
+                ? `ChatGPT error: ${e.message}`
+                : 'ChatGPT is unreachable right now, so that was the built-in assistant.';
+      setMessages((m) => [
+        ...m,
+        { id: `a${Date.now()}`, from: 'ai', ...respond(text, lastSingleRecipe(m)), note },
+      ]);
+    } finally {
+      setSending(false);
+      scrollSoon();
+    }
   };
 
   return (
@@ -243,15 +313,26 @@ export default function AssistantScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable style={styles.iconBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+        <Pressable
+          style={styles.iconBtn}
+          hitSlop={8}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="chevron-back" size={16} color={colors.ink} />
         </Pressable>
         <View style={styles.headerMark}>
           <MaterialCommunityIcons name="chef-hat" size={16} color={colors.sageDeep} />
         </View>
-        <Text style={styles.headerTitle}>Ask the Chef</Text>
+        <Text style={styles.headerTitle} accessibilityRole="header">Ask the Chef</Text>
         {messages.length > 1 && (
-          <Pressable hitSlop={8} onPress={clearChat}>
+          <Pressable
+            hitSlop={8}
+            onPress={clearChat}
+            accessibilityRole="button"
+            accessibilityLabel="Clear conversation"
+          >
             <Ionicons name="trash-outline" size={16} color={colors.inkFaint} />
           </Pressable>
         )}
@@ -272,9 +353,27 @@ export default function AssistantScreen({ navigation }) {
           I can help you swap ingredients, find recipes, or plan a meal.
         </Text>
 
+        {hasKey ? (
+          <View style={styles.aiPill}>
+            <Ionicons name="sparkles" size={11} color={colors.sageDeep} />
+            <Text style={styles.aiPillText}>Powered by ChatGPT</Text>
+          </View>
+        ) : (
+          <Pressable
+            style={styles.aiHint}
+            onPress={() => navigation.navigate('AiSettings')}
+            accessibilityRole="button"
+            accessibilityLabel="Connect ChatGPT for smarter answers"
+          >
+            <Ionicons name="sparkles-outline" size={12} color={colors.sageDeep} />
+            <Text style={styles.aiHintText}>Connect ChatGPT for smarter answers</Text>
+            <Ionicons name="chevron-forward" size={12} color={colors.sageDeep} />
+          </Pressable>
+        )}
+
         {messages.length <= 1 && (
           <View style={styles.prompts}>
-            {QUICK_PROMPTS.map((p) => (
+            {quickPrompts.map((p) => (
               <Pressable key={p} style={styles.prompt} onPress={() => send(p)}>
                 <Text style={styles.promptText}>{p}</Text>
               </Pressable>
@@ -296,6 +395,7 @@ export default function AssistantScreen({ navigation }) {
               >
                 <Text style={[styles.bubbleText, isUser && { color: colors.onAccent }]}>{m.text}</Text>
               </View>
+              {!!m.note && <Text style={styles.noteText}>{m.note}</Text>}
               {m.recipes?.map((r) => (
                 <Pressable
                   key={r.id}
@@ -312,6 +412,16 @@ export default function AssistantScreen({ navigation }) {
             </View>
           );
         })}
+
+        {sending && (
+          <View style={[styles.msgRow, { alignItems: 'flex-start' }]}>
+            <Text style={styles.sender}>Chef Assistant</Text>
+            <View style={[styles.bubble, styles.bubbleAi, styles.typingBubble]}>
+              <ActivityIndicator size="small" color={colors.inkSoft} />
+              <Text style={styles.typingText}>Thinking…</Text>
+            </View>
+          </View>
+        )}
       </ScrollView>
 
       <View style={[styles.composer, { paddingBottom: kbVisible ? spacing.sm : Math.max(insets.bottom, spacing.md) }]}>
@@ -325,7 +435,13 @@ export default function AssistantScreen({ navigation }) {
           returnKeyType="send"
           blurOnSubmit={false}
         />
-        <Pressable style={styles.sendBtn} onPress={() => send()}>
+        <Pressable
+          style={[styles.sendBtn, sending && styles.sendBtnOff]}
+          onPress={() => send()}
+          disabled={sending}
+          accessibilityRole="button"
+          accessibilityLabel="Send message"
+        >
           <Ionicons name="arrow-up" size={18} color={colors.onAccent} />
         </Pressable>
       </View>
@@ -382,6 +498,32 @@ function makeStyles(colors) {
       borderColor: colors.hairline,
     },
     promptText: { fontFamily: typography.body.medium, fontSize: 12, color: colors.inkSoft },
+    aiHint: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      alignSelf: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      marginBottom: spacing.sm,
+    },
+    aiHintText: { fontFamily: typography.body.semibold, fontSize: 11.5, color: colors.sageDeep },
+    aiPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      alignSelf: 'center',
+      marginBottom: spacing.sm,
+    },
+    aiPillText: {
+      fontFamily: typography.body.medium,
+      fontSize: 11,
+      color: colors.inkFaint,
+      letterSpacing: 0.3,
+    },
     msgRow: { gap: 4 },
     sender: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, paddingHorizontal: 4 },
     bubble: { maxWidth: '84%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 11 },
@@ -389,6 +531,15 @@ function makeStyles(colors) {
     bubbleAi: { backgroundColor: colors.creamDeep },
     bubbleUser: { backgroundColor: colors.sageDeep },
     bubbleText: { fontFamily: typography.body.fontFamily, fontSize: 14, lineHeight: 20, color: colors.ink },
+    typingBubble: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    typingText: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkSoft },
+    noteText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 11,
+      color: colors.inkFaint,
+      paddingHorizontal: 4,
+      maxWidth: '84%',
+    },
     recCard: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -432,5 +583,6 @@ function makeStyles(colors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    sendBtnOff: { opacity: 0.45 },
   });
 }

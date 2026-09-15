@@ -35,6 +35,8 @@ export default function AboutScreen({ navigation }) {
               key={item.id}
               style={[styles.row, i < LINKS.length - 1 && styles.rowBorder]}
               onPress={() => navigation.navigate(item.route)}
+              accessibilityRole="button"
+              accessibilityLabel={item.label}
             >
               <View style={styles.iconWrap}>
                 <Ionicons name={item.icon} size={17} color={colors.sageDeep} />

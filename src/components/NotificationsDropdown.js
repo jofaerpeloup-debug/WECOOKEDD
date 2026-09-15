@@ -1,9 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useNotifications } from '../context/NotificationsContext';
+import { timeAgo } from '../utils/time';
 
 const WIDTH = Math.min(320, Dimensions.get('window').width * 0.86);
 
@@ -11,7 +13,7 @@ export default function NotificationsDropdown({ visible, onClose, topOffset }) {
   const { colors, shadow } = useTheme();
   const navigation = useNavigation();
   const styles = makeStyles(colors, shadow);
-  const { feed, markAllRead } = useNotifications();
+  const { feed, markAllRead, clearFeed } = useNotifications();
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -38,19 +40,34 @@ export default function NotificationsDropdown({ visible, onClose, topOffset }) {
         <View style={styles.caret} />
         <View style={styles.headerRow}>
           <Text style={styles.header}>Notifications</Text>
-          <Pressable
-            hitSlop={8}
-            onPress={() => {
-              onClose();
-              navigation.navigate('Notifications');
-            }}
-          >
-            <Text style={styles.manage}>Settings</Text>
-          </Pressable>
+          <View style={styles.headerActions}>
+            {feed.length > 0 && (
+              <Pressable hitSlop={8} onPress={clearFeed}>
+                <Text style={styles.manage}>Clear</Text>
+              </Pressable>
+            )}
+            <Pressable
+              hitSlop={8}
+              onPress={() => {
+                onClose();
+                navigation.navigate('Notifications');
+              }}
+            >
+              <Text style={styles.manage}>Settings</Text>
+            </Pressable>
+            <Pressable
+              hitSlop={8}
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close notifications"
+            >
+              <Ionicons name="close" size={17} color={colors.inkFaint} />
+            </Pressable>
+          </View>
         </View>
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
           {feed.length === 0 ? (
-            <Text style={styles.empty}>You're all caught up.</Text>
+            <Text style={styles.empty}>You're all caught up. Real activity — saves, cooked dishes, cook reminders — will show up here.</Text>
           ) : (
             feed.map((n, i) => (
               <View key={n.id} style={[styles.item, i < feed.length - 1 && styles.itemBorder]}>
@@ -58,7 +75,7 @@ export default function NotificationsDropdown({ visible, onClose, topOffset }) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemTitle}>{n.title}</Text>
                   <Text style={styles.itemBody}>{n.body}</Text>
-                  <Text style={styles.itemTime}>{n.time}</Text>
+                  <Text style={styles.itemTime}>{timeAgo(n.ts)}</Text>
                 </View>
               </View>
             ))
@@ -104,6 +121,7 @@ function makeStyles(colors, shadow) {
       paddingBottom: spacing.sm,
     },
     header: { fontFamily: typography.display.fontFamily, fontSize: typography.sizes.md, color: colors.ink },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     manage: { fontFamily: typography.body.semibold, fontSize: 12, color: colors.sageDeep },
     list: { maxHeight: 300 },
     empty: {

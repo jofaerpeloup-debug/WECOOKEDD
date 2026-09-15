@@ -30,29 +30,37 @@ export function fmtClock(value) {
   return `${h12}:${String(m).padStart(2, '0')} ${period}`;
 }
 
-// One scroll wheel. Snaps to the nearest row on release and reports its index.
+// One scroll wheel. Tracks the centered row live while scrolling, and only
+// nudges the list back to an exact snap once the gesture has genuinely
+// ended (drag released with no residual fling, or momentum finished) —
+// never on a timer. A timer-based correction used to fire ~120ms after the
+// last scroll event even if the user had already started a new drag by
+// then, so it would fight/override that new drag and the wheel would feel
+// "stuck" and refuse to scroll back — see user report 2026-09-14.
 function Wheel({ data, initialIndex, onIndexChange, format, width, styles }) {
   const ref = useRef(null);
   const scrollY = useRef(new Animated.Value(initialIndex * ITEM_H)).current;
   const committed = useRef(initialIndex);
-  const snapTimer = useRef(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
       ref.current?.scrollTo({ y: initialIndex * ITEM_H, animated: false });
     }, 40);
-    return () => {
-      clearTimeout(t);
-      clearTimeout(snapTimer.current);
-    };
+    return () => clearTimeout(t);
   }, [initialIndex]);
 
-  const settle = (y) => {
-    const i = Math.max(0, Math.min(data.length - 1, Math.round(y / ITEM_H)));
+  const indexFor = (y) => Math.max(0, Math.min(data.length - 1, Math.round(y / ITEM_H)));
+
+  const commit = (i) => {
     if (i !== committed.current) {
       committed.current = i;
       onIndexChange(i);
     }
+  };
+
+  const settle = (y) => {
+    const i = indexFor(y);
+    commit(i);
     if (Math.abs(y - i * ITEM_H) > 0.5) {
       ref.current?.scrollTo({ y: i * ITEM_H, animated: true });
     }
@@ -62,13 +70,26 @@ function Wheel({ data, initialIndex, onIndexChange, format, width, styles }) {
     [{ nativeEvent: { contentOffset: { y: scrollY } } }],
     {
       useNativeDriver: Platform.OS !== 'web',
-      listener: (e) => {
-        const y = e.nativeEvent.contentOffset.y;
-        clearTimeout(snapTimer.current);
-        snapTimer.current = setTimeout(() => settle(y), 120);
-      },
+      // Live-update which value is centered as the wheel moves, so the
+      // preview text tracks the finger instead of lagging behind. This
+      // never scrolls the list itself — only the end-of-gesture handlers
+      // below do that.
+      listener: (e) => commit(indexFor(e.nativeEvent.contentOffset.y)),
     }
   );
+
+  // Snap immediately whenever the finger lifts — a slow, careful drag (the
+  // exact case of "trying to land on one precise value") barely moves after
+  // release, so `velocity` is small but non-zero and unreliable to gate on;
+  // waiting for it caused this to get skipped, and a slow release also
+  // produces no real momentum, so onMomentumScrollEnd never fired either,
+  // leaving the wheel stuck wherever it happened to land. `settle` is a
+  // no-op if already snapped, so calling it unconditionally here is safe.
+  const onScrollEndDrag = (e) => settle(e.nativeEvent.contentOffset.y);
+
+  // Also settle after any real fling's momentum finishes, in case that
+  // carried it past where onScrollEndDrag settled.
+  const onMomentumScrollEnd = (e) => settle(e.nativeEvent.contentOffset.y);
 
   return (
     <Animated.ScrollView
@@ -79,7 +100,8 @@ function Wheel({ data, initialIndex, onIndexChange, format, width, styles }) {
       decelerationRate="fast"
       scrollEventThrottle={16}
       onScroll={onScroll}
-      onMomentumScrollEnd={(e) => settle(e.nativeEvent.contentOffset.y)}
+      onScrollEndDrag={onScrollEndDrag}
+      onMomentumScrollEnd={onMomentumScrollEnd}
       contentOffset={{ x: 0, y: initialIndex * ITEM_H }}
       contentContainerStyle={{ paddingVertical: PAD }}
       nestedScrollEnabled

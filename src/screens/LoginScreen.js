@@ -27,13 +27,18 @@ export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const google = useGoogleSignIn();
-  const { login: markLoggedIn } = useAuth();
+  const { login: markLoggedIn, continueAsGuest } = useAuth();
 
   const proceed = () => navigation.replace('MainTabs');
 
   // Static demo sign-in — any (or no) credentials just continue.
   const login = async () => {
     await markLoggedIn();
+    proceed();
+  };
+
+  const browseAsGuest = async () => {
+    await continueAsGuest();
     proceed();
   };
 
@@ -133,12 +138,10 @@ export default function LoginScreen({ navigation }) {
             </Text>
           )}
 
-          <View style={styles.signupRow}>
-            <Text style={styles.signupText}>Don't have an account? </Text>
-            <Pressable onPress={login} hitSlop={8}>
-              <Text style={styles.signupLink}>Sign up</Text>
-            </Pressable>
-          </View>
+          <Pressable style={styles.guestWrap} hitSlop={8} onPress={browseAsGuest}>
+            <Text style={styles.guestText}>Continue as guest</Text>
+            <Text style={styles.guestHint}>Browse recipes without an account</Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -218,8 +221,13 @@ function makeStyles(colors) {
       textAlign: 'center',
       marginTop: spacing.sm,
     },
-    signupRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: spacing.xxl },
-    signupText: { fontFamily: typography.body.fontFamily, fontSize: 13.5, color: colors.inkSoft },
-    signupLink: { fontFamily: typography.body.bold, fontSize: 13.5, color: colors.sageDeep },
+    guestWrap: { alignItems: 'center', marginTop: spacing.xxl },
+    guestText: { fontFamily: typography.body.bold, fontSize: 14, color: colors.sageDeep },
+    guestHint: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 12,
+      color: colors.inkFaint,
+      marginTop: 3,
+    },
   });
 }

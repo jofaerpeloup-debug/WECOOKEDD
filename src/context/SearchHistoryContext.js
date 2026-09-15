@@ -8,7 +8,15 @@ const SearchHistoryContext = createContext(null);
 
 export function SearchHistoryProvider({ children }) {
   const [recent, setRecent] = useState([]);
-  const [filters, setFilters] = useState({ timeBkt: null, difficulty: null, dietary: [], category: null });
+  const [filters, setFilters] = useState({
+    timeBkt: null,
+    difficulty: null,
+    dietary: [],
+    category: null,
+    cuisine: null,
+    vibe: [],
+    sort: 'relevance',
+  });
   const hydrated = useRef(false);
 
   useEffect(() => {

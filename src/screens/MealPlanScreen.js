@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, PanResponder, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
@@ -9,6 +9,7 @@ import TimePickerSheet, { fmtClock } from '../components/TimePickerSheet';
 import { recipes } from '../data/mockData';
 import { metaLine } from '../utils/recipe';
 import { imageSource } from '../utils/image';
+import AppImage from '../components/AppImage';
 import { useMealPlan, PLAN_DAYS } from '../context/MealPlanContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { remindersSupported, sendTestReminder } from '../utils/notifications';
@@ -30,14 +31,112 @@ const fmtNextDate = (d) => {
 
 const byId = (id) => recipes.find((r) => r.id === id);
 
+// The plan itself is a recurring weekly template (no specific dates stored
+// per meal), but showing the actual calendar date next to each day name —
+// and letting you page through weeks — gives useful orientation. Maps each
+// PLAN_DAYS name to its date in a Monday-start week, `weekOffset` weeks from
+// the current one (0 = this week, 1 = next week, -1 = last week, ...).
+function weekDatesFor(weekOffset) {
+  const monday = new Date();
+  const dow = monday.getDay(); // 0=Sun..6=Sat
+  monday.setDate(monday.getDate() - ((dow + 6) % 7) + weekOffset * 7);
+  monday.setHours(0, 0, 0, 0);
+  const map = {};
+  PLAN_DAYS.forEach((day, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    map[day] = d;
+  });
+  return map;
+}
+
+const fmtDayDate = (d) =>
+  d ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+
+const fmtWeekRange = (weekDates) => {
+  const monday = weekDates[PLAN_DAYS[0]];
+  const sunday = weekDates[PLAN_DAYS[PLAN_DAYS.length - 1]];
+  if (!monday || !sunday) return '';
+  const start = monday.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const end = sunday.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${start} – ${end}, ${sunday.getFullYear()}`;
+};
+
 export default function MealPlanScreen({ navigation }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
-  const { plan, removeFromPlan, clearAll, setMealTime, plannedCount } = useMealPlan();
+  const { plan, removeFromPlan, moveMeal, clearAll, setMealTime, plannedCount } = useMealPlan();
   const { addFromRecipe } = useShoppingList();
   const [pickDay, setPickDay] = useState(null);
   const [timeFor, setTimeFor] = useState(null);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const weekDates = useMemo(() => weekDatesFor(weekOffset), [weekOffset]);
+
+  // Drag-and-drop a planned meal onto a different day. `dragRef`/`hoverDayRef`
+  // are the source of truth read inside PanResponder callbacks (a fresh
+  // PanResponder is created every render, so callbacks must not close over
+  // React state directly or they'd act on stale values); `activeDrag`/
+  // `hoverDay` state just mirrors them for rendering the floating card and
+  // the drop-target highlight.
+  const scrollRef = useRef(null);
+  const scrollY = useRef(0);
+  const containerPageY = useRef(0);
+  const sectionLayouts = useRef({});
+  const dragRef = useRef(null);
+  const hoverDayRef = useRef(null);
+  const pan = useRef(new Animated.ValueXY()).current;
+  const [activeDrag, setActiveDrag] = useState(null);
+  const [hoverDay, setHoverDay] = useState(null);
+
+  const dayForContentY = (y) => {
+    for (const d of PLAN_DAYS) {
+      const b = sectionLayouts.current[d];
+      if (b && y >= b.top && y <= b.bottom) return d;
+    }
+    return null;
+  };
+
+  const makeDragHandlers = (day, item, r) =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        const { pageX, pageY } = evt.nativeEvent;
+        pan.setValue({ x: 0, y: 0 });
+        dragRef.current = { day, recipeId: item.recipeId };
+        hoverDayRef.current = day;
+        const info = { day, recipeId: item.recipeId, r, baseX: pageX - 90, baseY: pageY - 28 };
+        setActiveDrag(info);
+        setHoverDay(day);
+        scrollRef.current?.measureInWindow?.((x, y) => {
+          containerPageY.current = y;
+        });
+      },
+      onPanResponderMove: (evt, gesture) => {
+        pan.setValue({ x: gesture.dx, y: gesture.dy });
+        const contentY = evt.nativeEvent.pageY - containerPageY.current + scrollY.current;
+        const found = dayForContentY(contentY);
+        if (found !== hoverDayRef.current) {
+          hoverDayRef.current = found;
+          setHoverDay(found);
+        }
+      },
+      onPanResponderRelease: () => {
+        const from = dragRef.current;
+        const to = hoverDayRef.current;
+        if (from && to && to !== from.day) moveMeal(from.day, to, from.recipeId);
+        dragRef.current = null;
+        hoverDayRef.current = null;
+        setActiveDrag(null);
+        setHoverDay(null);
+      },
+      onPanResponderTerminate: () => {
+        dragRef.current = null;
+        hoverDayRef.current = null;
+        setActiveDrag(null);
+        setHoverDay(null);
+      },
+    });
 
   const addAllToGrocery = () => {
     const ids = new Set(PLAN_DAYS.flatMap((d) => plan[d].map((it) => it.recipeId)));
@@ -92,7 +191,13 @@ export default function MealPlanScreen({ navigation }) {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+        <Pressable
+          style={styles.backBtn}
+          hitSlop={8}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="chevron-back" size={18} color={colors.ink} />
         </Pressable>
         <View style={{ flex: 1 }}>
@@ -109,31 +214,93 @@ export default function MealPlanScreen({ navigation }) {
         )}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <View style={styles.weekNav}>
+        <Pressable
+          style={styles.weekNavBtn}
+          hitSlop={8}
+          onPress={() => setWeekOffset((w) => w - 1)}
+          accessibilityRole="button"
+          accessibilityLabel="Previous week"
+        >
+          <Ionicons name="chevron-back" size={16} color={colors.ink} />
+        </Pressable>
+        <Text style={styles.weekNavLabel}>{fmtWeekRange(weekDates)}</Text>
+        <Pressable
+          style={styles.weekNavBtn}
+          hitSlop={8}
+          onPress={() => setWeekOffset((w) => w + 1)}
+          accessibilityRole="button"
+          accessibilityLabel="Next week"
+        >
+          <Ionicons name="chevron-forward" size={16} color={colors.ink} />
+        </Pressable>
+      </View>
+
+      {plannedCount > 1 && (
+        <Text style={styles.dragHint}>Drag a meal's handle onto another day to move it.</Text>
+      )}
+
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        onScroll={(e) => {
+          scrollY.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}
+      >
         {PLAN_DAYS.map((day) => (
-          <View key={day} style={styles.daySection}>
+          <View
+            key={day}
+            style={[styles.daySection, hoverDay === day && activeDrag && styles.daySectionHover]}
+            onLayout={(e) => {
+              sectionLayouts.current[day] = {
+                top: e.nativeEvent.layout.y,
+                bottom: e.nativeEvent.layout.y + e.nativeEvent.layout.height,
+              };
+            }}
+          >
             <View style={styles.dayHead}>
-              <Text style={styles.dayName}>{day}</Text>
-              <Pressable style={styles.addBtn} hitSlop={6} onPress={() => setPickDay(day)}>
+              <View style={styles.dayHeadLeft}>
+                <Text style={styles.dayName}>{day}</Text>
+                <Text style={styles.dayDate}>{fmtDayDate(weekDates[day])}</Text>
+              </View>
+              <Pressable
+                style={styles.addBtn}
+                hitSlop={6}
+                onPress={() => setPickDay(day)}
+                accessibilityRole="button"
+                accessibilityLabel={`Plan a meal for ${day}`}
+              >
                 <Ionicons name="add" size={16} color={colors.sageDeep} />
               </Pressable>
             </View>
             {plan[day].length === 0 ? (
               <Pressable style={styles.emptyDay} onPress={() => setPickDay(day)}>
-                <Text style={styles.emptyText}>Tap + to plan a meal</Text>
+                <Text style={styles.emptyText}>
+                  {hoverDay === day && activeDrag ? 'Drop here' : 'Tap + to plan a meal'}
+                </Text>
               </Pressable>
             ) : (
               plan[day].map((item) => {
                 const r = byId(item.recipeId);
                 if (!r) return null;
+                const dragging = activeDrag?.day === day && activeDrag.recipeId === item.recipeId;
                 return (
-                  <View key={item.recipeId} style={styles.mealRow}>
+                  <View key={item.recipeId} style={[styles.mealRow, dragging && styles.mealRowDragging]}>
                     <View style={styles.mealTop}>
+                      <View
+                        style={styles.dragHandle}
+                        accessibilityLabel={`Drag ${r.title} to another day`}
+                        {...makeDragHandlers(day, item, r).panHandlers}
+                      >
+                        <Ionicons name="reorder-three" size={18} color={colors.inkFaint} />
+                      </View>
                       <Pressable
                         style={styles.mealMain}
                         onPress={() => navigation.navigate('RecipeDetail', { recipe: r })}
                       >
-                        <Image source={imageSource(r.image)} style={styles.thumb} />
+                        <AppImage source={imageSource(r.image)} style={styles.thumb} />
                         <View style={{ flex: 1 }}>
                           <Text style={styles.mealTitle}>{r.title}</Text>
                           <Text style={styles.mealMeta}>{metaLine(r)}</Text>
@@ -143,6 +310,8 @@ export default function MealPlanScreen({ navigation }) {
                         hitSlop={8}
                         onPress={() => removeFromPlan(day, item.recipeId)}
                         style={styles.remove}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove ${r.title} from ${day}`}
                       >
                         <Ionicons name="remove-circle-outline" size={20} color={colors.inkFaint} />
                       </Pressable>
@@ -181,6 +350,23 @@ export default function MealPlanScreen({ navigation }) {
         </View>
       )}
 
+      {activeDrag && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.floatingCard,
+            {
+              left: activeDrag.baseX,
+              top: activeDrag.baseY,
+              transform: [{ translateX: pan.x }, { translateY: pan.y }],
+            },
+          ]}
+        >
+          <AppImage source={imageSource(activeDrag.r.image)} style={styles.thumb} />
+          <Text style={styles.mealTitle} numberOfLines={1}>{activeDrag.r.title}</Text>
+        </Animated.View>
+      )}
+
       <MealPlanSheet visible={!!pickDay} day={pickDay} onClose={() => setPickDay(null)} />
       <TimePickerSheet
         visible={!!timeFor}
@@ -216,15 +402,51 @@ function makeStyles(colors) {
     title: { fontFamily: typography.display.fontFamily, fontSize: 20, color: colors.ink },
     subtitle: { fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.inkFaint, marginTop: 1 },
     clear: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.error },
+    dragHint: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: 11.5,
+      color: colors.inkFaint,
+      paddingHorizontal: spacing.xl,
+      marginBottom: spacing.sm,
+    },
     scroll: { paddingHorizontal: spacing.xl, paddingBottom: 110 },
-    daySection: { marginBottom: spacing.xl },
+    daySection: { marginBottom: spacing.xl, borderRadius: radius.md },
+    daySectionHover: { backgroundColor: colors.sagePale },
     dayHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
+    dayHeadLeft: { gap: 2 },
     dayName: {
       fontFamily: typography.body.bold,
       fontSize: 11.5,
       letterSpacing: 1.1,
       textTransform: 'uppercase',
       color: colors.inkFaint,
+    },
+    dayDate: {
+      fontFamily: typography.body.medium,
+      fontSize: 13,
+      color: colors.inkSoft,
+    },
+    weekNav: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: spacing.md,
+      marginBottom: spacing.md,
+    },
+    weekNavBtn: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: colors.creamDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    weekNavLabel: {
+      fontFamily: typography.body.semibold,
+      fontSize: 14,
+      color: colors.ink,
+      minWidth: 160,
+      textAlign: 'center',
     },
     addBtn: {
       width: 28,
@@ -249,7 +471,9 @@ function makeStyles(colors) {
       padding: 8,
       marginBottom: 8,
     },
+    mealRowDragging: { opacity: 0.35 },
     mealTop: { flexDirection: 'row', alignItems: 'center' },
+    dragHandle: { paddingHorizontal: 6, paddingVertical: 10 },
     mealMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
     thumb: { width: 48, height: 48, borderRadius: 10, backgroundColor: colors.paper },
     mealTitle: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
@@ -292,5 +516,22 @@ function makeStyles(colors) {
       backgroundColor: colors.sageDeep,
     },
     ctaText: { fontFamily: typography.body.semibold, fontSize: 14, color: colors.onAccent },
+    floatingCard: {
+      position: 'absolute',
+      width: 180,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      padding: 8,
+      borderRadius: 12,
+      backgroundColor: colors.paper,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      shadowColor: '#000',
+      shadowOpacity: 0.2,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 6,
+    },
   });
 }

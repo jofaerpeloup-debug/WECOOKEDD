@@ -1,17 +1,23 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, Pressable, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import NotificationsDropdown from '../components/NotificationsDropdown';
+import AppImage from '../components/AppImage';
+import { useTabBarScroll, TAB_BAR_CLEARANCE } from '../components/TabBarContext';
 import { recipes, CRAVINGS } from '../data/mockData';
 import { metaLine } from '../utils/recipe';
+import { recipeSearchScore } from '../utils/fuzzy';
 import { imageSource } from '../utils/image';
 import { useNotifications } from '../context/NotificationsContext';
 import { useProfile } from '../context/ProfileContext';
 import { useSearchHistory } from '../context/SearchHistoryContext';
+import { useRecentlyViewed } from '../context/RecentlyViewedContext';
+import { useShoppingList } from '../context/ShoppingListContext';
+import useFakeRefresh from '../hooks/useFakeRefresh';
 
 // Rotates the featured recipe once per day.
 function featuredForToday() {
@@ -33,23 +39,44 @@ export default function DashboardScreen({ navigation }) {
   const { unreadCount } = useNotifications();
   const { profile } = useProfile();
   const { recent, addRecent, clearRecent } = useSearchHistory();
+  const { recentIds, clearRecentlyViewed } = useRecentlyViewed();
+  const { items: groceryItems } = useShoppingList();
+  const tabScroll = useTabBarScroll();
+  const { refreshing, onRefresh } = useFakeRefresh();
+
+  const pendingGroceryCount = groceryItems.filter((i) => !i.checked).length;
   const [notifOpen, setNotifOpen] = useState(false);
   const [query, setQuery] = useState('');
 
   const searching = query.trim().length > 0;
-  const hero = useMemo(featuredForToday, []);
+  const hero = useMemo(() => featuredForToday(), []);
 
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if (!q) return [];
-    return recipes.filter(
-      (r) =>
-        r.title.toLowerCase().includes(q) ||
-        r.ingredients.some((ing) => ing.name.toLowerCase().includes(q))
-    );
+    return recipes
+      .map((r) => ({ r, score: recipeSearchScore(q, r) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.r);
   }, [query]);
 
-  const trending = useMemo(() => recipes.filter((r) => r.id !== hero.id).slice(0, 6), [hero.id]);
+  // Ranked by real rating + review count, not just array order, so the
+  // preview row and the "See all" list agree on what's actually trending.
+  const trending = useMemo(
+    () =>
+      recipes
+        .filter((r) => r.id !== hero.id)
+        .slice()
+        .sort((a, b) => b.rating - a.rating || b.reviews - a.reviews)
+        .slice(0, 6),
+    [hero.id]
+  );
+
+  const recentlyViewed = useMemo(
+    () => recentIds.map((id) => recipes.find((r) => r.id === id)).filter(Boolean),
+    [recentIds]
+  );
 
   const openRecipe = (recipe) => navigation.navigate('RecipeDetail', { recipe });
   const firstName = (profile.name || 'Chef').replace(/^chef\s+/i, '').split(' ')[0];
@@ -66,14 +93,52 @@ export default function DashboardScreen({ navigation }) {
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.sageDeep} />
+        }
+        {...tabScroll}
       >
         <View style={styles.header}>
           <Text style={styles.wordmark}>WeCooked</Text>
           <View style={styles.headerActions}>
-            <Pressable style={styles.bellBtn} hitSlop={8} onPress={() => navigation.navigate('Saved')}>
+            <Pressable
+              style={styles.bellBtn}
+              hitSlop={8}
+              onPress={() => navigation.navigate('Saved')}
+              accessibilityRole="button"
+              accessibilityLabel="Saved recipes and collections"
+            >
               <Ionicons name="bookmark-outline" size={16} color={colors.ink} />
             </Pressable>
-            <Pressable style={styles.bellBtn} hitSlop={8} onPress={() => setNotifOpen(true)}>
+            <Pressable
+              style={styles.bellBtn}
+              hitSlop={8}
+              onPress={() => navigation.navigate('Grocery')}
+              accessibilityRole="button"
+              accessibilityLabel={
+                pendingGroceryCount > 0
+                  ? `Grocery list, ${pendingGroceryCount} items to get`
+                  : 'Grocery list'
+              }
+            >
+              <Ionicons name="cart-outline" size={16} color={colors.ink} />
+              {pendingGroceryCount > 0 && (
+                <View style={styles.cartBadge}>
+                  <Text style={styles.cartBadgeText}>
+                    {pendingGroceryCount > 9 ? '9+' : pendingGroceryCount}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+            <Pressable
+              style={styles.bellBtn}
+              hitSlop={8}
+              onPress={() => setNotifOpen((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'
+              }
+            >
               <Ionicons name="notifications-outline" size={17} color={colors.ink} />
               {unreadCount > 0 && <View style={styles.bellDot} />}
             </Pressable>
@@ -97,12 +162,22 @@ export default function DashboardScreen({ navigation }) {
               returnKeyType="search"
             />
             {searching && (
-              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <Pressable
+                onPress={() => setQuery('')}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+              >
                 <Ionicons name="close-circle" size={16} color={colors.inkFaint} />
               </Pressable>
             )}
           </View>
-          <Pressable style={styles.filterBtn} onPress={() => navigation.navigate('Search')}>
+          <Pressable
+            style={styles.filterBtn}
+            onPress={() => navigation.navigate('Search')}
+            accessibilityRole="button"
+            accessibilityLabel="Search filters"
+          >
             <Ionicons name="options-outline" size={18} color={colors.onAccent} />
           </Pressable>
         </View>
@@ -133,7 +208,7 @@ export default function DashboardScreen({ navigation }) {
             </Text>
             {results.map((r) => (
               <Pressable key={r.id} style={styles.resultRow} onPress={() => openRecipe(r)}>
-                <Image source={imageSource(r.image)} style={styles.resultThumb} />
+                <AppImage source={imageSource(r.image)} style={styles.resultThumb} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.resultTitle}>{r.title}</Text>
                   <Text style={styles.resultMeta}>{metaLine(r)}</Text>
@@ -148,7 +223,7 @@ export default function DashboardScreen({ navigation }) {
           <>
             {/* Today's Feature */}
             <Pressable style={styles.hero} onPress={() => openRecipe(hero)}>
-              <Image source={imageSource(hero.image)} style={styles.heroImg} />
+              <AppImage source={imageSource(hero.image)} style={styles.heroImg} />
               <LinearGradient colors={['rgba(18,22,14,0)', 'rgba(18,22,14,0.92)']} style={styles.heroScrim} />
               <Text style={styles.heroEyebrow}>TODAY'S FEATURE</Text>
               <View style={styles.heroText}>
@@ -163,7 +238,10 @@ export default function DashboardScreen({ navigation }) {
             {/* Craving */}
             <View style={styles.eyebrowRow}>
               <Text style={styles.eyebrow}>Browse by craving</Text>
-              <Pressable hitSlop={8} onPress={() => navigation.navigate('Search')}>
+              <Pressable
+                hitSlop={8}
+                onPress={() => navigation.navigate('Search', { filtersOpen: false, hideFilters: true })}
+              >
                 <Text style={styles.seeAll}>See all</Text>
               </Pressable>
             </View>
@@ -172,9 +250,9 @@ export default function DashboardScreen({ navigation }) {
                 <Pressable
                   key={c.key}
                   style={styles.craving}
-                  onPress={() => navigation.navigate('Search', { category: c.key })}
+                  onPress={() => navigation.navigate('Search', { category: c.key, filtersOpen: false })}
                 >
-                  <Image source={imageSource(c.image)} style={styles.cravingCircle} />
+                  <AppImage source={imageSource(c.image)} style={styles.cravingCircle} />
                   <Text style={styles.cravingLabel}>{c.label}</Text>
                 </Pressable>
               ))}
@@ -183,19 +261,40 @@ export default function DashboardScreen({ navigation }) {
             {/* Trending */}
             <View style={styles.eyebrowRow}>
               <Text style={styles.eyebrow}>Trending meals</Text>
-              <Pressable hitSlop={8} onPress={() => navigation.navigate('Search')}>
+              <Pressable hitSlop={8} onPress={() => navigation.navigate('Trending', { excludeId: hero.id })}>
                 <Text style={styles.seeAll}>See all</Text>
               </Pressable>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trendRow}>
               {trending.map((r) => (
-                <Pressable key={r.id} style={styles.trendCard} onPress={() => openRecipe(r)}>
-                  <Image source={imageSource(r.image)} style={styles.trendImg} />
-                  <Text style={styles.trendTitle} numberOfLines={2}>{r.title}</Text>
-                  <Text style={styles.trendMeta}>{metaLine(r)}</Text>
+                <Pressable key={r.id} style={styles.trendBubbleWrap} onPress={() => openRecipe(r)}>
+                  <AppImage source={imageSource(r.image)} style={styles.trendCircle} />
+                  <Text style={styles.trendTitle} numberOfLines={1}>{r.title}</Text>
+                  <Text style={styles.trendMeta} numberOfLines={1}>{metaLine(r)}</Text>
                 </Pressable>
               ))}
             </ScrollView>
+
+            {/* Recently viewed */}
+            {recentlyViewed.length > 0 && (
+              <>
+                <View style={styles.eyebrowRow}>
+                  <Text style={styles.eyebrow}>Recently viewed</Text>
+                  <Pressable hitSlop={8} onPress={clearRecentlyViewed}>
+                    <Text style={styles.seeAll}>Clear</Text>
+                  </Pressable>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trendRow}>
+                  {recentlyViewed.map((r) => (
+                    <Pressable key={r.id} style={styles.trendBubbleWrap} onPress={() => openRecipe(r)}>
+                      <AppImage source={imageSource(r.image)} style={styles.trendCircle} />
+                      <Text style={styles.trendTitle} numberOfLines={1}>{r.title}</Text>
+                      <Text style={styles.trendMeta} numberOfLines={1}>{metaLine(r)}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </>
+            )}
           </>
         )}
       </ScrollView>
@@ -213,7 +312,7 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     flex: { flex: 1 },
-    scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
+    scroll: { paddingHorizontal: spacing.xl, paddingBottom: TAB_BAR_CLEARANCE },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     headerActions: { flexDirection: 'row', gap: 8 },
     wordmark: { fontFamily: typography.display.fontFamilyItalic, fontSize: 22, color: colors.ink },
@@ -235,6 +334,25 @@ function makeStyles(colors) {
       backgroundColor: colors.stone,
       borderWidth: 1.5,
       borderColor: colors.creamDeep,
+    },
+    cartBadge: {
+      position: 'absolute',
+      top: -4,
+      right: -4,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      paddingHorizontal: 3,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: colors.cream,
+    },
+    cartBadgeText: {
+      fontFamily: typography.body.bold,
+      fontSize: 9,
+      color: colors.onAccent,
     },
     greetingSub: {
       fontFamily: typography.body.fontFamily,
@@ -343,16 +461,20 @@ function makeStyles(colors) {
       backgroundColor: colors.creamDeep,
     },
     cravingLabel: { fontFamily: typography.body.medium, fontSize: 12, color: colors.inkSoft },
-    trendRow: { gap: 14, paddingBottom: spacing.xxl },
-    trendCard: { width: 150 },
-    trendImg: { width: 150, height: 110, borderRadius: 14, backgroundColor: colors.creamDeep },
+    trendRow: { gap: 18, paddingBottom: spacing.xxl },
+    trendBubbleWrap: { alignItems: 'center', width: 84, gap: 4 },
+    trendCircle: {
+      width: 76,
+      height: 76,
+      borderRadius: 38,
+      backgroundColor: colors.creamDeep,
+    },
     trendTitle: {
       fontFamily: typography.body.semibold,
-      fontSize: 13,
-      lineHeight: 16,
+      fontSize: 12,
       color: colors.ink,
-      marginTop: 8,
+      textAlign: 'center',
     },
-    trendMeta: { fontFamily: typography.body.fontFamily, fontSize: 11.5, color: colors.inkFaint, marginTop: 3 },
+    trendMeta: { fontFamily: typography.body.fontFamily, fontSize: 10.5, color: colors.inkFaint, textAlign: 'center' },
   });
 }

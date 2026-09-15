@@ -10,6 +10,7 @@ export default function Input({
   secureTextEntry,
   rightAction,
   onRightActionPress,
+  error,
   style,
   ...props
 }) {
@@ -21,7 +22,7 @@ export default function Input({
   return (
     <View style={[styles.wrap, style]}>
       {label && <Text style={styles.label}>{label}</Text>}
-      <View style={[styles.field, focused && styles.fieldFocused]}>
+      <View style={[styles.field, focused && styles.fieldFocused, error && styles.fieldError]}>
         {icon && <Ionicons name={icon} size={17} color={colors.inkFaint} style={styles.icon} />}
         <TextInput
           style={styles.input}
@@ -46,6 +47,7 @@ export default function Input({
           </Pressable>
         )}
       </View>
+      {!!error && <Text style={styles.errorText}>{error}</Text>}
     </View>
   );
 }
@@ -73,6 +75,15 @@ function makeStyles(colors) {
     },
     fieldFocused: {
       borderColor: colors.sageDeep,
+    },
+    fieldError: {
+      borderColor: colors.error,
+    },
+    errorText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.error,
+      marginTop: 6,
     },
     icon: { marginRight: 2 },
     input: {

@@ -26,6 +26,8 @@ export default function HelpCenterScreen({ navigation }) {
         <Pressable
           style={styles.tourRow}
           onPress={() => navigation.navigate('Onboarding', { replay: true })}
+          accessibilityRole="button"
+          accessibilityLabel="Take the app tour"
         >
           <View style={styles.tourIcon}>
             <Ionicons name="sparkles-outline" size={18} color={colors.sageDeep} />
@@ -46,6 +48,9 @@ export default function HelpCenterScreen({ navigation }) {
                 <Pressable
                   style={styles.faqRow}
                   onPress={() => setOpenId(open ? null : item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.q}
+                  accessibilityState={{ expanded: open }}
                 >
                   <Text style={styles.faqQuestion}>{item.q}</Text>
                   <Ionicons
