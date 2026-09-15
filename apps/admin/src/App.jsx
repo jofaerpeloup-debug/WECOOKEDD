@@ -3,15 +3,16 @@ import {
   LayoutDashboard, ChefHat, Users, X,
   Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle,
-  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace,
+  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace, ShieldCheck, UserCog,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { useCallback, useRef } from 'react';
 import { auth } from './firebase.js';
 import {
-  toAccount, signUp, logIn, logOutUser, resendVerificationEmail,
-  refreshEmailVerified, updateUserProfile, changeUserPassword, deleteCurrentAccount,
+  toAccount, logIn, logOutUser,
+  updateUserProfile, changeUserPassword, deleteCurrentAccount,
   requestPasswordReset, verifyResetCode, confirmReset,
 } from './auth.js';
 import { useBackendAuth } from './backendAuth.js';
@@ -22,6 +23,25 @@ import IngredientsTab from './IngredientsTab.jsx';
 import SubstitutionsTab from './SubstitutionsTab.jsx';
 import RecipesTab from './RecipesTab.jsx';
 import UsersTab from './UsersTab.jsx';
+import StaffManagementTab from './StaffManagementTab.jsx';
+import {
+  ConsumerScreen,
+  PendingState,
+  RejectedState,
+  StaffBootstrapError,
+  StaffPortalAuthScreen,
+  StaffPortalScreenStyles,
+  VerifyEmailState,
+} from './StaffPortalScreens.jsx';
+import {
+  applyAsModerator,
+  getStaffState,
+  requestBackendPasswordReset,
+  resendBackendVerification,
+} from './staffApi.js';
+import { getPortalDestination, getSafeNavigation } from './portalPolicy.js';
+import { staffErrorMessage } from './staffErrorMessage.js';
+import { registerModeratorApplicant, retryModeratorApplication } from './staffOnboarding.js';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 
@@ -83,6 +103,9 @@ function WeCookedAdminApp() {
   const backend = useBackendAuth();
 
   const [tab, setTab] = useState('overview');
+  const [staffState, setStaffState] = useState({ status: 'idle', data: null, error: '' });
+  const [applicationNotice, setApplicationNotice] = useState('');
+  const staffRequestRef = useRef(0);
   // Recipes and users are fully REST-backed now (zero Firestore). The Overview
   // tab shows a few summary widgets, so it pulls lightweight, best-effort
   // counts from the same REST APIs the Recipes / Users tabs use.
@@ -117,6 +140,50 @@ function WeCookedAdminApp() {
     url.searchParams.delete('apiKey');
     window.history.replaceState({}, '', url.pathname + url.search);
   }
+
+  const refreshStaffState = useCallback(async ({ showLoading = true } = {}) => {
+    const requestId = ++staffRequestRef.current;
+    if (showLoading) setStaffState((current) => ({ ...current, status: 'loading', error: '' }));
+    try {
+      const data = await getStaffState();
+      if (requestId === staffRequestRef.current) setStaffState({ status: 'ready', data, error: '' });
+      return data;
+    } catch (error) {
+      if (requestId === staffRequestRef.current) {
+        setStaffState({ status: 'error', data: null, error: staffErrorMessage(error) });
+      }
+      throw error;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (backend.status !== 'authenticated') {
+      staffRequestRef.current += 1;
+      setStaffState({ status: 'idle', data: null, error: '' });
+      return undefined;
+    }
+    let cancelled = false;
+    const requestId = ++staffRequestRef.current;
+    setStaffState((current) => ({ ...current, status: 'loading', error: '' }));
+    getStaffState()
+      .then((data) => {
+        if (!cancelled && requestId === staffRequestRef.current) {
+          setStaffState({ status: 'ready', data, error: '' });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled && requestId === staffRequestRef.current) {
+          setStaffState({ status: 'error', data: null, error: staffErrorMessage(error) });
+        }
+      });
+    return () => { cancelled = true; };
+  }, [backend.status, backend.user?.id]);
+
+  useEffect(() => {
+    const mode = staffState.data?.mode;
+    if (mode !== 'admin' && mode !== 'moderator') return;
+    setTab((current) => getSafeNavigation(mode, current));
+  }, [staffState.data?.mode]);
 
   useEffect(() => {
     // Firebase auth runs in the background purely for the Firebase-Auth-backed
@@ -207,12 +274,25 @@ function WeCookedAdminApp() {
     suspendedUsers: userCounts.suspended,
   }), [recipeStats.total, userCounts]);
 
-  async function createAccount({ name, email, password }) {
-    // Sign-up remains a Firebase-only flow for now. Backend user provisioning
-    // (and promotion to the "admin" role) is a deferred, out-of-scope slice —
-    // an account created here cannot reach the dashboard until it exists in
-    // the backend with role "admin".
-    await signUp(name, email, password);
+  async function registerAndApply({ name, email, password }) {
+    setApplicationNotice('');
+    const result = await registerModeratorApplicant({
+      register: backend.register,
+      apply: applyAsModerator,
+      refresh: () => refreshStaffState({ showLoading: false }),
+    }, { name, email, password });
+    if (!result.applicationSubmitted) {
+      setApplicationNotice(
+        'Your account was created, but the Moderator application was not submitted. Use Retry Application below; you do not need to register again.',
+      );
+      try {
+        await refreshStaffState({ showLoading: false });
+      } catch {
+        // The authenticated account/session remains valid. The bootstrap error
+        // screen offers an explicit retry without repeating registration.
+      }
+      return;
+    }
   }
 
   async function signIn({ email, password }) {
@@ -236,6 +316,10 @@ function WeCookedAdminApp() {
     await requestPasswordReset(email);
   }
 
+  async function forgotStaffPassword(email) {
+    await requestBackendPasswordReset(email);
+  }
+
   async function signOut() {
     await backend.logout();
     try {
@@ -244,7 +328,28 @@ function WeCookedAdminApp() {
       // No Firebase session to end — fine.
     }
     setProfileMenuOpen(false);
+    setApplicationNotice('');
+    setStaffState({ status: 'idle', data: null, error: '' });
   }
+
+  async function submitModeratorApplication() {
+    const state = await retryModeratorApplication({
+      apply: applyAsModerator,
+      refresh: () => refreshStaffState({ showLoading: false }),
+    });
+    setApplicationNotice('');
+    return state;
+  }
+
+  async function resendModeratorVerification() {
+    if (!backend.user?.email) throw new Error('The current account email is unavailable.');
+    return resendBackendVerification(backend.user.email);
+  }
+
+  const refreshAuthority = useCallback(() => {
+    backend.refreshUser().catch(() => {});
+    refreshStaffState({ showLoading: false }).catch(() => {});
+  }, [backend.refreshUser, refreshStaffState]);
 
   async function deleteAccount(password) {
     await deleteCurrentAccount(password);
@@ -261,12 +366,6 @@ function WeCookedAdminApp() {
     await changeUserPassword(currentPassword, newPassword);
   }
 
-  async function checkEmailVerified() {
-    const verified = await refreshEmailVerified();
-    if (verified) setAccount((prev) => (prev ? { ...prev, emailVerified: true } : prev));
-    return verified;
-  }
-
   function updateDisplayPrefs(patch) {
     setDisplayPrefs((prev) => ({ ...prev, ...patch }));
   }
@@ -278,8 +377,10 @@ function WeCookedAdminApp() {
   const identity =
     account ||
     (backend.user
-      ? { name: backend.user.name, email: backend.user.email, emailVerified: true }
+      ? { name: backend.user.name, email: backend.user.email, emailVerified: backend.user.emailVerified }
       : null);
+
+  const portalDestination = getPortalDestination(staffState.data?.mode);
 
   return (
     <div className={`wc-admin ${displayPrefs.theme === 'dark' ? 'wc-dark' : ''} ${displayPrefs.reduceMotion ? 'wc-reduce-motion' : ''}`}>
@@ -943,17 +1044,31 @@ function WeCookedAdminApp() {
         }
       `}</style>
 
+      <StaffPortalScreenStyles />
+
       {resetOobCode ? (
         <ResetPasswordScreen oobCode={resetOobCode} onDone={clearResetLink} />
-      ) : backend.status === 'checking' ? (
+      ) : backend.status === 'checking' || (backend.status === 'authenticated' && ['idle', 'loading'].includes(staffState.status)) ? (
         <div className="wc-loading">
           <Leaf size={26} />
-          <span>Loading dashboard…</span>
+          <span>Loading Staff Portal…</span>
         </div>
       ) : backend.status !== 'authenticated' ? (
-        <AuthScreen onCreateAccount={createAccount} onSignIn={signIn} onForgotPassword={forgotPassword} />
-      ) : backend.user?.role !== 'admin' ? (
-        <AccessDeniedScreen user={backend.user} onSignOut={signOut} />
+        <StaffPortalAuthScreen onRegisterAndApply={registerAndApply} onSignIn={signIn} onForgotPassword={forgotStaffPassword} />
+      ) : staffState.status === 'error' ? (
+        <StaffBootstrapError message={staffState.error} onRetry={refreshStaffState} onSignOut={signOut} />
+      ) : portalDestination === 'consumer' ? (
+        <ConsumerScreen user={backend.user} notice={applicationNotice} onApply={submitModeratorApplication} onSignOut={signOut} />
+      ) : portalDestination === 'verify-email' ? (
+        <VerifyEmailState user={backend.user} onResend={resendModeratorVerification} onRefresh={() => refreshStaffState({ showLoading: false })} onSignOut={signOut} />
+      ) : portalDestination === 'pending' ? (
+        <PendingState onRefresh={() => refreshStaffState({ showLoading: false })} onSignOut={signOut} />
+      ) : portalDestination === 'rejected' ? (
+        <RejectedState reason={staffState.data?.application?.rejectionReason} onApplyAgain={submitModeratorApplication} onSignOut={signOut} />
+      ) : portalDestination === 'moderator' ? (
+        <ModeratorWorkspace tab={tab} setTab={setTab} identity={identity} onSignOut={signOut} />
+      ) : portalDestination !== 'admin' ? (
+        <StaffBootstrapError message="The Staff Portal returned an unsupported access state." onRetry={() => refreshStaffState()} onSignOut={signOut} />
       ) : (
         <>
           <aside className="wc-sidebar">
@@ -963,7 +1078,7 @@ function WeCookedAdminApp() {
               </div>
               <div>
                 <div className="wc-brand-name">WeCooked</div>
-                <div className="wc-brand-sub">Admin</div>
+                <div className="wc-brand-sub">Staff Portal · Admin</div>
               </div>
             </div>
             <nav className="wc-nav">
@@ -996,6 +1111,12 @@ function WeCookedAdminApp() {
                 onClick={() => setTab('users')}
               >
                 <Users size={17} /> Users
+              </button>
+              <button
+                className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
+                onClick={() => setTab('staff')}
+              >
+                <UserCog size={17} /> Staff Management
               </button>
             </nav>
             <div className="wc-sidebar-footer">
@@ -1035,9 +1156,11 @@ function WeCookedAdminApp() {
             {tab === 'users' && (
               <UsersTab
                 currentUserId={backend.user?.id}
-                onAuthorityLost={() => backend.refreshUser().catch(() => {})}
+                onAuthorityLost={refreshAuthority}
               />
             )}
+
+            {tab === 'staff' && <StaffManagementTab onAuthorityLost={refreshAuthority} />}
           </main>
 
           {settingsOpen && (
@@ -1071,6 +1194,62 @@ function WeCookedAdminApp() {
         </>
       )}
     </div>
+  );
+}
+
+function ModeratorWorkspace({ tab, setTab, identity, onSignOut }) {
+  const areas = [
+    { id: 'recipes', label: 'Recipes', icon: ChefHat },
+    { id: 'ingredients', label: 'Ingredients', icon: Carrot },
+    { id: 'substitutions', label: 'Substitutions', icon: Replace },
+  ];
+  const activeArea = areas.find((area) => area.id === tab);
+
+  return (
+    <>
+      <style>{`
+        .wc-moderator-card { max-width:760px; background:var(--field-bg); border:1px solid var(--stone-light); border-radius:16px; padding:28px; box-shadow:0 8px 24px rgba(42,47,40,.07); }
+        .wc-moderator-kicker { display:inline-flex; align-items:center; gap:7px; color:var(--sage-deep); background:rgba(192,213,194,.35); border-radius:999px; padding:7px 11px; font-size:12px; font-weight:700; margin-bottom:14px; }
+        .wc-moderator-card h1 { margin:0 0 9px; font-size:27px; }
+        .wc-moderator-card p { color:var(--stone); line-height:1.6; margin:0; }
+        .wc-moderator-areas { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-top:24px; }
+        .wc-moderator-area { border:1px solid var(--stone-light); border-radius:11px; padding:16px; display:flex; flex-direction:column; gap:8px; color:var(--ink); background:var(--parchment); }
+        .wc-moderator-area svg { color:var(--sage-deep); }
+        .wc-moderator-area span { font-size:11.5px; color:var(--stone); }
+        .wc-moderator-identity { padding:8px; color:var(--sage-light); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; }
+        @media (max-width:760px) { .wc-moderator-areas { grid-template-columns:1fr; } }
+      `}</style>
+      <aside className="wc-sidebar">
+        <div className="wc-brand">
+          <div className="wc-brand-badge"><Leaf size={18} color="#4A5D4E" /></div>
+          <div><div className="wc-brand-name">WeCooked</div><div className="wc-brand-sub">Staff Portal · Moderator</div></div>
+        </div>
+        <nav className="wc-nav">
+          <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')}><LayoutDashboard size={17} /> Overview</button>
+          {areas.map(({ id, label, icon: Icon }) => (
+            <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}><Icon size={17} /> {label}</button>
+          ))}
+        </nav>
+        <div className="wc-sidebar-footer">
+          <div className="wc-moderator-identity">{identity?.name || identity?.email}<br />{identity?.email}</div>
+          <button className="wc-nav-item" onClick={onSignOut}><LogOut size={17} /> Sign Out</button>
+        </div>
+      </aside>
+      <main className="wc-main">
+        <div className="wc-moderator-card">
+          <div className="wc-moderator-kicker"><ShieldCheck size={16} /> Moderator access approved</div>
+          <h1>{activeArea ? activeArea.label : 'Welcome to the Staff Portal'}</h1>
+          <p>Your Moderator account is active. Catalog management will become available after the Staff Portal rollout is completed.</p>
+          <div className="wc-moderator-areas">
+            {areas.map(({ id, label, icon: Icon }) => (
+              <div className="wc-moderator-area" key={id} aria-label={`${label} upcoming`}>
+                <Icon size={20} /><strong>{label}</strong><span>Upcoming · editing is not yet available</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </main>
+    </>
   );
 }
 
@@ -1305,11 +1484,11 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
 const HELP_FAQS = [
   {
     q: 'Where is my data stored?',
-    a: 'Ingredients, substitutions, recipes, and users all live in the WeCooked backend (REST API + MongoDB) and are shared across every admin and device — not tied to one browser. Firebase Authentication still participates in admin sign-in and the account flows (password reset, profile and password changes, email verification, account deletion).',
+    a: 'Ingredients, substitutions, recipes, users, and staff applications live in the WeCooked backend (REST API + MongoDB). Firebase remains only for legacy account utilities and a best-effort sign-in mirror; it does not determine Staff Portal access.',
   },
   {
     q: 'How do I add another admin?',
-    a: 'Sign out and choose “Sign Up” on the sign-in screen to create the account. New accounts are created as regular users. Granting admin access is managed outside the Admin Users screen (directly in MongoDB) — there is no in-app admin-promotion flow.',
+    a: 'There is no public Admin signup or in-app Admin promotion. Admin provisioning remains an out-of-band operational process. The public Staff Portal application creates only a normal user account and a Moderator application.',
   },
   {
     q: 'I lost my password — now what?',
@@ -1791,7 +1970,7 @@ function AuthScreen({ onCreateAccount, onSignIn, onForgotPassword }) {
           )}
 
           <button type="submit" className="wc-btn-primary wc-auth-submit" disabled={submitting}>
-            {submitting ? 'Please wait…' : isSignUp ? 'Create admin account' : 'Sign in'}
+          {submitting ? 'Please wait…' : isSignUp ? 'Create account' : 'Sign in'}
             <ArrowRight size={15} />
           </button>
         </form>
@@ -2073,7 +2252,7 @@ class WeCookedErrorBoundary extends React.Component {
     return { hasError: true, message: error && error.message ? error.message : String(error) };
   }
   componentDidCatch(error, info) {
-    console.error('WeCooked admin dashboard crashed:', error, info);
+    console.error('WeCooked Staff Portal crashed:', error, info);
   }
   render() {
     if (this.state.hasError) {
