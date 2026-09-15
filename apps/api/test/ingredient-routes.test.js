@@ -21,6 +21,8 @@ const ADMIN_ID = '507f1f77bcf86cd799439001';
 const ADMIN_SESSION_ID = '507f1f77bcf86cd799439002';
 const USER_ID = '507f1f77bcf86cd799439003';
 const USER_SESSION_ID = '507f1f77bcf86cd799439004';
+const MODERATOR_ID = '507f1f77bcf86cd799439005';
+const MODERATOR_SESSION_ID = '507f1f77bcf86cd799439006';
 const INGREDIENT_ID = '507f1f77bcf86cd799439099';
 
 function fakeIngredientDoc(overrides = {}) {
@@ -140,6 +142,23 @@ test('GET /api/v1/ingredients/:id allows an admin to retrieve an archived ingred
 test('POST /api/v1/ingredients is forbidden for a non-admin user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+
+  const response = await request(app)
+    .post('/api/v1/ingredients')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ name: 'Butter', category: 'dairy' });
+
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error.code, 'FORBIDDEN');
+});
+
+test('POST /api/v1/ingredients remains forbidden for a moderator until the M19E cutover', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({
+    id: MODERATOR_ID,
+    role: 'moderator',
+    sessionId: MODERATOR_SESSION_ID,
+  });
 
   const response = await request(app)
     .post('/api/v1/ingredients')

@@ -211,6 +211,31 @@ test('role defaults to "user" — public registration can never self-assign admi
   assert.equal(user.role, 'user');
 });
 
+test('role accepts user, moderator, and admin while rejecting unknown roles', async () => {
+  assert.deepEqual(User.ROLES, ['user', 'moderator', 'admin']);
+
+  for (const role of User.ROLES) {
+    const user = new User({
+      name: 'Ada',
+      email: `${role}@example.com`,
+      passwordHash: 'hash',
+      role,
+    });
+    await assert.doesNotReject(() => user.validate());
+  }
+
+  const invalid = new User({
+    name: 'Ada',
+    email: 'unknown@example.com',
+    passwordHash: 'hash',
+    role: 'superadmin',
+  });
+  await assert.rejects(() => invalid.validate(), (err) => {
+    assert.ok(err.errors.role);
+    return true;
+  });
+});
+
 test('status defaults to "active"', () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
   assert.equal(user.status, 'active');

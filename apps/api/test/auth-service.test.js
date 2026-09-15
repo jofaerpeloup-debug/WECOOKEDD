@@ -746,7 +746,7 @@ test('refresh succeeds: checks the user first, then rotates, and returns a fresh
   });
   t.mock.method(userService, 'getUserById', async () => {
     calls.push('getUserById');
-    return fakeUser();
+    return fakeUser({ role: 'moderator' });
   });
   t.mock.method(sessionService, 'rotateSession', async () => {
     calls.push('rotateSession');
@@ -759,6 +759,7 @@ test('refresh succeeds: checks the user first, then rotates, and returns a fresh
   assert.equal(result.refreshToken, 'new-raw-token');
   const payload = verifyAccessToken(result.accessToken);
   assert.equal(payload.sub, 'user-1');
+  assert.equal(payload.role, 'moderator');
 });
 
 test('refresh rejects with AUTH_REFRESH_TOKEN_INVALID when the atomic rotation loses a concurrency race after the pre-check passed', async (t) => {
