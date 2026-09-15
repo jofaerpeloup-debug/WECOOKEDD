@@ -134,11 +134,11 @@ test('GET /api/v1/users passes page/limit/sort/role/status/search through to the
   t.mock.method(userRepository, 'countByFilter', async () => 0);
 
   const res = await request(app)
-    .get('/api/v1/users?page=2&limit=5&sort=nameDesc&role=admin&status=active&search=a%2Bb')
+    .get('/api/v1/users?page=2&limit=5&sort=nameDesc&role=moderator&status=active&search=a%2Bb')
     .set('Authorization', `Bearer ${adminToken()}`);
 
   assert.equal(res.status, 200);
-  assert.equal(filter.role, 'admin');
+  assert.equal(filter.role, 'moderator');
   assert.equal(filter.status, 'active');
   assert.equal(filter.$or[0].name.source, 'a\\+b'); // regex-escaped
   assert.equal(filter.$or[1].email.source, 'a\\+b');
@@ -314,7 +314,7 @@ test('PATCH /api/v1/users/:userId rejects a role-only body with 400 and never wr
     return 0;
   });
 
-  for (const body of [{ role: 'admin' }, { role: 'user' }]) {
+  for (const body of [{ role: 'admin' }, { role: 'moderator' }, { role: 'user' }]) {
     const res = await request(app)
       .patch(`/api/v1/users/${TARGET_USER_ID}`)
       .set('Authorization', `Bearer ${adminToken()}`)

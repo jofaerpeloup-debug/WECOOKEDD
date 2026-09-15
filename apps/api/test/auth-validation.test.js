@@ -23,11 +23,13 @@ test('registerSchema accepts a well-formed registration payload', () => {
   assert.equal(result.data.body.email, 'ada@example.com');
 });
 
-test('registerSchema rejects a caller-supplied role field', () => {
-  const result = registerSchema.safeParse({
-    body: { name: 'Ada', email: 'ada@example.com', password: 'a-good-password', role: 'admin' },
-  });
-  assert.equal(result.success, false);
+test('registerSchema rejects caller-supplied moderator and admin roles', () => {
+  for (const role of ['moderator', 'admin']) {
+    const result = registerSchema.safeParse({
+      body: { name: 'Ada', email: 'ada@example.com', password: 'a-good-password', role },
+    });
+    assert.equal(result.success, false);
+  }
 });
 
 test('registerSchema rejects caller-supplied auth internals including legacy authProviders', () => {

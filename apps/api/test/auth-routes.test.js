@@ -515,16 +515,27 @@ test('POST /api/v1/auth/register rejects a duplicate email with 409 USER_EMAIL_A
   assert.equal(response.body.error.code, 'USER_EMAIL_ALREADY_EXISTS');
 });
 
-test('POST /api/v1/auth/register rejects a client-supplied role field before it reaches the service', async () => {
-  const response = await request(app).post('/api/v1/auth/register').send({
-    name: 'Ada',
-    email: 'ada@example.com',
-    password: 'a-good-password',
-    role: 'admin',
-  });
+test('POST /api/v1/auth/register rejects client-supplied staff roles and status', async () => {
+  await resetAuthLimiter();
 
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  for (const extra of [
+    { role: 'moderator' },
+    { role: 'admin' },
+    { status: 'active' },
+    { status: 'suspended' },
+  ]) {
+    const response = await request(app)
+      .post('/api/v1/auth/register')
+      .send({
+        name: 'Ada',
+        email: 'ada@example.com',
+        password: 'a-good-password',
+        ...extra,
+      });
+
+    assert.equal(response.status, 400, `expected ${JSON.stringify(extra)} to be rejected`);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
 });
 
 test('POST /api/v1/auth/register still succeeds when verification email delivery fails', async (t) => {

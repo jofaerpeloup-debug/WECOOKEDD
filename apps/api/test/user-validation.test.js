@@ -49,6 +49,12 @@ test('listUsersSchema coerces and accepts a full valid query', () => {
   assert.equal(result.data.query.limit, 50);
 });
 
+test('listUsersSchema accepts moderator as a current User role filter', () => {
+  const result = parseQuery({ role: 'moderator' });
+  assert.equal(result.success, true);
+  assert.equal(result.data.query.role, 'moderator');
+});
+
 test('listUsersSchema rejects an unknown query param (strict)', () => {
   const result = parseQuery({ isActive: 'true' });
   assert.equal(result.success, false);
@@ -105,6 +111,7 @@ test('updateUserSchema accepts a status-only suspended body and parses to status
 
 test('updateUserSchema rejects a role-only body (role is not a writable field)', () => {
   assert.equal(parsePatch(VALID_ID, { role: 'admin' }).success, false);
+  assert.equal(parsePatch(VALID_ID, { role: 'moderator' }).success, false);
   assert.equal(parsePatch(VALID_ID, { role: 'user' }).success, false);
 });
 
@@ -126,6 +133,7 @@ test('updateUserSchema rejects a malformed ObjectId path param', () => {
 test('updateUserSchema rejects every non-allowed body field', () => {
   for (const body of [
     { role: 'admin' },
+    { role: 'moderator' },
     { role: 'user' },
     { name: 'Mallory' },
     { email: 'mallory@example.com' },
@@ -259,6 +267,7 @@ test('updateCurrentUserSchema requires notifications.enabled to be a boolean whe
 test('updateCurrentUserSchema rejects every non-allowed / admin-managed field', () => {
   for (const body of [
     { role: 'admin' },
+    { role: 'moderator' },
     { status: 'active' },
     { email: 'x@example.com' },
     { emailVerified: true },

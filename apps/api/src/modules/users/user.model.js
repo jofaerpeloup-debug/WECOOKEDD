@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const SOCIAL_AUTH_PROVIDERS = ['google', 'apple', 'facebook'];
-const ROLES = ['user', 'admin'];
+const ROLES = Object.freeze(['user', 'moderator', 'admin']);
 const STATUSES = ['active', 'suspended'];
 
 const authIdentitySchema = new mongoose.Schema(

@@ -204,3 +204,51 @@ test('a fully valid token attaches a safe req.auth identity and never leaks pass
   assert.deepEqual(response.body.data.auth, { userId: USER_ID, role: 'admin', sessionId: SESSION_ID });
   assert.equal(JSON.stringify(response.body).includes('should-never-leak'), false);
 });
+
+test('current MongoDB moderator role overrides a stale access-token role in req.auth', async (t) => {
+  t.mock.method(sessionService, 'getActiveSessionById', async () => ({
+    _id: SESSION_ID,
+    userId: USER_ID,
+  }));
+  t.mock.method(userService, 'getUserById', async () => ({
+    _id: USER_ID,
+    role: 'moderator',
+    status: 'active',
+  }));
+  const token = signAccessToken({ userId: USER_ID, role: 'user', sessionId: SESSION_ID });
+
+  const response = await request(buildTestApp())
+    .get('/protected')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data.auth, {
+    userId: USER_ID,
+    role: 'moderator',
+    sessionId: SESSION_ID,
+  });
+});
+
+test('current MongoDB user role overrides a stale privileged access-token role in req.auth', async (t) => {
+  t.mock.method(sessionService, 'getActiveSessionById', async () => ({
+    _id: SESSION_ID,
+    userId: USER_ID,
+  }));
+  t.mock.method(userService, 'getUserById', async () => ({
+    _id: USER_ID,
+    role: 'user',
+    status: 'active',
+  }));
+  const token = signAccessToken({ userId: USER_ID, role: 'admin', sessionId: SESSION_ID });
+
+  const response = await request(buildTestApp())
+    .get('/protected')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data.auth, {
+    userId: USER_ID,
+    role: 'user',
+    sessionId: SESSION_ID,
+  });
+});
