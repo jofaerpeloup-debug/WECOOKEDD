@@ -1,10 +1,9 @@
-// Backend local-auth session for the admin app.
+// Backend local-auth session for the Staff Portal.
 //
 // This is the authoritative gate for the dashboard and for every WeCooked REST
-// API call: POST /api/v1/auth/login establishes the session, GET /api/v1/users/me
-// confirms the current backend role/status, and admin areas are only reachable
-// when that backend user has role === "admin". A client-supplied role is never
-// sent or trusted.
+// API call: register/login establishes the session, GET /api/v1/users/me keeps
+// the current backend identity available, and /staff/me determines the portal
+// destination. A client-supplied role is never sent or trusted.
 //
 // Token handling in this development slice (see
 // docs/architecture/admin-api-integration.md — "temporary compromises"):
@@ -17,6 +16,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, setAuthAdapter } from './apiClient.js';
+import { registrationPayload } from './staffContracts.js';
 
 const REFRESH_STORAGE_KEY = 'wecooked.admin.refreshToken';
 
@@ -104,6 +104,15 @@ async function loginRequest(email, password) {
   return data.user;
 }
 
+async function registerRequest(details) {
+  const data = await api.post('/auth/register', {
+    auth: false,
+    body: registrationPayload(details),
+  });
+  setTokens(data);
+  return data.user;
+}
+
 async function logoutRequest() {
   try {
     await api.post('/auth/logout');
@@ -182,6 +191,13 @@ export function useBackendAuth() {
     return currentUser;
   }, []);
 
+  const register = useCallback(async (details) => {
+    const registeredUser = await registerRequest(details);
+    setUser(registeredUser);
+    setStatus('authenticated');
+    return registeredUser;
+  }, []);
+
   const logout = useCallback(async () => {
     await logoutRequest();
     setUser(null);
@@ -194,5 +210,5 @@ export function useBackendAuth() {
     return fresh;
   }, []);
 
-  return { status, user, login, logout, refreshUser };
+  return { status, user, login, register, logout, refreshUser };
 }
