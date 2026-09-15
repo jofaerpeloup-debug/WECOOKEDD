@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   REQUIRED_INDEXES,
+  MODERATOR_APPLICATION_REQUIRED_INDEXES,
   verifyRequiredIndexes,
 } = require('../src/config/required-indexes');
 const {
@@ -182,4 +183,40 @@ test('a successful verification logs one non-sensitive summary line', async () =
     logger: { log: (line) => lines.push(line) },
   });
   assert.deepEqual(lines, ['[database] verified 1 required index(es) on "users"']);
+});
+
+test('startup registration verifies both ModeratorApplication indexes read-only', async () => {
+  const writes = [];
+  const moderatorApplicationCollection = {
+    collectionName: 'moderatorapplications',
+    listIndexes() {
+      return {
+        toArray: async () => [
+          {
+            name: 'uniq_pending_moderator_application_per_user',
+            key: { userId: 1 },
+            unique: true,
+            partialFilterExpression: { status: 'pending' },
+          },
+          {
+            name: 'moderator_application_queue',
+            key: { status: 1, createdAt: -1, _id: -1 },
+          },
+        ],
+      };
+    },
+    createIndex: (...args) => writes.push(args),
+    dropIndex: (...args) => writes.push(args),
+  };
+  const lines = [];
+  await verifyRequiredIndexes({
+    collection: fakeCollection([validIndex()]),
+    moderatorApplicationCollection,
+    logger: { log: (line) => lines.push(line) },
+  });
+  assert.equal(MODERATOR_APPLICATION_REQUIRED_INDEXES.length, 2);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(lines, [
+    '[database] verified 3 required index(es) across security-critical collections',
+  ]);
 });

@@ -13,6 +13,7 @@ const cookHistoryRoutes = require('../modules/cook-history/cook-history.routes')
 const mealPlanRoutes = require('../modules/meal-plan/meal-plan.routes');
 const communityRoutes = require('../modules/community/community.routes');
 const uploadRoutes = require('../modules/uploads/upload.routes');
+const staffRoutes = require('../modules/moderator-applications/moderator-application.routes');
 
 const router = Router();
 
@@ -32,5 +33,6 @@ router.use('/cook-history', cookHistoryRoutes);
 router.use('/meal-plan', mealPlanRoutes);
 router.use('/community', communityRoutes);
 router.use('/admin/uploads', uploadRoutes);
+router.use('/staff', staffRoutes);
 
 module.exports = router;

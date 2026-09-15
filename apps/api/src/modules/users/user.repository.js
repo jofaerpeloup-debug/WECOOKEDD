@@ -69,6 +69,38 @@ function findByIdWithPassword(id) {
   return User.findById(id).select('+passwordHash');
 }
 
+// Staff-application eligibility needs to know whether a local credential
+// exists, but the hash must never leave the service boundary. Keep this as an
+// explicit opt-in path rather than weakening passwordHash's select:false
+// default.
+function findModeratorApplicantById(id) {
+  return User.findById(id).select('+passwordHash');
+}
+
+// These are deliberately hard-coded role transitions. There is no generic
+// updateRole(userId, role) primitive for an HTTP caller to misuse.
+function promoteEligibleUserToModerator(id) {
+  return User.findOneAndUpdate(
+    {
+      _id: id,
+      status: 'active',
+      role: 'user',
+      emailVerified: true,
+      passwordHash: { $exists: true, $type: 'string', $ne: '' },
+    },
+    { $set: { role: 'moderator' } },
+    { new: true, runValidators: true }
+  );
+}
+
+function demoteModeratorToUser(id) {
+  return User.findOneAndUpdate(
+    { _id: id, role: 'moderator' },
+    { $set: { role: 'user' } },
+    { new: true, runValidators: true }
+  );
+}
+
 // Every password replacement invalidates every outstanding password-reset
 // credential in the SAME document write. Keeping this shape private and shared
 // prevents authenticated change-password and token reset from drifting.
@@ -189,6 +221,9 @@ module.exports = {
   findByEmail,
   findByEmailWithPassword,
   findByIdWithPassword,
+  findModeratorApplicantById,
+  promoteEligibleUserToModerator,
+  demoteModeratorToUser,
   findMany,
   countByFilter,
   updateById,

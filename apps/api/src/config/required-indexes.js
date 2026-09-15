@@ -1,4 +1,5 @@
 const User = require('../modules/users/user.model');
+const ModeratorApplication = require('../modules/moderator-applications/moderator-application.model');
 
 /**
  * Read-only startup verification of the security-relevant database indexes the
@@ -44,6 +45,25 @@ const REQUIRED_INDEXES = Object.freeze([
   }),
 ]);
 
+const MODERATOR_APPLICATION_REQUIRED_INDEXES = Object.freeze([
+  Object.freeze({
+    name: 'uniq_pending_moderator_application_per_user',
+    key: Object.freeze([Object.freeze(['userId', 1])]),
+    unique: true,
+    partialFilterExpression: Object.freeze({ status: 'pending' }),
+  }),
+  Object.freeze({
+    name: 'moderator_application_queue',
+    key: Object.freeze([
+      Object.freeze(['status', 1]),
+      Object.freeze(['createdAt', -1]),
+      Object.freeze(['_id', -1]),
+    ]),
+    unique: false,
+    partialFilterExpression: null,
+  }),
+]);
+
 // Key order is meaningful for an index key specification but NOT for the
 // partial filter expression, so filters are compared through a recursively
 // key-sorted canonical form.
@@ -71,6 +91,13 @@ function describeKey(key) {
 }
 
 function indexVerificationError(collectionName, name, reason) {
+  if (collectionName === ModeratorApplication.collection.collectionName) {
+    return new Error(
+      `Required index "${name}" on collection "${collectionName}" ${reason}. ` +
+        'Provision the schema-declared ModeratorApplication indexes before restarting. ' +
+        'This verifier never creates, repairs, or drops indexes.'
+    );
+  }
   return new Error(
     `Required index "${name}" on collection "${collectionName}" ${reason}. ` +
       'Run "npm run migrate:auth-identities" (dry run) and then ' +
@@ -109,7 +136,7 @@ function assertIndex(collectionName, required, existing) {
 
   assertKeyOrder(collectionName, required, actual);
 
-  if (actual.unique !== required.unique) {
+  if ((actual.unique === true) !== required.unique) {
     throw indexVerificationError(
       collectionName,
       required.name,
@@ -117,12 +144,13 @@ function assertIndex(collectionName, required, existing) {
     );
   }
 
-  if (!sameFilter(actual.partialFilterExpression, required.partialFilterExpression)) {
+  const actualFilter = actual.partialFilterExpression ?? null;
+  if (!sameFilter(actualFilter, required.partialFilterExpression)) {
     throw indexVerificationError(
       collectionName,
       required.name,
       `must carry the partial filter ${JSON.stringify(required.partialFilterExpression)}, found ` +
-        `${JSON.stringify(actual.partialFilterExpression ?? null)}`
+        `${JSON.stringify(actualFilter)}`
     );
   }
 }
@@ -132,7 +160,7 @@ function assertIndex(collectionName, required, existing) {
  * required index. Uses listIndexes only — no write ever reaches MongoDB from
  * here. `collection` is injectable so tests can drive it without a database.
  */
-async function verifyRequiredIndexes({ collection = User.collection, logger = console } = {}) {
+async function verifyCollectionIndexes(collection, requiredIndexes) {
   const collectionName = collection.collectionName;
 
   let existing;
@@ -148,13 +176,39 @@ async function verifyRequiredIndexes({ collection = User.collection, logger = co
     );
   }
 
-  for (const required of REQUIRED_INDEXES) {
+  for (const required of requiredIndexes) {
     assertIndex(collectionName, required, existing);
   }
 
+  return requiredIndexes.length;
+}
+
+async function verifyRequiredIndexes(options = {}) {
+  const collection = options.collection ?? User.collection;
+  const logger = options.logger ?? console;
+  // Existing unit callers inject only the User collection. Preserve that
+  // focused seam; production startup (no injected collection) verifies both.
+  const moderatorApplicationCollection =
+    options.moderatorApplicationCollection ??
+    (Object.hasOwn(options, 'collection') ? null : ModeratorApplication.collection);
+
+  let verified = await verifyCollectionIndexes(collection, REQUIRED_INDEXES);
+  if (moderatorApplicationCollection) {
+    verified += await verifyCollectionIndexes(
+      moderatorApplicationCollection,
+      MODERATOR_APPLICATION_REQUIRED_INDEXES
+    );
+  }
+
   logger.log(
-    `[database] verified ${REQUIRED_INDEXES.length} required index(es) on "${collectionName}"`
+    moderatorApplicationCollection
+      ? `[database] verified ${verified} required index(es) across security-critical collections`
+      : `[database] verified ${verified} required index(es) on "${collection.collectionName}"`
   );
 }
 
-module.exports = { REQUIRED_INDEXES, verifyRequiredIndexes };
+module.exports = {
+  REQUIRED_INDEXES,
+  MODERATOR_APPLICATION_REQUIRED_INDEXES,
+  verifyRequiredIndexes,
+};
