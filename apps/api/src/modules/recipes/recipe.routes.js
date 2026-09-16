@@ -2,7 +2,9 @@ const { Router } = require('express');
 const recipeController = require('./recipe.controller');
 const { validate } = require('../../middleware/validate.middleware');
 const { authenticate } = require('../../middleware/authenticate.middleware');
-const { authorize } = require('../../middleware/authorize.middleware');
+const { requireCapability } = require('../../middleware/require-capability.middleware');
+const { requireCatalogReadAllForNonActive } = require('../../middleware/catalog-read.middleware');
+const { CAPABILITIES } = require('../../shared/security/capabilities');
 const {
   recipeParamsSchema,
   listRecipesSchema,
@@ -12,27 +14,33 @@ const {
 
 const router = Router();
 
-router.get('/', authenticate, validate(listRecipesSchema), recipeController.listRecipes);
+router.get(
+  '/',
+  authenticate,
+  validate(listRecipesSchema),
+  requireCatalogReadAllForNonActive,
+  recipeController.listRecipes
+);
 router.get('/:recipeId', authenticate, validate(recipeParamsSchema), recipeController.getRecipe);
 
 router.post(
   '/',
   authenticate,
-  authorize('admin'),
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(createRecipeSchema),
   recipeController.createRecipe
 );
 router.patch(
   '/:recipeId',
   authenticate,
-  authorize('admin'),
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(updateRecipeSchema),
   recipeController.updateRecipe
 );
 router.delete(
   '/:recipeId',
   authenticate,
-  authorize('admin'),
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(recipeParamsSchema),
   recipeController.archiveRecipe
 );

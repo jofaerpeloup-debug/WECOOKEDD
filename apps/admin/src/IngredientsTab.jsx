@@ -152,7 +152,7 @@ function useIngredients() {
   return { filters, patchFilters, ...state, reload, create, update, archive, restore };
 }
 
-export default function IngredientsTab() {
+export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
   const {
     filters, patchFilters, items, pagination, loading, error,
     reload, create, update, archive, restore,
@@ -169,6 +169,7 @@ export default function IngredientsTab() {
     try {
       await action();
     } catch (err) {
+      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       setRowError({ id, message: toMessage(err) });
     }
   };
@@ -234,6 +235,7 @@ export default function IngredientsTab() {
       <div className="wc-topbar">
         <h1>Ingredients</h1>
         <div className="wc-topbar-actions wc-ing-filters">
+          {!canWrite && <span className="wc-pill active">Read-only</span>}
           <div className="wc-search">
             <Search size={15} />
             <input
@@ -273,9 +275,11 @@ export default function IngredientsTab() {
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
           </select>
-          <button className="wc-btn-primary" onClick={() => setModal('new')}>
-            <Plus size={16} /> Add ingredient
-          </button>
+          {canWrite && (
+            <button className="wc-btn-primary" onClick={() => setModal('new')}>
+              <Plus size={16} /> Add ingredient
+            </button>
+          )}
         </div>
       </div>
 
@@ -302,7 +306,9 @@ export default function IngredientsTab() {
             <div>
               {filters.search || filters.category || filters.allergen || filters.status !== 'active'
                 ? 'No ingredients match these filters.'
-                : 'No ingredients yet. Add one to build the catalog.'}
+                : canWrite
+                  ? 'No ingredients yet. Add one to build the catalog.'
+                  : 'No ingredients are currently available.'}
             </div>
           </div>
         ) : (
@@ -338,7 +344,7 @@ export default function IngredientsTab() {
                     </span>
                   </td>
                   <td>
-                    {rowError && rowError.id === ing.id ? (
+                    {!canWrite ? null : rowError && rowError.id === ing.id ? (
                       <div className="wc-confirm-row">
                         <span style={{ color: 'var(--clay)' }}>{rowError.message}</span>
                         <button className="wc-confirm-no" onClick={() => setRowError(null)}>
@@ -418,18 +424,19 @@ export default function IngredientsTab() {
         </div>
       )}
 
-      {modal && (
+      {canWrite && modal && (
         <IngredientModal
           ingredient={modal === 'new' ? null : modal}
           onClose={() => setModal(null)}
           onSubmit={handleSubmit}
+          onAuthorityLost={onAuthorityLost}
         />
       )}
     </div>
   );
 }
 
-function IngredientModal({ ingredient, onClose, onSubmit }) {
+function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
   const editing = Boolean(ingredient);
 
   const [form, setForm] = useState(() => ({
@@ -494,6 +501,7 @@ function IngredientModal({ ingredient, onClose, onSubmit }) {
       await onSubmit(payload);
       onClose();
     } catch (err) {
+      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       if (err instanceof ApiError && err.isValidationError) {
         setFieldErrors(fieldErrorsFromDetails(err.details));
         setFormError('Please fix the highlighted fields.');

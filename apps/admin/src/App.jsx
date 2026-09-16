@@ -39,7 +39,7 @@ import {
   requestBackendPasswordReset,
   resendBackendVerification,
 } from './staffApi.js';
-import { getPortalDestination, getSafeNavigation } from './portalPolicy.js';
+import { getCatalogPolicy, getPortalDestination, getSafeNavigation } from './portalPolicy.js';
 import { staffErrorMessage } from './staffErrorMessage.js';
 import { registerModeratorApplicant, retryModeratorApplication } from './staffOnboarding.js';
 
@@ -381,6 +381,7 @@ function WeCookedAdminApp() {
       : null);
 
   const portalDestination = getPortalDestination(staffState.data?.mode);
+  const catalogPolicy = getCatalogPolicy(staffState.data?.mode);
 
   return (
     <div className={`wc-admin ${displayPrefs.theme === 'dark' ? 'wc-dark' : ''} ${displayPrefs.reduceMotion ? 'wc-reduce-motion' : ''}`}>
@@ -1066,7 +1067,13 @@ function WeCookedAdminApp() {
       ) : portalDestination === 'rejected' ? (
         <RejectedState reason={staffState.data?.application?.rejectionReason} onApplyAgain={submitModeratorApplication} onSignOut={signOut} />
       ) : portalDestination === 'moderator' ? (
-        <ModeratorWorkspace tab={tab} setTab={setTab} identity={identity} onSignOut={signOut} />
+        <ModeratorWorkspace
+          tab={tab}
+          setTab={setTab}
+          identity={identity}
+          onSignOut={signOut}
+          onAuthorityLost={refreshAuthority}
+        />
       ) : portalDestination !== 'admin' ? (
         <StaffBootstrapError message="The Staff Portal returned an unsupported access state." onRetry={() => refreshStaffState()} onSignOut={signOut} />
       ) : (
@@ -1147,11 +1154,27 @@ function WeCookedAdminApp() {
               />
             )}
 
-            {tab === 'recipes' && <RecipesTab />}
+            {tab === 'recipes' && (
+              <RecipesTab
+                canWrite={catalogPolicy.canWriteCatalog}
+                canUploadRecipeImage={catalogPolicy.canUploadRecipeImage}
+                onAuthorityLost={refreshAuthority}
+              />
+            )}
 
-            {tab === 'ingredients' && <IngredientsTab />}
+            {tab === 'ingredients' && (
+              <IngredientsTab
+                canWrite={catalogPolicy.canWriteCatalog}
+                onAuthorityLost={refreshAuthority}
+              />
+            )}
 
-            {tab === 'substitutions' && <SubstitutionsTab />}
+            {tab === 'substitutions' && (
+              <SubstitutionsTab
+                canWrite={catalogPolicy.canWriteCatalog}
+                onAuthorityLost={refreshAuthority}
+              />
+            )}
 
             {tab === 'users' && (
               <UsersTab
@@ -1197,13 +1220,12 @@ function WeCookedAdminApp() {
   );
 }
 
-function ModeratorWorkspace({ tab, setTab, identity, onSignOut }) {
+function ModeratorWorkspace({ tab, setTab, identity, onSignOut, onAuthorityLost }) {
   const areas = [
     { id: 'recipes', label: 'Recipes', icon: ChefHat },
     { id: 'ingredients', label: 'Ingredients', icon: Carrot },
     { id: 'substitutions', label: 'Substitutions', icon: Replace },
   ];
-  const activeArea = areas.find((area) => area.id === tab);
 
   return (
     <>
@@ -1236,18 +1258,30 @@ function ModeratorWorkspace({ tab, setTab, identity, onSignOut }) {
         </div>
       </aside>
       <main className="wc-main">
-        <div className="wc-moderator-card">
-          <div className="wc-moderator-kicker"><ShieldCheck size={16} /> Moderator access approved</div>
-          <h1>{activeArea ? activeArea.label : 'Welcome to the Staff Portal'}</h1>
-          <p>Your Moderator account is active. Catalog management will become available after the Staff Portal rollout is completed.</p>
-          <div className="wc-moderator-areas">
-            {areas.map(({ id, label, icon: Icon }) => (
-              <div className="wc-moderator-area" key={id} aria-label={`${label} upcoming`}>
-                <Icon size={20} /><strong>{label}</strong><span>Upcoming · editing is not yet available</span>
-              </div>
-            ))}
+        {tab === 'recipes' && (
+          <RecipesTab canWrite canUploadRecipeImage onAuthorityLost={onAuthorityLost} />
+        )}
+        {tab === 'ingredients' && <IngredientsTab canWrite onAuthorityLost={onAuthorityLost} />}
+        {tab === 'substitutions' && <SubstitutionsTab canWrite onAuthorityLost={onAuthorityLost} />}
+        {tab === 'moderator-home' && (
+          <div className="wc-moderator-card">
+            <div className="wc-moderator-kicker"><ShieldCheck size={16} /> Moderator access approved</div>
+            <h1>Welcome to the Staff Portal</h1>
+            <p>Your Moderator account can manage the shared recipe, ingredient, and substitution catalog.</p>
+            <div className="wc-moderator-areas">
+              {areas.map(({ id, label, icon: Icon }) => (
+                <button
+                  type="button"
+                  className="wc-moderator-area"
+                  key={id}
+                  onClick={() => setTab(id)}
+                >
+                  <Icon size={20} /><strong>{label}</strong><span>Open catalog management</span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </main>
     </>
   );

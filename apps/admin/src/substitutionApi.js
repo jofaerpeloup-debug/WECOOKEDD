@@ -7,8 +7,8 @@
 //     -> Express REST API (/api/v1/substitutions)
 //     -> MongoDB
 //
-// Reads require authentication; mutations require an admin backend user (both
-// enforced by the API). DELETE is a soft archive (isActive -> false). The
+// Reads require authentication; staff/all reads and mutations are capability-
+// gated by the API. DELETE is a soft archive (isActive -> false). The
 // public JSON uses `id` (not `_id`) and inlines each referenced ingredient as
 // `{ id, name }` — internal ingredient fields (isActive, normalizedName, …)
 // are never exposed. Components never see a raw Mongo id typed by hand: the
@@ -30,7 +30,7 @@ import { api } from './apiClient.js';
  *   page?: number,
  *   limit?: number,
  * }} params
- *   status: "active" (default) | "inactive" | "all" — "inactive"/"all" are admin-only.
+ *   status: "active" (default) | "inactive" | "all" — "inactive"/"all" require catalog.read_all.
  * @returns {Promise<{ substitutions: object[], pagination: object|null }>}
  */
 export function listSubstitutions(params = {}) {
@@ -50,7 +50,7 @@ export function listSubstitutions(params = {}) {
 // the edit modal render, so this slice never needs a single-resource read.
 
 /**
- * POST /api/v1/substitutions (admin only)
+ * POST /api/v1/substitutions (catalog.write)
  * @param {{
  *   sourceIngredientId: string,
  *   substituteIngredientId: string,
@@ -76,7 +76,7 @@ export function createSubstitution({
 }
 
 /**
- * PATCH /api/v1/substitutions/:id (admin only)
+ * PATCH /api/v1/substitutions/:id (catalog.write)
  * @param {string} id
  * @param {{
  *   sourceIngredientId?: string,
@@ -97,7 +97,7 @@ export function updateSubstitution(id, patch) {
 }
 
 /**
- * DELETE /api/v1/substitutions/:id (admin only) — soft archive, not a physical
+ * DELETE /api/v1/substitutions/:id (catalog.write) — soft archive, not a physical
  * delete. Returns the archived substitution (isActive: false).
  */
 export function archiveSubstitution(id) {

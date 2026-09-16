@@ -1,10 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  getCatalogPolicy,
   getAllowedNavigation,
   getPortalDestination,
   getSafeNavigation,
 } from '../src/portalPolicy.js';
+
+test('catalog presentation policy matches the locked authority model', () => {
+  assert.deepEqual(getCatalogPolicy('admin'), {
+    canReadCatalog: true,
+    canWriteCatalog: false,
+    canUploadRecipeImage: false,
+  });
+  assert.deepEqual(getCatalogPolicy('moderator'), {
+    canReadCatalog: true,
+    canWriteCatalog: true,
+    canUploadRecipeImage: true,
+  });
+  for (const mode of ['consumer', 'pending', 'rejected', 'verify_email', undefined]) {
+    assert.deepEqual(getCatalogPolicy(mode), {
+      canReadCatalog: false,
+      canWriteCatalog: false,
+      canUploadRecipeImage: false,
+    });
+  }
+});
 
 test('staff modes resolve to explicit portal destinations', () => {
   assert.equal(getPortalDestination('admin'), 'admin');

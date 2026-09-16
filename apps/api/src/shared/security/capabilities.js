@@ -8,9 +8,8 @@ const CAPABILITIES = Object.freeze({
   MONITORING_READ: 'monitoring.read',
 });
 
-// This map describes the target staff architecture. Catalog mutation and
-// recipe-image routes intentionally remain on legacy authorize('admin') guards
-// until the M19E cutover; do not infer current route authority from this map.
+// This map is the authority source for staff capabilities. Routes must gate
+// privileged operations through requireCapability rather than role literals.
 const ROLE_CAPABILITIES = Object.freeze({
   user: Object.freeze([CAPABILITIES.CONSUMER]),
   moderator: Object.freeze([

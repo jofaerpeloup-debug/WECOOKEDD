@@ -19,6 +19,7 @@ const app = createApp();
 const ADMIN = {
   id: '507f1f77bcf86cd799439001',
   sessionId: '507f1f77bcf86cd799439002',
+  // Stale token claim; mockAuth reloads the current Moderator role below.
   role: 'admin',
 };
 const USER = {
@@ -45,7 +46,7 @@ function mockAuth(t, identity) {
   }));
   t.mock.method(userRepository, 'findById', async () => ({
     _id: identity.id,
-    role: identity.role,
+    role: identity.role === 'admin' ? 'moderator' : identity.role,
     status: 'active',
   }));
 }
@@ -94,7 +95,7 @@ test('upload denies an authenticated normal user', async (t) => {
 });
 
 for (const [format, file] of Object.entries(FILES)) {
-  test(`authenticated admin can upload a valid ${format.toUpperCase()} file`, async (t) => {
+  test(`authenticated moderator can upload a valid ${format.toUpperCase()} file`, async (t) => {
     mockAuth(t, ADMIN);
     mockSuccessfulProvider(t, { format: format === 'jpeg' ? 'jpg' : format });
     const response = await adminUpload(file);

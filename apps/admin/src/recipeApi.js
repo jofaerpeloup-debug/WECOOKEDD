@@ -7,8 +7,8 @@
 //     -> Express REST API (/api/v1/recipes)
 //     -> MongoDB
 //
-// Reads require authentication; mutations require an admin backend user (both
-// enforced by the API). DELETE is a soft archive (isActive -> false). The
+// Reads require authentication; staff/all reads and mutations are capability-
+// gated by the API. DELETE is a soft archive (isActive -> false). The
 // public JSON uses `id` (never `_id`) and inlines each referenced canonical
 // ingredient as `{ id, name }` (or null when the ref no longer resolves) —
 // internal ingredient fields (isActive, normalizedName, …) are never exposed.
@@ -37,7 +37,7 @@ import { TO_TASTE_UNIT } from './recipeOptions.js';
  *   page?: number,
  *   limit?: number,
  * }} params
- *   status: "active" (default) | "inactive" | "all" — "inactive"/"all" are admin-only.
+ *   status: "active" (default) | "inactive" | "all" — "inactive"/"all" require catalog.read_all.
  *   region / category: canonical slugs (e.g. "central-luzon", "main-dish").
  * @returns {Promise<{ recipes: object[], pagination: object|null }>}
  */
@@ -89,7 +89,7 @@ export function toIngredientUsagePayload(row) {
 }
 
 /**
- * POST /api/v1/recipes (admin only)
+ * POST /api/v1/recipes (catalog.write)
  * @param {{
  *   title: string, description: string, difficulty: string,
  *   region?: string, category?: string,
@@ -136,7 +136,7 @@ export function createRecipe({
 }
 
 /**
- * PATCH /api/v1/recipes/:id (admin only)
+ * PATCH /api/v1/recipes/:id (catalog.write)
  * @param {string} id
  * @param {object} patch
  *   Strict partial update. Only the changed fields should be passed — an empty
@@ -153,7 +153,7 @@ export function updateRecipe(id, patch) {
 }
 
 /**
- * DELETE /api/v1/recipes/:id (admin only) — soft archive, not a physical
+ * DELETE /api/v1/recipes/:id (catalog.write) — soft archive, not a physical
  * delete. Returns the archived recipe (isActive: false).
  */
 export function archiveRecipe(id) {
@@ -165,7 +165,7 @@ export function restoreRecipe(id) {
   return updateRecipe(id, { isActive: true });
 }
 
-/** POST /api/v1/admin/uploads/recipe-image (admin only, multipart field `image`). */
+/** POST /api/v1/admin/uploads/recipe-image (recipe_image.upload, multipart field `image`). */
 export function uploadRecipeImage(file) {
   const body = new FormData();
   body.append('image', file);
