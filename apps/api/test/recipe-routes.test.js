@@ -70,6 +70,7 @@ function fakeRecipeDoc(overrides = {}) {
 
 function validCreatePayload(overrides = {}) {
   return {
+    confirmFilipinoCuisine: true,
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
     difficulty: 'easy',
@@ -393,18 +394,20 @@ test('POST /api/v1/recipes is forbidden for a normal user', async (t) => {
 
 test('POST /api/v1/recipes creates a recipe for a moderator when every ingredient is active', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  let capturedData;
   t.mock.method(ingredientRepository, 'findById', async (id) =>
     activeIngredient(id, id === CHICKEN_ID ? 'Chicken' : 'Garlic')
   );
-  t.mock.method(recipeRepository, 'createRecipe', async (data) =>
-    fakeRecipeDoc({
+  t.mock.method(recipeRepository, 'createRecipe', async (data) => {
+    capturedData = data;
+    return fakeRecipeDoc({
       ...data,
       ingredients: data.ingredients.map((entry) => ({
         ...entry,
         ingredientId: activeIngredient(entry.ingredientId, entry.ingredientId === CHICKEN_ID ? 'Chicken' : 'Garlic'),
       })),
-    })
-  );
+    });
+  });
 
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
@@ -415,6 +418,32 @@ test('POST /api/v1/recipes creates a recipe for a moderator when every ingredien
   assert.equal(response.status, 201);
   assert.equal(response.body.data.recipe.title, 'Chicken Adobo');
   assert.equal(response.body.data.recipe.ingredients[0].ingredient.name, 'Chicken');
+  assert.equal(capturedData.publicationStatus, 'published');
+  assert.equal(capturedData.publishedBy, MODERATOR_ID);
+  assert.ok(capturedData.publishedAt instanceof Date);
+  assert.equal('confirmFilipinoCuisine' in capturedData, false);
+  assert.equal('confirmFilipinoCuisine' in response.body.data.recipe, false);
+});
+
+test('POST /api/v1/recipes rejects missing, false, and non-boolean Filipino confirmation', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const missing = validCreatePayload();
+  delete missing.confirmFilipinoCuisine;
+
+  for (const payload of [
+    missing,
+    validCreatePayload({ confirmFilipinoCuisine: false }),
+    validCreatePayload({ confirmFilipinoCuisine: 'true' }),
+    validCreatePayload({ confirmFilipinoCuisine: 1 }),
+  ]) {
+    const response = await request(app)
+      .post('/api/v1/recipes')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
 });
 
 test('POST /api/v1/recipes rejects a request referencing a nonexistent ingredient', async (t) => {
@@ -576,7 +605,7 @@ test('PATCH /api/v1/recipes/:id clears category with an explicit null and the se
 
   assert.equal(response.status, 200);
   assert.deepEqual(capturedOps.$unset, { category: '' });
-  assert.equal(capturedOps.$set, undefined);
+  assert.deepEqual(capturedOps.$set, { updatedBy: MODERATOR_ID });
   assert.equal(response.body.data.recipe.category, null);
   // The untouched region is unaffected.
   assert.equal(response.body.data.recipe.region, 'central-luzon');
@@ -711,20 +740,22 @@ test('PATCH /api/v1/recipes/:id accepts a replacement ingredient with a measurab
   assert.equal(response.body.data.recipe.ingredients[0].quantity, 1);
 });
 
-test('PATCH /api/v1/recipes/:id reactivation is rejected when a stored ingredient is inactive', async (t) => {
+test('POST /api/v1/recipes/:id/restore rejects a Published recipe with an inactive stored ingredient', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...validCreatePayload(),
     _id: RECIPE_ID,
     isActive: false,
+    publicationStatus: 'published',
     ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
   }));
   t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, name: 'X', isActive: false }));
 
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
-    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .post(`/api/v1/recipes/${RECIPE_ID}/restore`)
     .set('Authorization', `Bearer ${token}`)
-    .send({ isActive: true });
+    .send({});
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'RECIPE_INGREDIENT_INACTIVE');
@@ -784,4 +815,211 @@ test('DELETE /api/v1/recipes/:id returns 404 for an unknown id', async (t) => {
 
   assert.equal(response.status, 404);
   assert.equal(response.body.error.code, 'RECIPE_NOT_FOUND');
+});
+
+test('POST /api/v1/recipes/drafts creates a title-only Draft with server-owned attribution', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  let captured;
+  t.mock.method(recipeRepository, 'createRecipe', async (data) => {
+    captured = data;
+    return fakeRecipeDoc({ ...data, ingredients: [], instructions: [] });
+  });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .post('/api/v1/recipes/drafts')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ title: 'Draft Adobo' });
+
+  assert.equal(response.status, 201);
+  assert.equal(captured.publicationStatus, 'draft');
+  assert.equal(captured.createdBy, MODERATOR_ID);
+  assert.equal(captured.updatedBy, MODERATOR_ID);
+  assert.equal(response.body.data.recipe.publicationStatus, 'draft');
+});
+
+test('normal User cannot read a Draft by id while staff can inspect it', async (t) => {
+  const draft = fakeRecipeDoc({ publicationStatus: 'draft' });
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => draft);
+
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const userToken = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const hidden = await request(app)
+    .get(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${userToken}`);
+  assert.equal(hidden.status, 404);
+
+  // Install a new current identity for the second request after the first
+  // test-scoped mock has served its user lookup.
+  userRepository.findById.mock.mockImplementation(async () => ({
+    _id: MODERATOR_ID,
+    role: 'moderator',
+    status: 'active',
+  }));
+  sessionRepository.findActiveById.mock.mockImplementation(async () => ({
+    _id: MODERATOR_SESSION_ID,
+    userId: MODERATOR_ID,
+    revokedAt: null,
+  }));
+  const moderatorToken = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const visible = await request(app)
+    .get(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${moderatorToken}`);
+  assert.equal(visible.status, 200);
+  assert.equal(visible.body.data.recipe.publicationStatus, 'draft');
+});
+
+test('publish requires Filipino confirmation and a Moderator can publish a complete active Draft', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const updatedAt = new Date('2026-09-15T10:00:00.000Z');
+  const rawDraft = {
+    _id: RECIPE_ID,
+    ...validCreatePayload(),
+    isActive: true,
+    publicationStatus: 'draft',
+    updatedAt,
+  };
+  t.mock.method(recipeRepository, 'findRawById', async () => rawDraft);
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  let transition;
+  t.mock.method(recipeRepository, 'publishById', async (id, args) => {
+    transition = args;
+    return fakeRecipeDoc({ publicationStatus: 'published', publishedBy: args.actorId, publishedAt: args.publishedAt });
+  });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const missing = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/publish`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({});
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.error.code, 'VALIDATION_ERROR');
+
+  const published = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/publish`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ confirmFilipinoCuisine: true, expectedUpdatedAt: updatedAt.toISOString() });
+  assert.equal(published.status, 200);
+  assert.equal(published.body.data.recipe.publicationStatus, 'published');
+  assert.equal(transition.actorId, MODERATOR_ID);
+  assert.ok(transition.publishedAt instanceof Date);
+});
+
+test('PATCH rejects state/actor mass assignment and returns 409 for a stale precondition', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  for (const body of [
+    { publicationStatus: 'published' },
+    { isActive: false },
+    { createdBy: MODERATOR_ID },
+    { updatedBy: MODERATOR_ID },
+    { publishedBy: MODERATOR_ID },
+    { publishedAt: new Date().toISOString() },
+  ]) {
+    const rejected = await request(app)
+      .patch(`/api/v1/recipes/${RECIPE_ID}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.body.error.code, 'VALIDATION_ERROR');
+  }
+
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: RECIPE_ID,
+    updatedAt: new Date('2026-09-16T00:00:00.000Z'),
+    publicationStatus: 'draft',
+    isActive: true,
+    ingredients: [],
+    instructions: [],
+  }));
+  const conflict = await request(app)
+    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ title: 'Changed', expectedUpdatedAt: '2026-09-15T00:00:00.000Z' });
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.body.error.code, 'RECIPE_EDIT_CONFLICT');
+});
+
+test('explicit archive/restore preserve Draft state and restore does not require completeness', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(recipeRepository, 'archiveById', async () => fakeRecipeDoc({ isActive: false, publicationStatus: 'draft' }));
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: RECIPE_ID,
+    title: 'Incomplete Draft',
+    isActive: false,
+    publicationStatus: 'draft',
+    ingredients: [],
+    instructions: [],
+  }));
+  t.mock.method(recipeRepository, 'restoreById', async () => fakeRecipeDoc({ isActive: true, publicationStatus: 'draft' }));
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const archived = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/archive`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({});
+  const restored = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/restore`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({});
+
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.data.recipe.publicationStatus, 'draft');
+  assert.equal(archived.body.data.recipe.isActive, false);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.data.recipe.publicationStatus, 'draft');
+  assert.equal(restored.body.data.recipe.isActive, true);
+});
+
+test('restore returns controlled 409 when the validated snapshot changes before reactivation', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const updatedAt = new Date('2026-09-15T10:00:00.000Z');
+  let mutationArgs;
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: RECIPE_ID,
+    title: 'Incomplete Draft',
+    isActive: false,
+    publicationStatus: 'draft',
+    ingredients: [],
+    instructions: [],
+    updatedAt,
+  }));
+  t.mock.method(recipeRepository, 'restoreById', async (id, args) => {
+    mutationArgs = args;
+    return null;
+  });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/restore`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({});
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'RECIPE_EDIT_CONFLICT');
+  assert.equal(mutationArgs.expectedUpdatedAt, updatedAt.toISOString());
+});
+
+test('normal User is denied publish, archive, and restore commands', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const requests = [
+    request(app)
+      .post(`/api/v1/recipes/${RECIPE_ID}/publish`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ confirmFilipinoCuisine: true }),
+    request(app)
+      .post(`/api/v1/recipes/${RECIPE_ID}/archive`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({}),
+    request(app)
+      .post(`/api/v1/recipes/${RECIPE_ID}/restore`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({}),
+  ];
+  for (const pending of requests) {
+    const response = await pending;
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'FORBIDDEN');
+  }
 });

@@ -314,9 +314,15 @@ export default function RecipesTab({
     }
   };
 
-  const handleSubmit = async (payload) => {
+  const handleSubmit = async (payload, desiredIsActive) => {
     if (modal === 'new') await create(payload);
-    else await update(modal.id, payload);
+    else {
+      if (Object.keys(payload).length > 0) await update(modal.id, payload);
+      if (desiredIsActive !== modal.isActive) {
+        if (desiredIsActive) await restore(modal.id);
+        else await archive(modal.id);
+      }
+    }
   };
 
   return (
@@ -393,6 +399,20 @@ export default function RecipesTab({
         .wc-rcp-ing-totaste { font-size: 12.5px; color: var(--stone); font-style: italic; }
         .wc-rcp-ing-opt { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink); }
         .wc-rcp-ing-opt input { width: auto; }
+        .wc-rcp-confirmation {
+          margin-top: 18px; padding: 12px 14px;
+          border: 1px solid var(--sage-mid); border-radius: 10px;
+          background: var(--sage-light);
+        }
+        .wc-rcp-confirmation-label {
+          display: flex; align-items: flex-start; gap: 9px;
+          color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.4;
+          cursor: pointer;
+        }
+        .wc-rcp-confirmation-label input[type="checkbox"] {
+          flex: 0 0 auto; width: 16px; height: 16px; margin: 1px 0 0; padding: 0;
+          accent-color: var(--sage-deep);
+        }
         .wc-rcp-ing-note { width: 100%; margin-top: 8px;
           padding: 8px 9px; border-radius: 8px; border: 1px solid var(--stone-light);
           background: var(--field-bg); color: var(--ink); font-size: 13px;
@@ -779,6 +799,7 @@ function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthor
     ingredients: ingredientRowsFromRecipe(recipe),
     instructions: instructionRowsFromRecipe(recipe),
     isActive: recipe ? recipe.isActive : true,
+    confirmFilipinoCuisine: false,
   }));
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
@@ -922,6 +943,10 @@ function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthor
     else if (form.description.trim().length > MAX_DESCRIPTION_LENGTH) {
       errs.description = `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.`;
     }
+    if (!editing && form.confirmFilipinoCuisine !== true) {
+      errs.confirmFilipinoCuisine =
+        'Confirm that this recipe belongs to Filipino cuisine before publishing.';
+    }
     if (!isIntInRange(form.prepTimeMinutes, 0, MAX_PREP_TIME_MINUTES)) {
       errs.prepTimeMinutes = `Whole minutes, 0–${MAX_PREP_TIME_MINUTES}.`;
     }
@@ -1008,6 +1033,7 @@ function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthor
         ingredients: buildIngredientPayload(), instructions, dietaryTags,
         imageUrl: resolvedUpload?.url ?? (imageMode === 'external' ? manualImageUrl : null),
         imageAssetId: resolvedUpload?.assetId ?? null,
+        confirmFilipinoCuisine: form.confirmFilipinoCuisine,
       };
       if (region) payload.region = region;
       if (category) payload.category = category;
@@ -1054,8 +1080,6 @@ function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthor
 
     if (ingredientsChanged) patch.ingredients = buildIngredientPayload();
 
-    if (form.isActive !== recipe.isActive) patch.isActive = form.isActive;
-
     return patch;
   };
 
@@ -1086,11 +1110,11 @@ function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthor
 
       setSavePhase('saving');
       const payload = buildPayload(resolvedUpload);
-      if (editing && Object.keys(payload).length === 0) {
+      if (editing && Object.keys(payload).length === 0 && form.isActive === recipe.isActive) {
         onClose();
         return;
       }
-      await onSubmit(payload);
+      await onSubmit(payload, form.isActive);
       onClose();
     } catch (err) {
       if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
@@ -1496,6 +1520,30 @@ function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthor
                   Archived
                 </button>
               </div>
+            </div>
+          )}
+
+          {!editing && (
+            <div className="wc-rcp-confirmation">
+              <label className="wc-rcp-confirmation-label" htmlFor="confirm-filipino-cuisine">
+                <input
+                  id="confirm-filipino-cuisine"
+                  name="confirmFilipinoCuisine"
+                  type="checkbox"
+                  checked={form.confirmFilipinoCuisine}
+                  onChange={(e) => setField({ confirmFilipinoCuisine: e.target.checked })}
+                  aria-invalid={Boolean(fieldErrors.confirmFilipinoCuisine)}
+                  aria-describedby={
+                    fieldErrors.confirmFilipinoCuisine ? 'confirm-filipino-cuisine-error' : undefined
+                  }
+                />
+                <span>I confirm that this recipe belongs to Filipino cuisine.</span>
+              </label>
+              {fieldErrors.confirmFilipinoCuisine && (
+                <div id="confirm-filipino-cuisine-error" className="wc-rcp-field-error">
+                  {fieldErrors.confirmFilipinoCuisine}
+                </div>
+              )}
             </div>
           )}
 

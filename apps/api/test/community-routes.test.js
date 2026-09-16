@@ -69,6 +69,7 @@ function fakeRecipe(overrides = {}) {
   return {
     _id: RECIPE_ID,
     title: 'Chicken Adobo',
+    description: 'A complete Filipino braised chicken recipe.',
     imageUrl: 'https://example.com/adobo.jpg',
     region: null,
     category: null,

@@ -460,10 +460,19 @@ test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable 
   mockIngredientActive(t, 'Chicken');
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
     _id: RECIPE_ID,
+    title: 'Chicken Adobo',
+    description: 'A complete Filipino braised chicken recipe.',
+    difficulty: 'easy',
+    prepTimeMinutes: 15,
+    cookTimeMinutes: 40,
+    servings: 4,
     isActive: true,
     ingredients: [
       { ingredientId: activeIngredientDoc(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false },
     ],
+    instructions: ['Combine and simmer.'],
+    dietaryTags: [],
+    imageUrl: null,
   }));
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   mockNoSave(t);
@@ -481,8 +490,19 @@ test('POST /api/v1/shopping-list/recipes/:recipeId returns 404 RECIPE_NOT_FOUND 
   mockAuth(t);
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
     _id: RECIPE_ID,
+    title: 'Chicken Adobo',
+    description: 'A complete Filipino braised chicken recipe.',
+    difficulty: 'easy',
+    prepTimeMinutes: 15,
+    cookTimeMinutes: 40,
+    servings: 4,
     isActive: false,
-    ingredients: [],
+    ingredients: [
+      { ingredientId: activeIngredientDoc(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false },
+    ],
+    instructions: ['Combine and simmer.'],
+    dietaryTags: [],
+    imageUrl: null,
   }));
 
   const response = await request(app)

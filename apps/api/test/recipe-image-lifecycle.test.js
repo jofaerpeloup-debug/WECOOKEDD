@@ -29,6 +29,7 @@ function createBody(overrides = {}) {
     ingredients: [{ ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg' }],
     instructions: ['Cook until tender.'],
     imageUrl: null,
+    confirmFilipinoCuisine: true,
     ...overrides,
   };
 }

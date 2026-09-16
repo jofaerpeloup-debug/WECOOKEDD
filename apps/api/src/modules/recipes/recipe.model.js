@@ -4,6 +4,7 @@ const { SLUG_MAX_LENGTH, SLUG_PATTERN } = require('../../shared/validation/slug'
 const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
+const PUBLICATION_STATUSES = ['draft', 'published'];
 
 const DIETARY_TAGS = ['vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree'];
 
@@ -60,10 +61,9 @@ const recipeIngredientSchema = new mongoose.Schema(
 // shared/constants/measurement-units.js.
 recipeIngredientSchema.pre('validate', validateQuantityForUnit);
 
-function isNonEmptyStepArray(arr) {
+function isStructurallyValidStepArray(arr) {
   return (
     Array.isArray(arr) &&
-    arr.length >= 1 &&
     arr.length <= MAX_INSTRUCTIONS &&
     arr.every((step) => typeof step === 'string' && step.length > 0)
   );
@@ -79,7 +79,6 @@ const recipeSchema = new mongoose.Schema(
     },
     description: {
       type: String,
-      required: true,
       trim: true,
       maxlength: MAX_DESCRIPTION_LENGTH,
     },
@@ -103,12 +102,10 @@ const recipeSchema = new mongoose.Schema(
     },
     difficulty: {
       type: String,
-      required: true,
       enum: DIFFICULTIES,
     },
     prepTimeMinutes: {
       type: Number,
-      required: true,
       min: 0,
       max: MAX_PREP_TIME_MINUTES,
       validate: {
@@ -118,7 +115,6 @@ const recipeSchema = new mongoose.Schema(
     },
     cookTimeMinutes: {
       type: Number,
-      required: true,
       min: 0,
       max: MAX_COOK_TIME_MINUTES,
       validate: {
@@ -128,7 +124,6 @@ const recipeSchema = new mongoose.Schema(
     },
     servings: {
       type: Number,
-      required: true,
       min: 1,
       max: MAX_SERVINGS,
       validate: {
@@ -138,18 +133,16 @@ const recipeSchema = new mongoose.Schema(
     },
     ingredients: {
       type: [recipeIngredientSchema],
-      required: true,
       validate: {
-        validator: (arr) => Array.isArray(arr) && arr.length >= 1 && arr.length <= MAX_INGREDIENTS,
-        message: `ingredients must contain between 1 and ${MAX_INGREDIENTS} entries.`,
+        validator: (arr) => Array.isArray(arr) && arr.length <= MAX_INGREDIENTS,
+        message: `ingredients must contain no more than ${MAX_INGREDIENTS} entries.`,
       },
     },
     instructions: {
       type: [{ type: String, trim: true, maxlength: MAX_INSTRUCTION_LENGTH }],
-      required: true,
       validate: {
-        validator: isNonEmptyStepArray,
-        message: `instructions must contain between 1 and ${MAX_INSTRUCTIONS} non-empty steps, in order.`,
+        validator: isStructurallyValidStepArray,
+        message: `instructions must contain no more than ${MAX_INSTRUCTIONS} non-empty steps, in order.`,
       },
     },
     dietaryTags: {
@@ -176,6 +169,33 @@ const recipeSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Intentionally has no default. During the M20 transition, a missing
+    // value identifies a legacy complete recipe and is treated as published
+    // by explicit service/query compatibility logic. New authoring writes
+    // always set this field.
+    publicationStatus: {
+      type: String,
+      enum: PUBLICATION_STATUSES,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    publishedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    publishedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
@@ -192,6 +212,8 @@ recipeSchema.pre('validate', function validateManagedImageConsistency() {
 recipeSchema.index({ isActive: 1, region: 1 });
 recipeSchema.index({ isActive: 1, category: 1 });
 recipeSchema.index({ isActive: 1, difficulty: 1 });
+recipeSchema.index({ isActive: 1, publicationStatus: 1, createdAt: -1 });
+recipeSchema.index({ publicationStatus: 1, isActive: 1, updatedAt: -1 });
 recipeSchema.index({ 'ingredients.ingredientId': 1 });
 recipeSchema.index({ title: 1 });
 
@@ -199,6 +221,7 @@ const Recipe = mongoose.model('Recipe', recipeSchema);
 
 module.exports = Recipe;
 module.exports.DIFFICULTIES = DIFFICULTIES;
+module.exports.PUBLICATION_STATUSES = PUBLICATION_STATUSES;
 module.exports.UNITS = UNITS;
 module.exports.DIETARY_TAGS = DIETARY_TAGS;
 module.exports.SLUG_MAX_LENGTH = SLUG_MAX_LENGTH;

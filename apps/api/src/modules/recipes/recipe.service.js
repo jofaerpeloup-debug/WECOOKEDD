@@ -2,10 +2,13 @@ const recipeRepository = require('./recipe.repository');
 const ingredientService = require('../ingredients/ingredient.service');
 const { AppError } = require('../../shared/errors/app-error');
 const imageProvider = require('../uploads/cloudinary-image.provider');
+const { publishedRecipeBodySchema } = require('./recipe.validation');
 
 const SORT_MAP = {
   titleAsc: { title: 1 },
   titleDesc: { title: -1 },
+  // Transitional M20B ordering remains creation-based until the publication
+  // state/time backfill has been executed and verified in deployment.
   newest: { createdAt: -1 },
   oldest: { createdAt: 1 },
   prepTimeAsc: { prepTimeMinutes: 1 },
@@ -35,6 +38,50 @@ function ingredientInactiveError() {
     statusCode: 400,
     code: 'RECIPE_INGREDIENT_INACTIVE',
   });
+}
+
+function conflictError() {
+  return new AppError('Recipe changed after it was loaded. Refresh and try again.', {
+    statusCode: 409,
+    code: 'RECIPE_EDIT_CONFLICT',
+  });
+}
+
+function incompleteRecipeError(issues) {
+  return new AppError('Recipe is incomplete and cannot be published.', {
+    statusCode: 400,
+    code: 'RECIPE_INCOMPLETE',
+    details: issues,
+  });
+}
+
+function inactiveRecipeError() {
+  return new AppError('An archived recipe cannot be published.', {
+    statusCode: 409,
+    code: 'RECIPE_ARCHIVED',
+  });
+}
+
+function publicationStateError() {
+  return new AppError('Only an active Draft can be published.', {
+    statusCode: 409,
+    code: 'RECIPE_NOT_DRAFT',
+  });
+}
+
+// Transitional compatibility is explicit: only a missing state is
+// interpreted as published. The model deliberately has no default so legacy
+// reads cannot accidentally become Drafts.
+function effectivePublicationStatus(recipe) {
+  return recipe.publicationStatus === undefined ? 'published' : recipe.publicationStatus;
+}
+
+function assertCurrentPrecondition(existing, expectedUpdatedAt) {
+  if (!expectedUpdatedAt) return;
+  const stored = existing.updatedAt && new Date(existing.updatedAt).getTime();
+  if (!stored || stored !== new Date(expectedUpdatedAt).getTime()) {
+    throw conflictError();
+  }
 }
 
 // Escapes regex metacharacters so free-text search input is always treated
@@ -94,6 +141,50 @@ function normalizeIngredients(ingredients) {
   }));
 }
 
+function toPublishedValidationInput(recipe) {
+  // A populated reference becomes null when its target Ingredient was deleted.
+  // The stored usage was still structurally complete, so use a validation-only
+  // ObjectId sentinel here and leave missing/inactive-reference eligibility to
+  // isUsableForNonAdmin below. An actually absent ingredientId stays invalid.
+  const populatedIngredientId = (entry) => {
+    if (entry.ingredientId === null) return '000000000000000000000000';
+    return String(entry.ingredientId?._id || entry.ingredientId);
+  };
+  const input = {
+    title: recipe.title,
+    description: recipe.description,
+    difficulty: recipe.difficulty,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    cookTimeMinutes: recipe.cookTimeMinutes,
+    servings: recipe.servings,
+    ingredients: (recipe.ingredients || []).map((entry) => ({
+      ingredientId: populatedIngredientId(entry),
+      quantity: entry.quantity,
+      unit: entry.unit,
+      note: entry.note,
+      optional: entry.optional ?? false,
+    })),
+    instructions: recipe.instructions || [],
+    dietaryTags: recipe.dietaryTags || [],
+    imageUrl: recipe.imageUrl ?? null,
+    imageAssetId: recipe.imageAssetId ?? null,
+  };
+  if (recipe.region != null) input.region = recipe.region;
+  if (recipe.category != null) input.category = recipe.category;
+  return input;
+}
+
+function assertPublishedComplete(recipe) {
+  const result = publishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe));
+  if (!result.success) {
+    throw incompleteRecipeError(result.error.issues);
+  }
+}
+
+function isPublishedComplete(recipe) {
+  return publishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe)).success;
+}
+
 // A recipe is "usable" for a non-admin view when it is itself active and
 // every non-optional ingredient entry resolves to a currently-active
 // Ingredient (a populated ref that fails to resolve reads as missing/
@@ -102,7 +193,10 @@ function normalizeIngredients(ingredients) {
 // instead. An optional entry (e.g. a garnish) going inactive does not hide
 // the whole recipe. See docs/architecture/recipes.md.
 function isUsableForNonAdmin(recipe) {
-  if (!recipe.isActive) {
+  if (!recipe.isActive || effectivePublicationStatus(recipe) !== 'published') {
+    return false;
+  }
+  if (!isPublishedComplete(recipe)) {
     return false;
   }
   return recipe.ingredients.every((entry) => {
@@ -152,7 +246,7 @@ async function createRecipe({
   dietaryTags = [],
   imageUrl,
   imageAssetId,
-}) {
+}, { actorId, now = new Date() } = {}) {
   await assertIngredientsActive(ingredients);
 
   const doc = {
@@ -167,12 +261,42 @@ async function createRecipe({
     dietaryTags: normalizeDietaryTags(dietaryTags),
     imageUrl: imageUrl ?? null,
     imageAssetId: imageAssetId ?? null,
+    publicationStatus: 'published',
+    createdBy: actorId ?? null,
+    updatedBy: actorId ?? null,
+    publishedBy: actorId ?? null,
+    publishedAt: now,
   };
   // region/category are optional canonical slugs (already normalized by the
   // validation layer). Never fabricated from cuisine/title/anything else.
   if (region !== undefined) doc.region = region;
   if (category !== undefined) doc.category = category;
 
+  return recipeRepository.createRecipe(doc);
+}
+
+async function createDraft(input, { actorId } = {}) {
+  const doc = {
+    title: collapseWhitespace(input.title),
+    publicationStatus: 'draft',
+    isActive: true,
+    createdBy: actorId ?? null,
+    updatedBy: actorId ?? null,
+  };
+  if (input.description !== undefined) doc.description = input.description.trim();
+  for (const field of ['region', 'category', 'difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']) {
+    if (input[field] !== undefined) doc[field] = input[field];
+  }
+  if (input.ingredients !== undefined) {
+    if (input.ingredients.length > 0) await assertIngredientsActive(input.ingredients);
+    doc.ingredients = normalizeIngredients(input.ingredients);
+  }
+  if (input.instructions !== undefined || input.steps !== undefined) {
+    doc.instructions = toInstructionsList(input);
+  }
+  if (input.dietaryTags !== undefined) doc.dietaryTags = normalizeDietaryTags(input.dietaryTags);
+  if (input.imageUrl !== undefined) doc.imageUrl = input.imageUrl;
+  if (input.imageAssetId !== undefined) doc.imageAssetId = input.imageAssetId;
   return recipeRepository.createRecipe(doc);
 }
 
@@ -277,6 +401,16 @@ async function listRecipes({
     filter.$or = [{ title: pattern }, { description: pattern }];
   }
 
+  if (!isAdmin) {
+    const publicationFilter = {
+      $or: [
+        { publicationStatus: 'published' },
+        { publicationStatus: { $exists: false } },
+      ],
+    };
+    filter.$and = [...(filter.$and || []), publicationFilter];
+  }
+
   const skip = (page - 1) * limit;
   const [rawItems, total] = await Promise.all([
     recipeRepository.findMany({ filter, sort: SORT_MAP[sort], skip, limit }),
@@ -289,17 +423,25 @@ async function listRecipes({
   // totalPages reflect the pre-filter Recipe count and can overstate how
   // many usable recipes actually exist. The returned `data` array itself is
   // always safe — no unusable recipe is ever included.
-  const usableItems = status === 'active' ? rawItems.filter(isUsableForNonAdmin) : rawItems;
+  const usableItems = isAdmin
+    ? rawItems
+    : status === 'active'
+      ? rawItems.filter(isUsableForNonAdmin)
+      : rawItems;
   const items = isAdmin ? usableItems : usableItems.map(toNonAdminView);
 
   return { items, total, page, limit };
 }
 
-async function updateRecipe(id, patch) {
+async function updateRecipe(id, patch, { actorId } = {}) {
   const existing = await recipeRepository.findRawById(id);
   if (!existing) {
     throw notFoundError();
   }
+
+  const { expectedUpdatedAt, ...contentPatch } = patch;
+  patch = contentPatch;
+  assertCurrentPrecondition(existing, expectedUpdatedAt);
 
   const update = {};
   // Fields removed from the document rather than set — an explicit `null` for
@@ -344,28 +486,47 @@ async function updateRecipe(id, patch) {
     }
   }
 
-  const reactivating = patch.isActive === true && existing.isActive === false;
-
   if (patch.ingredients !== undefined) {
     // The provided array is the complete replacement list — validate and
     // persist it wholesale rather than merging with what's stored.
     await assertIngredientsActive(patch.ingredients);
     update.ingredients = normalizeIngredients(patch.ingredients);
-  } else if (reactivating) {
-    // Reactivating without replacing ingredients: re-verify every
-    // currently-stored ingredient (including optional entries) is still
-    // active before allowing it back into the active view.
-    await assertIngredientsActive(existing.ingredients);
   }
+  if (actorId) update.updatedBy = actorId;
 
-  if (patch.isActive !== undefined) update.isActive = patch.isActive;
+  const merged = {
+    ...(typeof existing.toObject === 'function' ? existing.toObject() : existing),
+    ...update,
+  };
+  for (const field of Object.keys(unset)) delete merged[field];
+  // New published records are always checked after every edit. Transitional
+  // legacy records are also fully checked when ingredient/step completeness
+  // can be changed; unrelated legacy edits remain deploy-compatible.
+  if (existing.publicationStatus === 'published') {
+    assertPublishedComplete(merged);
+  } else if (effectivePublicationStatus(existing) === 'published') {
+    // Legacy records were created under the complete contract. Prevent the
+    // only structurally-valid PATCH operations that could make one
+    // incomplete, while tolerating unrelated edits on malformed legacy data
+    // until the migration report has surfaced it for repair.
+    if (patch.ingredients !== undefined && merged.ingredients.length === 0) {
+      throw incompleteRecipeError([{ path: ['ingredients'], message: 'At least one ingredient is required.' }]);
+    }
+    if (
+      (patch.instructions !== undefined || patch.steps !== undefined) &&
+      merged.instructions.length === 0
+    ) {
+      throw incompleteRecipeError([{ path: ['instructions'], message: 'At least one instruction step is required.' }]);
+    }
+  }
 
   const ops = {};
   if (Object.keys(update).length > 0) ops.$set = update;
   if (Object.keys(unset).length > 0) ops.$unset = unset;
 
-  const updated = await recipeRepository.updateById(id, ops);
+  const updated = await recipeRepository.updateById(id, ops, { expectedUpdatedAt });
   if (!updated) {
+    if (expectedUpdatedAt) throw conflictError();
     throw notFoundError();
   }
 
@@ -381,20 +542,64 @@ async function updateRecipe(id, patch) {
   return updated;
 }
 
-async function archiveRecipe(id) {
-  const archived = await recipeRepository.archiveById(id);
+async function publishRecipe(id, { expectedUpdatedAt } = {}, { actorId, now = new Date() } = {}) {
+  const existing = await recipeRepository.findRawById(id);
+  if (!existing) throw notFoundError();
+  assertCurrentPrecondition(existing, expectedUpdatedAt);
+  if (!existing.isActive) throw inactiveRecipeError();
+  if (effectivePublicationStatus(existing) !== 'draft') throw publicationStateError();
+  assertPublishedComplete(existing);
+  await assertIngredientsActive(existing.ingredients || []);
+
+  const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;
+  const published = await recipeRepository.publishById(id, {
+    actorId,
+    publishedAt: existing.publishedAt || now,
+    expectedUpdatedAt: atomicUpdatedAt,
+  });
+  if (!published) throw conflictError();
+  return published;
+}
+
+async function archiveRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
+  const archived = await recipeRepository.archiveById(id, { actorId, expectedUpdatedAt });
   if (!archived) {
+    if (expectedUpdatedAt) throw conflictError();
     throw notFoundError();
   }
   return archived;
 }
 
+async function restoreRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
+  const existing = await recipeRepository.findRawById(id);
+  if (!existing) throw notFoundError();
+  assertCurrentPrecondition(existing, expectedUpdatedAt);
+  if (effectivePublicationStatus(existing) === 'published') {
+    assertPublishedComplete(existing);
+    await assertIngredientsActive(existing.ingredients || []);
+  }
+  const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;
+  const restored = await recipeRepository.restoreById(id, {
+    actorId,
+    expectedUpdatedAt: atomicUpdatedAt,
+  });
+  if (!restored) {
+    throw conflictError();
+  }
+  return restored;
+}
+
 module.exports = {
   createRecipe,
+  createDraft,
   findRecipeById,
   findUsableRecipeById,
   getRecipeById,
   listRecipes,
   updateRecipe,
+  publishRecipe,
   archiveRecipe,
+  restoreRecipe,
+  effectivePublicationStatus,
+  assertPublishedComplete,
 };

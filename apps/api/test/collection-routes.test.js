@@ -35,6 +35,7 @@ function fakeRecipeDoc(overrides = {}) {
   return {
     _id: RECIPE_ID,
     title: 'Chicken Adobo',
+    description: 'A complete Filipino braised chicken recipe.',
     region: 'central-luzon',
     category: 'main-dish',
     difficulty: 'easy',

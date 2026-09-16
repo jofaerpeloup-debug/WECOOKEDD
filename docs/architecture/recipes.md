@@ -378,3 +378,66 @@ uploads/storage, and unit conversion are all deliberately not implemented
 here. `ingredients.ingredientId` filtering exists specifically so this later
 work has something to build on without a schema migration. (The Phase 4
 `cuisine` field was later retired — see the M3 section above.)
+
+## M20B authoring and publication lifecycle
+
+Recipe publication and archival are independent axes:
+
+- `publicationStatus: "draft" | "published"` controls publication.
+- `isActive` controls archive state and is changed only by the explicit
+  `POST /recipes/:recipeId/archive` and `POST /recipes/:recipeId/restore`
+  commands (with `DELETE /recipes/:recipeId` retained as a soft-archive
+  compatibility alias).
+- Archive/restore never changes `publicationStatus`; restoring a Draft does
+  not require publish completeness, while restoring a Published recipe
+  revalidates referenced Ingredient usability.
+
+Legacy records with no physical `publicationStatus` are explicitly treated
+as Published during rollout. New Drafts are created through
+`POST /recipes/drafts`, explicitly store `publicationStatus: "draft"`, and
+require only a nonblank title. Supplied optional fields remain structurally
+validated. Publishing uses `POST /recipes/:recipeId/publish`, requires
+`{ "confirmFilipinoCuisine": true }`, validates the complete legacy create
+contract plus Ingredient usability, and atomically records `publishedBy` and
+the first `publishedAt`.
+
+Normal consumer list/detail and the shared `findUsableRecipeById` gate accept
+only active, fully publish-valid Published recipes or fully publish-valid
+legacy records with missing state. Malformed legacy or explicit Published
+records fail closed using the same authoritative completeness contract as the
+Publish command. That central gate protects Favorites, Collections, Reviews,
+Meal Plan, Shopping, Community, and Cook History. `catalog.read_all` callers
+receive a staff representation that includes lifecycle and attribution
+metadata and may inspect all Draft/Published and active/archived combinations.
+
+Generic PATCH is content-only. It rejects lifecycle/attribution assignment,
+allows incomplete Draft content, and keeps explicitly Published records
+publish-valid. An optional `expectedUpdatedAt` precondition supports the M20C
+wizard; a stale value returns `409 RECIPE_EDIT_CONFLICT`. It is optional for
+the current Staff Portal during transition.
+
+The current Staff Portal still submits its existing complete Add Recipe form
+to `POST /recipes`. That route is a temporary compatibility path which keeps
+the pre-M20 behavior by storing the complete recipe as Published and stamping
+server-owned attribution. It requires the Moderator to actively check the
+visible Filipino-cuisine acknowledgement; the request must carry literal
+`confirmFilipinoCuisine: true`, which is validated but never persisted or
+serialized. The Portal's archive/restore controls already use the explicit
+lifecycle commands. M20C should replace complete-create with Draft creation
+followed by the explicit, confirmed publish command.
+
+`newest` and `oldest` retain the pre-M20 `createdAt` ordering during the
+transition. `publishedAt` is stored correctly but is not yet used for list
+ordering. Switching Newest to publication-time ordering is deferred until the
+publication-state backfill has been executed and verified; a compound Mongo
+sort is not a true `publishedAt ?? createdAt` fallback.
+
+The dry-run-first `scripts/migrate-recipe-publication-state.js` reports every
+legacy record missing state, migrates only complete records when `--apply` is
+explicitly supplied, preserves `isActive`, uses `createdAt` as `publishedAt`,
+and leaves unknowable actor fields null. Malformed legacy records are reported
+without mutation. The operation is idempotent and is never run automatically.
+
+Additive query indexes cover `(isActive, publicationStatus, createdAt)` for
+transitional consumer lists and `(publicationStatus, isActive, updatedAt)` for
+staff Draft management. No existing index is dropped automatically.

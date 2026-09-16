@@ -25,12 +25,56 @@ function findByIdWithIngredients(id) {
   return withIngredientSummaries(Recipe.findById(id));
 }
 
-function updateById(id, update) {
-  return withIngredientSummaries(Recipe.findByIdAndUpdate(id, update, { new: true, runValidators: true }));
+function mutationFilter(id, expectedUpdatedAt) {
+  const filter = { _id: id };
+  if (expectedUpdatedAt) filter.updatedAt = new Date(expectedUpdatedAt);
+  return filter;
 }
 
-function archiveById(id) {
-  return withIngredientSummaries(Recipe.findByIdAndUpdate(id, { $set: { isActive: false } }, { new: true }));
+function updateById(id, update, { expectedUpdatedAt } = {}) {
+  return withIngredientSummaries(
+    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), update, {
+      new: true,
+      runValidators: true,
+    })
+  );
+}
+
+function publishById(id, { actorId, publishedAt, expectedUpdatedAt }) {
+  return withIngredientSummaries(
+    Recipe.findOneAndUpdate(
+      {
+        ...mutationFilter(id, expectedUpdatedAt),
+        isActive: true,
+        publicationStatus: 'draft',
+      },
+      {
+        $set: {
+          publicationStatus: 'published',
+          publishedBy: actorId,
+          publishedAt,
+          updatedBy: actorId,
+        },
+      },
+      { new: true, runValidators: true }
+    )
+  );
+}
+
+function archiveById(id, { actorId, expectedUpdatedAt } = {}) {
+  const update = { isActive: false };
+  if (actorId) update.updatedBy = actorId;
+  return withIngredientSummaries(
+    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), { $set: update }, { new: true })
+  );
+}
+
+function restoreById(id, { actorId, expectedUpdatedAt } = {}) {
+  const update = { isActive: true };
+  if (actorId) update.updatedBy = actorId;
+  return withIngredientSummaries(
+    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), { $set: update }, { new: true })
+  );
 }
 
 function findMany({ filter, sort, skip, limit }) {
@@ -46,7 +90,9 @@ module.exports = {
   findRawById,
   findByIdWithIngredients,
   updateById,
+  publishById,
   archiveById,
+  restoreById,
   findMany,
   countByFilter,
 };
