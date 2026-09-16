@@ -9,7 +9,10 @@ const {
   recipeParamsSchema,
   listRecipesSchema,
   createRecipeSchema,
+  createDraftSchema,
   updateRecipeSchema,
+  publishRecipeSchema,
+  lifecycleRecipeSchema,
 } = require('./recipe.validation');
 
 const router = Router();
@@ -24,11 +27,39 @@ router.get(
 router.get('/:recipeId', authenticate, validate(recipeParamsSchema), recipeController.getRecipe);
 
 router.post(
+  '/drafts',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(createDraftSchema),
+  recipeController.createDraft
+);
+router.post(
   '/',
   authenticate,
   requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(createRecipeSchema),
   recipeController.createRecipe
+);
+router.post(
+  '/:recipeId/publish',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(publishRecipeSchema),
+  recipeController.publishRecipe
+);
+router.post(
+  '/:recipeId/archive',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(lifecycleRecipeSchema),
+  recipeController.archiveRecipe
+);
+router.post(
+  '/:recipeId/restore',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(lifecycleRecipeSchema),
+  recipeController.restoreRecipe
 );
 router.patch(
   '/:recipeId',

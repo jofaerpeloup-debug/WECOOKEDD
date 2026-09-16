@@ -8,7 +8,7 @@
 //     -> MongoDB
 //
 // Reads require authentication; staff/all reads and mutations are capability-
-// gated by the API. DELETE is a soft archive (isActive -> false). The
+// gated by the API. Archive/restore are explicit lifecycle commands. The
 // public JSON uses `id` (never `_id`) and inlines each referenced canonical
 // ingredient as `{ id, name }` (or null when the ref no longer resolves) —
 // internal ingredient fields (isActive, normalizedName, …) are never exposed.
@@ -95,6 +95,7 @@ export function toIngredientUsagePayload(row) {
  *   region?: string, category?: string,
  *   prepTimeMinutes: number, cookTimeMinutes: number, servings: number,
  *   ingredients: object[], instructions: string[],
+ *   confirmFilipinoCuisine: true,
  *   dietaryTags?: string[], imageUrl?: string|null, imageAssetId?: string|null,
  * }} input
  *   `ingredients` entries must already be in the `toIngredientUsagePayload`
@@ -116,6 +117,7 @@ export function createRecipe({
   dietaryTags = [],
   imageUrl = null,
   imageAssetId = null,
+  confirmFilipinoCuisine,
 }) {
   const body = {
     title,
@@ -129,6 +131,7 @@ export function createRecipe({
     dietaryTags,
     imageUrl,
     imageAssetId,
+    confirmFilipinoCuisine,
   };
   if (region) body.region = region;
   if (category) body.category = category;
@@ -157,12 +160,12 @@ export function updateRecipe(id, patch) {
  * delete. Returns the archived recipe (isActive: false).
  */
 export function archiveRecipe(id) {
-  return api.del(`/recipes/${encodeURIComponent(id)}`).then((data) => data.recipe);
+  return api.post(`/recipes/${encodeURIComponent(id)}/archive`, { body: {} }).then((data) => data.recipe);
 }
 
-/** Convenience wrapper over updateRecipe for restoring an archived record. */
+/** POST /api/v1/recipes/:id/restore (catalog.write). */
 export function restoreRecipe(id) {
-  return updateRecipe(id, { isActive: true });
+  return api.post(`/recipes/${encodeURIComponent(id)}/restore`, { body: {} }).then((data) => data.recipe);
 }
 
 /** POST /api/v1/admin/uploads/recipe-image (recipe_image.upload, multipart field `image`). */

@@ -48,9 +48,9 @@ function toPublicRecipe(recipe) {
     prepTimeMinutes: recipe.prepTimeMinutes,
     cookTimeMinutes: recipe.cookTimeMinutes,
     servings: recipe.servings,
-    ingredients: recipe.ingredients.map(toPublicRecipeIngredient),
-    instructions: recipe.instructions,
-    steps: toStructuredSteps(recipe.instructions),
+    ingredients: (recipe.ingredients || []).map(toPublicRecipeIngredient),
+    instructions: recipe.instructions || [],
+    steps: toStructuredSteps(recipe.instructions || []),
     dietaryTags: recipe.dietaryTags ?? [],
     imageUrl: recipe.imageUrl ?? null,
     isActive: recipe.isActive,
@@ -59,4 +59,22 @@ function toPublicRecipe(recipe) {
   };
 }
 
-module.exports = { toPublicRecipe, toStructuredSteps };
+function actorId(value) {
+  if (!value) return null;
+  return String(value._id || value);
+}
+
+// Staff-only representation. Normal consumer responses continue to use
+// toPublicRecipe and therefore never expose actor attribution.
+function toStaffRecipe(recipe) {
+  return {
+    ...toPublicRecipe(recipe),
+    publicationStatus: recipe.publicationStatus === undefined ? 'published' : recipe.publicationStatus,
+    createdBy: actorId(recipe.createdBy),
+    updatedBy: actorId(recipe.updatedBy),
+    publishedBy: actorId(recipe.publishedBy),
+    publishedAt: recipe.publishedAt ?? null,
+  };
+}
+
+module.exports = { toPublicRecipe, toStaffRecipe, toStructuredSteps };

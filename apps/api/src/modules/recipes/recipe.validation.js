@@ -84,6 +84,10 @@ const instructionsArraySchema = z
   .min(1, 'At least one instruction step is required.')
   .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} instruction steps is allowed.`);
 
+const draftInstructionsArraySchema = z
+  .array(instructionItemSchema)
+  .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} instruction steps is allowed.`);
+
 // Structured cooking-steps input. Mongo still persists `instructions:
 // string[]` as the source of truth (see recipe.model.js /
 // docs/architecture/recipes.md) — the service normalizes a valid `steps`
@@ -102,6 +106,20 @@ const stepItemSchema = z
 const stepsArraySchema = z
   .array(stepItemSchema)
   .min(1, 'At least one step is required.')
+  .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} steps is allowed.`)
+  .superRefine((steps, ctx) => {
+    const orders = steps.map((step) => step.order);
+    if (new Set(orders).size !== orders.length) {
+      ctx.addIssue({ code: 'custom', message: 'step order values must be unique.' });
+    }
+    const sorted = [...orders].sort((a, b) => a - b);
+    if (!sorted.every((value, index) => value === index + 1)) {
+      ctx.addIssue({ code: 'custom', message: 'step order values must be contiguous starting at 1.' });
+    }
+  });
+
+const draftStepsArraySchema = z
+  .array(stepItemSchema)
   .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} steps is allowed.`)
   .superRefine((steps, ctx) => {
     const orders = steps.map((step) => step.order);
@@ -182,6 +200,10 @@ const ingredientsArraySchema = z
   .min(1, 'At least one ingredient is required.')
   .max(MAX_INGREDIENTS, `A maximum of ${MAX_INGREDIENTS} ingredients is allowed.`);
 
+const draftIngredientsArraySchema = z
+  .array(recipeIngredientUsageSchema)
+  .max(MAX_INGREDIENTS, `A maximum of ${MAX_INGREDIENTS} ingredients is allowed.`);
+
 const imageUrlSchema = z
   .string()
   .trim()
@@ -224,6 +246,9 @@ const sortSchema = z
   .default('titleAsc');
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(20);
+const expectedUpdatedAtSchema = z
+  .string()
+  .datetime({ offset: true, message: 'expectedUpdatedAt must be an ISO-8601 timestamp.' });
 
 const recipeParamsSchema = z.object({
   params: z.object({ recipeId: objectIdSchema }).strict(),
@@ -247,36 +272,83 @@ const listRecipesSchema = z.object({
     .strict(),
 });
 
+const filipinoCuisineConfirmationSchema = z.literal(true, {
+  error: 'confirmFilipinoCuisine must be true to publish a recipe.',
+});
+
+const publishedRecipeFields = {
+  title: titleSchema,
+  description: descriptionSchema,
+  region: slugFieldSchema.optional(),
+  category: slugFieldSchema.optional(),
+  difficulty: difficultySchema,
+  prepTimeMinutes: prepTimeMinutesSchema,
+  cookTimeMinutes: cookTimeMinutesSchema,
+  servings: servingsSchema,
+  ingredients: ingredientsArraySchema,
+  // Steps may arrive as legacy `instructions: string[]` or as structured
+  // `steps: [{ order, text }]`. At least one is required on create; when
+  // both are given they must be equivalent (refineStepConsistency).
+  instructions: instructionsArraySchema.optional(),
+  steps: stepsArraySchema.optional(),
+  dietaryTags: dietaryTagsArraySchema.default([]),
+  imageUrl: imageUrlSchema,
+  imageAssetId: imageAssetIdSchema,
+};
+
+function refinePublishedRecipe(body, ctx) {
+  if (body.instructions === undefined && body.steps === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['instructions'],
+      message: 'Provide either instructions (string[]) or steps ([{ order, text }]).',
+    });
+  }
+  refineStepConsistency(body, ctx);
+  refineImageConsistency(body, ctx);
+}
+
+// Authoritative completeness contract reused by Publish, Published edits,
+// migration assessment, and consumer eligibility. Policy acknowledgement is
+// deliberately not part of persisted recipe structure.
+const publishedRecipeBodySchema = z
+  .object(publishedRecipeFields)
+  .strict()
+  .superRefine(refinePublishedRecipe);
+
+// Temporary M20B compatibility route contract. POST /recipes still accepts
+// the current complete Staff Portal form and stores it as published while the
+// next milestone moves that UI to POST /recipes/drafts + explicit publish.
 const createRecipeSchema = z.object({
   body: z
     .object({
+      ...publishedRecipeFields,
+      confirmFilipinoCuisine: filipinoCuisineConfirmationSchema,
+    })
+    .strict()
+    .superRefine(refinePublishedRecipe),
+});
+
+const createDraftSchema = z.object({
+  body: z
+    .object({
       title: titleSchema,
-      description: descriptionSchema,
+      description: descriptionSchema.optional(),
       region: slugFieldSchema.optional(),
       category: slugFieldSchema.optional(),
-      difficulty: difficultySchema,
-      prepTimeMinutes: prepTimeMinutesSchema,
-      cookTimeMinutes: cookTimeMinutesSchema,
-      servings: servingsSchema,
-      ingredients: ingredientsArraySchema,
-      // Steps may arrive as legacy `instructions: string[]` or as structured
-      // `steps: [{ order, text }]`. At least one is required on create; when
-      // both are given they must be equivalent (refineStepConsistency).
-      instructions: instructionsArraySchema.optional(),
-      steps: stepsArraySchema.optional(),
-      dietaryTags: dietaryTagsArraySchema.default([]),
+      difficulty: difficultySchema.optional(),
+      prepTimeMinutes: prepTimeMinutesSchema.optional(),
+      cookTimeMinutes: cookTimeMinutesSchema.optional(),
+      servings: servingsSchema.optional(),
+      ingredients: draftIngredientsArraySchema.optional(),
+      instructions: draftInstructionsArraySchema.optional(),
+      steps: draftStepsArraySchema.optional(),
+      dietaryTags: dietaryTagsArraySchema.optional(),
       imageUrl: imageUrlSchema,
       imageAssetId: imageAssetIdSchema,
     })
     .strict()
     .superRefine((body, ctx) => {
-      if (body.instructions === undefined && body.steps === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['instructions'],
-          message: 'Provide either instructions (string[]) or steps ([{ order, text }]).',
-        });
-      }
       refineStepConsistency(body, ctx);
       refineImageConsistency(body, ctx);
     }),
@@ -297,27 +369,46 @@ const updateRecipeSchema = z.object({
       prepTimeMinutes: prepTimeMinutesSchema.optional(),
       cookTimeMinutes: cookTimeMinutesSchema.optional(),
       servings: servingsSchema.optional(),
-      ingredients: ingredientsArraySchema.optional(),
-      instructions: instructionsArraySchema.optional(),
-      steps: stepsArraySchema.optional(),
+      ingredients: draftIngredientsArraySchema.optional(),
+      instructions: draftInstructionsArraySchema.optional(),
+      steps: draftStepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.optional(),
       imageUrl: imageUrlSchema,
       imageAssetId: imageAssetIdSchema,
-      isActive: z.boolean().optional(),
+      expectedUpdatedAt: expectedUpdatedAtSchema.optional(),
     })
     .strict()
     .superRefine((body, ctx) => {
       refineStepConsistency(body, ctx);
       refineImageConsistency(body, ctx, { update: true });
     })
-    .refine((body) => Object.keys(body).length > 0, {
-      message: 'At least one field must be provided.',
+    .refine((body) => Object.keys(body).some((field) => field !== 'expectedUpdatedAt'), {
+      message: 'At least one recipe content field must be provided.',
     }),
+});
+
+const publishRecipeSchema = z.object({
+  params: z.object({ recipeId: objectIdSchema }).strict(),
+  body: z
+    .object({
+      confirmFilipinoCuisine: filipinoCuisineConfirmationSchema,
+      expectedUpdatedAt: expectedUpdatedAtSchema.optional(),
+    })
+    .strict(),
+});
+
+const lifecycleRecipeSchema = z.object({
+  params: z.object({ recipeId: objectIdSchema }).strict(),
+  body: z.object({ expectedUpdatedAt: expectedUpdatedAtSchema.optional() }).strict(),
 });
 
 module.exports = {
   recipeParamsSchema,
   listRecipesSchema,
   createRecipeSchema,
+  createDraftSchema,
   updateRecipeSchema,
+  publishRecipeSchema,
+  lifecycleRecipeSchema,
+  publishedRecipeBodySchema,
 };

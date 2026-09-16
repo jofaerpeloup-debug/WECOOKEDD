@@ -14,6 +14,7 @@ const RECIPE_ID = '507f1f77bcf86cd799439099';
 
 function validPayload(overrides = {}) {
   return {
+    confirmFilipinoCuisine: true,
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
     difficulty: 'easy',
@@ -319,9 +320,29 @@ test('createRecipeSchema still rejects a null region/category (clear is PATCH-on
   assert.equal(createRecipeSchema.safeParse({ body: validPayload({ category: null }) }).success, false);
 });
 
-test('updateRecipeSchema allows reactivation via isActive: true', () => {
+test('updateRecipeSchema rejects direct lifecycle mutation via isActive', () => {
   const result = updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { isActive: true } });
-  assert.equal(result.success, true);
+  assert.equal(result.success, false);
+});
+
+test('createRecipeSchema requires literal true Filipino-cuisine confirmation', () => {
+  const missing = validPayload();
+  delete missing.confirmFilipinoCuisine;
+  assert.equal(createRecipeSchema.safeParse({ body: missing }).success, false);
+  assert.equal(
+    createRecipeSchema.safeParse({ body: validPayload({ confirmFilipinoCuisine: false }) }).success,
+    false
+  );
+  for (const value of ['true', 1, {}, []]) {
+    assert.equal(
+      createRecipeSchema.safeParse({ body: validPayload({ confirmFilipinoCuisine: value }) }).success,
+      false
+    );
+  }
+  assert.equal(
+    createRecipeSchema.safeParse({ body: validPayload({ confirmFilipinoCuisine: true }) }).success,
+    true
+  );
 });
 
 test('updateRecipeSchema rejects unknown fields', () => {

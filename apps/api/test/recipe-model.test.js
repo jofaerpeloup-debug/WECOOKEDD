@@ -25,23 +25,13 @@ function baseRecipe(overrides = {}) {
   });
 }
 
-test('title, description, difficulty, prepTimeMinutes, cookTimeMinutes, and servings are required', async () => {
+test('a Draft requires only a title at the persistence layer', async () => {
   const recipe = new Recipe({});
   await assert.rejects(() => recipe.validate(), (err) => {
-    for (const field of [
-      'title',
-      'description',
-      'difficulty',
-      'prepTimeMinutes',
-      'cookTimeMinutes',
-      'servings',
-      'ingredients',
-      'instructions',
-    ]) {
-      assert.ok(err.errors[field], `expected ${field} to be required`);
-    }
+    assert.ok(err.errors.title);
     return true;
   });
+  await assert.doesNotReject(() => new Recipe({ title: 'Draft Adobo' }).validate());
 });
 
 test('title is trimmed and length-limited, and does not require uniqueness', () => {
@@ -125,8 +115,8 @@ test('servings must be a positive integer within a reasonable bound', async () =
   await assert.doesNotReject(() => baseRecipe({ servings: Recipe.MAX_SERVINGS }).validate());
 });
 
-test('ingredients requires at least one entry and rejects more than the maximum', async () => {
-  await assert.rejects(() => baseRecipe({ ingredients: [] }).validate());
+test('ingredients allows an empty Draft list and rejects more than the maximum', async () => {
+  await assert.doesNotReject(() => baseRecipe({ ingredients: [] }).validate());
 
   const tooMany = baseRecipe({
     ingredients: Array.from({ length: Recipe.MAX_INGREDIENTS + 1 }, () => ({
@@ -197,8 +187,8 @@ test('ingredient optional flag defaults to false', () => {
   assert.equal(recipe.ingredients[0].optional, false);
 });
 
-test('instructions requires at least one non-empty step, preserves order, and rejects too many steps', async () => {
-  await assert.rejects(() => baseRecipe({ instructions: [] }).validate());
+test('instructions allows an empty Draft list, rejects blank persisted steps, preserves order, and enforces the maximum', async () => {
+  await assert.doesNotReject(() => baseRecipe({ instructions: [] }).validate());
   await assert.rejects(() => baseRecipe({ instructions: [''] }).validate());
 
   const ordered = baseRecipe({ instructions: ['Step one.', 'Step two.', 'Step three.'] });

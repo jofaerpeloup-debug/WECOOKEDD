@@ -47,6 +47,33 @@ function adoboPayload(overrides = {}) {
   };
 }
 
+function completeStoredRecipe(overrides = {}) {
+  const recipe = {
+    _id: 'recipe1',
+    title: 'Chicken Adobo',
+    description: 'A complete Filipino recipe.',
+    difficulty: 'easy',
+    prepTimeMinutes: 15,
+    cookTimeMinutes: 40,
+    servings: 4,
+    instructions: ['Cook until done.'],
+    dietaryTags: [],
+    imageUrl: null,
+    imageAssetId: null,
+    isActive: true,
+    ...overrides,
+  };
+
+  recipe.ingredients = (recipe.ingredients || []).map((entry) => ({
+    quantity: 1,
+    unit: 'piece',
+    optional: false,
+    ...entry,
+  }));
+
+  return recipe;
+}
+
 test('createRecipe validates every ingredient through IngredientService and persists a normalized document', async (t) => {
   const checkedIds = [];
   t.mock.method(ingredientService, 'findIngredientById', async (id) => {
@@ -162,9 +189,7 @@ test('createRecipe deduplicates dietary tags', async (t) => {
 });
 
 test('getRecipeById returns a usable recipe for a non-admin caller', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
   }));
 
@@ -173,8 +198,7 @@ test('getRecipeById returns a usable recipe for a non-admin caller', async (t) =
 });
 
 test('getRecipeById returns 404 for an archived recipe when the caller is not an admin', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     isActive: false,
     ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
   }));
@@ -190,9 +214,7 @@ test('getRecipeById returns 404 for an archived recipe when the caller is not an
 });
 
 test('getRecipeById returns 404 when a required (non-optional) referenced ingredient is archived', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [{ ingredientId: inactiveIngredient(CHICKEN_ID), optional: false }],
   }));
 
@@ -207,9 +229,7 @@ test('getRecipeById returns 404 when a required (non-optional) referenced ingred
 });
 
 test('getRecipeById returns 404 when a referenced ingredient no longer exists (populate returns null)', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [{ ingredientId: null, optional: false }],
   }));
 
@@ -223,9 +243,7 @@ test('getRecipeById returns 404 when a referenced ingredient no longer exists (p
 });
 
 test('getRecipeById stays visible when only an optional ingredient (e.g. garnish) is archived', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [
       { ingredientId: activeIngredient(CHICKEN_ID), optional: false },
       { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), optional: true },
@@ -237,9 +255,7 @@ test('getRecipeById stays visible when only an optional ingredient (e.g. garnish
 });
 
 test('getRecipeById omits an archived optional ingredient usage from the normal-user response instead of exposing it as usable', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [
       { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), optional: false },
       { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), optional: true },
@@ -253,9 +269,7 @@ test('getRecipeById omits an archived optional ingredient usage from the normal-
 });
 
 test('getRecipeById omits an optional ingredient usage whose Ingredient was deleted outright (populate returns null)', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [
       { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), optional: false },
       { ingredientId: null, optional: true },
@@ -486,16 +500,14 @@ test('listRecipes search matches title/description via an escaped, case-insensit
 
 test('listRecipes drops a recipe whose non-optional ingredient is archived when status=active', async (t) => {
   t.mock.method(recipeRepository, 'findMany', async () => [
-    {
+    completeStoredRecipe({
       _id: 'recipe1',
-      isActive: true,
       ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
-    },
-    {
+    }),
+    completeStoredRecipe({
       _id: 'recipe2',
-      isActive: true,
       ingredients: [{ ingredientId: inactiveIngredient(OTHER_ID), optional: false }],
-    },
+    }),
   ]);
   t.mock.method(recipeRepository, 'countByFilter', async () => 2);
 
@@ -536,14 +548,12 @@ test('listRecipes does not apply the usability trim when an admin requests statu
 
 test('listRecipes omits an archived optional ingredient usage from a normal user\'s results, consistent with getRecipeById', async (t) => {
   t.mock.method(recipeRepository, 'findMany', async () => [
-    {
-      _id: 'recipe1',
-      isActive: true,
+    completeStoredRecipe({
       ingredients: [
         { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), optional: false },
         { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), optional: true },
       ],
-    },
+    }),
   ]);
   t.mock.method(recipeRepository, 'countByFilter', async () => 1);
 
@@ -672,10 +682,12 @@ test('updateRecipe throws RECIPE_NOT_FOUND when the id does not exist', async (t
   );
 });
 
-test('updateRecipe reactivation re-verifies every stored ingredient (including optional) is still active', async (t) => {
+test('restoreRecipe re-verifies every stored ingredient (including optional) for a Published recipe', async (t) => {
   t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...adoboPayload(),
     _id: 'recipe1',
     isActive: false,
+    publicationStatus: 'published',
     ingredients: [
       { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false },
       { ingredientId: GARLIC_ID, quantity: 1, unit: 'clove', optional: true },
@@ -686,23 +698,25 @@ test('updateRecipe reactivation re-verifies every stored ingredient (including o
     checkedIds.push(id);
     return activeIngredient(id);
   });
-  t.mock.method(recipeRepository, 'updateById', async (id, update) => ({ _id: id, ...update.$set }));
+  t.mock.method(recipeRepository, 'restoreById', async (id) => ({ _id: id, isActive: true }));
 
-  await recipeService.updateRecipe('recipe1', { isActive: true });
+  await recipeService.restoreRecipe('recipe1');
 
   assert.deepEqual(checkedIds.sort(), [CHICKEN_ID, GARLIC_ID].sort());
 });
 
-test('updateRecipe rejects reactivation when a stored ingredient (even an optional one) is no longer active', async (t) => {
+test('restoreRecipe rejects restoration when a Published recipe ingredient (even optional) is inactive', async (t) => {
   t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...adoboPayload(),
     _id: 'recipe1',
     isActive: false,
+    publicationStatus: 'published',
     ingredients: [{ ingredientId: GARLIC_ID, quantity: 1, unit: 'clove', optional: true }],
   }));
   t.mock.method(ingredientService, 'findIngredientById', async (id) => inactiveIngredient(id));
 
   await assert.rejects(
-    () => recipeService.updateRecipe('recipe1', { isActive: true }),
+    () => recipeService.restoreRecipe('recipe1'),
     (err) => {
       assert.equal(err.code, 'RECIPE_INGREDIENT_INACTIVE');
       return true;
@@ -787,8 +801,7 @@ test('findUsableRecipeById resolves null (never throws) when the recipe does not
 });
 
 test('findUsableRecipeById resolves null for an archived recipe', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     isActive: false,
     ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
   }));
@@ -798,9 +811,7 @@ test('findUsableRecipeById resolves null for an archived recipe', async (t) => {
 });
 
 test('findUsableRecipeById resolves null when a required (non-optional) ingredient is inactive', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [{ ingredientId: inactiveIngredient(CHICKEN_ID), optional: false }],
   }));
 
@@ -824,9 +835,7 @@ test('findUsableRecipeById propagates an unexpected repository/database failure 
 });
 
 test('findUsableRecipeById returns a decoupled { ingredient: { id, name } } usage shape, not the raw populated ingredientId field', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [
       { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false, note: 'secret internal note' },
     ],
@@ -845,9 +854,7 @@ test('findUsableRecipeById returns a decoupled { ingredient: { id, name } } usag
 });
 
 test('findUsableRecipeById omits an archived optional ingredient usage from the returned usages, same as getRecipeById', async (t) => {
-  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
-    _id: 'recipe1',
-    isActive: true,
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
     ingredients: [
       { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false },
       { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), quantity: 1, unit: 'clove', optional: true },

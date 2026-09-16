@@ -99,6 +99,10 @@ test('Admin direct catalog mutations are denied across every existing write rout
   const authorization = authHeader(IDENTITIES.admin);
   const requests = [
     request(app).post('/api/v1/recipes').set('Authorization', authorization).send({}),
+    request(app).post('/api/v1/recipes/drafts').set('Authorization', authorization).send({ title: 'Draft' }),
+    request(app).post(`/api/v1/recipes/${RESOURCE_ID}/publish`).set('Authorization', authorization).send({ confirmFilipinoCuisine: true }),
+    request(app).post(`/api/v1/recipes/${RESOURCE_ID}/archive`).set('Authorization', authorization).send({}),
+    request(app).post(`/api/v1/recipes/${RESOURCE_ID}/restore`).set('Authorization', authorization).send({}),
     request(app).patch(`/api/v1/recipes/${RESOURCE_ID}`).set('Authorization', authorization).send({}),
     request(app).delete(`/api/v1/recipes/${RESOURCE_ID}`).set('Authorization', authorization),
     request(app).post('/api/v1/ingredients').set('Authorization', authorization).send({}),
