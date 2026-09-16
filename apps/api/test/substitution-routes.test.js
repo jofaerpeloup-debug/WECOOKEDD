@@ -18,8 +18,8 @@ const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
 
-const ADMIN_ID = '507f1f77bcf86cd799439001';
-const ADMIN_SESSION_ID = '507f1f77bcf86cd799439002';
+const MODERATOR_ID = '507f1f77bcf86cd799439001';
+const MODERATOR_SESSION_ID = '507f1f77bcf86cd799439002';
 const USER_ID = '507f1f77bcf86cd799439003';
 const USER_SESSION_ID = '507f1f77bcf86cd799439004';
 const SOURCE_ID = '507f1f77bcf86cd799439011';
@@ -51,13 +51,9 @@ function mockAuth(t, { id, role, sessionId }) {
     userId: id,
     revokedAt: null,
   }));
-  // Legacy catalog success fixtures still mint an "admin" token. During the
-  // M19E cutover they intentionally resolve that stale claim to the current
-  // database-authoritative Moderator role.
-  const currentRole = role === 'admin' ? 'moderator' : role;
   t.mock.method(userRepository, 'findById', async () => ({
     _id: id,
-    role: currentRole,
+    role,
     status: 'active',
   }));
 }
@@ -107,7 +103,7 @@ test('GET /api/v1/substitutions never leaks internal ingredient fields in the po
   assert.deepEqual(Object.keys(substituteSummary).sort(), ['id', 'name']);
 });
 
-test('GET /api/v1/substitutions?status=all is rejected for a non-admin user', async (t) => {
+test('GET /api/v1/substitutions?status=all is rejected for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -143,7 +139,7 @@ test('GET /api/v1/substitutions/:id returns 404 for an unknown id', async (t) =>
   assert.equal(response.body.error.code, 'SUBSTITUTION_NOT_FOUND');
 });
 
-test('GET /api/v1/substitutions/:id returns 404 for a non-admin when the source ingredient is archived (no cascade, filtered at read time)', async (t) => {
+test('GET /api/v1/substitutions/:id returns 404 for a normal user when the source ingredient is archived (no cascade, filtered at read time)', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   t.mock.method(substitutionRepository, 'findByIdWithIngredients', async () =>
     fakeSubstitutionDoc({
@@ -162,7 +158,7 @@ test('GET /api/v1/substitutions/:id returns 404 for a non-admin when the source 
   assert.equal(response.body.error.code, 'SUBSTITUTION_NOT_FOUND');
 });
 
-test('GET /api/v1/substitutions/:id returns 404 for a non-admin when the substitute ingredient is archived', async (t) => {
+test('GET /api/v1/substitutions/:id returns 404 for a normal user when the substitute ingredient is archived', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   t.mock.method(substitutionRepository, 'findByIdWithIngredients', async () =>
     fakeSubstitutionDoc({
@@ -182,7 +178,7 @@ test('GET /api/v1/substitutions/:id returns 404 for a non-admin when the substit
 });
 
 test('GET /api/v1/substitutions/:id allows a moderator to inspect an archived ingredient relationship', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(substitutionRepository, 'findByIdWithIngredients', async () =>
     fakeSubstitutionDoc({
       isActive: true,
@@ -191,7 +187,7 @@ test('GET /api/v1/substitutions/:id allows a moderator to inspect an archived in
     })
   );
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .get(`/api/v1/substitutions/${SUBSTITUTION_ID}`)
     .set('Authorization', `Bearer ${token}`);
@@ -200,7 +196,7 @@ test('GET /api/v1/substitutions/:id allows a moderator to inspect an archived in
   assert.equal(response.body.data.substitution.id, SUBSTITUTION_ID);
 });
 
-test('POST /api/v1/substitutions is forbidden for a non-admin user', async (t) => {
+test('POST /api/v1/substitutions is forbidden for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -217,7 +213,7 @@ test('POST /api/v1/substitutions is forbidden for a non-admin user', async (t) =
 });
 
 test('POST /api/v1/substitutions creates a substitution for a moderator when both ingredients are active', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id, id === SOURCE_ID ? 'Butter' : 'Olive Oil'));
   // The real repository populates sourceIngredientId/substituteIngredientId
   // before returning (see substitution.repository.js) — simulate that here
@@ -230,7 +226,7 @@ test('POST /api/v1/substitutions creates a substitution for a moderator when bot
     })
   );
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .post('/api/v1/substitutions')
     .set('Authorization', `Bearer ${token}`)
@@ -247,10 +243,10 @@ test('POST /api/v1/substitutions creates a substitution for a moderator when bot
 });
 
 test('POST /api/v1/substitutions rejects a request referencing a nonexistent ingredient', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async () => null);
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .post('/api/v1/substitutions')
     .set('Authorization', `Bearer ${token}`)
@@ -265,10 +261,10 @@ test('POST /api/v1/substitutions rejects a request referencing a nonexistent ing
 });
 
 test('POST /api/v1/substitutions rejects a request referencing an inactive ingredient', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, name: 'X', isActive: false }));
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .post('/api/v1/substitutions')
     .set('Authorization', `Bearer ${token}`)
@@ -283,8 +279,8 @@ test('POST /api/v1/substitutions rejects a request referencing an inactive ingre
 });
 
 test('POST /api/v1/substitutions rejects identical source/substitute ids via validation, before the service runs', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
 
   const response = await request(app)
     .post('/api/v1/substitutions')
@@ -300,7 +296,7 @@ test('POST /api/v1/substitutions rejects identical source/substitute ids via val
 });
 
 test('POST /api/v1/substitutions returns a stable 409 for a duplicate ordered pair', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
   t.mock.method(substitutionRepository, 'createSubstitution', async () => {
     const err = new Error(
@@ -310,7 +306,7 @@ test('POST /api/v1/substitutions returns a stable 409 for a duplicate ordered pa
     throw err;
   });
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .post('/api/v1/substitutions')
     .set('Authorization', `Bearer ${token}`)
@@ -326,7 +322,7 @@ test('POST /api/v1/substitutions returns a stable 409 for a duplicate ordered pa
   assert.equal(response.body.error.code, 'SUBSTITUTION_ALREADY_EXISTS');
 });
 
-test('PATCH /api/v1/substitutions/:id is forbidden for a non-admin user', async (t) => {
+test('PATCH /api/v1/substitutions/:id is forbidden for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -339,7 +335,7 @@ test('PATCH /api/v1/substitutions/:id is forbidden for a non-admin user', async 
 });
 
 test('PATCH /api/v1/substitutions/:id applies a partial update for a moderator', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(substitutionRepository, 'findRawById', async () => ({
     _id: SUBSTITUTION_ID,
     sourceIngredientId: SOURCE_ID,
@@ -350,7 +346,7 @@ test('PATCH /api/v1/substitutions/:id applies a partial update for a moderator',
     fakeSubstitutionDoc({ notes: update.$set.notes })
   );
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .patch(`/api/v1/substitutions/${SUBSTITUTION_ID}`)
     .set('Authorization', `Bearer ${token}`)
@@ -361,8 +357,8 @@ test('PATCH /api/v1/substitutions/:id applies a partial update for a moderator',
 });
 
 test('PATCH /api/v1/substitutions/:id rejects an empty body', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
 
   const response = await request(app)
     .patch(`/api/v1/substitutions/${SUBSTITUTION_ID}`)
@@ -373,7 +369,7 @@ test('PATCH /api/v1/substitutions/:id rejects an empty body', async (t) => {
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
 });
 
-test('DELETE /api/v1/substitutions/:id is forbidden for a non-admin user', async (t) => {
+test('DELETE /api/v1/substitutions/:id is forbidden for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -385,14 +381,14 @@ test('DELETE /api/v1/substitutions/:id is forbidden for a non-admin user', async
 });
 
 test('DELETE /api/v1/substitutions/:id archives (soft-deletes) for a moderator', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   let archivedId;
   t.mock.method(substitutionRepository, 'archiveById', async (id) => {
     archivedId = id;
     return fakeSubstitutionDoc({ isActive: false });
   });
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .delete(`/api/v1/substitutions/${SUBSTITUTION_ID}`)
     .set('Authorization', `Bearer ${token}`);

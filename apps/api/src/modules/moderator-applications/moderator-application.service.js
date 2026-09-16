@@ -3,6 +3,7 @@ const userRepository = require('../users/user.repository');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
+const MODERATOR_REAPPLICATION_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 function appError(message, statusCode, code) {
   return new AppError(message, { statusCode, code });
@@ -24,7 +25,15 @@ function applicationNotPending() {
   );
 }
 
-async function apply(userId) {
+function applicationHistoryInvalid() {
+  return appError(
+    "We can't process another Moderator application right now. Please try again later or contact an administrator.",
+    409,
+    'MODERATOR_APPLICATION_HISTORY_INVALID'
+  );
+}
+
+async function apply(userId, { now = new Date() } = {}) {
   const user = await userRepository.findModeratorApplicantById(userId);
   if (!user || user.status !== 'active' || user.role !== 'user') {
     throw appError(
@@ -47,6 +56,35 @@ async function apply(userId) {
       409,
       'MODERATOR_APPLICATION_ALREADY_PENDING'
     );
+  }
+
+  const latestApplication = await applicationRepository.findLatestByUserId(userId);
+  if (latestApplication?.status === 'rejected') {
+    const nowMs = now instanceof Date ? now.getTime() : Number.NaN;
+    const reviewedAtMs =
+      latestApplication.reviewedAt instanceof Date
+        ? latestApplication.reviewedAt.getTime()
+        : Number.NaN;
+    if (!Number.isFinite(nowMs)) {
+      throw new TypeError('Moderator application clock must be a valid Date.');
+    }
+    if (!Number.isFinite(reviewedAtMs)) {
+      // A rejected decision without its server-owned review timestamp is
+      // inconsistent history. The cooldown boundary can't be safely computed,
+      // so fail closed with a controlled, explicit state rather than either
+      // bypassing the cooldown or leaking a recurring 500.
+      console.error('[moderator-applications] rejected application has invalid reviewedAt', {
+        applicationId: String(latestApplication._id),
+      });
+      throw applicationHistoryInvalid();
+    }
+    if (nowMs < reviewedAtMs + MODERATOR_REAPPLICATION_COOLDOWN_MS) {
+      throw appError(
+        'You can apply again after the reapplication cooldown ends.',
+        429,
+        'MODERATOR_APPLICATION_REAPPLY_COOLDOWN'
+      );
+    }
   }
 
   try {
@@ -197,4 +235,13 @@ async function demote(userId) {
   return demoted;
 }
 
-module.exports = { apply, getStaffState, list, approve, reject, demote, hasLocalPassword };
+module.exports = {
+  apply,
+  getStaffState,
+  list,
+  approve,
+  reject,
+  demote,
+  hasLocalPassword,
+  MODERATOR_REAPPLICATION_COOLDOWN_MS,
+};

@@ -17,12 +17,10 @@ const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
 
-const ADMIN_ID = '507f1f77bcf86cd799439001';
-const ADMIN_SESSION_ID = '507f1f77bcf86cd799439002';
+const MODERATOR_ID = '507f1f77bcf86cd799439001';
+const MODERATOR_SESSION_ID = '507f1f77bcf86cd799439002';
 const USER_ID = '507f1f77bcf86cd799439003';
 const USER_SESSION_ID = '507f1f77bcf86cd799439004';
-const MODERATOR_ID = '507f1f77bcf86cd799439005';
-const MODERATOR_SESSION_ID = '507f1f77bcf86cd799439006';
 const INGREDIENT_ID = '507f1f77bcf86cd799439099';
 
 function fakeIngredientDoc(overrides = {}) {
@@ -48,13 +46,9 @@ function mockAuth(t, { id, role, sessionId }) {
     userId: id,
     revokedAt: null,
   }));
-  // Legacy catalog success fixtures still mint an "admin" token. During the
-  // M19E cutover they intentionally resolve that stale claim to the current
-  // database-authoritative Moderator role.
-  const currentRole = role === 'admin' ? 'moderator' : role;
   t.mock.method(userRepository, 'findById', async () => ({
     _id: id,
-    role: currentRole,
+    role,
     status: 'active',
   }));
 }
@@ -69,7 +63,7 @@ test('GET /api/v1/ingredients without a token is rejected', async () => {
   assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
 });
 
-test('GET /api/v1/ingredients is readable by an authenticated non-admin user', async (t) => {
+test('GET /api/v1/ingredients is readable by an authenticated normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   t.mock.method(ingredientRepository, 'findMany', async () => [fakeIngredientDoc()]);
   t.mock.method(ingredientRepository, 'countByFilter', async () => 1);
@@ -84,7 +78,7 @@ test('GET /api/v1/ingredients is readable by an authenticated non-admin user', a
   assert.equal(response.body.data.pagination.total, 1);
 });
 
-test('GET /api/v1/ingredients?status=all is rejected for a non-admin user', async (t) => {
+test('GET /api/v1/ingredients?status=all is rejected for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -96,11 +90,11 @@ test('GET /api/v1/ingredients?status=all is rejected for a non-admin user', asyn
 });
 
 test('GET /api/v1/ingredients?status=inactive is allowed for a moderator', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'findMany', async () => [fakeIngredientDoc({ isActive: false })]);
   t.mock.method(ingredientRepository, 'countByFilter', async () => 1);
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .get('/api/v1/ingredients?status=inactive')
     .set('Authorization', `Bearer ${token}`);
@@ -121,7 +115,7 @@ test('GET /api/v1/ingredients rejects an invalid query param with the standard V
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
 });
 
-test('GET /api/v1/ingredients/:id returns 404 for an archived ingredient requested by a non-admin', async (t) => {
+test('GET /api/v1/ingredients/:id returns 404 for an archived ingredient requested by a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async () => fakeIngredientDoc({ isActive: false }));
 
@@ -135,10 +129,10 @@ test('GET /api/v1/ingredients/:id returns 404 for an archived ingredient request
 });
 
 test('GET /api/v1/ingredients/:id allows a moderator to retrieve an archived ingredient', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async () => fakeIngredientDoc({ isActive: false }));
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .get(`/api/v1/ingredients/${INGREDIENT_ID}`)
     .set('Authorization', `Bearer ${token}`);
@@ -147,7 +141,7 @@ test('GET /api/v1/ingredients/:id allows a moderator to retrieve an archived ing
   assert.equal(response.body.data.ingredient.isActive, false);
 });
 
-test('POST /api/v1/ingredients is forbidden for a non-admin user', async (t) => {
+test('POST /api/v1/ingredients is forbidden for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -179,10 +173,10 @@ test('POST /api/v1/ingredients reaches the existing handler for a moderator afte
 });
 
 test('POST /api/v1/ingredients creates an ingredient for a moderator and never returns normalizedName', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'createIngredient', async (data) => fakeIngredientDoc(data));
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .post('/api/v1/ingredients')
     .set('Authorization', `Bearer ${token}`)
@@ -195,8 +189,8 @@ test('POST /api/v1/ingredients creates an ingredient for a moderator and never r
 });
 
 test('POST /api/v1/ingredients rejects a client-supplied isActive field before it reaches the service', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
 
   const response = await request(app)
     .post('/api/v1/ingredients')
@@ -208,14 +202,14 @@ test('POST /api/v1/ingredients rejects a client-supplied isActive field before i
 });
 
 test('POST /api/v1/ingredients returns a stable 409 for a duplicate name, not a raw Mongo error', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'createIngredient', async () => {
     const err = new Error('E11000 duplicate key error index: normalizedName_1');
     err.code = 11000;
     throw err;
   });
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .post('/api/v1/ingredients')
     .set('Authorization', `Bearer ${token}`)
@@ -226,7 +220,7 @@ test('POST /api/v1/ingredients returns a stable 409 for a duplicate name, not a 
   assert.equal(JSON.stringify(response.body).includes('E11000'), false);
 });
 
-test('PATCH /api/v1/ingredients/:id is forbidden for a non-admin user', async (t) => {
+test('PATCH /api/v1/ingredients/:id is forbidden for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -239,12 +233,12 @@ test('PATCH /api/v1/ingredients/:id is forbidden for a non-admin user', async (t
 });
 
 test('PATCH /api/v1/ingredients/:id applies a partial update for a moderator', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'updateById', async (id, update) =>
     fakeIngredientDoc({ _id: id, name: update.$set.name })
   );
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
     .set('Authorization', `Bearer ${token}`)
@@ -255,7 +249,7 @@ test('PATCH /api/v1/ingredients/:id applies a partial update for a moderator', a
 });
 
 test('PATCH /api/v1/ingredients/:id renaming into another ingredient\'s normalized name is a stable 409, not a raw Mongo error', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   let capturedUpdate;
   t.mock.method(ingredientRepository, 'updateById', async (id, update) => {
     capturedUpdate = update;
@@ -269,7 +263,7 @@ test('PATCH /api/v1/ingredients/:id renaming into another ingredient\'s normaliz
     throw err;
   });
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
     .set('Authorization', `Bearer ${token}`)
@@ -284,8 +278,8 @@ test('PATCH /api/v1/ingredients/:id renaming into another ingredient\'s normaliz
 });
 
 test('PATCH /api/v1/ingredients/:id rejects an empty body', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
 
   const response = await request(app)
     .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
@@ -296,7 +290,7 @@ test('PATCH /api/v1/ingredients/:id rejects an empty body', async (t) => {
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
 });
 
-test('DELETE /api/v1/ingredients/:id is forbidden for a non-admin user', async (t) => {
+test('DELETE /api/v1/ingredients/:id is forbidden for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
@@ -308,14 +302,14 @@ test('DELETE /api/v1/ingredients/:id is forbidden for a non-admin user', async (
 });
 
 test('DELETE /api/v1/ingredients/:id archives (soft-deletes) for a moderator', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   let archivedId;
   t.mock.method(ingredientRepository, 'archiveById', async (id) => {
     archivedId = id;
     return fakeIngredientDoc({ isActive: false });
   });
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .delete(`/api/v1/ingredients/${INGREDIENT_ID}`)
     .set('Authorization', `Bearer ${token}`);
@@ -326,10 +320,10 @@ test('DELETE /api/v1/ingredients/:id archives (soft-deletes) for a moderator', a
 });
 
 test('DELETE /api/v1/ingredients/:id returns 404 for an unknown id', async (t) => {
-  mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   t.mock.method(ingredientRepository, 'archiveById', async () => null);
 
-  const token = tokenFor({ id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
     .delete(`/api/v1/ingredients/${INGREDIENT_ID}`)
     .set('Authorization', `Bearer ${token}`);

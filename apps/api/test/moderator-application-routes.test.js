@@ -37,12 +37,12 @@ function userDoc({ id = USER_ID, role = 'user', status = 'active', emailVerified
   };
 }
 
-function applicationDoc({ status = 'pending', reason = null, user = USER_ID } = {}) {
+function applicationDoc({ status = 'pending', reason = null, user = USER_ID, reviewedAt } = {}) {
   return {
     _id: APPLICATION_ID,
     userId: user,
     status,
-    reviewedAt: status === 'pending' ? null : new Date('2026-02-02T00:00:00Z'),
+    reviewedAt: reviewedAt ?? (status === 'pending' ? null : new Date('2026-02-02T00:00:00Z')),
     reviewedBy: status === 'pending' ? null : ADMIN_ID,
     rejectionReason: reason,
     createdAt: new Date('2026-02-01T00:00:00Z'),
@@ -74,6 +74,7 @@ test('an active local user can apply while unverified without changing authority
   mockAuth(t, caller);
   t.mock.method(userRepository, 'findModeratorApplicantById', async () => caller);
   t.mock.method(applicationRepository, 'findPendingByUserId', async () => null);
+  t.mock.method(applicationRepository, 'findLatestByUserId', async () => null);
   t.mock.method(applicationRepository, 'createPending', async (userId) => {
     assert.equal(userId, USER_ID);
     return applicationDoc();
@@ -91,10 +92,17 @@ test('an active local user can apply while unverified without changing authority
   assert.equal(JSON.stringify(response.body).includes(HASH), false);
 });
 
-test('apply strictly rejects client-owned user, role, and status fields', async (t) => {
+test('apply strictly rejects all client-owned identity and decision fields', async (t) => {
   const caller = userDoc();
   mockAuth(t, caller);
-  for (const body of [{ userId: ADMIN_ID }, { role: 'moderator' }, { status: 'approved' }]) {
+  for (const body of [
+    { userId: ADMIN_ID },
+    { role: 'moderator' },
+    { status: 'approved' },
+    { reviewedBy: ADMIN_ID },
+    { reviewedAt: new Date().toISOString() },
+    { rejectionReason: 'client controlled' },
+  ]) {
     const response = await request(app)
       .post('/api/v1/staff/moderator-applications')
       .set('Authorization', `Bearer ${tokenFor(caller)}`)
@@ -145,6 +153,7 @@ test('duplicate-key apply races become a stable conflict without Mongo details',
   mockAuth(t, caller);
   t.mock.method(userRepository, 'findModeratorApplicantById', async () => caller);
   t.mock.method(applicationRepository, 'findPendingByUserId', async () => null);
+  t.mock.method(applicationRepository, 'findLatestByUserId', async () => null);
   t.mock.method(applicationRepository, 'createPending', async () => {
     throw Object.assign(new Error('E11000 uniq_pending_moderator_application_per_user'), { code: 11000 });
   });
@@ -157,6 +166,85 @@ test('duplicate-key apply races become a stable conflict without Mongo details',
   assert.equal(JSON.stringify(response.body).includes('E11000'), false);
   assert.equal(JSON.stringify(response.body).includes('uniq_pending'), false);
 });
+
+test('recent rejection returns the stable cooldown envelope without internal data', async (t) => {
+  const caller = userDoc({ emailVerified: true });
+  mockAuth(t, caller);
+  t.mock.method(userRepository, 'findModeratorApplicantById', async () => caller);
+  t.mock.method(applicationRepository, 'findPendingByUserId', async () => null);
+  t.mock.method(applicationRepository, 'findLatestByUserId', async () =>
+    applicationDoc({
+      status: 'rejected',
+      reason: 'Internal review reason',
+      reviewedAt: new Date(Date.now() - 60 * 60 * 1000),
+    })
+  );
+  let created = false;
+  t.mock.method(applicationRepository, 'createPending', async () => {
+    created = true;
+  });
+
+  const response = await request(app)
+    .post('/api/v1/staff/moderator-applications')
+    .set('Authorization', `Bearer ${tokenFor(caller)}`)
+    .send({});
+
+  assert.equal(response.status, 429);
+  assert.deepEqual(response.body, {
+    success: false,
+    error: {
+      code: 'MODERATOR_APPLICATION_REAPPLY_COOLDOWN',
+      message: 'You can apply again after the reapplication cooldown ends.',
+    },
+  });
+  assert.equal(created, false);
+  const raw = JSON.stringify(response.body);
+  assert.equal(raw.includes('Internal review reason'), false);
+  assert.equal(raw.includes('passwordHash'), false);
+  assert.equal(raw.includes('reviewedBy'), false);
+});
+
+for (const { label, reviewedAt } of [
+  { label: 'missing (null) reviewedAt', reviewedAt: null },
+  { label: 'invalid reviewedAt', reviewedAt: new Date('not-a-real-date') },
+]) {
+  test(`rejected history with ${label} returns a controlled data-integrity 409, never a bare 500`, async (t) => {
+    const caller = userDoc({ emailVerified: true });
+    mockAuth(t, caller);
+    t.mock.method(userRepository, 'findModeratorApplicantById', async () => caller);
+    t.mock.method(applicationRepository, 'findPendingByUserId', async () => null);
+    t.mock.method(applicationRepository, 'findLatestByUserId', async () => ({
+      ...applicationDoc({ status: 'rejected', reason: 'Internal review reason' }),
+      reviewedAt,
+    }));
+    let created = false;
+    t.mock.method(applicationRepository, 'createPending', async () => {
+      created = true;
+    });
+    t.mock.method(console, 'error', () => {});
+
+    const response = await request(app)
+      .post('/api/v1/staff/moderator-applications')
+      .set('Authorization', `Bearer ${tokenFor(caller)}`)
+      .send({});
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(response.body, {
+      success: false,
+      error: {
+        code: 'MODERATOR_APPLICATION_HISTORY_INVALID',
+        message:
+          "We can't process another Moderator application right now. Please try again later or contact an administrator.",
+      },
+    });
+    assert.equal(created, false);
+    const raw = JSON.stringify(response.body);
+    assert.equal(raw.includes('Internal review reason'), false);
+    assert.equal(raw.includes('passwordHash'), false);
+    assert.equal(raw.includes('reviewedBy'), false);
+    assert.equal(raw.includes(USER_ID), false);
+  });
+}
 
 test('/staff/me resolves consumer, verify_email, pending, rejected, moderator, and admin', async (t) => {
   const cases = [
