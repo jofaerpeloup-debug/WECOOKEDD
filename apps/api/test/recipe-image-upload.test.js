@@ -16,11 +16,10 @@ const recipeImageService = require('../src/modules/uploads/recipe-image.service'
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
-const ADMIN = {
+const MODERATOR = {
   id: '507f1f77bcf86cd799439001',
   sessionId: '507f1f77bcf86cd799439002',
-  // Stale token claim; mockAuth reloads the current Moderator role below.
-  role: 'admin',
+  role: 'moderator',
 };
 const USER = {
   id: '507f1f77bcf86cd799439003',
@@ -46,7 +45,7 @@ function mockAuth(t, identity) {
   }));
   t.mock.method(userRepository, 'findById', async () => ({
     _id: identity.id,
-    role: identity.role === 'admin' ? 'moderator' : identity.role,
+    role: identity.role,
     status: 'active',
   }));
 }
@@ -69,10 +68,10 @@ function mockSuccessfulProvider(t, overrides = {}) {
   }));
 }
 
-function adminUpload(file = FILES.jpeg) {
+function moderatorUpload(file = FILES.jpeg) {
   return request(app)
     .post('/api/v1/admin/uploads/recipe-image')
-    .set('Authorization', `Bearer ${tokenFor(ADMIN)}`)
+    .set('Authorization', `Bearer ${tokenFor(MODERATOR)}`)
     .attach('image', file.buffer, { filename: file.name, contentType: file.type });
 }
 
@@ -96,9 +95,9 @@ test('upload denies an authenticated normal user', async (t) => {
 
 for (const [format, file] of Object.entries(FILES)) {
   test(`authenticated moderator can upload a valid ${format.toUpperCase()} file`, async (t) => {
-    mockAuth(t, ADMIN);
+    mockAuth(t, MODERATOR);
     mockSuccessfulProvider(t, { format: format === 'jpeg' ? 'jpg' : format });
-    const response = await adminUpload(file);
+    const response = await moderatorUpload(file);
     assert.equal(response.status, 201);
     assert.deepEqual(response.body, {
       success: true,
@@ -113,9 +112,9 @@ for (const [format, file] of Object.entries(FILES)) {
 }
 
 test('upload endpoint without Cloudinary configuration returns safe 503', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   t.mock.method(imageProvider, 'isConfigured', () => false);
-  const response = await adminUpload();
+  const response = await moderatorUpload();
   assert.equal(response.status, 503);
   assert.equal(response.body.error.code, 'UPLOADS_NOT_CONFIGURED');
   assert.equal(JSON.stringify(response.body).includes('API_SECRET'), false);
@@ -126,19 +125,19 @@ for (const file of [
   { name: 'dish.gif', type: 'image/gif', buffer: Buffer.from('GIF89a') },
 ]) {
   test(`${file.name.split('.').pop().toUpperCase()} is rejected`, async (t) => {
-    mockAuth(t, ADMIN);
-    const response = await adminUpload(file);
+    mockAuth(t, MODERATOR);
+    const response = await moderatorUpload(file);
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'IMAGE_FILE_UNSUPPORTED');
   });
 }
 
 test('fake JPEG MIME carrying HTML is rejected before provider upload', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   let providerCalled = false;
   t.mock.method(imageProvider, 'isConfigured', () => true);
   t.mock.method(imageProvider, 'uploadImage', async () => { providerCalled = true; });
-  const response = await adminUpload({
+  const response = await moderatorUpload({
     name: 'fake.jpg',
     type: 'image/jpeg',
     buffer: Buffer.from('<html>not an image</html>'),
@@ -149,26 +148,26 @@ test('fake JPEG MIME carrying HTML is rejected before provider upload', async (t
 });
 
 test('extension/signature mismatch is rejected', async (t) => {
-  mockAuth(t, ADMIN);
-  const response = await adminUpload({ ...FILES.png, name: 'dish.jpg', type: 'image/jpeg' });
+  mockAuth(t, MODERATOR);
+  const response = await moderatorUpload({ ...FILES.png, name: 'dish.jpg', type: 'image/jpeg' });
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'IMAGE_FILE_INVALID');
 });
 
 test('missing file is rejected', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   const response = await request(app)
     .post('/api/v1/admin/uploads/recipe-image')
-    .set('Authorization', `Bearer ${tokenFor(ADMIN)}`);
+    .set('Authorization', `Bearer ${tokenFor(MODERATOR)}`);
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'IMAGE_FILE_REQUIRED');
 });
 
 test('multiple files are rejected', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   const response = await request(app)
     .post('/api/v1/admin/uploads/recipe-image')
-    .set('Authorization', `Bearer ${tokenFor(ADMIN)}`)
+    .set('Authorization', `Bearer ${tokenFor(MODERATOR)}`)
     .attach('image', FILES.jpeg.buffer, { filename: 'one.jpg', contentType: 'image/jpeg' })
     .attach('image', FILES.jpeg.buffer, { filename: 'two.jpg', contentType: 'image/jpeg' });
   assert.equal(response.status, 400);
@@ -176,21 +175,21 @@ test('multiple files are rejected', async (t) => {
 });
 
 test('file over 5 MiB is rejected', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   const oversized = Buffer.alloc(recipeImageService.MAX_IMAGE_FILE_SIZE + 1, 0xff);
   oversized[0] = 0xff;
   oversized[1] = 0xd8;
   oversized[2] = 0xff;
-  const response = await adminUpload({ name: 'large.jpg', type: 'image/jpeg', buffer: oversized });
+  const response = await moderatorUpload({ name: 'large.jpg', type: 'image/jpeg', buffer: oversized });
   assert.equal(response.status, 413);
   assert.equal(response.body.error.code, 'IMAGE_FILE_TOO_LARGE');
 });
 
 test('malformed multipart is handled with a safe application error', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   const response = await request(app)
     .post('/api/v1/admin/uploads/recipe-image')
-    .set('Authorization', `Bearer ${tokenFor(ADMIN)}`)
+    .set('Authorization', `Bearer ${tokenFor(MODERATOR)}`)
     .set('Content-Type', 'multipart/form-data; boundary=broken')
     .send('--broken\r\nContent-Disposition: form-data; name="image"; filename="x.jpg"\r\n');
   assert.equal(response.status, 400);
@@ -199,13 +198,13 @@ test('malformed multipart is handled with a safe application error', async (t) =
 });
 
 test('provider failure returns a safe error without raw internals', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   t.mock.method(console, 'error', () => {});
   t.mock.method(imageProvider, 'isConfigured', () => true);
   t.mock.method(imageProvider, 'uploadImage', async () => {
     throw new Error('api_secret=hunter2 signed-request=abc');
   });
-  const response = await adminUpload();
+  const response = await moderatorUpload();
   assert.equal(response.status, 502);
   assert.equal(response.body.error.code, 'IMAGE_UPLOAD_FAILED');
   assert.equal(JSON.stringify(response.body).includes('hunter2'), false);
@@ -213,7 +212,7 @@ test('provider failure returns a safe error without raw internals', async (t) =>
 });
 
 test('unexpected provider format/result is rejected and its asset is best-effort deleted', async (t) => {
-  mockAuth(t, ADMIN);
+  mockAuth(t, MODERATOR);
   t.mock.method(imageProvider, 'isConfigured', () => true);
   t.mock.method(imageProvider, 'uploadImage', async () => ({
     secure_url: 'https://res.cloudinary.com/demo/image/upload/dish.gif',
@@ -222,7 +221,7 @@ test('unexpected provider format/result is rejected and its asset is best-effort
   }));
   let deleted;
   t.mock.method(imageProvider, 'deleteByAssetId', async (assetId) => { deleted = assetId; });
-  const response = await adminUpload();
+  const response = await moderatorUpload();
   assert.equal(response.status, 502);
   assert.equal(response.body.error.code, 'IMAGE_UPLOAD_FAILED');
   assert.equal(deleted, 'bad-output-asset');

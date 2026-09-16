@@ -126,7 +126,7 @@ test('Admin direct recipe-image upload is denied before multipart parsing', asyn
   assert.equal(response.body.error.code, 'FORBIDDEN');
 });
 
-test('catalog write authority follows the current database role, never the JWT role claim', async (t) => {
+test('catalog read/write authority follows every meaningful current-DB/stale-JWT combination', async (t) => {
   const currentModerator = { ...IDENTITIES.moderator };
   const demotedUser = {
     id: '507f1f77bcf86cd799439107',
@@ -135,23 +135,48 @@ test('catalog write authority follows the current database role, never the JWT r
   };
   const currentAdmin = { ...IDENTITIES.admin };
   mockIdentityDirectory(t, [currentModerator, demotedUser, currentAdmin]);
+  t.mock.method(ingredientRepository, 'findMany', async () => []);
+  t.mock.method(ingredientRepository, 'countByFilter', async () => 0);
 
-  const promotedResponse = await request(app)
-    .post('/api/v1/ingredients')
-    .set('Authorization', authHeader(currentModerator, 'admin'))
-    .send({});
-  assert.equal(promotedResponse.status, 400);
-  assert.equal(promotedResponse.body.error.code, 'VALIDATION_ERROR');
+  const cases = [
+    { identity: currentModerator, staleRole: 'admin', read: 200, write: 400 },
+    { identity: demotedUser, staleRole: 'moderator', read: 403, write: 403 },
+    { identity: currentAdmin, staleRole: 'moderator', read: 200, write: 403 },
+    { identity: currentModerator, staleRole: 'user', read: 200, write: 400 },
+    { identity: demotedUser, staleRole: 'admin', read: 403, write: 403 },
+  ];
 
-  for (const [identity, staleRole] of [
-    [demotedUser, 'moderator'],
-    [currentAdmin, 'moderator'],
-  ]) {
-    const response = await request(app)
+  for (const item of cases) {
+    const readResponse = await request(app)
+      .get('/api/v1/ingredients?status=all')
+      .set('Authorization', authHeader(item.identity, item.staleRole));
+    assert.equal(readResponse.status, item.read);
+
+    const writeResponse = await request(app)
       .post('/api/v1/ingredients')
-      .set('Authorization', authHeader(identity, staleRole))
+      .set('Authorization', authHeader(item.identity, item.staleRole))
       .send({});
-    assert.equal(response.status, 403);
-    assert.equal(response.body.error.code, 'FORBIDDEN');
+    assert.equal(writeResponse.status, item.write);
+    assert.equal(
+      writeResponse.body.error.code,
+      item.write === 400 ? 'VALIDATION_ERROR' : 'FORBIDDEN'
+    );
   }
+
+  const moderatorUpload = await request(app)
+    .post('/api/v1/admin/uploads/recipe-image')
+    .set('Authorization', authHeader(currentModerator, 'admin'));
+  assert.equal(moderatorUpload.status, 400);
+  assert.equal(moderatorUpload.body.error.code, 'IMAGE_FILE_REQUIRED');
+
+  const adminUpload = await request(app)
+    .post('/api/v1/admin/uploads/recipe-image')
+    .set('Authorization', authHeader(currentAdmin, 'moderator'));
+  assert.equal(adminUpload.status, 403);
+  assert.equal(adminUpload.body.error.code, 'FORBIDDEN');
+
+  const consumerRead = await request(app)
+    .get('/api/v1/ingredients')
+    .set('Authorization', authHeader(demotedUser, 'moderator'));
+  assert.equal(consumerRead.status, 200);
 });

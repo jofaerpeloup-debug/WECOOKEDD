@@ -1,8 +1,9 @@
 const { Router } = require('express');
 const { authenticate } = require('../../middleware/authenticate.middleware');
-const { authorize } = require('../../middleware/authorize.middleware');
+const { requireCapability } = require('../../middleware/require-capability.middleware');
 const { validate } = require('../../middleware/validate.middleware');
 const { noStore } = require('../../middleware/no-store.middleware');
+const { CAPABILITIES } = require('../../shared/security/capabilities');
 const userController = require('./user.controller');
 const {
   listUsersSchema,
@@ -11,6 +12,7 @@ const {
 } = require('./user.validation');
 
 const router = Router();
+const userManager = requireCapability(CAPABILITIES.USERS_MANAGE);
 
 // Declared first so it can never be shadowed by /:userId.
 router.get('/me', authenticate, noStore, userController.getCurrentUser);
@@ -27,15 +29,14 @@ router.patch(
   userController.updateCurrentUser
 );
 
-// Admin user management. authorize('admin') is on the route itself (unlike
-// GET /ingredients or GET /recipes, which any authenticated user may read) —
-// listing and mutating users is admin-only.
-router.get('/', authenticate, authorize('admin'), validate(listUsersSchema), userController.listUsers);
+// User management is capability-gated. In the locked role map only Admin has
+// users.manage; route authority does not depend on a role literal.
+router.get('/', authenticate, userManager, validate(listUsersSchema), userController.listUsers);
 
 router.patch(
   '/:userId',
   authenticate,
-  authorize('admin'),
+  userManager,
   validate(updateUserSchema),
   userController.updateUser
 );

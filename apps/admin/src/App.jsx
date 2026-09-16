@@ -1071,6 +1071,7 @@ function WeCookedAdminApp() {
           tab={tab}
           setTab={setTab}
           identity={identity}
+          catalogPolicy={catalogPolicy}
           onSignOut={signOut}
           onAuthorityLost={refreshAuthority}
         />
@@ -1220,7 +1221,14 @@ function WeCookedAdminApp() {
   );
 }
 
-function ModeratorWorkspace({ tab, setTab, identity, onSignOut, onAuthorityLost }) {
+function ModeratorWorkspace({
+  tab,
+  setTab,
+  identity,
+  catalogPolicy,
+  onSignOut,
+  onAuthorityLost,
+}) {
   const areas = [
     { id: 'recipes', label: 'Recipes', icon: ChefHat },
     { id: 'ingredients', label: 'Ingredients', icon: Carrot },
@@ -1259,10 +1267,24 @@ function ModeratorWorkspace({ tab, setTab, identity, onSignOut, onAuthorityLost 
       </aside>
       <main className="wc-main">
         {tab === 'recipes' && (
-          <RecipesTab canWrite canUploadRecipeImage onAuthorityLost={onAuthorityLost} />
+          <RecipesTab
+            canWrite={catalogPolicy.canWriteCatalog}
+            canUploadRecipeImage={catalogPolicy.canUploadRecipeImage}
+            onAuthorityLost={onAuthorityLost}
+          />
         )}
-        {tab === 'ingredients' && <IngredientsTab canWrite onAuthorityLost={onAuthorityLost} />}
-        {tab === 'substitutions' && <SubstitutionsTab canWrite onAuthorityLost={onAuthorityLost} />}
+        {tab === 'ingredients' && (
+          <IngredientsTab
+            canWrite={catalogPolicy.canWriteCatalog}
+            onAuthorityLost={onAuthorityLost}
+          />
+        )}
+        {tab === 'substitutions' && (
+          <SubstitutionsTab
+            canWrite={catalogPolicy.canWriteCatalog}
+            onAuthorityLost={onAuthorityLost}
+          />
+        )}
         {tab === 'moderator-home' && (
           <div className="wc-moderator-card">
             <div className="wc-moderator-kicker"><ShieldCheck size={16} /> Moderator access approved</div>

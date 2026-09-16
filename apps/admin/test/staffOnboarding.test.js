@@ -28,3 +28,16 @@ test('retry submits with the current session and never invokes registration', as
   assert.deepEqual(calls, ['apply', 'refresh']);
   assert.deepEqual(state, { mode: 'pending' });
 });
+
+test('failed retry does not refresh or pretend the application succeeded', async () => {
+  const failure = new Error('cooldown');
+  let refreshes = 0;
+  await assert.rejects(
+    () => retryModeratorApplication({
+      apply: async () => { throw failure; },
+      refresh: async () => { refreshes += 1; },
+    }),
+    (error) => error === failure
+  );
+  assert.equal(refreshes, 0);
+});

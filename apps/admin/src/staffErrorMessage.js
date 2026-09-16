@@ -7,6 +7,10 @@ const STAFF_ERROR_MESSAGES = Object.freeze({
     'This account is not currently eligible to apply for Moderator access.',
   MODERATOR_APPLICATION_ALREADY_PENDING:
     'A Moderator application is already pending. Refresh your status to continue.',
+  MODERATOR_APPLICATION_REAPPLY_COOLDOWN:
+    'Your previous Moderator application was recently reviewed. You can apply again after the 24-hour reapplication cooldown.',
+  MODERATOR_APPLICATION_HISTORY_INVALID:
+    "We can't process another Moderator application right now. Please try again later or contact an administrator.",
   MODERATOR_APPLICATION_EMAIL_UNVERIFIED:
     'The applicant must verify their email before approval.',
   MODERATOR_APPLICATION_NOT_PENDING:
