@@ -2,7 +2,9 @@ const { Router } = require('express');
 const substitutionController = require('./substitution.controller');
 const { validate } = require('../../middleware/validate.middleware');
 const { authenticate } = require('../../middleware/authenticate.middleware');
-const { authorize } = require('../../middleware/authorize.middleware');
+const { requireCapability } = require('../../middleware/require-capability.middleware');
+const { requireCatalogReadAllForNonActive } = require('../../middleware/catalog-read.middleware');
+const { CAPABILITIES } = require('../../shared/security/capabilities');
 const {
   substitutionParamsSchema,
   listSubstitutionsSchema,
@@ -16,6 +18,7 @@ router.get(
   '/',
   authenticate,
   validate(listSubstitutionsSchema),
+  requireCatalogReadAllForNonActive,
   substitutionController.listSubstitutions
 );
 router.get(
@@ -28,21 +31,21 @@ router.get(
 router.post(
   '/',
   authenticate,
-  authorize('admin'),
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(createSubstitutionSchema),
   substitutionController.createSubstitution
 );
 router.patch(
   '/:substitutionId',
   authenticate,
-  authorize('admin'),
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(updateSubstitutionSchema),
   substitutionController.updateSubstitution
 );
 router.delete(
   '/:substitutionId',
   authenticate,
-  authorize('admin'),
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
   validate(substitutionParamsSchema),
   substitutionController.archiveSubstitution
 );

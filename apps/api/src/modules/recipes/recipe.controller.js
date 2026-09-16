@@ -2,6 +2,7 @@ const recipeService = require('./recipe.service');
 const { toPublicRecipe } = require('./recipe.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
+const { CAPABILITIES, hasCapability } = require('../../shared/security/capabilities');
 
 function toPagination({ page, limit, total }) {
   return { page, limit, total, totalPages: Math.ceil(total / limit) };
@@ -21,7 +22,7 @@ const listRecipes = asyncHandler(async (req, res) => {
     limit,
     sort,
   } = req.validated.query;
-  const isAdmin = req.auth.role === 'admin';
+  const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
   const { items, total } = await recipeService.listRecipes({
     search,
@@ -35,7 +36,7 @@ const listRecipes = asyncHandler(async (req, res) => {
     page,
     limit,
     sort,
-    isAdmin,
+    isAdmin: canReadAll,
   });
 
   sendSuccess(res, {
@@ -46,9 +47,9 @@ const listRecipes = asyncHandler(async (req, res) => {
 
 const getRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
-  const isAdmin = req.auth.role === 'admin';
+  const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
-  const recipe = await recipeService.getRecipeById(recipeId, { isAdmin });
+  const recipe = await recipeService.getRecipeById(recipeId, { isAdmin: canReadAll });
   sendSuccess(res, { recipe: toPublicRecipe(recipe) });
 });
 

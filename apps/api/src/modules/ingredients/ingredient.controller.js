@@ -2,6 +2,7 @@ const ingredientService = require('./ingredient.service');
 const { toPublicIngredient } = require('./ingredient.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
+const { CAPABILITIES, hasCapability } = require('../../shared/security/capabilities');
 
 function toPagination({ page, limit, total }) {
   return { page, limit, total, totalPages: Math.ceil(total / limit) };
@@ -9,7 +10,7 @@ function toPagination({ page, limit, total }) {
 
 const listIngredients = asyncHandler(async (req, res) => {
   const { search, category, allergen, status, page, limit, sort } = req.validated.query;
-  const isAdmin = req.auth.role === 'admin';
+  const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
   const { items, total } = await ingredientService.listIngredients({
     search,
@@ -19,7 +20,7 @@ const listIngredients = asyncHandler(async (req, res) => {
     page,
     limit,
     sort,
-    isAdmin,
+    isAdmin: canReadAll,
   });
 
   sendSuccess(res, {
@@ -30,9 +31,9 @@ const listIngredients = asyncHandler(async (req, res) => {
 
 const getIngredient = asyncHandler(async (req, res) => {
   const { ingredientId } = req.params;
-  const isAdmin = req.auth.role === 'admin';
+  const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
-  const ingredient = await ingredientService.getIngredientById(ingredientId, { isAdmin });
+  const ingredient = await ingredientService.getIngredientById(ingredientId, { isAdmin: canReadAll });
   sendSuccess(res, { ingredient: toPublicIngredient(ingredient) });
 });
 

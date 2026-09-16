@@ -51,7 +51,15 @@ function mockAuth(t, { id, role, sessionId }) {
     userId: id,
     revokedAt: null,
   }));
-  t.mock.method(userRepository, 'findById', async () => ({ _id: id, role, status: 'active' }));
+  // Legacy catalog success fixtures still mint an "admin" token. During the
+  // M19E cutover they intentionally resolve that stale claim to the current
+  // database-authoritative Moderator role.
+  const currentRole = role === 'admin' ? 'moderator' : role;
+  t.mock.method(userRepository, 'findById', async () => ({
+    _id: id,
+    role: currentRole,
+    status: 'active',
+  }));
 }
 
 function tokenFor({ id, role, sessionId }) {
@@ -173,7 +181,7 @@ test('GET /api/v1/substitutions/:id returns 404 for a non-admin when the substit
   assert.equal(response.body.error.code, 'SUBSTITUTION_NOT_FOUND');
 });
 
-test('GET /api/v1/substitutions/:id still allows an admin to inspect it when a referenced ingredient is archived', async (t) => {
+test('GET /api/v1/substitutions/:id allows a moderator to inspect an archived ingredient relationship', async (t) => {
   mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
   t.mock.method(substitutionRepository, 'findByIdWithIngredients', async () =>
     fakeSubstitutionDoc({
@@ -208,7 +216,7 @@ test('POST /api/v1/substitutions is forbidden for a non-admin user', async (t) =
   assert.equal(response.status, 403);
 });
 
-test('POST /api/v1/substitutions creates a substitution for an admin when both ingredients are active', async (t) => {
+test('POST /api/v1/substitutions creates a substitution for a moderator when both ingredients are active', async (t) => {
   mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
   t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id, id === SOURCE_ID ? 'Butter' : 'Olive Oil'));
   // The real repository populates sourceIngredientId/substituteIngredientId
@@ -330,7 +338,7 @@ test('PATCH /api/v1/substitutions/:id is forbidden for a non-admin user', async 
   assert.equal(response.status, 403);
 });
 
-test('PATCH /api/v1/substitutions/:id applies a partial update for an admin', async (t) => {
+test('PATCH /api/v1/substitutions/:id applies a partial update for a moderator', async (t) => {
   mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
   t.mock.method(substitutionRepository, 'findRawById', async () => ({
     _id: SUBSTITUTION_ID,
@@ -376,7 +384,7 @@ test('DELETE /api/v1/substitutions/:id is forbidden for a non-admin user', async
   assert.equal(response.status, 403);
 });
 
-test('DELETE /api/v1/substitutions/:id archives (soft-deletes) for an admin', async (t) => {
+test('DELETE /api/v1/substitutions/:id archives (soft-deletes) for a moderator', async (t) => {
   mockAuth(t, { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID });
   let archivedId;
   t.mock.method(substitutionRepository, 'archiveById', async (id) => {

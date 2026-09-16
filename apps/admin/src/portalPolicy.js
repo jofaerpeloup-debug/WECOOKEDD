@@ -14,6 +14,29 @@ export const MODERATOR_NAVIGATION = Object.freeze([
   'substitutions',
 ]);
 
+const CATALOG_POLICIES = Object.freeze({
+  admin: Object.freeze({
+    canReadCatalog: true,
+    canWriteCatalog: false,
+    canUploadRecipeImage: false,
+  }),
+  moderator: Object.freeze({
+    canReadCatalog: true,
+    canWriteCatalog: true,
+    canUploadRecipeImage: true,
+  }),
+});
+
+const NO_CATALOG_ACCESS = Object.freeze({
+  canReadCatalog: false,
+  canWriteCatalog: false,
+  canUploadRecipeImage: false,
+});
+
+export function getCatalogPolicy(mode) {
+  return CATALOG_POLICIES[mode] || NO_CATALOG_ACCESS;
+}
+
 export function getPortalDestination(mode) {
   switch (mode) {
     case 'admin': return 'admin';

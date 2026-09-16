@@ -2,6 +2,7 @@ const substitutionService = require('./substitution.service');
 const { toPublicSubstitution } = require('./substitution.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
+const { CAPABILITIES, hasCapability } = require('../../shared/security/capabilities');
 
 function toPagination({ page, limit, total }) {
   return { page, limit, total, totalPages: Math.ceil(total / limit) };
@@ -10,7 +11,7 @@ function toPagination({ page, limit, total }) {
 const listSubstitutions = asyncHandler(async (req, res) => {
   const { sourceIngredientId, substituteIngredientId, context, status, page, limit, sort } =
     req.validated.query;
-  const isAdmin = req.auth.role === 'admin';
+  const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
   const { items, total } = await substitutionService.listSubstitutions({
     sourceIngredientId,
@@ -20,7 +21,7 @@ const listSubstitutions = asyncHandler(async (req, res) => {
     page,
     limit,
     sort,
-    isAdmin,
+    isAdmin: canReadAll,
   });
 
   sendSuccess(res, {
@@ -31,9 +32,11 @@ const listSubstitutions = asyncHandler(async (req, res) => {
 
 const getSubstitution = asyncHandler(async (req, res) => {
   const { substitutionId } = req.params;
-  const isAdmin = req.auth.role === 'admin';
+  const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
-  const substitution = await substitutionService.getSubstitutionById(substitutionId, { isAdmin });
+  const substitution = await substitutionService.getSubstitutionById(substitutionId, {
+    isAdmin: canReadAll,
+  });
   sendSuccess(res, { substitution: toPublicSubstitution(substitution) });
 });
 

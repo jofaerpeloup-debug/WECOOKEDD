@@ -351,7 +351,7 @@ function useSubstitutions() {
 // ---------------------------------------------------------------------------
 // Tab
 // ---------------------------------------------------------------------------
-export default function SubstitutionsTab() {
+export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) {
   const {
     filters, patchFilters, items, pagination, loading, error,
     reload, create, update, archive, restore,
@@ -377,6 +377,7 @@ export default function SubstitutionsTab() {
     try {
       await action();
     } catch (err) {
+      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       setRowError({ id, message: toMessage(err) });
     } finally {
       setBusyRowId(null);
@@ -531,6 +532,7 @@ export default function SubstitutionsTab() {
       <div className="wc-topbar">
         <h1>Substitutions</h1>
         <div className="wc-topbar-actions wc-sub-filters">
+          {!canWrite && <span className="wc-pill active">Read-only</span>}
           <IngredientPicker
             value={filters.source}
             onChange={(v) => patchFilters({ source: v })}
@@ -574,9 +576,11 @@ export default function SubstitutionsTab() {
               <option key={s.value} value={s.value}>{s.label}</option>
             ))}
           </select>
-          <button className="wc-btn-primary" onClick={() => setModal('new')}>
-            <Plus size={16} /> Add substitution
-          </button>
+          {canWrite && (
+            <button className="wc-btn-primary" onClick={() => setModal('new')}>
+              <Plus size={16} /> Add substitution
+            </button>
+          )}
         </div>
       </div>
 
@@ -603,7 +607,9 @@ export default function SubstitutionsTab() {
               <div>
                 {hasFilters
                   ? 'No substitutions match these filters.'
-                  : 'No substitutions yet. Add one to describe how an ingredient can be swapped.'}
+                  : canWrite
+                    ? 'No substitutions yet. Add one to describe how an ingredient can be swapped.'
+                    : 'No substitutions are currently available.'}
               </div>
             </div>
           ) : (
@@ -645,7 +651,7 @@ export default function SubstitutionsTab() {
                       </span>
                     </td>
                     <td>
-                      {rowError && rowError.id === sub.id ? (
+                      {!canWrite ? null : rowError && rowError.id === sub.id ? (
                         <div className="wc-confirm-row">
                           <span style={{ color: 'var(--clay)' }}>{rowError.message}</span>
                           <button className="wc-confirm-no" onClick={() => setRowError(null)}>
@@ -739,11 +745,12 @@ export default function SubstitutionsTab() {
         </div>
       )}
 
-      {modal && (
+      {canWrite && modal && (
         <SubstitutionModal
           substitution={modal === 'new' ? null : modal}
           onClose={() => setModal(null)}
           onSubmit={handleSubmit}
+          onAuthorityLost={onAuthorityLost}
         />
       )}
     </div>
@@ -753,7 +760,7 @@ export default function SubstitutionsTab() {
 // ---------------------------------------------------------------------------
 // Create / edit modal
 // ---------------------------------------------------------------------------
-function SubstitutionModal({ substitution, onClose, onSubmit }) {
+function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost }) {
   const editing = Boolean(substitution);
 
   const [form, setForm] = useState(() => ({
@@ -856,6 +863,7 @@ function SubstitutionModal({ substitution, onClose, onSubmit }) {
       await onSubmit(payload);
       onClose();
     } catch (err) {
+      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       if (err instanceof ApiError && err.isValidationError) {
         setFieldErrors(fieldErrorsFromDetails(err.details));
         setFormError('Please fix the highlighted fields.');

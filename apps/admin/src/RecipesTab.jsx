@@ -274,7 +274,11 @@ function useRecipes() {
 // ---------------------------------------------------------------------------
 // Tab
 // ---------------------------------------------------------------------------
-export default function RecipesTab() {
+export default function RecipesTab({
+  canWrite = false,
+  canUploadRecipeImage = false,
+  onAuthorityLost,
+}) {
   const {
     filters, patchFilters, items, pagination, loading, error,
     reload, create, update, archive, restore,
@@ -302,6 +306,7 @@ export default function RecipesTab() {
     try {
       await action();
     } catch (err) {
+      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       setRowError({ id, message: toMessage(err) });
     } finally {
       rowBusyRef.current = false;
@@ -493,6 +498,7 @@ export default function RecipesTab() {
       <div className="wc-topbar">
         <h1>Recipes</h1>
         <div className="wc-topbar-actions wc-rcp-filters">
+          {!canWrite && <span className="wc-pill active">Read-only</span>}
           <div className="wc-search">
             <Search size={15} />
             <input
@@ -567,9 +573,11 @@ export default function RecipesTab() {
           >
             {RECIPE_SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
-          <button className="wc-btn-primary" onClick={() => setModal('new')}>
-            <Plus size={16} /> Add recipe
-          </button>
+          {canWrite && (
+            <button className="wc-btn-primary" onClick={() => setModal('new')}>
+              <Plus size={16} /> Add recipe
+            </button>
+          )}
         </div>
       </div>
 
@@ -596,7 +604,9 @@ export default function RecipesTab() {
               <div>
                 {hasFilters
                   ? 'No recipes match these filters.'
-                  : 'No recipes yet. Add one to build the catalog.'}
+                  : canWrite
+                    ? 'No recipes yet. Add one to build the catalog.'
+                    : 'No recipes are currently available.'}
               </div>
             </div>
           ) : (
@@ -642,7 +652,7 @@ export default function RecipesTab() {
                       </span>
                     </td>
                     <td>
-                      {rowError && rowError.id === r.id ? (
+                      {!canWrite ? null : rowError && rowError.id === r.id ? (
                         <div className="wc-confirm-row">
                           <span style={{ color: 'var(--clay)' }}>{rowError.message}</span>
                           <button className="wc-confirm-no" onClick={() => setRowError(null)}>
@@ -736,11 +746,13 @@ export default function RecipesTab() {
         </div>
       )}
 
-      {modal && (
+      {canWrite && modal && (
         <RecipeModal
           recipe={modal === 'new' ? null : modal}
           onClose={() => setModal(null)}
           onSubmit={handleSubmit}
+          canUploadRecipeImage={canUploadRecipeImage}
+          onAuthorityLost={onAuthorityLost}
         />
       )}
     </div>
@@ -750,7 +762,7 @@ export default function RecipesTab() {
 // ---------------------------------------------------------------------------
 // Create / edit modal
 // ---------------------------------------------------------------------------
-function RecipeModal({ recipe, onClose, onSubmit }) {
+function RecipeModal({ recipe, onClose, onSubmit, canUploadRecipeImage, onAuthorityLost }) {
   const editing = Boolean(recipe);
 
   const [form, setForm] = useState(() => ({
@@ -1064,7 +1076,7 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
     setSaving(true);
     try {
       let resolvedUpload = uploadedImage;
-      if (imageMode === 'upload' && selectedFile && !resolvedUpload) {
+      if (canUploadRecipeImage && imageMode === 'upload' && selectedFile && !resolvedUpload) {
         setSavePhase('uploading');
         resolvedUpload = await uploadRecipeImage(selectedFile);
         // Persist this result before attempting the recipe mutation. If that
@@ -1081,6 +1093,7 @@ function RecipeModal({ recipe, onClose, onSubmit }) {
       await onSubmit(payload);
       onClose();
     } catch (err) {
+      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       if (
         err instanceof ApiError &&
         (err.code.startsWith('IMAGE_') || err.code === 'UPLOADS_NOT_CONFIGURED')
