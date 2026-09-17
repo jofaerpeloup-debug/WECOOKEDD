@@ -611,6 +611,55 @@ test('PATCH /api/v1/recipes/:id clears category with an explicit null and the se
   assert.equal(response.body.data.recipe.region, 'central-luzon');
 });
 
+test('PATCH /api/v1/recipes/:id clears Draft-optional scalars with $unset and keeps expectedUpdatedAt', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const updatedAt = new Date('2026-09-17T02:00:00.000Z');
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...validCreatePayload(),
+    _id: RECIPE_ID,
+    publicationStatus: 'draft',
+    isActive: true,
+    updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+  let captured;
+  t.mock.method(recipeRepository, 'updateById', async (id, update, options) => {
+    captured = { update, options };
+    return fakeRecipeDoc({ publicationStatus: 'draft', description: undefined, prepTimeMinutes: undefined });
+  });
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ description: null, prepTimeMinutes: null, expectedUpdatedAt: updatedAt.toISOString() });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(captured.update.$unset, { description: '', prepTimeMinutes: '' });
+  assert.equal(captured.options.expectedUpdatedAt, updatedAt.toISOString());
+  assert.equal(response.body.data.recipe.description, undefined);
+});
+
+test('PATCH /api/v1/recipes/:id rejects a Published required-scalar null clear', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...validCreatePayload(),
+    _id: RECIPE_ID,
+    publicationStatus: 'published',
+    isActive: true,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ servings: null });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'RECIPE_INCOMPLETE');
+});
+
 test('PATCH /api/v1/recipes/:id rejects an empty-string region (clear requires null)', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
