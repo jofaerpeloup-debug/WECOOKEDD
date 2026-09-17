@@ -448,7 +448,10 @@ async function updateRecipe(id, patch, { actorId } = {}) {
   // an optional slug field clears it (see recipe.validation.js).
   const unset = {};
   if (patch.title !== undefined) update.title = collapseWhitespace(patch.title);
-  if (patch.description !== undefined) update.description = patch.description.trim();
+  if (patch.description !== undefined) {
+    if (patch.description === null) unset.description = '';
+    else update.description = patch.description.trim();
+  }
   if (patch.region !== undefined) {
     if (patch.region === null) unset.region = '';
     else update.region = patch.region;
@@ -457,10 +460,12 @@ async function updateRecipe(id, patch, { actorId } = {}) {
     if (patch.category === null) unset.category = '';
     else update.category = patch.category;
   }
-  if (patch.difficulty !== undefined) update.difficulty = patch.difficulty;
-  if (patch.prepTimeMinutes !== undefined) update.prepTimeMinutes = patch.prepTimeMinutes;
-  if (patch.cookTimeMinutes !== undefined) update.cookTimeMinutes = patch.cookTimeMinutes;
-  if (patch.servings !== undefined) update.servings = patch.servings;
+  for (const field of ['difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']) {
+    if (patch[field] !== undefined) {
+      if (patch[field] === null) unset[field] = '';
+      else update[field] = patch[field];
+    }
+  }
   if (patch.instructions !== undefined || patch.steps !== undefined) {
     update.instructions = toInstructionsList({ instructions: patch.instructions, steps: patch.steps });
   }
@@ -517,6 +522,14 @@ async function updateRecipe(id, patch, { actorId } = {}) {
       merged.instructions.length === 0
     ) {
       throw incompleteRecipeError([{ path: ['instructions'], message: 'At least one instruction step is required.' }]);
+    }
+    const clearedRequiredField = ['description', 'difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']
+      .find((field) => patch[field] === null);
+    if (clearedRequiredField) {
+      throw incompleteRecipeError([{
+        path: [clearedRequiredField],
+        message: `${clearedRequiredField} is required for a Published recipe.`,
+      }]);
     }
   }
 

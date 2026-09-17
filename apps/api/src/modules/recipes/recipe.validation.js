@@ -359,16 +359,20 @@ const updateRecipeSchema = z.object({
   body: z
     .object({
       title: titleSchema.optional(),
-      description: descriptionSchema.optional(),
+      // Draft-optional scalar fields use an explicit nullable PATCH contract:
+      // omitted means unchanged, null means intentionally unset, and a
+      // concrete value replaces the stored value. The service enforces the
+      // effective publication state's completeness after merging.
+      description: descriptionSchema.nullable().optional(),
       // On PATCH, an explicit `null` clears (unsets) the field — the only way
       // to correct a bad classification. A valid slug replaces it; an empty
       // string or non-slug is still rejected (never silently unset).
       region: slugFieldSchema.nullable().optional(),
       category: slugFieldSchema.nullable().optional(),
-      difficulty: difficultySchema.optional(),
-      prepTimeMinutes: prepTimeMinutesSchema.optional(),
-      cookTimeMinutes: cookTimeMinutesSchema.optional(),
-      servings: servingsSchema.optional(),
+      difficulty: difficultySchema.nullable().optional(),
+      prepTimeMinutes: prepTimeMinutesSchema.nullable().optional(),
+      cookTimeMinutes: cookTimeMinutesSchema.nullable().optional(),
+      servings: servingsSchema.nullable().optional(),
       ingredients: draftIngredientsArraySchema.optional(),
       instructions: draftInstructionsArraySchema.optional(),
       steps: draftStepsArraySchema.optional(),

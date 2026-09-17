@@ -93,6 +93,23 @@ test('generic PATCH rejects lifecycle and server-owned attribution mass assignme
   );
 });
 
+test('PATCH validation strictly permits null only for Draft-optional scalar clears', () => {
+  const params = { recipeId: RECIPE_ID };
+  for (const field of ['description', 'difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']) {
+    assert.equal(updateRecipeSchema.safeParse({ params, body: { [field]: null } }).success, true, field);
+  }
+  for (const [field, value] of [
+    ['title', null],
+    ['ingredients', null],
+    ['instructions', null],
+    ['dietaryTags', null],
+    ['publicationStatus', null],
+    ['updatedBy', null],
+  ]) {
+    assert.equal(updateRecipeSchema.safeParse({ params, body: { [field]: value } }).success, false, field);
+  }
+});
+
 test('publish validation requires explicit Filipino-cuisine confirmation', () => {
   const params = { recipeId: RECIPE_ID };
   assert.equal(publishRecipeSchema.safeParse({ params, body: {} }).success, false);
@@ -259,6 +276,46 @@ test('Draft partial edits may remain incomplete; Published edits may not empty r
     () => recipeService.updateRecipe(RECIPE_ID, { instructions: [] }, { actorId: MODERATOR_ID }),
     { code: 'RECIPE_INCOMPLETE' }
   );
+});
+
+test('Draft null clears become whitelisted $unset operations and retain the concurrency token', async (t) => {
+  const existing = fullRecipe();
+  let mutation;
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(recipeRepository, 'updateById', async (id, update, options) => {
+    mutation = { id, update, options };
+    return populated({ ...existing, description: undefined, difficulty: undefined });
+  });
+
+  await recipeService.updateRecipe(RECIPE_ID, {
+    description: null,
+    difficulty: null,
+    expectedUpdatedAt: UPDATED_AT.toISOString(),
+  }, { actorId: MODERATOR_ID });
+
+  assert.deepEqual(mutation.update.$unset, { description: '', difficulty: '' });
+  assert.equal(mutation.update.$set.updatedBy, MODERATOR_ID);
+  assert.equal(mutation.options.expectedUpdatedAt, UPDATED_AT.toISOString());
+});
+
+test('Published and effective legacy-Published recipes reject required scalar null clears', async (t) => {
+  let existing = fullRecipe({ publicationStatus: 'published' });
+  let updates = 0;
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(recipeRepository, 'updateById', async () => { updates += 1; return existing; });
+
+  await assert.rejects(
+    () => recipeService.updateRecipe(RECIPE_ID, { description: null }, { actorId: MODERATOR_ID }),
+    { code: 'RECIPE_INCOMPLETE' }
+  );
+
+  existing = fullRecipe();
+  delete existing.publicationStatus;
+  await assert.rejects(
+    () => recipeService.updateRecipe(RECIPE_ID, { servings: null }, { actorId: MODERATOR_ID }),
+    { code: 'RECIPE_INCOMPLETE' }
+  );
+  assert.equal(updates, 0);
 });
 
 test('archive preserves publication state and Draft restore does not require publish completeness', async (t) => {
