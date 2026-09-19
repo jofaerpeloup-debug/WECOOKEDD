@@ -41,7 +41,7 @@ async function attemptIngredientsUpdate(ingredients) {
     await Recipe.findByIdAndUpdate(
       RECIPE_ID,
       { $set: { ingredients } },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
     return null;
   } catch (err) {
@@ -88,7 +88,7 @@ async function attemptUnset(field) {
     await Recipe.findByIdAndUpdate(
       RECIPE_ID,
       { $unset: { [field]: '' } },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     );
     return null;
   } catch (err) {

@@ -34,7 +34,7 @@ function mutationFilter(id, expectedUpdatedAt) {
 function updateById(id, update, { expectedUpdatedAt } = {}) {
   return withIngredientSummaries(
     Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), update, {
-      new: true,
+      returnDocument: 'after',
       runValidators: true,
     })
   );
@@ -56,7 +56,7 @@ function publishById(id, { actorId, publishedAt, expectedUpdatedAt }) {
           updatedBy: actorId,
         },
       },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     )
   );
 }
@@ -65,7 +65,7 @@ function archiveById(id, { actorId, expectedUpdatedAt } = {}) {
   const update = { isActive: false };
   if (actorId) update.updatedBy = actorId;
   return withIngredientSummaries(
-    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), { $set: update }, { new: true })
+    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), { $set: update }, { returnDocument: 'after' })
   );
 }
 
@@ -73,7 +73,7 @@ function restoreById(id, { actorId, expectedUpdatedAt } = {}) {
   const update = { isActive: true };
   if (actorId) update.updatedBy = actorId;
   return withIngredientSummaries(
-    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), { $set: update }, { new: true })
+    Recipe.findOneAndUpdate(mutationFilter(id, expectedUpdatedAt), { $set: update }, { returnDocument: 'after' })
   );
 }
 
