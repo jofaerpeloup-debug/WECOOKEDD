@@ -10,6 +10,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "node --test",
+    "audit:catalog": "node scripts/audit-catalog-consistency.js",
     "migrate:auth-identities": "node scripts/migrate-auth-identities.js"
   },
   "dependencies": {
