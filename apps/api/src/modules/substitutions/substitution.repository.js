@@ -50,6 +50,17 @@ function countByFilter(filter) {
   return Substitution.countDocuments(filter);
 }
 
+async function hasActiveSubstitutionUsingIngredient(ingredientId) {
+  const match = await Substitution.exists({
+    isActive: true,
+    $or: [
+      { sourceIngredientId: ingredientId },
+      { substituteIngredientId: ingredientId },
+    ],
+  });
+  return Boolean(match);
+}
+
 module.exports = {
   createSubstitution,
   findRawById,
@@ -58,4 +69,5 @@ module.exports = {
   archiveById,
   findMany,
   countByFilter,
+  hasActiveSubstitutionUsingIngredient,
 };

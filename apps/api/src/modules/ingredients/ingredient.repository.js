@@ -12,8 +12,12 @@ function updateById(id, update) {
   return Ingredient.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 }
 
-function archiveById(id) {
-  return Ingredient.findByIdAndUpdate(id, { $set: { isActive: false } }, { returnDocument: 'after' });
+function updateByIdIfActiveState(id, expectedIsActive, update, { runValidators = true } = {}) {
+  return Ingredient.findOneAndUpdate(
+    { _id: id, isActive: expectedIsActive },
+    update,
+    { returnDocument: 'after', runValidators }
+  );
 }
 
 function findMany({ filter, sort, skip, limit }) {
@@ -28,7 +32,7 @@ module.exports = {
   createIngredient,
   findById,
   updateById,
-  archiveById,
+  updateByIdIfActiveState,
   findMany,
   countByFilter,
 };

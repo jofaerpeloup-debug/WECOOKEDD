@@ -13,6 +13,10 @@ for the authentication/session system it depends on.
 - `src/modules/ingredients/` — the `Ingredient` model plus a repository/
   service/controller/routes/serializer/validation set for canonical
   ingredient data.
+- `ingredient-dependency.guard.js` coordinates the M22 service policy through
+  narrow read-only Recipe and Substitution repository existence checks; it
+  does not depend on either module's service and therefore adds no service
+  cycle.
 - `src/modules/substitutions/` — the `Substitution` model plus the same
   layer set for directed source → substitute relationships between two
   ingredients.
@@ -51,7 +55,7 @@ rather than an array embedded in `Ingredient`.
   in JSON.
 - `allergenTags` — array constrained to a fixed V1 enum of major allergens
   (`milk`, `egg`, `fish`, `shellfish`, `treeNut`, `peanut`, `wheat`, `soy`,
-  `sesame`), default `[]`. **Never inferred automatically** — an admin
+  `sesame`), default `[]`. **Never inferred automatically** — a moderator
   supplies these explicitly.
 - `isActive` — boolean, default `true`. See Archive semantics below.
 - `createdAt` / `updatedAt` — via `{ timestamps: true }`.
@@ -122,9 +126,9 @@ patching just one side of an existing pair can only be checked against the
 ```
 GET    /api/v1/ingredients            authenticated (any role)
 GET    /api/v1/ingredients/:id        authenticated (any role)
-POST   /api/v1/ingredients            admin only
-PATCH  /api/v1/ingredients/:id        admin only
-DELETE /api/v1/ingredients/:id        admin only (archives, does not delete)
+POST   /api/v1/ingredients            catalog.write (Moderator)
+PATCH  /api/v1/ingredients/:id        catalog.write (Moderator)
+DELETE /api/v1/ingredients/:id        catalog.write (Moderator; archives)
 ```
 
 List query params: `search`, `category`, `allergen`, `status`, `page`,
@@ -144,9 +148,9 @@ choice — no Atlas Search, Elasticsearch, or fuzzy-search library.
 ```
 GET    /api/v1/substitutions          authenticated (any role)
 GET    /api/v1/substitutions/:id      authenticated (any role)
-POST   /api/v1/substitutions          admin only
-PATCH  /api/v1/substitutions/:id      admin only
-DELETE /api/v1/substitutions/:id      admin only (archives, does not delete)
+POST   /api/v1/substitutions          catalog.write (Moderator)
+PATCH  /api/v1/substitutions/:id      catalog.write (Moderator)
+DELETE /api/v1/substitutions/:id      catalog.write (Moderator; archives)
 ```
 
 List query params: `sourceIngredientId`, `substituteIngredientId`,
@@ -160,16 +164,20 @@ described below.
 - Every Phase 3 endpoint requires authentication (`authenticate` middleware,
   same as every other module).
 - All mutation endpoints (`POST`/`PATCH`/`DELETE`, both modules) additionally
-  require `authorize('admin')`. Role comes from `req.auth.role`, which
+  require the server-side `catalog.write` capability. Moderator owns
+  `catalog.write`; Admin has `catalog.read_all` but not `catalog.write`, and
+  User has neither. Role still comes from `req.auth.role`, which
   `authenticate` resolves from the current MongoDB user record — a
-  client-supplied role is never trusted.
+  client-supplied or stale-token role is never trusted.
 - `status=inactive` and `status=all` on either list endpoint are rejected
-  with `403 FORBIDDEN` for a non-admin caller, enforced in the service layer
+  with `403 FORBIDDEN` for a User. Moderator and Admin have
+  `catalog.read_all`; this remains enforced in the service layer
   (`ingredient.service.js#listIngredients`,
   `substitution.service.js#listSubstitutions`) rather than only at the
   route, since it depends on both the caller's role and the requested
   query.
-- A non-admin `GET`-by-id for an archived ingredient or substitution returns
+- A caller without `catalog.read_all` gets a `GET`-by-id 404 for an archived
+  ingredient or substitution, returning
   a plain `404`, identical to a genuinely unknown id — never a distinguishing
   error that would confirm an archived record once existed.
 
@@ -178,39 +186,84 @@ described below.
 Both `Ingredient` and `Substitution` use soft-delete via `isActive`, not
 physical deletion:
 
-- `DELETE` always sets `isActive: false` (`archiveById` in each repository)
-  and never removes the document.
+- Ingredient `DELETE` represents soft deletion by setting `isActive: false`;
+  it never removes the document. The service performs dependency validation
+  when the observed state is active, and the final repository update is
+  conditional on that observed `isActive` state. A state change causes a
+  reread and reevaluation; repeated contention fails safely instead of
+  falling back to an unconditional deactivation.
+- Substitution `DELETE` sets `isActive: false` through its repository
+  `archiveById` operation and never removes the document.
+- Ingredient has two supported deactivation paths: `DELETE
+  /api/v1/ingredients/:ingredientId` and `PATCH` of that resource with
+  `isActive: false`. Both use the same service-layer guard for an actual
+  active-to-inactive transition.
 - `PATCH` can set `isActive: true` to reactivate. Reactivating a
   `Substitution` additionally re-validates that **both** referenced
   ingredients are currently active — including the side not being changed
   in that particular patch — before allowing it, so a reactivated
   relationship can never point at an archived ingredient.
 
-### Cross-module archive behavior (deliberate V1 simplification)
+### Ingredient deactivation dependency guard
 
-Archiving an `Ingredient` does **not** cascade to touch every `Substitution`
-document that references it — no transactions, no batch updates, no
-cross-module write coupling. Instead, visibility is filtered at read time:
+An active Ingredient cannot be deactivated while it is referenced by
+consumer-relevant active catalog content. The request-time guard checks for:
 
-- `SubstitutionService` treats a substitution as "usable" for a non-admin
-  view only when the relationship itself is active **and** both the
-  populated source and substitute ingredients are active
+- an active Recipe whose `publicationStatus` is `published`;
+- an active legacy Recipe with no `publicationStatus`, which retains
+  Published consumer semantics; or
+- an active Substitution where the Ingredient is either
+  `sourceIngredientId` or `substituteIngredientId`.
+
+Every matching Recipe usage blocks, including `optional: true`. Active Draft
+Recipes, archived Published or Draft Recipes, archived Substitutions, and
+Shopping List items do not block. Shopping List references remain user-owned
+history under their existing unavailable-item behavior.
+
+The guard does not archive, unpublish, delete, or rewrite dependent Recipe,
+Substitution, or Shopping List documents. Existing Recipe publish and
+Published-restore validation, plus Substitution create/reactivation
+validation, remain authoritative for Draft or archived content. A rejected
+PATCH is checked before its Ingredient mutation, so other fields in the same
+request are not partially applied.
+
+This safeguard is a request-time precheck, not strict cross-collection
+referential integrity. A concurrent Recipe publish or Substitution
+create/reactivation can occur between dependency reads and Ingredient
+mutation. M22 adds no transactions, locks, version protocol, or cross-module
+serialization. Existing fail-closed Recipe/Substitution consumer reads remain
+the safety net for that known race.
+
+### Consumer fail-closed behavior
+
+Deactivating an `Ingredient` does **not** cascade to dependent Recipe,
+Substitution, or Shopping List documents. If an inconsistent relationship
+exists despite the request-time guard, visibility still fails closed at read
+time:
+
+- Recipe consumer reads hide active Published/legacy recipes with an
+  inactive required Ingredient. An inactive optional Ingredient usage is
+  omitted while the otherwise-usable Recipe remains visible.
+- `SubstitutionService` treats a substitution as "usable" for a caller
+  without `catalog.read_all` only when the relationship itself is active
+  **and** both the populated source and substitute ingredients are active
   (`substitution.service.js#isUsableForNonAdmin`). A populated ref that
   fails to resolve (`null`) is treated the same as inactive.
-- `GET /substitutions/:id` applies this check for any non-admin caller: if
-  the substitution itself is archived, **or** either referenced ingredient
-  is archived (or fails to populate at all), the response is `404
+- `GET /substitutions/:id` applies this check for a caller without
+  `catalog.read_all`: if the substitution itself is archived, **or** either
+  referenced ingredient is archived (or fails to populate at all), the
+  response is `404
   SUBSTITUTION_NOT_FOUND` — identical to an unknown id. There is no
-  `status` query param on the single-resource endpoint; an admin's request
-  bypasses the check unconditionally, so an admin can always fetch a
+  `status` query param on the single-resource endpoint; a caller with
+  `catalog.read_all` bypasses the check, so Moderator or Admin can fetch a
   substitution by id regardless of its own or its ingredients' `isActive`
-  state, purely on the strength of `req.auth.role === 'admin'`.
+  state for staff inspection.
 - `GET /substitutions` (the list endpoint) applies the same "usable" filter
   to each page of results whenever the effective `status` is `active`
-  (always for non-admins; the default for admins). An admin explicitly
+  (always for Users; the default for staff). A staff caller explicitly
   requesting `status=inactive` or `status=all` sees the raw, unfiltered
   relationships — including ones whose ingredient has since been archived —
-  so admins can actually find and clean these up.
+  so staff can find and clean these up.
 
 **Known limitation (list endpoint only):** because the "usable" filter runs
 in application code *after* the database page is fetched (rather than as a
@@ -265,17 +318,22 @@ added complexity.
 - `{ substituteIngredientId: 1 }` — supports the reverse lookup ("what is
   this ingredient a substitute for?") without a full collection scan.
 
+`Recipe` already has `{ "ingredients.ingredientId": 1 }`, which supports the
+Ingredient dependency lookup. M22 adds no schema migration or new index.
+
 ## Error codes
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| `INGREDIENT_NOT_FOUND` | 404 | No matching ingredient (or hidden from a non-admin caller because it's archived) |
+| `INGREDIENT_NOT_FOUND` | 404 | No matching ingredient (or hidden from a caller without `catalog.read_all` because it is archived) |
 | `INGREDIENT_ALREADY_EXISTS` | 409 | `normalizedName` collision on create/update |
+| `INGREDIENT_HAS_ACTIVE_DEPENDENCIES` | 409 | Active Ingredient deactivation is blocked by an active consumer Recipe and/or Substitution |
+| `INGREDIENT_EDIT_CONFLICT` | 409 | Concurrent Ingredient state/edit conflict; retry using the current Ingredient state |
 | `INGREDIENT_INACTIVE` | 400 | A substitution create/patch referenced an ingredient that exists but is archived |
-| `SUBSTITUTION_NOT_FOUND` | 404 | No matching substitution (or hidden from a non-admin caller) |
+| `SUBSTITUTION_NOT_FOUND` | 404 | No matching substitution (or hidden from a caller without `catalog.read_all`) |
 | `SUBSTITUTION_ALREADY_EXISTS` | 409 | Duplicate ordered `(source, substitute)` pair |
 | `SUBSTITUTION_SAME_INGREDIENT` | 400 | `sourceIngredientId === substituteIngredientId` |
-| `FORBIDDEN` | 403 | Role-based rejection — either a non-admin mutation attempt, or a non-admin requesting `status=inactive`/`all` |
+| `FORBIDDEN` | 403 | Capability rejection — including Admin/User mutations or a User requesting `status=inactive`/`all` |
 | `VALIDATION_ERROR` | 400 | Request shape/type failure at the Zod boundary |
 
 All of the above are raised as `AppError`s and pass through the existing

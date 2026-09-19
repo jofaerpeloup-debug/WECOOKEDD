@@ -13,6 +13,8 @@ const { createApp } = require('../src/app');
 const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
 const ingredientRepository = require('../src/modules/ingredients/ingredient.repository');
+const recipeRepository = require('../src/modules/recipes/recipe.repository');
+const substitutionRepository = require('../src/modules/substitutions/substitution.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -55,6 +57,11 @@ function mockAuth(t, { id, role, sessionId }) {
 
 function tokenFor({ id, role, sessionId }) {
   return signAccessToken({ userId: id, role, sessionId });
+}
+
+function mockDependencies(t, { recipe = false, substitution = false } = {}) {
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => recipe);
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => substitution);
 }
 
 test('GET /api/v1/ingredients without a token is rejected', async () => {
@@ -248,6 +255,45 @@ test('PATCH /api/v1/ingredients/:id applies a partial update for a moderator', a
   assert.equal(response.body.data.ingredient.name, 'Salted Butter');
 });
 
+test('PATCH /api/v1/ingredients/:id keeps isActive=true reactivation supported for a moderator', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'updateById', async (id, update) =>
+    fakeIngredientDoc({ _id: id, isActive: update.$set.isActive })
+  );
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ isActive: true });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.ingredient.isActive, true);
+});
+
+test('PATCH /api/v1/ingredients/:id returns controlled 409 and applies nothing when deactivation is blocked', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findById', async () => fakeIngredientDoc());
+  mockDependencies(t, { recipe: true });
+  let mutationCalled = false;
+  t.mock.method(ingredientRepository, 'updateById', async () => {
+    mutationCalled = true;
+    return null;
+  });
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ name: 'Updated Name', isActive: false });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'INGREDIENT_HAS_ACTIVE_DEPENDENCIES');
+  assert.deepEqual(response.body.error.details, { recipe: true, substitution: false });
+  assert.equal(mutationCalled, false);
+  assert.equal(JSON.stringify(response.body).includes('recipeId'), false);
+});
+
 test('PATCH /api/v1/ingredients/:id renaming into another ingredient\'s normalized name is a stable 409, not a raw Mongo error', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   let capturedUpdate;
@@ -304,9 +350,12 @@ test('DELETE /api/v1/ingredients/:id is forbidden for a normal user', async (t) 
 test('DELETE /api/v1/ingredients/:id archives (soft-deletes) for a moderator', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   let archivedId;
-  t.mock.method(ingredientRepository, 'archiveById', async (id) => {
+  t.mock.method(ingredientRepository, 'findById', async () => fakeIngredientDoc());
+  mockDependencies(t);
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive, update) => {
     archivedId = id;
-    return fakeIngredientDoc({ isActive: false });
+    assert.equal(expectedIsActive, true);
+    return fakeIngredientDoc(update.$set);
   });
 
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
@@ -319,9 +368,31 @@ test('DELETE /api/v1/ingredients/:id archives (soft-deletes) for a moderator', a
   assert.equal(archivedId, INGREDIENT_ID);
 });
 
+test('DELETE /api/v1/ingredients/:id uses the same dependency policy and returns controlled 409', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findById', async () => fakeIngredientDoc());
+  mockDependencies(t, { substitution: true });
+  let mutationCalled = false;
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async () => {
+    mutationCalled = true;
+    return null;
+  });
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .delete(`/api/v1/ingredients/${INGREDIENT_ID}`)
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'INGREDIENT_HAS_ACTIVE_DEPENDENCIES');
+  assert.deepEqual(response.body.error.details, { recipe: false, substitution: true });
+  assert.equal(mutationCalled, false);
+  assert.equal(JSON.stringify(response.body).includes('substitutionId'), false);
+});
+
 test('DELETE /api/v1/ingredients/:id returns 404 for an unknown id', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
-  t.mock.method(ingredientRepository, 'archiveById', async () => null);
+  t.mock.method(ingredientRepository, 'findById', async () => null);
 
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)

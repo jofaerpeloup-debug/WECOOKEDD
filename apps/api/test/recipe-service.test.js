@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
+const Recipe = require('../src/modules/recipes/recipe.model');
 const ingredientService = require('../src/modules/ingredients/ingredient.service');
 const recipeService = require('../src/modules/recipes/recipe.service');
 const { AppError } = require('../src/shared/errors/app-error');
@@ -353,7 +354,36 @@ test('listRecipes builds a filter from region, category, difficulty, dietaryTag,
   assert.equal(capturedFilter.dietaryTags, 'dairyFree');
   assert.equal(capturedFilter['ingredients.ingredientId'], CHICKEN_ID);
   assert.deepEqual(capturedFilter.prepTimeMinutes, { $lte: 30 });
+  assert.deepEqual(capturedFilter.$and, [
+    {
+      $or: [
+        { publicationStatus: 'published' },
+        { publicationStatus: { $exists: false } },
+      ],
+    },
+  ]);
   assert.equal('cuisine' in capturedFilter, false);
+});
+
+test('recipe dependency lookup matches active Published and legacy consumer-visible recipes using any ingredient entry', async (t) => {
+  let capturedFilter;
+  t.mock.method(Recipe, 'exists', async (filter) => {
+    capturedFilter = filter;
+    return { _id: 'recipe1' };
+  });
+
+  const exists = await recipeRepository.hasActiveConsumerRecipeUsingIngredient(CHICKEN_ID);
+
+  assert.equal(exists, true);
+  assert.deepEqual(capturedFilter, {
+    isActive: true,
+    'ingredients.ingredientId': CHICKEN_ID,
+    $or: [
+      { publicationStatus: 'published' },
+      { publicationStatus: { $exists: false } },
+    ],
+  });
+  assert.equal(JSON.stringify(capturedFilter).includes('optional'), false);
 });
 
 test('listRecipes composes a region/category filter with search and count over the same universe', async (t) => {
@@ -717,6 +747,25 @@ test('restoreRecipe rejects restoration when a Published recipe ingredient (even
 
   await assert.rejects(
     () => recipeService.restoreRecipe('recipe1'),
+    (err) => {
+      assert.equal(err.code, 'RECIPE_INGREDIENT_INACTIVE');
+      return true;
+    }
+  );
+});
+
+test('publishRecipe rejects a Draft whose Ingredient was archived while the Draft remained non-blocking', async (t) => {
+  t.mock.method(recipeRepository, 'findRawById', async () => completeStoredRecipe({
+    publicationStatus: 'draft',
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  }));
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => inactiveIngredient(id));
+  t.mock.method(recipeRepository, 'publishById', async () => {
+    assert.fail('A Draft with an inactive Ingredient must not be published.');
+  });
+
+  await assert.rejects(
+    () => recipeService.publishRecipe('recipe1', {}, { actorId: 'moderator1' }),
     (err) => {
       assert.equal(err.code, 'RECIPE_INGREDIENT_INACTIVE');
       return true;

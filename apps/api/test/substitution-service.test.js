@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const substitutionRepository = require('../src/modules/substitutions/substitution.repository');
+const Substitution = require('../src/modules/substitutions/substitution.model');
 const ingredientService = require('../src/modules/ingredients/ingredient.service');
 const substitutionService = require('../src/modules/substitutions/substitution.service');
 const { AppError } = require('../src/shared/errors/app-error');
@@ -24,6 +25,25 @@ function activeIngredient(id, name = 'Ingredient') {
 function inactiveIngredient(id, name = 'Ingredient') {
   return { _id: id, name, isActive: false };
 }
+
+test('substitution dependency lookup matches active source or substitute usage and excludes archived relationships', async (t) => {
+  let capturedFilter;
+  t.mock.method(Substitution, 'exists', async (filter) => {
+    capturedFilter = filter;
+    return { _id: 'sub1' };
+  });
+
+  const exists = await substitutionRepository.hasActiveSubstitutionUsingIngredient(SOURCE_ID);
+
+  assert.equal(exists, true);
+  assert.deepEqual(capturedFilter, {
+    isActive: true,
+    $or: [
+      { sourceIngredientId: SOURCE_ID },
+      { substituteIngredientId: SOURCE_ID },
+    ],
+  });
+});
 
 test('createSubstitution rejects an identical source/substitute id before touching the repository', async () => {
   await assert.rejects(
