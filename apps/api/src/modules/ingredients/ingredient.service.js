@@ -1,7 +1,9 @@
 const ingredientRepository = require('./ingredient.repository');
+const { assertIngredientCanDeactivate } = require('./ingredient-dependency.guard');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
+const MAX_DEACTIVATION_WRITE_ATTEMPTS = 2;
 
 const SORT_MAP = {
   nameAsc: { name: 1 },
@@ -43,6 +45,13 @@ function duplicateNameError() {
 
 function notFoundError() {
   return new AppError('Ingredient not found.', { statusCode: 404, code: 'INGREDIENT_NOT_FOUND' });
+}
+
+function editConflictError() {
+  return new AppError('Ingredient changed while it was being updated. Refresh and try again.', {
+    statusCode: 409,
+    code: 'INGREDIENT_EDIT_CONFLICT',
+  });
 }
 
 function forbiddenStatusError() {
@@ -126,6 +135,37 @@ async function listIngredients({ search, category, allergen, status, page, limit
   return { items, total, page, limit };
 }
 
+async function applyInactiveUpdate(id, update, { runValidators = true } = {}) {
+  let existing = await ingredientRepository.findById(id);
+  if (!existing) {
+    throw notFoundError();
+  }
+
+  for (let attempt = 0; attempt < MAX_DEACTIVATION_WRITE_ATTEMPTS; attempt += 1) {
+    const expectedIsActive = existing.isActive === true;
+    if (expectedIsActive) {
+      await assertIngredientCanDeactivate(id);
+    }
+
+    const updated = await ingredientRepository.updateByIdIfActiveState(
+      id,
+      expectedIsActive,
+      update,
+      { runValidators }
+    );
+    if (updated) {
+      return updated;
+    }
+
+    existing = await ingredientRepository.findById(id);
+    if (!existing) {
+      throw notFoundError();
+    }
+  }
+
+  throw editConflictError();
+}
+
 async function updateIngredient(id, patch) {
   const update = {};
   if (patch.name !== undefined) {
@@ -147,7 +187,9 @@ async function updateIngredient(id, patch) {
   }
 
   try {
-    const updated = await ingredientRepository.updateById(id, { $set: update });
+    const updated = patch.isActive === false
+      ? await applyInactiveUpdate(id, { $set: update })
+      : await ingredientRepository.updateById(id, { $set: update });
     if (!updated) {
       throw notFoundError();
     }
@@ -161,11 +203,11 @@ async function updateIngredient(id, patch) {
 }
 
 async function archiveIngredient(id) {
-  const archived = await ingredientRepository.archiveById(id);
-  if (!archived) {
-    throw notFoundError();
-  }
-  return archived;
+  return applyInactiveUpdate(
+    id,
+    { $set: { isActive: false } },
+    { runValidators: false }
+  );
 }
 
 module.exports = {

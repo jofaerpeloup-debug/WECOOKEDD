@@ -9,8 +9,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const ingredientRepository = require('../src/modules/ingredients/ingredient.repository');
+const Ingredient = require('../src/modules/ingredients/ingredient.model');
+const recipeRepository = require('../src/modules/recipes/recipe.repository');
+const substitutionRepository = require('../src/modules/substitutions/substitution.repository');
 const ingredientService = require('../src/modules/ingredients/ingredient.service');
 const { AppError } = require('../src/shared/errors/app-error');
+
+function mockDependencies(t, { recipe = false, substitution = false } = {}) {
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => recipe);
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => substitution);
+}
 
 test('createIngredient normalizes the name (case/whitespace) and delegates to the repository', async (t) => {
   let capturedArgs;
@@ -93,6 +101,25 @@ test('findIngredientById delegates to the repository and returns null for a miss
   t.mock.method(ingredientRepository, 'findById', async () => null);
   const result = await ingredientService.findIngredientById('missing');
   assert.equal(result, null);
+});
+
+test('updateByIdIfActiveState ties an Ingredient update to the observed isActive value', async (t) => {
+  let captured;
+  t.mock.method(Ingredient, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return { _id: 'ing1', isActive: false };
+  });
+
+  await ingredientRepository.updateByIdIfActiveState(
+    'ing1',
+    true,
+    { $set: { name: 'Updated Name', isActive: false } },
+    { runValidators: true }
+  );
+
+  assert.deepEqual(captured.filter, { _id: 'ing1', isActive: true });
+  assert.deepEqual(captured.update, { $set: { name: 'Updated Name', isActive: false } });
+  assert.deepEqual(captured.options, { returnDocument: 'after', runValidators: true });
 });
 
 test('getIngredientById returns an active ingredient for a non-admin caller', async (t) => {
@@ -369,11 +396,14 @@ test('updateIngredient renaming "Brown Sugar" to a variant of "Caster Sugar" com
   assert.equal(capturedUpdate.$set.normalizedName, 'caster sugar');
 });
 
-test('archiveIngredient sets isActive: false via the repository', async (t) => {
+test('archiveIngredient allows an unused active Ingredient to be archived', async (t) => {
   let archivedId;
-  t.mock.method(ingredientRepository, 'archiveById', async (id) => {
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: true }));
+  mockDependencies(t);
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive, update) => {
     archivedId = id;
-    return { _id: id, isActive: false };
+    assert.equal(expectedIsActive, true);
+    return { _id: id, ...update.$set };
   });
 
   const ingredient = await ingredientService.archiveIngredient('ing1');
@@ -382,7 +412,7 @@ test('archiveIngredient sets isActive: false via the repository', async (t) => {
 });
 
 test('archiveIngredient throws INGREDIENT_NOT_FOUND when no document matches', async (t) => {
-  t.mock.method(ingredientRepository, 'archiveById', async () => null);
+  t.mock.method(ingredientRepository, 'findById', async () => null);
 
   await assert.rejects(
     () => ingredientService.archiveIngredient('missing'),
@@ -391,4 +421,297 @@ test('archiveIngredient throws INGREDIENT_NOT_FOUND when no document matches', a
       return true;
     }
   );
+});
+
+for (const { label, recipe, substitution, details } of [
+  {
+    label: 'an active Published Recipe required usage',
+    recipe: true,
+    substitution: false,
+    details: { recipe: true, substitution: false },
+  },
+  {
+    label: 'an active Published Recipe optional usage',
+    recipe: true,
+    substitution: false,
+    details: { recipe: true, substitution: false },
+  },
+  {
+    label: 'an active legacy consumer-visible Recipe usage',
+    recipe: true,
+    substitution: false,
+    details: { recipe: true, substitution: false },
+  },
+  {
+    label: 'an active Substitution source usage',
+    recipe: false,
+    substitution: true,
+    details: { recipe: false, substitution: true },
+  },
+  {
+    label: 'an active Substitution substitute usage',
+    recipe: false,
+    substitution: true,
+    details: { recipe: false, substitution: true },
+  },
+]) {
+  test(`archiveIngredient rejects ${label} without calling the mutation repository`, async (t) => {
+    t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: true }));
+    mockDependencies(t, { recipe, substitution });
+    let mutationCalled = false;
+    t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async () => {
+      mutationCalled = true;
+      return null;
+    });
+
+    await assert.rejects(
+      () => ingredientService.archiveIngredient('ing1'),
+      (err) => {
+        assert.ok(err instanceof AppError);
+        assert.equal(err.statusCode, 409);
+        assert.equal(err.code, 'INGREDIENT_HAS_ACTIVE_DEPENDENCIES');
+        assert.deepEqual(err.details, details);
+        return true;
+      }
+    );
+    assert.equal(mutationCalled, false);
+  });
+}
+
+for (const label of [
+  'active Draft Recipe-only references',
+  'archived Published Recipe-only references',
+  'archived Draft Recipe-only references',
+  'archived Substitution-only references',
+  'Shopping List history-only references',
+]) {
+  test(`archiveIngredient allows ${label}`, async (t) => {
+    t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: true }));
+    mockDependencies(t);
+    t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive, update) => ({
+      _id: id,
+      ...update.$set,
+    }));
+
+    const ingredient = await ingredientService.archiveIngredient('ing1');
+    assert.equal(ingredient.isActive, false);
+  });
+}
+
+test('archiveIngredient preserves already-inactive behavior without dependency checks', async (t) => {
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: false }));
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => {
+    assert.fail('Recipe dependencies must not be checked for an already-inactive Ingredient.');
+  });
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => {
+    assert.fail('Substitution dependencies must not be checked for an already-inactive Ingredient.');
+  });
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive, update) => {
+    assert.equal(expectedIsActive, false);
+    return { _id: id, ...update.$set };
+  });
+
+  const ingredient = await ingredientService.archiveIngredient('ing1');
+  assert.equal(ingredient.isActive, false);
+});
+
+test('updateIngredient blocks an active-to-inactive PATCH atomically before applying other fields', async (t) => {
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: true }));
+  mockDependencies(t, { recipe: true });
+  let mutationCalled = false;
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async () => {
+    mutationCalled = true;
+    return null;
+  });
+
+  await assert.rejects(
+    () => ingredientService.updateIngredient('ing1', { name: 'Updated Name', isActive: false }),
+    (err) => {
+      assert.equal(err.code, 'INGREDIENT_HAS_ACTIVE_DEPENDENCIES');
+      assert.equal(err.statusCode, 409);
+      return true;
+    }
+  );
+  assert.equal(mutationCalled, false);
+});
+
+test('updateIngredient preserves an already-inactive PATCH without dependency checks', async (t) => {
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: false }));
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => {
+    assert.fail('Recipe dependencies must not be checked for an already-inactive Ingredient.');
+  });
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => {
+    assert.fail('Substitution dependencies must not be checked for an already-inactive Ingredient.');
+  });
+  let capturedUpdate;
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive, update) => {
+    assert.equal(expectedIsActive, false);
+    capturedUpdate = update;
+    return { _id: id, ...update.$set };
+  });
+
+  const ingredient = await ingredientService.updateIngredient('ing1', {
+    name: 'Updated Name',
+    isActive: false,
+  });
+  assert.equal(ingredient.isActive, false);
+  assert.equal(capturedUpdate.$set.name, 'Updated Name');
+});
+
+test('updateIngredient applies one complete active-to-inactive PATCH after both dependency checks pass', async (t) => {
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, isActive: true }));
+  let recipeChecks = 0;
+  let substitutionChecks = 0;
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => {
+    recipeChecks += 1;
+    return false;
+  });
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => {
+    substitutionChecks += 1;
+    return false;
+  });
+  let conditionalWrites = 0;
+  let captured;
+  t.mock.method(
+    ingredientRepository,
+    'updateByIdIfActiveState',
+    async (id, expectedIsActive, update, options) => {
+      conditionalWrites += 1;
+      captured = { id, expectedIsActive, update, options };
+      return { _id: id, ...update.$set };
+    }
+  );
+  t.mock.method(ingredientRepository, 'updateById', async () => {
+    assert.fail('A deactivation PATCH must not fall back to an unconditional update.');
+  });
+
+  const ingredient = await ingredientService.updateIngredient('ing1', {
+    name: 'Updated Name',
+    isActive: false,
+  });
+
+  assert.equal(recipeChecks, 1);
+  assert.equal(substitutionChecks, 1);
+  assert.equal(conditionalWrites, 1);
+  assert.deepEqual(captured, {
+    id: 'ing1',
+    expectedIsActive: true,
+    update: {
+      $set: {
+        name: 'Updated Name',
+        normalizedName: 'updated name',
+        isActive: false,
+      },
+    },
+    options: { runValidators: true },
+  });
+  assert.equal(ingredient.name, 'Updated Name');
+  assert.equal(ingredient.isActive, false);
+});
+
+test('updateIngredient reevaluates dependencies when an inactive observation loses to concurrent reactivation', async (t) => {
+  const observedStates = [false, true];
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({
+    _id: id,
+    isActive: observedStates.shift(),
+  }));
+  let recipeChecks = 0;
+  let substitutionChecks = 0;
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => {
+    recipeChecks += 1;
+    return true;
+  });
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => {
+    substitutionChecks += 1;
+    return false;
+  });
+  let conditionalWrites = 0;
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive) => {
+    conditionalWrites += 1;
+    assert.equal(expectedIsActive, false);
+    return null;
+  });
+  t.mock.method(ingredientRepository, 'updateById', async () => {
+    assert.fail('A lost conditional deactivation must not use an unconditional update.');
+  });
+
+  await assert.rejects(
+    () => ingredientService.updateIngredient('ing1', { name: 'Updated Name', isActive: false }),
+    (err) => {
+      assert.equal(err.code, 'INGREDIENT_HAS_ACTIVE_DEPENDENCIES');
+      return true;
+    }
+  );
+
+  assert.equal(conditionalWrites, 1);
+  assert.equal(recipeChecks, 1);
+  assert.equal(substitutionChecks, 1);
+});
+
+test('archiveIngredient reevaluates dependencies when an inactive observation loses to concurrent reactivation', async (t) => {
+  const observedStates = [false, true];
+  t.mock.method(ingredientRepository, 'findById', async (id) => ({
+    _id: id,
+    isActive: observedStates.shift(),
+  }));
+  let recipeChecks = 0;
+  let substitutionChecks = 0;
+  t.mock.method(recipeRepository, 'hasActiveConsumerRecipeUsingIngredient', async () => {
+    recipeChecks += 1;
+    return false;
+  });
+  t.mock.method(substitutionRepository, 'hasActiveSubstitutionUsingIngredient', async () => {
+    substitutionChecks += 1;
+    return true;
+  });
+  let conditionalWrites = 0;
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async (id, expectedIsActive) => {
+    conditionalWrites += 1;
+    assert.equal(expectedIsActive, false);
+    return null;
+  });
+  t.mock.method(ingredientRepository, 'updateById', async () => {
+    assert.fail('A lost conditional archive must not use an unconditional update.');
+  });
+
+  await assert.rejects(
+    () => ingredientService.archiveIngredient('ing1'),
+    (err) => {
+      assert.equal(err.code, 'INGREDIENT_HAS_ACTIVE_DEPENDENCIES');
+      return true;
+    }
+  );
+
+  assert.equal(conditionalWrites, 1);
+  assert.equal(recipeChecks, 1);
+  assert.equal(substitutionChecks, 1);
+});
+
+test('updateIngredient returns a controlled conflict after bounded conditional-write losses without an unconditional fallback', async (t) => {
+  let reads = 0;
+  t.mock.method(ingredientRepository, 'findById', async (id) => {
+    reads += 1;
+    return { _id: id, isActive: true };
+  });
+  mockDependencies(t);
+  let conditionalWrites = 0;
+  t.mock.method(ingredientRepository, 'updateByIdIfActiveState', async () => {
+    conditionalWrites += 1;
+    return null;
+  });
+  t.mock.method(ingredientRepository, 'updateById', async () => {
+    assert.fail('Repeated CAS loss must not fall back to an unconditional update.');
+  });
+
+  await assert.rejects(
+    () => ingredientService.updateIngredient('ing1', { isActive: false }),
+    (err) => {
+      assert.equal(err.statusCode, 409);
+      assert.equal(err.code, 'INGREDIENT_EDIT_CONFLICT');
+      return true;
+    }
+  );
+
+  assert.equal(conditionalWrites, 2);
+  assert.equal(reads, 3);
 });

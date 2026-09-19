@@ -1,4 +1,5 @@
 const Recipe = require('./recipe.model');
+const { consumerPublicationFilter } = require('./recipe.visibility');
 
 // Only the fields a populated ingredient summary is allowed to expose (see
 // recipe.serializer.js) plus isActive, which the service needs to decide
@@ -85,6 +86,15 @@ function countByFilter(filter) {
   return Recipe.countDocuments(filter);
 }
 
+async function hasActiveConsumerRecipeUsingIngredient(ingredientId) {
+  const match = await Recipe.exists({
+    isActive: true,
+    'ingredients.ingredientId': ingredientId,
+    ...consumerPublicationFilter(),
+  });
+  return Boolean(match);
+}
+
 module.exports = {
   createRecipe,
   findRawById,
@@ -95,4 +105,5 @@ module.exports = {
   restoreById,
   findMany,
   countByFilter,
+  hasActiveConsumerRecipeUsingIngredient,
 };

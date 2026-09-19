@@ -3,6 +3,7 @@ const ingredientService = require('../ingredients/ingredient.service');
 const { AppError } = require('../../shared/errors/app-error');
 const imageProvider = require('../uploads/cloudinary-image.provider');
 const { publishedRecipeBodySchema } = require('./recipe.validation');
+const { consumerPublicationFilter } = require('./recipe.visibility');
 
 const SORT_MAP = {
   titleAsc: { title: 1 },
@@ -402,13 +403,7 @@ async function listRecipes({
   }
 
   if (!isAdmin) {
-    const publicationFilter = {
-      $or: [
-        { publicationStatus: 'published' },
-        { publicationStatus: { $exists: false } },
-      ],
-    };
-    filter.$and = [...(filter.$and || []), publicationFilter];
+    filter.$and = [...(filter.$and || []), consumerPublicationFilter()];
   }
 
   const skip = (page - 1) * limit;
