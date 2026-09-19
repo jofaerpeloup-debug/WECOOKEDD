@@ -99,7 +99,7 @@ test('linkAuthIdentity uses one conditional normal-user update with $push and va
       'authIdentities.provider': { $ne: 'apple' },
     },
     update: { $push: { authIdentities: authIdentity } },
-    options: { new: true, runValidators: true },
+    options: { returnDocument: 'after', runValidators: true },
   });
 });
 
@@ -204,7 +204,7 @@ test('resetPasswordByTokenHash atomically matches, replaces password, and consum
     $set: { passwordHash: 'new-password-hash' },
     $unset: { passwordResetTokenHash: 1, passwordResetExpiresAt: 1 },
   });
-  assert.deepEqual(captured.options, { new: true, projection: { _id: 1 } });
+  assert.deepEqual(captured.options, { returnDocument: 'after', projection: { _id: 1 } });
   assert.equal(User.findOneAndUpdate.mock.callCount(), 1);
 });
 

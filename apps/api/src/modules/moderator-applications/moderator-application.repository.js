@@ -39,7 +39,7 @@ function approvePending(id, { reviewedAt, reviewedBy }) {
         rejectionReason: null,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 
@@ -47,7 +47,7 @@ function rejectPending(id, { reviewedAt, reviewedBy, rejectionReason }) {
   return ModeratorApplication.findOneAndUpdate(
     { _id: id, status: 'pending' },
     { $set: { status: 'rejected', reviewedAt, reviewedBy, rejectionReason } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 
@@ -64,7 +64,7 @@ function rollbackApproval(id, { reviewedAt, reviewedBy }) {
         rejectionReason: null,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 

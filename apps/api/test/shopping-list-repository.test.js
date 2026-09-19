@@ -22,7 +22,7 @@ test('findOrCreateByUserId issues an atomic upsert keyed on userId with an empty
   assert.deepEqual(capturedFilter, { userId: USER_ID });
   assert.deepEqual(capturedUpdate, { $setOnInsert: { userId: USER_ID, items: [] } });
   assert.equal(capturedOptions.upsert, true);
-  assert.equal(capturedOptions.new, true);
+  assert.equal(capturedOptions.returnDocument, 'after');
   assert.equal(result._id, 'list1');
 });
 

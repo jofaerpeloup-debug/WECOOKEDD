@@ -32,13 +32,13 @@ function findByIdWithIngredients(id) {
 
 function updateById(id, update) {
   return withIngredientSummaries(
-    Substitution.findByIdAndUpdate(id, update, { new: true, runValidators: true })
+    Substitution.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
   );
 }
 
 function archiveById(id) {
   return withIngredientSummaries(
-    Substitution.findByIdAndUpdate(id, { $set: { isActive: false } }, { new: true })
+    Substitution.findByIdAndUpdate(id, { $set: { isActive: false } }, { returnDocument: 'after' })
   );
 }
 

@@ -35,7 +35,7 @@ function linkAuthIdentity(userId, authIdentity) {
       'authIdentities.provider': { $ne: authIdentity.provider },
     },
     { $push: { authIdentities: authIdentity } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 
@@ -89,7 +89,7 @@ function promoteEligibleUserToModerator(id) {
       passwordHash: { $exists: true, $type: 'string', $ne: '' },
     },
     { $set: { role: 'moderator' } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 
@@ -97,7 +97,7 @@ function demoteModeratorToUser(id) {
   return User.findOneAndUpdate(
     { _id: id, role: 'moderator' },
     { $set: { role: 'user' } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 
@@ -145,7 +145,7 @@ function resetPasswordByTokenHash({ tokenHash, passwordHash, now }) {
       passwordHash: { $exists: true, $type: 'string', $ne: '' },
     },
     buildPasswordReplacementUpdate(passwordHash),
-    { new: true, projection: { _id: 1 } }
+    { returnDocument: 'after', projection: { _id: 1 } }
   );
 }
 
@@ -204,11 +204,11 @@ function countByFilter(filter) {
   return User.countDocuments(filter);
 }
 
-// runValidators re-checks the role/status enums on write; { new: true }
+// runValidators re-checks the role/status enums on write; returnDocument: 'after'
 // returns the post-update document for the response. Returns null when no
 // document matches the id (e.g. deleted between read and write).
 function updateById(id, update) {
-  return User.findByIdAndUpdate(id, update, { new: true, runValidators: true });
+  return User.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 }
 
 module.exports = {

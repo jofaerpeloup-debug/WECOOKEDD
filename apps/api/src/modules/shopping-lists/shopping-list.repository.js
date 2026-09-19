@@ -24,7 +24,7 @@ async function findOrCreateByUserId(userId) {
     return await ShoppingList.findOneAndUpdate(
       { userId },
       { $setOnInsert: { userId, items: [] } },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
     );
   } catch (err) {
     if (err && err.code === DUPLICATE_KEY_ERROR_CODE) {

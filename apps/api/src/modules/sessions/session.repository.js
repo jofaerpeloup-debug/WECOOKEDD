@@ -26,7 +26,7 @@ function rotateByHash({ currentHash, newHash, now }) {
   return Session.findOneAndUpdate(
     { refreshTokenHash: currentHash, revokedAt: null, expiresAt: { $gt: now } },
     { $set: { refreshTokenHash: newHash, lastUsedAt: now } },
-    { new: true }
+    { returnDocument: 'after' }
   );
 }
 
@@ -34,7 +34,7 @@ function revokeById(id, now) {
   return Session.findOneAndUpdate(
     { _id: id, revokedAt: null },
     { $set: { revokedAt: now } },
-    { new: true }
+    { returnDocument: 'after' }
   );
 }
 

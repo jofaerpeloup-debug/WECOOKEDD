@@ -19,7 +19,7 @@ function updateOwnedById(id, userId, update) {
   return Collection.findOneAndUpdate(
     { _id: id, userId },
     { $set: update },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 }
 
