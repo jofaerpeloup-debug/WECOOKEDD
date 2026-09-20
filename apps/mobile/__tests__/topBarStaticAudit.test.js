@@ -2,10 +2,9 @@
 //
 // The teammate-authoritative Saved entry point (the only navigate('Saved')
 // call anywhere in the teammate app, c1c86ed) is a bookmark icon in the
-// Dashboard header. TopBar is shared by four `mode="brand"` screens
-// (Dashboard/Assistant/IngredientStudio/Discover), so the bookmark is
-// wired as an opt-in `onSavedPress` prop rather than a global addition — only
-// Dashboard passes it. These assertions lock that boundary. The mobile
+// Dashboard header. The bookmark is wired as an opt-in `onSavedPress` prop
+// rather than a global addition, so only Dashboard passes it. These assertions
+// lock that boundary. The mobile
 // workspace has no RN renderer (see jest.config.js), so invariants are
 // encoded as source assertions.
 
@@ -23,6 +22,14 @@ function stripComments(src) {
 
 const raw = read('components/TopBar.js');
 const code = stripComments(raw);
+const brandBranch = code.match(
+  /mode\s*===\s*['"]brand['"]\s*\?\s*\(\s*(<>[\s\S]*?<\/>)\s*\)\s*:\s*\(/
+);
+
+const ingredientStudioNavigation =
+  /navigation\s*\.\s*navigate\s*\(\s*['"]IngredientStudio['"]/;
+const swapHorizontalIcon =
+  /\bname\s*=\s*(?:['"]swap-horizontal['"]|\{\s*['"]swap-horizontal['"]\s*\})/;
 
 describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
   it('accepts an onSavedPress prop, defaulting to nothing', () => {
@@ -43,14 +50,33 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
     expect(bookmarkBlock[0]).not.toMatch(/navigation\.navigate/);
   });
 
-  it('keeps the swap shortcut and makes notification-feed state explicitly unavailable', () => {
-    expect(code).toMatch(/navigation\.navigate\('IngredientStudio'\)/);
-    expect(code).toMatch(/name="swap-horizontal"/);
-    expect(code).toMatch(/onPress=\{pressBell\}/);
-    expect(code).toMatch(/name="notifications-outline"/);
+  it('removes the persistent Substitute Finder from brand mode and keeps notification state explicitly unavailable', () => {
+    expect(brandBranch).not.toBeNull();
+    const brandRegion = brandBranch?.[1] || '';
+
+    // Fail closed: the scoped region is trusted only after proving extraction
+    // reached the Notifications control at the end of the brand action area.
+    expect(brandRegion).toMatch(/\bonPress\s*=\s*\{\s*pressBell\s*\}/);
+    expect(brandRegion).toMatch(
+      /\bname\s*=\s*(?:['"]notifications-outline['"]|\{\s*['"]notifications-outline['"]\s*\})/
+    );
+
+    expect(brandRegion).not.toMatch(ingredientStudioNavigation);
+    expect(brandRegion).not.toMatch(swapHorizontalIcon);
+    expect(brandRegion).toMatch(/\{onSavedPress && \(/);
+    expect(brandRegion).toMatch(/name="bookmark-outline"/);
     expect(code).toMatch(/showBellDot && <View style=\{styles\.bellDot\} \/>/);
     expect(code).toMatch(/showBellDot = false/);
     expect(raw).toMatch(/notifications feed isn&apos;t available yet/i);
+  });
+
+  it('keeps the Notifications control accessible as a labelled button', () => {
+    const notificationControl = code.match(
+      /<Pressable\b(?=[^>]*onPress=\{pressBell\})[^>]*>/
+    );
+    expect(notificationControl).not.toBeNull();
+    expect(notificationControl[0]).toMatch(/accessibilityRole\s*=\s*"button"/);
+    expect(notificationControl[0]).toMatch(/accessibilityLabel\s*=\s*"Notifications"/);
   });
 
   it('holds no auth/session state or navigation reset of its own', () => {
@@ -61,17 +87,7 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
   });
 });
 
-describe('other TopBar callers do not opt in to the Saved control', () => {
-  const OTHER_BRAND_CALLERS = [
-    'screens/DiscoverScreen.js',
-  ];
-
-  it.each(OTHER_BRAND_CALLERS)('%s renders TopBar without onSavedPress', (rel) => {
-    const src = stripComments(read(rel));
-    expect(src).toMatch(/<TopBar mode="brand"\s*\/>/);
-    expect(src).not.toMatch(/onSavedPress/);
-  });
-
+describe('other header contracts remain scoped to their screens', () => {
   it('product-authority screens keep their intended title/back controls', () => {
     const assistant = stripComments(read('screens/AssistantScreen.js'));
     const community = stripComments(read('screens/CommunityScreen.js'));
@@ -86,6 +102,17 @@ describe('other TopBar callers do not opt in to the Saved control', () => {
   it('title mode reserves the back-control space without drawing a back arrow', () => {
     expect(code).toMatch(/disabled=\{mode !== 'back' \|\| !onBack\}/);
     expect(code).toMatch(/\{mode === 'back' && <Ionicons name="arrow-back"/);
+  });
+
+  it('back mode exposes the existing back control as a labelled button', () => {
+    const backControl = code.match(/<Pressable\b(?=[^>]*onPress=\{onBack\})[^>]*>/);
+    expect(backControl).not.toBeNull();
+    expect(backControl[0]).toMatch(
+      /accessibilityRole\s*=\s*\{\s*mode\s*===\s*'back'\s*\?\s*'button'\s*:\s*undefined\s*\}/
+    );
+    expect(backControl[0]).toMatch(
+      /accessibilityLabel\s*=\s*\{\s*mode\s*===\s*'back'\s*\?\s*'Back'\s*:\s*undefined\s*\}/
+    );
   });
 
   it('Profile uses its teammate-local header and is no longer a TopBar consumer', () => {

@@ -40,8 +40,8 @@ import { recipeTimeLabel } from '../utils/recipe';
 //     `{ recipeSource:'api', recipeId, initialRecipe }`; the Dashboard handoff
 //     param `initialFilter` ('all' | 'easy' | 'vegetarian' | 'vegan') is still
 //     consumed on the already-mounted tab.
-//   - the 5-tab shell is untouched: this stays a root tab with the shared
-//     `<TopBar mode="brand">` — no back button, no PlusMenu, no tab-arch port.
+//   - the navigation shell is untouched: this stays a root-stack destination
+//     with the shared `<TopBar mode="back">`; no PlusMenu or tab-arch port.
 //
 // Teammate parts that do not map onto our real model, represented honestly:
 //   - the collapsible multi-group filter panel (Cooking Time / Difficulty /
@@ -317,12 +317,11 @@ export default function DiscoverScreen({ navigation, route }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" />
+      <TopBar mode="back" title="Discover" onBack={() => navigation.goBack()} />
 
       {/* Fixed search / filter header — kept out of the FlatList so the text
           field is never re-mounted by list virtualization. */}
       <View style={styles.header}>
-        <Text style={styles.pageTitle}>Discover</Text>
         <Text style={styles.pageSub}>Search our kitchen, then narrow it down.</Text>
 
         <View style={styles.searchField}>
@@ -403,11 +402,6 @@ function makeStyles(colors, shadow) {
       paddingBottom: spacing.md,
       borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
-    },
-    pageTitle: {
-      fontFamily: typography.display.fontFamily,
-      fontSize: 22,
-      color: colors.ink,
     },
     pageSub: {
       fontFamily: typography.body.fontFamily,

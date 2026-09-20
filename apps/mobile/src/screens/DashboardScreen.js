@@ -37,14 +37,14 @@ import { loadJSON, saveJSON } from '../utils/storage';
 //     `{ recipeSource:'api', recipeId, initialRecipe }`; every Dashboard ->
 //     Discover jump goes through `openDiscover(key)` which ALWAYS passes an
 //     explicit `initialFilter` ('all' for the filter button / "See all"), so
-//     the already-mounted Discover tab never keeps a stale shortcut. No
+//     the Discover screen never keeps a stale shortcut. No
 //     MainTabs replace/reset, no RootNavigator change.
-//   - the header stays our shared `<TopBar mode="brand">` (wordmark + swap
-//     shortcut + bell), with the teammate Dashboard's `bookmark-outline` ->
-//     Saved affordance wired through TopBar's opt-in `onSavedPress` prop —
+//   - the header stays our shared `<TopBar mode="brand">` (wordmark + Saved +
+//     bell), with the teammate Dashboard's `bookmark-outline` affordance wired
+//     through TopBar's opt-in `onSavedPress` prop —
 //     the only teammate-authoritative entry point into Saved/My Collections
-//     (verified: no other teammate screen navigates there). Every other
-//     `mode="brand"` caller does not pass the prop and is unchanged.
+//     (verified: no other teammate screen navigates there). Saved therefore
+//     remains Dashboard-specific rather than automatic in brand mode.
 //
 // Teammate parts that need a backend we don't have yet are represented
 // honestly, never faked:
@@ -254,7 +254,7 @@ export default function DashboardScreen({ navigation }) {
   };
 
   // Every Dashboard -> Discover navigation passes an EXPLICIT filter key so the
-  // already-mounted Discover tab never keeps a stale shortcut. 'all' is a real
+  // Discover screen never keeps a stale shortcut. 'all' is a real
   // DISCOVER_FILTERS key (unfiltered) that Discover's param effect consumes, so
   // "See all" / the filter button reliably clear a previously chosen shortcut.
   const openDiscover = (filterKey) =>
