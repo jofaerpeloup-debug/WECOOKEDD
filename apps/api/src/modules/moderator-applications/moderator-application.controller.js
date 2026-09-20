@@ -33,6 +33,7 @@ const approve = asyncHandler(async (req, res) => {
   const result = await service.approve({
     applicationId: req.params.applicationId,
     reviewedBy: req.auth.userId,
+    actorRole: req.auth.role,
   });
   sendSuccess(res, {
     application: toApplication(result.application),
@@ -44,13 +45,18 @@ const reject = asyncHandler(async (req, res) => {
   const application = await service.reject({
     applicationId: req.params.applicationId,
     reviewedBy: req.auth.userId,
+    actorRole: req.auth.role,
     reason: req.body.reason,
   });
   sendSuccess(res, { application: toApplication(application) });
 });
 
 const demote = asyncHandler(async (req, res) => {
-  const user = await service.demote(req.params.userId);
+  const user = await service.demote({
+    userId: req.params.userId,
+    actorUserId: req.auth.userId,
+    actorRole: req.auth.role,
+  });
   sendSuccess(res, { user: toAdminUserSummary(user) });
 });
 

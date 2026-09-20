@@ -15,6 +15,7 @@ const request = require('supertest');
 const { createApp } = require('../src/app');
 const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
+const auditLogRepository = require('../src/modules/audit/audit-log.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -26,6 +27,10 @@ const USER_SESSION_ID = '507f1f77bcf86cd799439004';
 const TARGET_USER_ID = '507f1f77bcf86cd799439005';
 const TARGET_ADMIN_ID = '507f1f77bcf86cd799439006';
 const MISSING_ID = '507f1f77bcf86cd7994390ee';
+
+test.beforeEach((t) => {
+  t.mock.method(auditLogRepository, 'create', async (event) => event);
+});
 
 const FORBIDDEN_HASH = '$2b$10$FORBIDDENhashFORBIDDENhashFORBIDDENhashFOO';
 
@@ -305,7 +310,7 @@ test('PATCH /api/v1/users/:userId rejects a role-only body with 400 and never wr
   });
   let updated = false;
   let revoked = false;
-  t.mock.method(userRepository, 'updateById', async () => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async () => {
     updated = true;
     return userDoc();
   });
@@ -333,7 +338,7 @@ test('PATCH /api/v1/users/:userId rejects a combined role + status body atomical
   });
   let updated = false;
   let revoked = false;
-  t.mock.method(userRepository, 'updateById', async () => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async () => {
     updated = true;
     return userDoc({ status: 'suspended' });
   });
@@ -359,15 +364,20 @@ test('PATCH /api/v1/users/:userId suspending an active user persists status THEN
     directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
   });
   const order = [];
-  t.mock.method(userRepository, 'updateById', async (id, update) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
     order.push('update');
-    return userDoc({ id, status: update.$set.status });
+    return userDoc({ id, status: desiredStatus });
   });
   let revokedFor;
   t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
     order.push('revoke');
     revokedFor = String(userId);
     return 3;
+  });
+  let auditEvent;
+  auditLogRepository.create.mock.mockImplementation(async (event) => {
+    auditEvent = event;
+    return event;
   });
 
   const res = await request(app)
@@ -381,6 +391,15 @@ test('PATCH /api/v1/users/:userId suspending an active user persists status THEN
   assert.equal(res.body.data.user.role, 'user');
   assert.deepEqual(order, ['update', 'revoke']);
   assert.equal(revokedFor, TARGET_USER_ID);
+  assert.deepEqual(auditEvent, {
+    eventType: 'admin.user.status_changed',
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+    targetType: 'user',
+    targetId: TARGET_USER_ID,
+    outcome: 'success',
+    metadata: { fromStatus: 'active', toStatus: 'suspended' },
+  });
 });
 
 test('PATCH /api/v1/users/:userId reactivating a suspended user revokes sessions BEFORE persisting active', async (t) => {
@@ -389,13 +408,13 @@ test('PATCH /api/v1/users/:userId reactivating a suspended user revokes sessions
     directory: { [TARGET_USER_ID]: userDoc({ status: 'suspended' }) },
   });
   const order = [];
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserCreatedBy', async () => {
     order.push('revoke');
     return 2;
   });
-  t.mock.method(userRepository, 'updateById', async (id, update) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
     order.push('update');
-    return userDoc({ id, status: update.$set.status });
+    return userDoc({ id, status: desiredStatus });
   });
 
   const res = await request(app)
@@ -414,11 +433,11 @@ test('PATCH /api/v1/users/:userId reactivation is aborted (user stays suspended)
     directory: { [TARGET_USER_ID]: userDoc({ status: 'suspended' }) },
   });
   let updateCalled = false;
-  t.mock.method(userRepository, 'updateById', async () => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async () => {
     updateCalled = true;
     return userDoc({ status: 'active' });
   });
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserCreatedBy', async () => {
     throw new Error('session store unavailable');
   });
 
@@ -433,15 +452,15 @@ test('PATCH /api/v1/users/:userId reactivation is aborted (user stays suspended)
   assert.equal(updateCalled, false);
 });
 
-test('PATCH /api/v1/users/:userId applies a status-only change and $sets nothing but status', async (t) => {
+test('PATCH /api/v1/users/:userId passes only expected and desired status to the CAS write', async (t) => {
   mockContext(t, {
     caller: adminDoc(),
     directory: { [TARGET_ADMIN_ID]: userDoc({ id: TARGET_ADMIN_ID, role: 'admin', status: 'active' }) },
   });
-  let capturedSet;
-  t.mock.method(userRepository, 'updateById', async (id, update) => {
-    capturedSet = update.$set;
-    return userDoc({ id, role: 'admin', status: update.$set.status });
+  let capturedWrite;
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+    capturedWrite = { expectedStatus, desiredStatus };
+    return userDoc({ id, role: 'admin', status: desiredStatus });
   });
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
 
@@ -451,7 +470,7 @@ test('PATCH /api/v1/users/:userId applies a status-only change and $sets nothing
     .send({ status: 'suspended' });
 
   assert.equal(res.status, 200);
-  assert.deepEqual(capturedSet, { status: 'suspended' });
+  assert.deepEqual(capturedWrite, { expectedStatus: 'active', desiredStatus: 'suspended' });
   // The target's role is untouched — it is not a field this endpoint can write.
   assert.equal(res.body.data.user.role, 'admin');
   assert.equal(res.body.data.user.status, 'suspended');
@@ -467,8 +486,8 @@ test('PATCH /api/v1/users/:userId active -> active is a no-op with no session re
     revoked = true;
     return 0;
   });
-  t.mock.method(userRepository, 'updateById', async (id, update) =>
-    userDoc({ id, status: update.$set.status })
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+    userDoc({ id, status: desiredStatus })
   );
 
   const res = await request(app)
@@ -478,12 +497,83 @@ test('PATCH /api/v1/users/:userId active -> active is a no-op with no session re
 
   assert.equal(res.status, 200);
   assert.equal(revoked, false);
+  assert.equal(auditLogRepository.create.mock.callCount(), 0);
+});
+
+test('PATCH status records partial_failure when suspension persists but revocation fails', async (t) => {
+  mockContext(t, {
+    caller: adminDoc(),
+    directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
+  });
+  let persisted = false;
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+    persisted = true;
+    return userDoc({ id, status: desiredStatus });
+  });
+  const infrastructureError = new Error('private session store details');
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+    throw infrastructureError;
+  });
+  let auditEvent;
+  auditLogRepository.create.mock.mockImplementation(async (event) => {
+    auditEvent = event;
+    return event;
+  });
+
+  const response = await request(app)
+    .patch(`/api/v1/users/${TARGET_USER_ID}`)
+    .set('Authorization', `Bearer ${adminToken()}`)
+    .send({ status: 'suspended' });
+
+  assert.equal(response.status, 500);
+  assert.equal(response.body.error.code, 'INTERNAL_SERVER_ERROR');
+  assert.equal(persisted, true);
+  assert.deepEqual(auditEvent, {
+    eventType: 'admin.user.status_changed',
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+    targetType: 'user',
+    targetId: TARGET_USER_ID,
+    outcome: 'partial_failure',
+    reasonCode: 'SESSION_REVOCATION_FAILED',
+    metadata: { fromStatus: 'active', toStatus: 'suspended' },
+  });
+  assert.equal(JSON.stringify(auditEvent).includes(infrastructureError.message), false);
+  assert.equal(JSON.stringify(response.body).includes(infrastructureError.message), false);
+});
+
+test('PATCH status remains successful and is not replayed when audit persistence fails', async (t) => {
+  mockContext(t, {
+    caller: adminDoc(),
+    directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
+  });
+  const update = t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+    userDoc({ id, status: desiredStatus })
+  );
+  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
+  const internal = 'MongoServerError mongodb://private-uri';
+  auditLogRepository.create.mock.mockImplementation(async () => {
+    throw new Error(internal);
+  });
+  const diagnostics = [];
+  t.mock.method(console, 'error', (...args) => diagnostics.push(args));
+
+  const response = await request(app)
+    .patch(`/api/v1/users/${TARGET_USER_ID}`)
+    .set('Authorization', `Bearer ${adminToken()}`)
+    .send({ status: 'suspended' });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.user.status, 'suspended');
+  assert.equal(update.mock.callCount(), 1);
+  assert.deepEqual(diagnostics, [['[audit] audit event was not recorded']]);
+  assert.equal(JSON.stringify(diagnostics).includes(internal), false);
 });
 
 test('PATCH /api/v1/users/:userId rejects an admin trying to change their own role with 400 (role is not a field)', async (t) => {
   mockContext(t, { caller: adminDoc() });
   let updated = false;
-  t.mock.method(userRepository, 'updateById', async () => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async () => {
     updated = true;
     return adminDoc({ role: 'user' });
   });
@@ -511,7 +601,7 @@ test('PATCH /api/v1/users/:userId rejects an admin suspending themselves', async
 test('PATCH /api/v1/users/:userId self-protection cannot be bypassed by upper-casing the id in the path', async (t) => {
   mockContext(t, { caller: adminDoc() });
   let updated = false;
-  t.mock.method(userRepository, 'updateById', async () => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async () => {
     updated = true;
     return adminDoc({ role: 'user' });
   });
@@ -533,8 +623,8 @@ test('PATCH /api/v1/users/:userId still works when a different target id is uppe
     directory: { [TARGET_USER_ID]: userDoc({ role: 'user', status: 'active' }) },
   });
   t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
-  t.mock.method(userRepository, 'updateById', async (id, update) =>
-    userDoc({ id: String(id), status: update.$set.status })
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+    userDoc({ id: String(id), status: desiredStatus })
   );
 
   const res = await request(app)

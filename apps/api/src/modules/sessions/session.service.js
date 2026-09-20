@@ -65,6 +65,10 @@ function revokeAllSessionsForUser(userId) {
   return sessionRepository.revokeAllForUser(userId, new Date());
 }
 
+function revokeAllSessionsForUserCreatedBy(userId, createdAtCutoff) {
+  return sessionRepository.revokeAllForUserCreatedBy(userId, createdAtCutoff, new Date());
+}
+
 module.exports = {
   createSession,
   findActiveSessionByRefreshToken,
@@ -72,4 +76,5 @@ module.exports = {
   getActiveSessionById,
   revokeSession,
   revokeAllSessionsForUser,
+  revokeAllSessionsForUserCreatedBy,
 };
