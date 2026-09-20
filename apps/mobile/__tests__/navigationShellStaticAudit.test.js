@@ -178,6 +178,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(rootNav).toMatch(/name="Assistant"\s+component=\{AssistantScreen\}/);
     expect(rootNav).toMatch(/name="MealPlan"\s+component=\{MealPlanScreen\}/);
     expect(rootNav).toMatch(/name="List"\s+component=\{ShoppingListScreen\}/);
+    expect(rootNav).toMatch(/name="IngredientStudio"\s+component=\{IngredientStudioScreen\}/);
     expect(rootNav).toMatch(/name="SwapDetail"\s+component=\{SwapDetailScreen\}/);
   });
 });

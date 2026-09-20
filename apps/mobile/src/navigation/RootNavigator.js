@@ -101,11 +101,11 @@ export default function RootNavigator() {
                 - Discover  — Dashboard "search / browse / See all / Easy / Vegan
                   / Vegetarian" all navigate('Discover', { initialFilter }); the
                   internal route name stays "Discover" (user-facing title may be
-                  "Search"). SavedScreen also navigate('Discover').
+                  "Search"). CollectionDetailScreen also navigates to Discover.
                 - Assistant — PlusMenu "Ask the Chef".
                 - MealPlan  — PlusMenu "Meal Plan" (real server-backed planner).
-                - IngredientStudio — the brand-header shortcut; the same screen
-                  is also the Swaps tab.
+                - IngredientStudio — registered for direct navigation; the same
+                  screen is also the Swaps tab.
                 - SwapDetail — real catalog result cards from IngredientStudio.
 
               Community is NOT registered here: it is intentionally reachable

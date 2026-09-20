@@ -112,6 +112,25 @@ describe('Discover does not cross the navigation / auth boundary', () => {
   });
 });
 
+describe('Discover uses the pushed-screen header contract', () => {
+  it('renders one Back + Discover title TopBar without Dashboard Saved opt-in', () => {
+    expect(code.match(/<TopBar\b/g) || []).toHaveLength(1);
+    const [header] = code.match(/<TopBar\b[\s\S]*?\/>/g) || [];
+    expect(header).toBeDefined();
+    expect(header).toMatch(/\bmode\s*=\s*"back"/);
+    expect(header).toMatch(/\btitle\s*=\s*"Discover"/);
+    expect(header).toMatch(
+      /\bonBack\s*=\s*\{\s*\(\)\s*=>\s*navigation\.goBack\(\s*\)\s*\}/
+    );
+    expect(header).not.toMatch(/\bmode\s*=\s*"brand"/);
+  });
+
+  it('keeps the TopBar as the only Discover title presentation', () => {
+    expect(code).not.toMatch(/styles\.pageTitle/);
+    expect(code).not.toMatch(/\bpageTitle\s*:/);
+  });
+});
+
 describe('the Dashboard -> Discover handoff contract holds (M2.1 locked)', () => {
   it('the four filter keys stay exactly all | easy | vegetarian | vegan', () => {
     const { DISCOVER_FILTERS } = require('../src/api/recipeOptions');

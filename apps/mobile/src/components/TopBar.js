@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -56,13 +55,13 @@ function NotificationDropdown({ visible, onClose, topOffset }) {
 }
 
 /**
- * mode: 'brand' (wordmark · [saved] · substitute finder · notification bell)
+ * mode: 'brand' (wordmark · [saved] · notification bell)
  *     | 'title' (centered title for a tab screen)
  *     | 'back' (back arrow · title · action)
  *
  * `onSavedPress` is opt-in: only screens that pass it get the bookmark
  * affordance (teammate `c1c86ed` Dashboard header). Every other `mode="brand"`
- * caller renders exactly as before.
+ * caller renders the wordmark and notification bell without a Saved action.
  */
 export default function TopBar({
   mode = 'brand',
@@ -78,7 +77,6 @@ export default function TopBar({
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation();
   const [notifVisible, setNotifVisible] = useState(false);
 
   const pressBell = () => {
@@ -105,7 +103,7 @@ export default function TopBar({
               <Pressable
                 onPress={onSavedPress}
                 hitSlop={10}
-                style={styles.substituteBtn}
+                style={styles.savedBtn}
                 accessibilityRole="button"
                 accessibilityLabel="Saved recipes"
               >
@@ -113,13 +111,11 @@ export default function TopBar({
               </Pressable>
             )}
             <Pressable
-              onPress={() => navigation.navigate('IngredientStudio')}
+              onPress={pressBell}
               hitSlop={10}
-              style={styles.substituteBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Notifications"
             >
-              <Ionicons name="swap-horizontal" size={18} color={colors.ink} />
-            </Pressable>
-            <Pressable onPress={pressBell} hitSlop={10}>
               <View>
                 <Ionicons name="notifications-outline" size={22} color={colors.ink} />
                 {showBellDot && <View style={styles.bellDot} />}
@@ -140,6 +136,8 @@ export default function TopBar({
             hitSlop={10}
             style={styles.side}
             disabled={mode !== 'back' || !onBack}
+            accessibilityRole={mode === 'back' ? 'button' : undefined}
+            accessibilityLabel={mode === 'back' ? 'Back' : undefined}
           >
             {mode === 'back' && <Ionicons name="arrow-back" size={22} color={colors.ink} />}
           </Pressable>
@@ -175,7 +173,7 @@ function makeStyles(colors) {
     side: { width: 34, alignItems: 'center' },
     edgeSpacer: { width: 60 },
     bellCluster: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    substituteBtn: {
+    savedBtn: {
       width: 28,
       height: 28,
       borderRadius: 14,

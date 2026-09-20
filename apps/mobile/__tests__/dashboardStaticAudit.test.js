@@ -92,7 +92,13 @@ describe('Dashboard does not cross the navigation / auth boundary', () => {
     // The only navigate('Saved') call anywhere in the teammate app (c1c86ed)
     // is the Dashboard header bookmark icon — restored here via TopBar's
     // opt-in `onSavedPress`, not a forked/local header.
-    expect(code).toMatch(/<TopBar mode="brand" onSavedPress=\{\(\) => navigation\.navigate\('Saved'\)\}/);
+    expect(code.match(/<TopBar\b/g) || []).toHaveLength(1);
+    const [header] = code.match(/<TopBar\b[\s\S]*?\/>/g) || [];
+    expect(header).toBeDefined();
+    expect(header).toMatch(/\bmode\s*=\s*"brand"/);
+    expect(header).toMatch(
+      /\bonSavedPress\s*=\s*\{\s*\(\)\s*=>\s*navigation\.navigate\(\s*'Saved'\s*\)\s*\}/
+    );
   });
 
   it('holds no authentication, session, or token state of its own', () => {
