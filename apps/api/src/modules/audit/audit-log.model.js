@@ -48,6 +48,11 @@ const auditLogSchema = new mongoose.Schema(
   }
 );
 
+auditLogSchema.index(
+  { createdAt: -1, _id: -1 },
+  { name: 'audit_log_newest_first' }
+);
+
 const AuditLog = mongoose.model('AuditLog', auditLogSchema);
 
 module.exports = AuditLog;

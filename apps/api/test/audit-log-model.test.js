@@ -122,3 +122,14 @@ test('AuditLog adds no custom update or delete model behavior', () => {
   const methods = Object.keys(AuditLog.schema.methods);
   assert.equal(methods.some((name) => /update|delete|remove/i.test(name)), false);
 });
+
+test('AuditLog has only the approved stable newest-first compound index', () => {
+  const customIndexes = AuditLog.schema.indexes();
+  assert.deepEqual(customIndexes, [
+    [
+      { createdAt: -1, _id: -1 },
+      { name: 'audit_log_newest_first' },
+    ],
+  ]);
+  assert.equal(customIndexes.some(([, options]) => options.expireAfterSeconds !== undefined), false);
+});

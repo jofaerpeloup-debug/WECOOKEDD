@@ -117,5 +117,105 @@ test('AuditService contains repository failures and emits only a fixed diagnosti
   assert.equal(result, null);
   assert.deepEqual(diagnostics, [['[audit] audit event was not recorded']]);
   assert.equal(JSON.stringify(diagnostics).includes(internal), false);
-  assert.deepEqual(Object.keys(auditService), ['record']);
+  assert.deepEqual(Object.keys(auditService), ['record', 'list']);
+});
+
+test('AuditService constructs the approved read filter and pagination only', async (t) => {
+  const from = new Date('2026-09-01T00:00:00Z');
+  const to = new Date('2026-09-20T23:59:59Z');
+  let findOptions;
+  let countFilter;
+  t.mock.method(auditLogRepository, 'findMany', async (value) => {
+    findOptions = value;
+    return [{ _id: '1' }];
+  });
+  t.mock.method(auditLogRepository, 'countByFilter', async (value) => {
+    countFilter = value;
+    return 51;
+  });
+
+  const result = await auditService.list({
+    eventType: 'admin.user.status_changed',
+    actorUserId: ACTOR_ID,
+    targetType: 'user',
+    targetId: USER_ID,
+    outcome: 'partial_failure',
+    from,
+    to,
+    page: 3,
+    limit: 25,
+    actorRole: 'admin',
+    sort: { createdAt: 1 },
+  });
+
+  assert.deepEqual(findOptions, {
+    filter: {
+      eventType: 'admin.user.status_changed',
+      actorUserId: ACTOR_ID,
+      targetType: 'user',
+      targetId: USER_ID,
+      outcome: 'partial_failure',
+      createdAt: { $gte: from, $lte: to },
+    },
+    skip: 50,
+    limit: 25,
+  });
+  assert.equal(countFilter, findOptions.filter);
+  assert.deepEqual(result, { items: [{ _id: '1' }], total: 51, page: 3, limit: 25 });
+});
+
+test('AuditService supports empty and one-sided filters', async (t) => {
+  const calls = [];
+  t.mock.method(auditLogRepository, 'findMany', async (value) => {
+    calls.push(value);
+    return [];
+  });
+  t.mock.method(auditLogRepository, 'countByFilter', async () => 0);
+
+  const empty = await auditService.list({ page: 1, limit: 20 });
+  const from = new Date('2026-09-01T00:00:00Z');
+  const bounded = await auditService.list({ from, page: 2, limit: 10 });
+
+  assert.deepEqual(calls, [
+    { filter: {}, skip: 0, limit: 20 },
+    { filter: { createdAt: { $gte: from } }, skip: 10, limit: 10 },
+  ]);
+  assert.deepEqual(empty, { items: [], total: 0, page: 1, limit: 20 });
+  assert.deepEqual(bounded, { items: [], total: 0, page: 2, limit: 10 });
+});
+
+test('AuditService invokes list and count concurrently', async (t) => {
+  let findStarted = false;
+  let countStarted = false;
+  let releaseFind;
+  const findBlocked = new Promise((resolve) => {
+    releaseFind = resolve;
+  });
+  t.mock.method(auditLogRepository, 'findMany', async () => {
+    findStarted = true;
+    await findBlocked;
+    return [];
+  });
+  t.mock.method(auditLogRepository, 'countByFilter', async () => {
+    countStarted = true;
+    releaseFind();
+    return 0;
+  });
+
+  await auditService.list({ page: 1, limit: 20 });
+  assert.equal(findStarted, true);
+  assert.equal(countStarted, true);
+});
+
+test('AuditService read failures propagate instead of becoming best-effort', async (t) => {
+  const failure = new Error('database read failed');
+  t.mock.method(auditLogRepository, 'findMany', async () => {
+    throw failure;
+  });
+  t.mock.method(auditLogRepository, 'countByFilter', async () => 0);
+
+  await assert.rejects(
+    () => auditService.list({ page: 1, limit: 20 }),
+    (error) => error === failure
+  );
 });

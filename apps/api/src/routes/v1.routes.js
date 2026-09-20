@@ -14,6 +14,7 @@ const mealPlanRoutes = require('../modules/meal-plan/meal-plan.routes');
 const communityRoutes = require('../modules/community/community.routes');
 const uploadRoutes = require('../modules/uploads/upload.routes');
 const staffRoutes = require('../modules/moderator-applications/moderator-application.routes');
+const auditRoutes = require('../modules/audit/audit.routes');
 
 const router = Router();
 
@@ -34,5 +35,6 @@ router.use('/meal-plan', mealPlanRoutes);
 router.use('/community', communityRoutes);
 router.use('/admin/uploads', uploadRoutes);
 router.use('/staff', staffRoutes);
+router.use('/admin/audit-logs', auditRoutes);
 
 module.exports = router;

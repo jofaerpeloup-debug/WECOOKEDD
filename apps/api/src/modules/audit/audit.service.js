@@ -134,4 +134,36 @@ async function record(input) {
   }
 }
 
-module.exports = { record };
+async function list({
+  eventType,
+  actorUserId,
+  targetType,
+  targetId,
+  outcome,
+  from,
+  to,
+  page,
+  limit,
+}) {
+  const filter = {};
+  if (eventType) filter.eventType = eventType;
+  if (actorUserId) filter.actorUserId = actorUserId;
+  if (targetType) filter.targetType = targetType;
+  if (targetId) filter.targetId = targetId;
+  if (outcome) filter.outcome = outcome;
+  if (from || to) {
+    filter.createdAt = {};
+    if (from) filter.createdAt.$gte = from;
+    if (to) filter.createdAt.$lte = to;
+  }
+
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    auditLogRepository.findMany({ filter, skip, limit }),
+    auditLogRepository.countByFilter(filter),
+  ]);
+
+  return { items, total, page, limit };
+}
+
+module.exports = { record, list };
