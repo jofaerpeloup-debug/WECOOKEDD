@@ -22,8 +22,76 @@ function stripComments(src) {
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
+function extractBalancedAfter(src, anchor, open, close) {
+  const anchorIndex = src.indexOf(anchor);
+  if (anchorIndex < 0) return null;
+  if (src.indexOf(anchor, anchorIndex + anchor.length) >= 0) return null;
+  const start = src.indexOf(open, anchorIndex + anchor.length);
+  if (start < 0) return null;
+
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let i = start; i < src.length; i += 1) {
+    const char = src[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === open) depth += 1;
+    if (char === close) depth -= 1;
+    if (depth === 0) return src.slice(start, i + 1);
+  }
+  return null;
+}
+
+function staticTextNodes(src) {
+  return [...src.matchAll(/<Text\b[^>]*>([\s\S]*?)<\/Text>/g)]
+    .map((match) =>
+      match[1]
+        .replace(/\{\s*(['"])(.*?)\1\s*\}/g, '$2')
+        .replace(/\{[\s\S]*?\}/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter(Boolean);
+}
+
+function hasVisibleLabelFamily(src, families) {
+  const labels = staticTextNodes(src).map((label) => label.toLowerCase());
+  return labels.some((label) => families.some((family) => label.startsWith(family)));
+}
+
+function hasCategoryQueryKey(src) {
+  return /\bcategory\s*:/.test(src);
+}
+
 const raw = read('screens/DashboardScreen.js');
 const code = stripComments(raw);
+
+describe('static audit source helpers', () => {
+  it('fails closed for missing, duplicate, and unbalanced anchors', () => {
+    expect(extractBalancedAfter('const value = [1];', 'missing', '[', ']')).toBeNull();
+    expect(extractBalancedAfter('anchor [1]; anchor [2];', 'anchor', '[', ']')).toBeNull();
+    expect(extractBalancedAfter('anchor [1;', 'anchor', '[', ']')).toBeNull();
+  });
+
+  it('ignores delimiters inside ordinary quoted strings', () => {
+    const block = extractBalancedAfter(
+      "anchor ['single ]', \"double ]\", `template ]`, { key: 'value' }]",
+      'anchor',
+      '[',
+      ']'
+    );
+    expect(block).toBe("['single ]', \"double ]\", `template ]`, { key: 'value' }]");
+  });
+});
 
 describe('Dashboard keeps our real data architecture (no mock regression)', () => {
   it('imports no mock-data layer or teammate mock providers', () => {
@@ -208,18 +276,84 @@ describe('no new cuisine-based UX (locked M2 decision — cuisine leaves in M3)'
     }
   });
 
-  it('adds no cuisine filter, chip, label or query on Home', () => {
+  it('adds no cuisine or category filter UI/query wiring on Home', () => {
     expect(code).not.toMatch(/cuisine/i);
     expect(code).not.toMatch(/\bFilipino\b|\bregion\b|\bLuzon\b|\bVisayas\b|\bMindanao\b/);
-    expect(code).not.toMatch(/\bcategory\b/);
+    expect(
+      hasVisibleLabelFamily(code, [
+        'category',
+        'categories',
+        'browse by category',
+        'browse by categories',
+        'browse by craving',
+      ])
+    ).toBe(false);
+    expect(code).not.toMatch(/\b(?:setCategory|activeCategory|categoryFilter|initialCategory)\b/);
+
+    const queries = [...code.matchAll(/listRecipes\s*\(\s*(\{[\s\S]*?\})\s*\)/g)].map(
+      (match) => match[1]
+    );
+    expect(queries.length).toBeGreaterThan(0);
+    for (const query of queries) expect(hasCategoryQueryKey(query)).toBe(false);
+  });
+
+  it('allows legitimate recipe.category reads while detecting category query/UI semantics', () => {
+    expect(hasCategoryQueryKey('const label = recipe.category;')).toBe(false);
+    expect(hasCategoryQueryKey('const query = { category: selectedCategory };')).toBe(true);
+    expect(hasVisibleLabelFamily("<Text>{'Browse by category'}</Text>", ['browse by category'])).toBe(
+      true
+    );
   });
 });
 
-describe('Today’s Feature is derived, not a fabricated editorial flag', () => {
+describe('Today’s Pick is derived, not a fabricated editorial flag', () => {
   it('picks deterministically from the real latest list', () => {
     expect(code).toMatch(/featureIndexForToday/);
     expect(code).toMatch(/latest\[featureIndexForToday\(latest\.length\)\]/);
     expect(code).not.toMatch(/isFeatured|featuredFlag|editorPick|curated/i);
+  });
+
+  it('uses neutral daily-pick wording rather than claiming editorial selection', () => {
+    expect(code).toMatch(/TODAY'S PICK/);
+    expect(code).not.toMatch(/TODAY'S FEATURE/);
+  });
+});
+
+describe('unsupported teammate Dashboard concepts stay out of production', () => {
+  it('keeps the shortcut set exactly Easy, Vegetarian, and Vegan', () => {
+    const shortcutsBlock = extractBalancedAfter(code, 'const BROWSE_SHORTCUTS =', '[', ']');
+    expect(shortcutsBlock).not.toBeNull();
+    const keys = [...shortcutsBlock.matchAll(/\bkey\s*:\s*(['"])([^'"]+)\1/g)].map(
+      (match) => match[2]
+    );
+    expect(keys).toEqual(['easy', 'vegetarian', 'vegan']);
+  });
+
+  it('adds no Trending, Recently Viewed, Grocery, or global substitution entry point', () => {
+    expect(staticTextNodes(code).map((label) => label.toLowerCase())).toContain('latest recipes');
+    expect(hasVisibleLabelFamily(code, ['trending', 'recently viewed'])).toBe(false);
+    expect(code).not.toMatch(/\buseRecentlyViewed\s*\(/);
+
+    const targets = [...code.matchAll(/navigation\.navigate\(\s*(['"])([^'"]+)\1/g)].map(
+      (match) => match[2]
+    );
+    expect(targets).not.toEqual(expect.arrayContaining(['Trending', 'Grocery', 'IngredientStudio']));
+    expect(code).not.toMatch(/swap-horizontal/);
+  });
+
+  it('recognizes prohibited quoted static labels but ignores dynamic JSX expressions', () => {
+    expect(staticTextNodes("<Text>{'Trending'}</Text>")).toEqual(['Trending']);
+    expect(staticTextNodes('<Text>{"Trending recipes"}</Text>')).toEqual(['Trending recipes']);
+    expect(staticTextNodes("<Text>{'Recently Viewed recipes'}</Text>")).toEqual([
+      'Recently Viewed recipes',
+    ]);
+    expect(hasVisibleLabelFamily("<Text>{'Trending meals'}</Text>", ['trending'])).toBe(true);
+    expect(
+      hasVisibleLabelFamily("<Text>{'Recently Viewed recipes'}</Text>", ['recently viewed'])
+    ).toBe(true);
+    expect(staticTextNodes('<Text>{title}</Text>')).toEqual([]);
+    expect(staticTextNodes('<Text>{getTitle()}</Text>')).toEqual([]);
+    expect(staticTextNodes("<Text>{condition ? 'Trending' : 'Latest'}</Text>")).toEqual([]);
   });
 });
 
