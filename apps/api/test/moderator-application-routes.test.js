@@ -13,6 +13,7 @@ const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
 const applicationRepository = require('../src/modules/moderator-applications/moderator-application.repository');
 const service = require('../src/modules/moderator-applications/moderator-application.service');
+const auditLogRepository = require('../src/modules/audit/audit-log.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -22,6 +23,10 @@ const ADMIN_ID = '507f1f77bcf86cd799439103';
 const SESSION_ID = '507f1f77bcf86cd799439104';
 const APPLICATION_ID = '507f1f77bcf86cd799439105';
 const HASH = '$2b$10$private-private-private-private-private';
+
+test.beforeEach((t) => {
+  t.mock.method(auditLogRepository, 'create', async (event) => event);
+});
 
 function userDoc({ id = USER_ID, role = 'user', status = 'active', emailVerified = false, password = true } = {}) {
   return {
@@ -355,6 +360,11 @@ test('admin approval promotes a verified eligible applicant and records the revi
     ...applicant,
     role: 'moderator',
   }));
+  let auditEvent;
+  auditLogRepository.create.mock.mockImplementation(async (event) => {
+    auditEvent = event;
+    return event;
+  });
   const response = await request(app)
     .post(`/api/v1/staff/moderator-applications/${APPLICATION_ID}/approve`)
     .set('Authorization', `Bearer ${tokenFor(admin)}`)
@@ -362,6 +372,15 @@ test('admin approval promotes a verified eligible applicant and records the revi
   assert.equal(response.status, 200);
   assert.equal(response.body.data.application.status, 'approved');
   assert.equal(response.body.data.user.role, 'moderator');
+  assert.deepEqual(auditEvent, {
+    eventType: 'admin.staff.moderator_approved',
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+    targetType: 'user',
+    targetId: USER_ID,
+    outcome: 'success',
+    metadata: { applicationId: APPLICATION_ID, fromRole: 'user', toRole: 'moderator' },
+  });
 });
 
 test('approval rejects unverified users and never transitions the application', async (t) => {
@@ -398,12 +417,18 @@ test('promotion failure compensates the exact approval and remains fail-closed',
     return pending;
   });
   await assert.rejects(
-    () => service.approve({ applicationId: APPLICATION_ID, reviewedBy }),
+    () =>
+      service.approve({
+        applicationId: APPLICATION_ID,
+        reviewedBy,
+        actorRole: 'admin',
+      }),
     (error) => error.code === 'MODERATOR_APPLICATION_NOT_ELIGIBLE'
   );
   assert.equal(rollback.id, APPLICATION_ID);
   assert.equal(rollback.decision.reviewedBy, ADMIN_ID);
   assert.equal(applicant.role, 'user');
+  assert.equal(auditLogRepository.create.mock.callCount(), 0);
 });
 
 test('admin can reject an unverified pending application with a trimmed reason', async (t) => {
@@ -423,6 +448,9 @@ test('admin can reject an unverified pending application with a trimmed reason',
     .send({ reason: '  insufficient detail  ' });
   assert.equal(response.status, 200);
   assert.equal(response.body.data.application.rejectionReason, 'insufficient detail');
+  const auditEvent = auditLogRepository.create.mock.calls[0].arguments[0];
+  assert.deepEqual(auditEvent.metadata, { applicationId: APPLICATION_ID });
+  assert.equal(JSON.stringify(auditEvent).includes('insufficient detail'), false);
 });
 
 test('rejection requires exactly one nonblank reason of at most 500 characters', async (t) => {
@@ -453,6 +481,11 @@ test('demotion is admin-only, hard-coded, preserves sessions, and stale moderato
     .send({});
   assert.equal(response.status, 200);
   assert.equal(response.body.data.user.role, 'user');
+  const auditEvent = auditLogRepository.create.mock.calls[0].arguments[0];
+  assert.equal(auditEvent.actorUserId, ADMIN_ID);
+  assert.equal(auditEvent.actorRole, 'admin');
+  assert.equal(auditEvent.targetId, MODERATOR_ID);
+  assert.deepEqual(auditEvent.metadata, { fromRole: 'moderator', toRole: 'user' });
 
   userRepository.findById.mock.mockImplementation(async () => current);
   sessionRepository.findActiveById.mock.mockImplementation(async () => ({
@@ -464,6 +497,35 @@ test('demotion is admin-only, hard-coded, preserves sessions, and stale moderato
     .set('Authorization', `Bearer ${tokenFor(userDoc({ id: MODERATOR_ID, role: 'moderator' }))}`);
   assert.equal(stale.status, 403);
   assert.equal(stale.body.error.code, 'FORBIDDEN');
+});
+
+test('staff mutation success is preserved and not replayed when audit persistence fails', async (t) => {
+  const admin = userDoc({ id: ADMIN_ID, role: 'admin' });
+  mockAuth(t, admin);
+  t.mock.method(applicationRepository, 'findById', async () => applicationDoc());
+  const reject = t.mock.method(applicationRepository, 'rejectPending', async (id, decision) => ({
+    ...applicationDoc(),
+    status: 'rejected',
+    ...decision,
+    rejectionReason: decision.rejectionReason,
+  }));
+  const internal = 'MongoServerError credentials=private';
+  auditLogRepository.create.mock.mockImplementation(async () => {
+    throw new Error(internal);
+  });
+  const diagnostics = [];
+  t.mock.method(console, 'error', (...args) => diagnostics.push(args));
+
+  const response = await request(app)
+    .post(`/api/v1/staff/moderator-applications/${APPLICATION_ID}/reject`)
+    .set('Authorization', `Bearer ${tokenFor(admin)}`)
+    .send({ reason: 'valid private reason' });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.application.status, 'rejected');
+  assert.equal(reject.mock.callCount(), 1);
+  assert.deepEqual(diagnostics, [['[audit] audit event was not recorded']]);
+  assert.equal(JSON.stringify(diagnostics).includes(internal), false);
 });
 
 test('invalid application and target ids are controlled validation errors', async (t) => {

@@ -69,3 +69,26 @@ test('revokeAllForUser only counts sessions that are unrevoked and unexpired', a
   assert.deepEqual(capturedFilter.expiresAt, { $gt: now });
   assert.equal(count, 2);
 });
+
+test('revokeAllForUserCreatedBy fences the sweep at the supplied creation cutoff', async (t) => {
+  let capturedFilter;
+  let capturedUpdate;
+  t.mock.method(Session, 'updateMany', (filter, update) => {
+    capturedFilter = filter;
+    capturedUpdate = update;
+    return Promise.resolve({ modifiedCount: 2 });
+  });
+  const cutoff = new Date('2026-09-21T01:00:00.000Z');
+  const now = new Date('2026-09-21T01:00:05.000Z');
+
+  const count = await sessionRepository.revokeAllForUserCreatedBy('user-1', cutoff, now);
+
+  assert.equal(count, 2);
+  assert.deepEqual(capturedFilter, {
+    userId: 'user-1',
+    revokedAt: null,
+    expiresAt: { $gt: now },
+    createdAt: { $lte: cutoff },
+  });
+  assert.deepEqual(capturedUpdate, { $set: { revokedAt: now } });
+});

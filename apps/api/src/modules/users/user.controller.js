@@ -35,6 +35,7 @@ const updateUser = asyncHandler(async (req, res) => {
 
   const updated = await userService.adminUpdateUser({
     actingUserId: req.auth.userId,
+    actingUserRole: req.auth.role,
     targetUserId: userId,
     patch: req.body,
   });

@@ -4,11 +4,16 @@ const assert = require('node:assert/strict');
 const service = require('../src/modules/moderator-applications/moderator-application.service');
 const applicationRepository = require('../src/modules/moderator-applications/moderator-application.repository');
 const userRepository = require('../src/modules/users/user.repository');
+const auditService = require('../src/modules/audit/audit.service');
 
 const USER_ID = '507f1f77bcf86cd799439201';
 const ADMIN_ID = '507f1f77bcf86cd799439202';
 const APPLICATION_ID = '507f1f77bcf86cd799439203';
 const NOW = new Date('2026-09-16T12:00:00.000Z');
+
+test.beforeEach((t) => {
+  t.mock.method(auditService, 'record', async () => null);
+});
 
 function eligibleUser(overrides = {}) {
   return {
@@ -229,9 +234,10 @@ test('rejection changes only the application and never invokes a user role updat
 test('demotion safely rejects a non-moderator or missing target', async (t) => {
   t.mock.method(userRepository, 'demoteModeratorToUser', async () => null);
   await assert.rejects(
-    () => service.demote(USER_ID),
+    () => service.demote({ userId: USER_ID, actorUserId: ADMIN_ID, actorRole: 'admin' }),
     (error) => error.code === 'MODERATOR_TARGET_INVALID' && error.statusCode === 409
   );
+  assert.equal(auditService.record.mock.callCount(), 0);
 });
 
 test('a thrown promotion failure is compensated exactly and exposes only the controlled error', async (t) => {
@@ -279,4 +285,123 @@ test('a thrown promotion failure is compensated exactly and exposes only the con
   assert.equal(compensation.reviewedAt, approvalDecision.reviewedAt);
   assert.equal(applicant.role, 'user');
   assert.equal(alternateRoleWrite, false);
+  assert.equal(auditService.record.mock.callCount(), 0);
+});
+
+test('successful approval audits only after approval and promotion both succeed', async (t) => {
+  const order = [];
+  const pending = application();
+  const applicant = eligibleUser();
+  t.mock.method(applicationRepository, 'findById', async () => pending);
+  t.mock.method(userRepository, 'findModeratorApplicantById', async () => applicant);
+  t.mock.method(applicationRepository, 'approvePending', async (id, decision) => {
+    order.push('approve');
+    return application({ status: 'approved', ...decision });
+  });
+  t.mock.method(userRepository, 'promoteEligibleUserToModerator', async () => {
+    order.push('promote');
+    return eligibleUser({ role: 'moderator' });
+  });
+  let event;
+  auditService.record.mock.mockImplementation(async (value) => {
+    order.push('audit');
+    event = value;
+    return value;
+  });
+
+  const result = await service.approve({
+    applicationId: APPLICATION_ID,
+    reviewedBy: ADMIN_ID,
+    actorRole: 'admin',
+  });
+
+  assert.equal(result.user.role, 'moderator');
+  assert.deepEqual(order, ['approve', 'promote', 'audit']);
+  assert.deepEqual(event, {
+    eventType: 'admin.staff.moderator_approved',
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+    targetType: 'user',
+    targetId: USER_ID,
+    outcome: 'success',
+    metadata: { applicationId: APPLICATION_ID, fromRole: 'user', toRole: 'moderator' },
+  });
+});
+
+test('successful rejection audits the application without its free-form reason', async (t) => {
+  t.mock.method(applicationRepository, 'findById', async () => application());
+  t.mock.method(applicationRepository, 'rejectPending', async (id, decision) =>
+    application({ status: 'rejected', rejectionReason: decision.rejectionReason })
+  );
+  let event;
+  auditService.record.mock.mockImplementation(async (value) => {
+    event = value;
+    return value;
+  });
+
+  await service.reject({
+    applicationId: APPLICATION_ID,
+    reviewedBy: ADMIN_ID,
+    actorRole: 'admin',
+    reason: 'private free-form explanation',
+  });
+
+  assert.deepEqual(event, {
+    eventType: 'admin.staff.application_rejected',
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+    targetType: 'moderator_application',
+    targetId: APPLICATION_ID,
+    outcome: 'success',
+    metadata: { applicationId: APPLICATION_ID },
+  });
+  assert.equal(JSON.stringify(event).includes('private free-form explanation'), false);
+});
+
+test('successful demotion audits the actor, target, and hard-coded role transition', async (t) => {
+  t.mock.method(userRepository, 'demoteModeratorToUser', async () =>
+    eligibleUser({ role: 'user' })
+  );
+  let event;
+  auditService.record.mock.mockImplementation(async (value) => {
+    event = value;
+    return value;
+  });
+
+  const demoted = await service.demote({
+    userId: USER_ID,
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+  });
+
+  assert.equal(demoted.role, 'user');
+  assert.deepEqual(event, {
+    eventType: 'admin.staff.moderator_demoted',
+    actorUserId: ADMIN_ID,
+    actorRole: 'admin',
+    targetType: 'user',
+    targetId: USER_ID,
+    outcome: 'success',
+    metadata: { fromRole: 'moderator', toRole: 'user' },
+  });
+});
+
+test('audit failure does not replay or fail successful staff mutations', async (t) => {
+  const pending = application();
+  t.mock.method(applicationRepository, 'findById', async () => pending);
+  const reject = t.mock.method(applicationRepository, 'rejectPending', async (id, decision) =>
+    application({ status: 'rejected', ...decision })
+  );
+  auditService.record.mock.mockImplementation(async () => null);
+
+  const rejected = await service.reject({
+    applicationId: APPLICATION_ID,
+    reviewedBy: ADMIN_ID,
+    actorRole: 'admin',
+    reason: 'not stored in audit',
+  });
+
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(reject.mock.callCount(), 1);
+  assert.equal(auditService.record.mock.callCount(), 1);
 });

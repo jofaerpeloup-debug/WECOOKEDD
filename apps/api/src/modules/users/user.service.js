@@ -1,12 +1,14 @@
 const mongoose = require('mongoose');
 const userRepository = require('./user.repository');
 const sessionService = require('../sessions/session.service');
+const auditService = require('../audit/audit.service');
 const { hashPassword, comparePassword } = require('../../shared/security/password');
 const { hashPasswordResetToken } = require('../../shared/security/password-reset-token');
 const { hashEmailVerificationToken } = require('../../shared/security/email-verification-token');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
+const MAX_STATUS_CAS_ATTEMPTS = 2;
 
 // Fixed list-sort map. Every entry carries `_id` as a final tiebreaker so
 // pagination is deterministic even when the primary key (createdAt / name) is
@@ -40,6 +42,13 @@ function userNotFoundError() {
 // denial, same family as authorize()'s FORBIDDEN.
 function selfAdministrationError(message) {
   return new AppError(message, { statusCode: 403, code: 'ADMIN_CANNOT_MODIFY_SELF' });
+}
+
+function statusUpdateConflictError() {
+  return new AppError('User status changed concurrently. Please retry.', {
+    statusCode: 409,
+    code: 'USER_STATUS_UPDATE_CONFLICT',
+  });
 }
 
 // A precomputed hash compared against when no user is found, so a lookup
@@ -197,7 +206,7 @@ async function listUsers({ search, role, status, sort, page, limit }) {
  * Cross-module revocation goes through SessionService only; this module
  * never imports the Session model or repository.
  */
-async function adminUpdateUser({ actingUserId, targetUserId, patch }) {
+async function adminUpdateUser({ actingUserId, actingUserRole, targetUserId, patch }) {
   // Canonicalise the target id before any identity comparison. It arrives as a
   // validated-but-not-normalised hex string — mongoose.Types.ObjectId.isValid()
   // accepts a 24-char hex string in ANY case — while actingUserId is already
@@ -207,7 +216,7 @@ async function adminUpdateUser({ actingUserId, targetUserId, patch }) {
   // this is a valid ObjectId, so the constructor cannot throw here.
   const targetId = new mongoose.Types.ObjectId(targetUserId).toString();
 
-  const target = await userRepository.findById(targetId);
+  let target = await userRepository.findById(targetId);
   if (!target) {
     throw userNotFoundError();
   }
@@ -235,36 +244,74 @@ async function adminUpdateUser({ actingUserId, targetUserId, patch }) {
     throw selfAdministrationError('You cannot change your own status.');
   }
 
-  const reactivating = update.status === 'active' && target.status === 'suspended';
-  // Fires on active->suspended and on a suspended->suspended retry (a cheap,
-  // idempotent mop-up if an earlier suspension's revoke call had failed).
-  const suspending = update.status === 'suspended';
+  for (let attempt = 0; attempt < MAX_STATUS_CAS_ATTEMPTS; attempt += 1) {
+    const fromStatus = target.status;
+    const statusChanged = update.status !== fromStatus;
+    const reactivating = update.status === 'active' && fromStatus === 'suspended';
+    // Fires for a winning active->suspended transition and for an initial
+    // suspended->suspended mop-up. A request that loses a suspension CAS exits
+    // on the authoritative reload below and never reaches this side effect.
+    const suspending = update.status === 'suspended';
 
-  if (reactivating) {
-    await sessionService.revokeAllSessionsForUser(targetId);
+    if (reactivating) {
+      const sessionCutoff = new Date();
+      await sessionService.revokeAllSessionsForUserCreatedBy(targetId, sessionCutoff);
+    }
+
+    const updated = await userRepository.updateStatusIfCurrent(
+      targetId,
+      fromStatus,
+      update.status
+    );
+
+    if (!updated) {
+      const current = await userRepository.findById(targetId);
+      if (!current) {
+        throw userNotFoundError();
+      }
+      if (current.status === update.status) {
+        return current;
+      }
+      target = current;
+      continue;
+    }
+
+    if (suspending) {
+      try {
+        await sessionService.revokeAllSessionsForUser(targetId);
+      } catch (error) {
+        if (statusChanged) {
+          await auditService.record({
+            eventType: 'admin.user.status_changed',
+            actorUserId: actingUserId,
+            actorRole: actingUserRole,
+            targetType: 'user',
+            targetId,
+            outcome: 'partial_failure',
+            reasonCode: 'SESSION_REVOCATION_FAILED',
+            metadata: { fromStatus, toStatus: update.status },
+          });
+        }
+        throw error;
+      }
+    }
+
+    if (statusChanged) {
+      await auditService.record({
+        eventType: 'admin.user.status_changed',
+        actorUserId: actingUserId,
+        actorRole: actingUserRole,
+        targetType: 'user',
+        targetId,
+        outcome: 'success',
+        metadata: { fromStatus, toStatus: update.status },
+      });
+    }
+
+    return updated;
   }
 
-  const databaseUpdate = { $set: update };
-  if (suspending) {
-    // A pre-suspension reset credential must not spring back to life after
-    // reactivation. Clear it atomically with the authoritative status write.
-    databaseUpdate.$unset = {
-      passwordResetTokenHash: 1,
-      passwordResetExpiresAt: 1,
-    };
-  }
-
-  const updated = await userRepository.updateById(targetId, databaseUpdate);
-  if (!updated) {
-    // Deleted between the read above and this write.
-    throw userNotFoundError();
-  }
-
-  if (suspending) {
-    await sessionService.revokeAllSessionsForUser(targetId);
-  }
-
-  return updated;
+  throw statusUpdateConflictError();
 }
 
 // The authenticated principal was deleted between authenticate (which loaded

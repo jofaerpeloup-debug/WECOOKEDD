@@ -46,6 +46,19 @@ async function revokeAllForUser(userId, now) {
   return result.modifiedCount;
 }
 
+async function revokeAllForUserCreatedBy(userId, createdAtCutoff, now) {
+  const result = await Session.updateMany(
+    {
+      userId,
+      revokedAt: null,
+      expiresAt: { $gt: now },
+      createdAt: { $lte: createdAtCutoff },
+    },
+    { $set: { revokedAt: now } }
+  );
+  return result.modifiedCount;
+}
+
 module.exports = {
   createSession,
   findActiveById,
@@ -53,4 +66,5 @@ module.exports = {
   rotateByHash,
   revokeById,
   revokeAllForUser,
+  revokeAllForUserCreatedBy,
 };

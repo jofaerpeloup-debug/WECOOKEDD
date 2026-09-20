@@ -211,6 +211,27 @@ function updateById(id, update) {
   return User.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 }
 
+// Atomic compare-and-set for the Admin status mutation. Matching both the id
+// and the status observed by the service means a returned document proves this
+// caller owned the write. A null result is a lost race, never evidence of a
+// transition. Reset credentials are cleared in the same winning suspension
+// write, preserving the existing suspension security invariant.
+function updateStatusIfCurrent(id, expectedStatus, desiredStatus) {
+  const update = { $set: { status: desiredStatus } };
+  if (desiredStatus === 'suspended') {
+    update.$unset = {
+      passwordResetTokenHash: 1,
+      passwordResetExpiresAt: 1,
+    };
+  }
+
+  return User.findOneAndUpdate(
+    { _id: id, status: expectedStatus },
+    update,
+    { returnDocument: 'after', runValidators: true }
+  );
+}
+
 module.exports = {
   createUser,
   findByAuthIdentity,
@@ -227,6 +248,7 @@ module.exports = {
   findMany,
   countByFilter,
   updateById,
+  updateStatusIfCurrent,
   replacePasswordById,
   setPasswordResetTokenForEligibleUser,
   resetPasswordByTokenHash,

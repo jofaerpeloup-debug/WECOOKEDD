@@ -1,5 +1,6 @@
 const applicationRepository = require('./moderator-application.repository');
 const userRepository = require('../users/user.repository');
+const auditService = require('../audit/audit.service');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
@@ -141,7 +142,7 @@ async function loadPendingDecision(applicationId) {
   return application;
 }
 
-async function approve({ applicationId, reviewedBy }) {
+async function approve({ applicationId, reviewedBy, actorRole }) {
   const application = await loadPendingDecision(applicationId);
   const user = await userRepository.findModeratorApplicantById(application.userId);
 
@@ -183,6 +184,15 @@ async function approve({ applicationId, reviewedBy }) {
         'MODERATOR_APPLICATION_NOT_ELIGIBLE'
       );
     }
+    await auditService.record({
+      eventType: 'admin.staff.moderator_approved',
+      actorUserId: reviewedBy,
+      actorRole,
+      targetType: 'user',
+      targetId: application.userId,
+      outcome: 'success',
+      metadata: { applicationId, fromRole: 'user', toRole: 'moderator' },
+    });
     return { application: approved, user: promoted };
   } catch (promotionError) {
     try {
@@ -212,7 +222,7 @@ async function approve({ applicationId, reviewedBy }) {
   }
 }
 
-async function reject({ applicationId, reviewedBy, reason }) {
+async function reject({ applicationId, reviewedBy, actorRole, reason }) {
   await loadPendingDecision(applicationId);
   const rejected = await applicationRepository.rejectPending(applicationId, {
     reviewedAt: new Date(),
@@ -220,10 +230,19 @@ async function reject({ applicationId, reviewedBy, reason }) {
     rejectionReason: reason,
   });
   if (!rejected) throw applicationNotPending();
+  await auditService.record({
+    eventType: 'admin.staff.application_rejected',
+    actorUserId: reviewedBy,
+    actorRole,
+    targetType: 'moderator_application',
+    targetId: applicationId,
+    outcome: 'success',
+    metadata: { applicationId },
+  });
   return rejected;
 }
 
-async function demote(userId) {
+async function demote({ userId, actorUserId, actorRole }) {
   const demoted = await userRepository.demoteModeratorToUser(userId);
   if (!demoted) {
     throw appError(
@@ -232,6 +251,15 @@ async function demote(userId) {
       'MODERATOR_TARGET_INVALID'
     );
   }
+  await auditService.record({
+    eventType: 'admin.staff.moderator_demoted',
+    actorUserId,
+    actorRole,
+    targetType: 'user',
+    targetId: userId,
+    outcome: 'success',
+    metadata: { fromRole: 'moderator', toRole: 'user' },
+  });
   return demoted;
 }
 

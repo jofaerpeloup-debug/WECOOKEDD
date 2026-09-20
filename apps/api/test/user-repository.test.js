@@ -252,3 +252,50 @@ test('verifyEmailByTokenHash atomically matches, flips emailVerified, and clears
   assert.deepEqual(captured.options, { returnDocument: 'after', projection: { _id: 1 } });
   assert.equal(User.findOneAndUpdate.mock.callCount(), 1);
 });
+
+test('updateStatusIfCurrent atomically matches id and expected status', async (t) => {
+  let captured;
+  const updated = { _id: 'user-1', status: 'active' };
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return Promise.resolve(updated);
+  });
+
+  const result = await userRepository.updateStatusIfCurrent(
+    'user-1',
+    'suspended',
+    'active'
+  );
+
+  assert.equal(result, updated);
+  assert.deepEqual(captured, {
+    filter: { _id: 'user-1', status: 'suspended' },
+    update: { $set: { status: 'active' } },
+    options: { returnDocument: 'after', runValidators: true },
+  });
+});
+
+test('updateStatusIfCurrent clears reset credentials in the winning suspension write', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return Promise.resolve(null);
+  });
+
+  const result = await userRepository.updateStatusIfCurrent(
+    'user-1',
+    'active',
+    'suspended'
+  );
+
+  assert.equal(result, null);
+  assert.deepEqual(captured.filter, { _id: 'user-1', status: 'active' });
+  assert.deepEqual(captured.update, {
+    $set: { status: 'suspended' },
+    $unset: {
+      passwordResetTokenHash: 1,
+      passwordResetExpiresAt: 1,
+    },
+  });
+  assert.deepEqual(captured.options, { returnDocument: 'after', runValidators: true });
+});

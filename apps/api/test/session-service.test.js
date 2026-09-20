@@ -102,3 +102,23 @@ test('revokeAllSessionsForUser returns the number of sessions revoked', async (t
   const count = await sessionService.revokeAllSessionsForUser('user-1');
   assert.equal(count, 3);
 });
+
+test('revokeAllSessionsForUserCreatedBy preserves and forwards the stable cutoff', async (t) => {
+  let captured;
+  t.mock.method(
+    sessionRepository,
+    'revokeAllForUserCreatedBy',
+    async (userId, createdAtCutoff, now) => {
+      captured = { userId, createdAtCutoff, now };
+      return 2;
+    }
+  );
+  const cutoff = new Date('2026-09-21T01:00:00.000Z');
+
+  const count = await sessionService.revokeAllSessionsForUserCreatedBy('user-1', cutoff);
+
+  assert.equal(count, 2);
+  assert.equal(captured.userId, 'user-1');
+  assert.equal(captured.createdAtCutoff, cutoff);
+  assert.ok(captured.now instanceof Date);
+});
