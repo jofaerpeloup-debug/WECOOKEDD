@@ -21,8 +21,76 @@ function stripComments(src) {
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
+function extractBalancedAfter(src, anchor, open = '{', close = '}') {
+  const anchorIndex = src.indexOf(anchor);
+  if (anchorIndex < 0) return null;
+  if (src.indexOf(anchor, anchorIndex + anchor.length) >= 0) return null;
+  const start = src.indexOf(open, anchorIndex + anchor.length);
+  if (start < 0) return null;
+
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let i = start; i < src.length; i += 1) {
+    const char = src[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === open) depth += 1;
+    if (char === close) depth -= 1;
+    if (depth === 0) return src.slice(start, i + 1);
+  }
+  return null;
+}
+
+function staticTextNodes(src) {
+  return [...src.matchAll(/<Text\b[^>]*>([\s\S]*?)<\/Text>/g)]
+    .map((match) =>
+      match[1]
+        // Preserve simple static JSX string expressions before removing
+        // genuinely dynamic expressions: <Text>{'Discover'}</Text>.
+        .replace(/\{\s*(['"])(.*?)\1\s*\}/g, '$2')
+        .replace(/\{[\s\S]*?\}/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+    .filter(Boolean);
+}
+
+function hasVisibleLabelFamily(src, families) {
+  const labels = staticTextNodes(src).map((label) => label.toLowerCase());
+  return labels.some((label) => families.some((family) => label.startsWith(family)));
+}
+
+function hasCategoryQueryKey(src) {
+  return /\bcategory\s*:/.test(src);
+}
+
 const raw = read('screens/DiscoverScreen.js');
 const code = stripComments(raw);
+
+describe('static audit source helpers', () => {
+  it('fails closed for missing, duplicate, and unbalanced anchors', () => {
+    expect(extractBalancedAfter('const value = { ok: true };', 'missing')).toBeNull();
+    expect(extractBalancedAfter('anchor { one: 1 }; anchor { two: 2 };', 'anchor')).toBeNull();
+    expect(extractBalancedAfter('anchor { one: 1;', 'anchor')).toBeNull();
+  });
+
+  it('ignores delimiters inside ordinary quoted strings', () => {
+    const block = extractBalancedAfter(
+      "anchor { single: '}', double: \"}\", template: `}`, nested: { ok: true } }",
+      'anchor'
+    );
+    expect(block).toBe("{ single: '}', double: \"}\", template: `}`, nested: { ok: true } }");
+  });
+});
 
 describe('Discover keeps our real recipe data architecture (no mock regression)', () => {
   it('imports no mock-data layer or teammate mock providers', () => {
@@ -128,6 +196,90 @@ describe('Discover uses the pushed-screen header contract', () => {
   it('keeps the TopBar as the only Discover title presentation', () => {
     expect(code).not.toMatch(/styles\.pageTitle/);
     expect(code).not.toMatch(/\bpageTitle\s*:/);
+    expect(staticTextNodes(code)).not.toContain('Discover');
+  });
+
+  it('recognizes quoted JSX text literals without treating dynamic expressions as static copy', () => {
+    expect(staticTextNodes("<Text>{'Discover'}</Text>")).toEqual(['Discover']);
+    expect(staticTextNodes('<Text>{"Discover"}</Text>')).toEqual(['Discover']);
+    expect(staticTextNodes('<Text>{dynamicTitle}</Text>')).toEqual([]);
+  });
+});
+
+describe('Clear-all owns only search and the supported filter selection', () => {
+  it('clears search immediately and selects the real all filter', () => {
+    const clearAll = extractBalancedAfter(code, 'const clearAll = () =>');
+    expect(clearAll).not.toBeNull();
+    expect(clearAll).toMatch(/setSearch\(\s*['"]{2}\s*\)/);
+    expect(clearAll).toMatch(/setDebouncedSearch\(\s*['"]{2}\s*\)/);
+    expect(clearAll).toMatch(/setActiveKey\(\s*['"]all['"]\s*\)/);
+    expect(clearAll).not.toMatch(/setFilters|AsyncStorage|saveJSON|navigation\./);
+  });
+
+  it('a first-page supersession resets both load-more flags before its request', () => {
+    const loadFirstPage = extractBalancedAfter(code, 'async ({ refresh = false } = {}) =>');
+    expect(loadFirstPage).not.toBeNull();
+
+    const generation = loadFirstPage.indexOf('const gen = ++genRef.current');
+    const firstPageGuard = loadFirstPage.indexOf('firstPageGenRef.current = gen');
+    const refReset = loadFirstPage.indexOf('loadingMoreRef.current = false');
+    const stateReset = loadFirstPage.indexOf('setLoadingMore(false)');
+    const refreshBranch = loadFirstPage.indexOf('if (refresh)');
+    const request = loadFirstPage.indexOf('await listRecipes(queryFor(1))');
+
+    expect(generation).toBeGreaterThanOrEqual(0);
+    expect(firstPageGuard).toBeGreaterThan(generation);
+    expect(refReset).toBeGreaterThan(firstPageGuard);
+    expect(stateReset).toBeGreaterThan(refReset);
+    expect(refreshBranch).toBeGreaterThan(stateReset);
+    expect(request).toBeGreaterThan(stateReset);
+  });
+
+  it('blocks load-more while the current generation owns a first-page request', () => {
+    const loadMore = extractBalancedAfter(code, 'const loadMore = useCallback(');
+    expect(loadMore).not.toBeNull();
+
+    const firstPageGate = loadMore.indexOf(
+      'if (firstPageGenRef.current === genRef.current) return'
+    );
+    const loadMoreGate = loadMore.indexOf('if (loadingMoreRef.current) return');
+    const request = loadMore.indexOf('await listRecipes(queryFor(nextPage))');
+
+    expect(firstPageGate).toBeGreaterThanOrEqual(0);
+    expect(loadMoreGate).toBeGreaterThan(firstPageGate);
+    expect(request).toBeGreaterThan(loadMoreGate);
+  });
+
+  it('only the owning first-page generation can release its in-flight guard', () => {
+    const loadFirstPage = extractBalancedAfter(code, 'async ({ refresh = false } = {}) =>');
+    expect(loadFirstPage).not.toBeNull();
+    const finallyBlock = extractBalancedAfter(loadFirstPage, 'finally');
+    expect(finallyBlock).not.toBeNull();
+    expect(finallyBlock).toMatch(
+      /if \(firstPageGenRef\.current === gen\) firstPageGenRef\.current = null/
+    );
+  });
+
+  it('stale load-more completion cannot mutate results or clean up a newer generation', () => {
+    const loadMore = extractBalancedAfter(code, 'const loadMore = useCallback(');
+    expect(loadMore).not.toBeNull();
+    expect(loadMore).toMatch(
+      /await listRecipes\(queryFor\(nextPage\)\);\s*if \(!mountedRef\.current \|\| gen !== genRef\.current\) return;\s*setRecipes/
+    );
+
+    const finallyBlock = extractBalancedAfter(loadMore, 'finally');
+    expect(finallyBlock).not.toBeNull();
+    expect(finallyBlock).toMatch(
+      /if \(mountedRef\.current && gen === genRef\.current\)\s*\{[\s\S]*loadingMoreRef\.current = false;[\s\S]*setLoadingMore\(false\)/
+    );
+  });
+});
+
+describe('Discover search-row layout', () => {
+  it('lets the outer search surface consume remaining width beside Clear', () => {
+    const searchFieldStyle = extractBalancedAfter(code, 'searchField:');
+    expect(searchFieldStyle).not.toBeNull();
+    expect(searchFieldStyle).toMatch(/\bflex\s*:\s*1\b/);
   });
 });
 
@@ -156,10 +308,46 @@ describe('the Dashboard -> Discover handoff contract holds (M2.1 locked)', () =>
 });
 
 describe('no new cuisine / category / region UX (locked M2 decision)', () => {
-  it('adds no cuisine filter, chip, label, copy or query', () => {
+  it('adds no cuisine or category filter UI/query wiring', () => {
     expect(code).not.toMatch(/cuisine/i);
     expect(code).not.toMatch(/\bFilipino\b|\bLuzon\b|\bVisayas\b|\bMindanao\b|\bregion\b/);
-    expect(code).not.toMatch(/\bcategory\b/);
     expect(code).not.toMatch(/craving/i);
+
+    expect(
+      hasVisibleLabelFamily(code, [
+        'category',
+        'categories',
+        'browse by category',
+        'browse by categories',
+      ])
+    ).toBe(false);
+    expect(code).not.toMatch(/\b(?:setCategory|activeCategory|categoryFilter|initialCategory)\b/);
+
+    const queryFor = extractBalancedAfter(code, 'const queryFor = useCallback(');
+    expect(queryFor).not.toBeNull();
+    expect(hasCategoryQueryKey(queryFor)).toBe(false);
+  });
+
+  it('allows legitimate recipe.category reads while detecting category query/UI semantics', () => {
+    expect(hasCategoryQueryKey('const label = recipe.category;')).toBe(false);
+    expect(hasCategoryQueryKey('const query = { category: selectedCategory };')).toBe(true);
+    expect(hasVisibleLabelFamily('<Text>Categories</Text>', ['category', 'categories'])).toBe(
+      true
+    );
+  });
+
+  it('renders none of the unsupported teammate filter or feed sections', () => {
+    expect(
+      hasVisibleLabelFamily(code, [
+        'cuisine',
+        'mood',
+        'cooking time',
+        'sort',
+        'trending',
+        'recently viewed',
+      ])
+    ).toBe(false);
+    expect(code).not.toMatch(/\buseRecentlyViewed\s*\(|\buseSearchHistory\s*\(/);
+    expect(code).not.toMatch(/\bSORT_OPTIONS\b|\bTIME_BUCKETS\b|\bVIBES\b/);
   });
 });

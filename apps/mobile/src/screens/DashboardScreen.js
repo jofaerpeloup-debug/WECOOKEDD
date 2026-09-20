@@ -23,9 +23,9 @@ import { loadJSON, saveJSON } from '../utils/storage';
 
 // M2.1 — teammate Dashboard/Home visual port on top of our real data + routes.
 //
-// PRESENTATION comes from the teammate Dashboard (commit c1c86ed): time-of-day
+// PRESENTATION comes from the audited teammate Dashboard (commit 081a94b): time-of-day
 // greeting, search + filter affordance, recent-search chips, a rotating
-// "Today's Feature" hero, a browse row, and a horizontal recipe rail.
+// daily-pick hero, a browse row, and a horizontal recipe rail.
 //
 // DATA + ROUTES stay ours and are NOT regressed:
 //   - recipes come from the Express REST API via `listRecipes` (debounced,
@@ -54,7 +54,7 @@ import { loadJSON, saveJSON } from '../utils/storage';
 //     decisions we add no new cuisine-based UX here. So this row links to the
 //     backend-supported Discover filters (difficulty / dietary) instead of
 //     inventing category tiles or imagery.
-//   - "Today's Feature" is a deterministic daily pick FROM the real latest
+//   - "Today's Pick" is a deterministic daily rotation FROM the real latest
 //     recipes — not a curated/editorial "featured" flag (the backend has none).
 //   - the notifications bell stays the shared TopBar affordance (a real
 //     notifications feed is M9).
@@ -272,11 +272,30 @@ export default function DashboardScreen({ navigation }) {
 
   const renderErrorBlock = (message, onRetry) => (
     <View style={styles.stateBlock}>
+      <View style={styles.stateIcon}>
+        <Ionicons name="alert-circle-outline" size={21} color={colors.sageDeep} />
+      </View>
       <Text style={styles.errorText}>{message}</Text>
       <Pressable style={styles.retryBtn} onPress={onRetry} hitSlop={8}>
         <Ionicons name="refresh" size={14} color={colors.sageDeep} />
         <Text style={styles.retryText}>Retry</Text>
       </Pressable>
+    </View>
+  );
+
+  const renderLoadingBlock = (message = 'Loading recipes…') => (
+    <View style={styles.stateBlock}>
+      <ActivityIndicator color={colors.sageDeep} />
+      <Text style={styles.stateMessage}>{message}</Text>
+    </View>
+  );
+
+  const renderEmptyBlock = (message, icon = 'restaurant-outline') => (
+    <View style={styles.stateBlock}>
+      <View style={styles.stateIcon}>
+        <Ionicons name={icon} size={21} color={colors.sageDeep} />
+      </View>
+      <Text style={styles.emptyText}>{message}</Text>
     </View>
   );
 
@@ -395,24 +414,20 @@ export default function DashboardScreen({ navigation }) {
               )}
             </View>
             {searchLoading && results.length === 0 ? (
-              <View style={styles.stateBlock}>
-                <ActivityIndicator color={colors.sageDeep} />
-              </View>
+              renderLoadingBlock('Searching recipes…')
             ) : searchError ? (
               renderErrorBlock(searchError, () => setSearchNonce((n) => n + 1))
             ) : results.length === 0 ? (
-              <Text style={styles.emptyText}>No recipes match “{trimmed}”.</Text>
+              renderEmptyBlock(`No recipes match “${trimmed}”.`, 'search-outline')
             ) : (
               <View style={styles.resultList}>{results.map(renderSearchRow)}</View>
             )}
           </View>
         ) : (
           <>
-            {/* Today's Feature — a daily pick from the real latest recipes. */}
+            {/* Today's Pick — a daily rotation from the real latest recipes. */}
             {latestLoading && latest.length === 0 ? (
-              <View style={styles.stateBlock}>
-                <ActivityIndicator color={colors.sageDeep} />
-              </View>
+              renderLoadingBlock()
             ) : latestError ? (
               renderErrorBlock(latestError, loadLatest)
             ) : feature ? (
@@ -423,7 +438,7 @@ export default function DashboardScreen({ navigation }) {
                       expo-linear-gradient (proven not to paint on the
                       Samsung/Fabric runtime this app was tested on). */}
                   <View style={styles.heroScrim} pointerEvents="none" />
-                  <Text style={styles.heroEyebrow}>TODAY'S FEATURE</Text>
+                  <Text style={styles.heroEyebrow}>TODAY'S PICK</Text>
                   <View style={styles.heroTextWrap}>
                     <Text style={styles.heroTitle} numberOfLines={2}>
                       {feature.title}
@@ -452,7 +467,9 @@ export default function DashboardScreen({ navigation }) {
                       style={styles.browseChip}
                       onPress={() => openDiscover(shortcut.key)}
                     >
-                      <Ionicons name={shortcut.icon} size={18} color={colors.sageDeep} />
+                      <View style={styles.browseIcon}>
+                        <Ionicons name={shortcut.icon} size={21} color={colors.sageDeep} />
+                      </View>
                       <Text style={styles.browseLabel}>{shortcut.label}</Text>
                     </Pressable>
                   ))}
@@ -465,7 +482,7 @@ export default function DashboardScreen({ navigation }) {
                   </Pressable>
                 </View>
                 {rail.length === 0 ? (
-                  <Text style={styles.emptyText}>No other recipes yet.</Text>
+                  renderEmptyBlock('No other recipes yet.')
                 ) : (
                   <ScrollView
                     horizontal
@@ -477,7 +494,7 @@ export default function DashboardScreen({ navigation }) {
                 )}
               </>
             ) : (
-              <Text style={styles.emptyText}>No recipes yet.</Text>
+              renderEmptyBlock('No recipes yet.')
             )}
           </>
         )}
@@ -489,34 +506,36 @@ export default function DashboardScreen({ navigation }) {
 function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
-    scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    scroll: {
+      paddingHorizontal: spacing.xl,
+      paddingTop: spacing.lg,
+      paddingBottom: spacing.xxxl,
+    },
 
     greetingSub: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.base,
       color: colors.inkSoft,
-      marginTop: spacing.sm,
+      marginTop: spacing.md,
     },
     greeting: {
       fontFamily: typography.display.fontFamily,
       fontSize: 22,
       color: colors.ink,
       marginTop: 2,
-      marginBottom: spacing.lg,
+      marginBottom: spacing.xl,
     },
 
-    searchRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
+    searchRow: { flexDirection: 'row', gap: 10, marginBottom: spacing.xl },
     searchBar: {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.sm,
-      backgroundColor: colors.paper,
-      borderRadius: radius.pill,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      paddingHorizontal: spacing.lg,
-      height: 46,
+      backgroundColor: colors.creamDeep,
+      borderRadius: radius.md,
+      paddingHorizontal: 14,
+      height: 44,
     },
     searchInput: {
       flex: 1,
@@ -526,8 +545,8 @@ function makeStyles(colors) {
       outlineStyle: 'none',
     },
     filterBtn: {
-      width: 46,
-      height: 46,
+      width: 44,
+      height: 44,
       borderRadius: radius.md,
       backgroundColor: colors.sageDeep,
       alignItems: 'center',
@@ -609,7 +628,7 @@ function makeStyles(colors) {
       fontFamily: typography.body.bold,
       fontSize: 10.5,
       letterSpacing: 1.2,
-      color: '#FAF9F6',
+      color: colors.stone,
     },
     heroTextWrap: { position: 'absolute', left: spacing.lg, right: 68, bottom: spacing.md },
     heroTitle: {
@@ -636,18 +655,22 @@ function makeStyles(colors) {
       justifyContent: 'center',
     },
 
-    browseRow: { gap: spacing.sm, paddingBottom: spacing.xl, paddingRight: spacing.md },
+    browseRow: { gap: spacing.lg, paddingBottom: spacing.xxl, paddingRight: spacing.md },
     browseChip: {
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 6,
+      gap: spacing.sm,
+      width: 78,
+    },
+    browseIcon: {
+      width: 62,
+      height: 62,
+      borderRadius: 31,
+      alignItems: 'center',
+      justifyContent: 'center',
       backgroundColor: colors.paper,
-      borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: colors.hairline,
-      paddingVertical: spacing.md,
-      paddingHorizontal: spacing.lg,
-      minWidth: 92,
     },
     browseLabel: {
       fontFamily: typography.body.medium,
@@ -656,17 +679,24 @@ function makeStyles(colors) {
     },
 
     railRow: { gap: spacing.md, paddingBottom: spacing.xl, paddingRight: spacing.md },
-    railCard: { width: 158 },
+    railCard: {
+      width: 168,
+      padding: spacing.sm,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      backgroundColor: colors.paper,
+    },
     railImage: {
-      width: 158,
+      width: '100%',
       height: 112,
       borderRadius: radius.md,
       backgroundColor: colors.creamDeep,
     },
     railHeart: {
       position: 'absolute',
-      top: spacing.sm,
-      right: spacing.sm,
+      top: spacing.md,
+      right: spacing.md,
       width: 26,
       height: 26,
       borderRadius: 13,
@@ -688,7 +718,16 @@ function makeStyles(colors) {
 
     searchSection: { marginTop: spacing.xs },
     resultList: { gap: spacing.md },
-    resultRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    resultRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      padding: spacing.sm,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      backgroundColor: colors.paper,
+    },
     resultMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     resultThumb: {
       width: 56,
@@ -714,7 +753,7 @@ function makeStyles(colors) {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
       color: colors.inkFaint,
-      marginBottom: spacing.xl,
+      textAlign: 'center',
     },
     stateBlock: {
       alignItems: 'center',
@@ -722,6 +761,20 @@ function makeStyles(colors) {
       gap: spacing.md,
       paddingVertical: spacing.xl,
       marginBottom: spacing.xl,
+    },
+    stateIcon: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.sagePale,
+    },
+    stateMessage: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      color: colors.inkFaint,
+      textAlign: 'center',
     },
     errorText: {
       fontFamily: typography.body.fontFamily,

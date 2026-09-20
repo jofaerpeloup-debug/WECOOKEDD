@@ -23,7 +23,7 @@ import { recipeTimeLabel } from '../utils/recipe';
 
 // M2.2 — teammate Discover ("Search") visual port on top of our real data + routes.
 //
-// PRESENTATION comes from the teammate Discover screen (commit c1c86ed): the
+// PRESENTATION comes from the audited teammate Discover screen (commit 081a94b): the
 // screen title, the filled search field, pill filter chips (active = deep sage),
 // an uppercase result-count label, and compact image + title + meta result rows.
 //
@@ -125,6 +125,10 @@ export default function DiscoverScreen({ navigation, route }) {
   // One monotonic generation per filter/search change / refresh. A response
   // tagged with a superseded generation is dropped instead of mutating the list.
   const genRef = useRef(0);
+  // Generation that currently owns a first-page request. Unlike visible phase
+  // state, this updates synchronously, so onEndReached cannot start load-more
+  // during refresh or before a first-page state update has rendered.
+  const firstPageGenRef = useRef(null);
   const loadingMoreRef = useRef(false);
   const mountedRef = useRef(true);
 
@@ -171,7 +175,9 @@ export default function DiscoverScreen({ navigation, route }) {
   const loadFirstPage = useCallback(
     async ({ refresh = false } = {}) => {
       const gen = ++genRef.current;
+      firstPageGenRef.current = gen;
       loadingMoreRef.current = false;
+      setLoadingMore(false);
       setMoreError(null);
       if (refresh) {
         setRefreshing(true);
@@ -194,6 +200,9 @@ export default function DiscoverScreen({ navigation, route }) {
         setError(getRecipeErrorMessage(err));
         setPhase('error');
       } finally {
+        // A newer first-page request owns the guard once it replaces this
+        // generation. Obsolete completion must never release that newer guard.
+        if (firstPageGenRef.current === gen) firstPageGenRef.current = null;
         if (mountedRef.current && gen === genRef.current) setRefreshing(false);
       }
     },
@@ -205,6 +214,7 @@ export default function DiscoverScreen({ navigation, route }) {
   }, [loadFirstPage]);
 
   const loadMore = useCallback(async () => {
+    if (firstPageGenRef.current === genRef.current) return;
     if (loadingMoreRef.current) return;
     if (phase !== 'ready' || !pagination) return;
     // Backend V1 behavior: the DB page is fetched BEFORE the non-admin "usable"
@@ -227,8 +237,13 @@ export default function DiscoverScreen({ navigation, route }) {
       if (!mountedRef.current || gen !== genRef.current) return;
       setMoreError(getRecipeErrorMessage(err));
     } finally {
-      loadingMoreRef.current = false;
-      if (mountedRef.current && gen === genRef.current) setLoadingMore(false);
+      // A first-page load may have superseded this request and already reset
+      // both load-more flags. Stale cleanup must not interfere with a newer
+      // generation (including a later load-more request).
+      if (mountedRef.current && gen === genRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }, [phase, pagination, pageLoaded, queryFor]);
 
@@ -238,6 +253,14 @@ export default function DiscoverScreen({ navigation, route }) {
       recipeId: recipe.id,
       initialRecipe: recipe,
     });
+  };
+
+  // One honest reset for the two controls this screen owns. It deliberately
+  // does not introduce or mutate any additional filter/persistence state.
+  const clearAll = () => {
+    setSearch('');
+    setDebouncedSearch('');
+    setActiveKey('all');
   };
 
   const countLabel = useMemo(() => {
@@ -272,12 +295,17 @@ export default function DiscoverScreen({ navigation, route }) {
       return (
         <View style={styles.centerBox}>
           <ActivityIndicator color={colors.sageDeep} />
+          <Text style={styles.stateMessage}>Loading recipes…</Text>
         </View>
       );
     }
     if (phase === 'error') {
       return (
         <View style={styles.centerBox}>
+          <View style={styles.stateIcon}>
+            <Ionicons name="alert-circle-outline" size={22} color={colors.sageDeep} />
+          </View>
+          <Text style={styles.stateTitle}>We couldn’t load recipes</Text>
           <Text style={styles.errorText}>{error}</Text>
           <Pressable style={styles.retryBtn} onPress={() => loadFirstPage()} hitSlop={8}>
             <Ionicons name="refresh" size={14} color={colors.sageDeep} />
@@ -288,7 +316,11 @@ export default function DiscoverScreen({ navigation, route }) {
     }
     return (
       <View style={styles.centerBox}>
-        <Text style={styles.emptyText}>
+        <View style={styles.stateIcon}>
+          <Ionicons name="search-outline" size={22} color={colors.sageDeep} />
+        </View>
+        <Text style={styles.stateTitle}>Nothing matches</Text>
+        <Text style={styles.stateMessage}>
           {debouncedSearch
             ? `No recipes match “${debouncedSearch}”.`
             : 'No recipes match this filter yet.'}
@@ -324,22 +356,39 @@ export default function DiscoverScreen({ navigation, route }) {
       <View style={styles.header}>
         <Text style={styles.pageSub}>Search our kitchen, then narrow it down.</Text>
 
-        <View style={styles.searchField}>
-          <Ionicons name="search" size={15} color={colors.inkSoft} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search recipes..."
-            placeholderTextColor={colors.inkFaint}
-            value={search}
-            onChangeText={setSearch}
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect={false}
-            returnKeyType="search"
-          />
-          {search.length > 0 && (
-            <Pressable onPress={() => setSearch('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={16} color={colors.inkFaint} />
+        <View style={styles.searchRow}>
+          <View style={styles.searchField}>
+            <Ionicons name="search" size={15} color={colors.inkSoft} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search recipes..."
+              placeholderTextColor={colors.inkFaint}
+              value={search}
+              onChangeText={setSearch}
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {search.length > 0 && (
+              <Pressable
+                onPress={() => setSearch('')}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+              >
+                <Ionicons name="close-circle" size={16} color={colors.inkFaint} />
+              </Pressable>
+            )}
+          </View>
+          {(search.length > 0 || activeKey !== 'all') && (
+            <Pressable
+              onPress={clearAll}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search and filters"
+            >
+              <Text style={styles.clearText}>Clear</Text>
             </Pressable>
           )}
         </View>
@@ -357,6 +406,8 @@ export default function DiscoverScreen({ navigation, route }) {
                 key={f.key}
                 onPress={() => setActiveKey(f.key)}
                 style={[styles.chip, isActive && styles.chipActive]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isActive }}
               >
                 <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
                   {f.label}
@@ -366,7 +417,11 @@ export default function DiscoverScreen({ navigation, route }) {
           })}
         </ScrollView>
 
-        {countLabel && <Text style={styles.countLabel}>{countLabel} found</Text>}
+        {countLabel && (
+          <View style={styles.countPill}>
+            <Text style={styles.countLabel}>{countLabel} found</Text>
+          </View>
+        )}
       </View>
 
       <FlatList
@@ -397,7 +452,7 @@ function makeStyles(colors, shadow) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     header: {
-      paddingHorizontal: spacing.lg,
+      paddingHorizontal: spacing.xl,
       paddingTop: spacing.lg,
       paddingBottom: spacing.md,
       borderBottomWidth: 1,
@@ -410,7 +465,13 @@ function makeStyles(colors, shadow) {
       marginTop: 2,
       marginBottom: spacing.md,
     },
+    searchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
     searchField: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.sm,
@@ -425,6 +486,11 @@ function makeStyles(colors, shadow) {
       fontSize: typography.sizes.base,
       color: colors.ink,
       outlineStyle: 'none',
+    },
+    clearText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
     },
     chipRow: { gap: spacing.sm, paddingTop: spacing.md, paddingRight: spacing.md },
     chip: {
@@ -441,22 +507,31 @@ function makeStyles(colors, shadow) {
       color: colors.inkSoft,
     },
     chipTextActive: { color: colors.onAccent },
+    countPill: {
+      alignSelf: 'flex-start',
+      marginTop: spacing.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 6,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sagePale,
+    },
     countLabel: {
       fontFamily: typography.body.bold,
       fontSize: 11.5,
       letterSpacing: 1.1,
       textTransform: 'uppercase',
-      color: colors.inkFaint,
-      marginTop: spacing.md,
+      color: colors.sageDeep,
     },
-    listContent: { padding: spacing.lg, paddingBottom: spacing.xxxl, flexGrow: 1 },
+    listContent: { padding: spacing.xl, paddingBottom: spacing.xxxl, flexGrow: 1 },
     row: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.sm,
-      backgroundColor: colors.paper,
-      borderRadius: radius.md,
-      padding: spacing.sm,
+      backgroundColor: colors.creamDeep,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      padding: 10,
       marginBottom: spacing.md,
       ...shadow.soft,
     },
@@ -486,6 +561,29 @@ function makeStyles(colors, shadow) {
       justifyContent: 'center',
       gap: spacing.md,
       paddingVertical: spacing.xxxl,
+      paddingHorizontal: spacing.lg,
+    },
+    stateIcon: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.sagePale,
+    },
+    stateTitle: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: typography.sizes.lg,
+      color: colors.ink,
+      textAlign: 'center',
+    },
+    stateMessage: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      lineHeight: 19,
+      color: colors.inkFaint,
+      textAlign: 'center',
+      maxWidth: 280,
     },
     footerBox: {
       alignItems: 'center',
@@ -496,12 +594,6 @@ function makeStyles(colors, shadow) {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
       color: colors.inkSoft,
-      textAlign: 'center',
-    },
-    emptyText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkFaint,
       textAlign: 'center',
     },
     retryBtn: {
