@@ -489,9 +489,9 @@ describe('forgot-password request step', () => {
       /const requestPasswordReset = async \(\) => \{[\s\S]*?\n  \};/
     );
     expect(reset).not.toBeNull();
-    expect(reset[0]).toMatch(/if \(!trimmedEmail\)/);
+    expect(reset[0]).toMatch(/if \(emailError\)/);
     // The guard returns before any request goes out.
-    const guardIndex = reset[0].indexOf('if (!trimmedEmail)');
+    const guardIndex = reset[0].indexOf('if (emailError)');
     const callIndex = reset[0].indexOf('authService.forgotPassword');
     expect(guardIndex).toBeGreaterThan(-1);
     expect(callIndex).toBeGreaterThan(guardIndex);
@@ -502,15 +502,7 @@ describe('forgot-password request step', () => {
   });
 });
 
-describe('M1 adds no password-manager integration to the auth fields', () => {
-  // M1 is a presentation migration. Password-manager integration is deferred to
-  // its own slice, so these fields stay exactly where HEAD left them: no
-  // autofill hints of any kind. These assertions describe that absence and
-  // nothing about how the deferred slice should eventually be built.
-  //
-  // What the migration DOES keep is input hardening that stands on its own,
-  // independent of autofill: the email keyboard, and the IME transforms pinned
-  // off on both fields.
+describe('auth fields expose supported keyboard and password-manager hints', () => {
   const inputBlocks = (name) => [...raw[name].matchAll(/<Input\b[\s\S]*?\/>/g)].map((m) => m[0]);
 
   const emailField = (name) => {
@@ -525,10 +517,9 @@ describe('M1 adds no password-manager integration to the auth fields', () => {
     return secure[0];
   };
 
-  it.each(['Login', 'Register'])('%s introduces no autoComplete on any field', (name) => {
-    for (const block of inputBlocks(name)) {
-      expect(block).not.toMatch(/autoComplete/);
-    }
+  it.each(['Login', 'Register'])('%s identifies its email field for autofill', (name) => {
+    expect(emailField(name)).toMatch(/autoComplete="email"/);
+    expect(emailField(name)).toMatch(/textContentType="emailAddress"/);
   });
 
   it.each(['Login', 'Register'])('%s introduces no importantForAutofill on any field', (name) => {
@@ -537,9 +528,11 @@ describe('M1 adds no password-manager integration to the auth fields', () => {
     }
   });
 
-  it('Register introduces no credential-pairing textContentType', () => {
-    expect(emailField('Register')).not.toMatch(/textContentType/);
-    expect(passwordField('Register')).not.toMatch(/textContentType/);
+  it('distinguishes current-password login from new-password registration', () => {
+    expect(passwordField('Login')).toMatch(/autoComplete="current-password"/);
+    expect(passwordField('Login')).toMatch(/textContentType="password"/);
+    expect(passwordField('Register')).toMatch(/autoComplete="new-password"/);
+    expect(passwordField('Register')).toMatch(/textContentType="newPassword"/);
   });
 
   it.each(['Login', 'Register'])(
@@ -556,14 +549,14 @@ describe('M1 adds no password-manager integration to the auth fields', () => {
   it.each(['Login', 'Register'])('%s email field stays controlled', (name) => {
     const field = emailField(name);
     expect(field).toMatch(/value=\{email\}/);
-    expect(field).toMatch(/onChangeText=\{setEmail\}/);
+    expect(field).toMatch(/onChangeText=/);
   });
 
   it.each(['Login', 'Register'])('%s password input stays masked and controlled', (name) => {
     const field = passwordField(name);
     expect(field).toMatch(/\bsecureTextEntry\b/);
     expect(field).toMatch(/value=\{password\}/);
-    expect(field).toMatch(/onChangeText=\{setPassword\}/);
+    expect(field).toMatch(/onChangeText=/);
   });
 
   it.each(['Login', 'Register'])('%s password input pins the IME transforms off', (name) => {
@@ -590,7 +583,7 @@ describe('M1 adds no password-manager integration to the auth fields', () => {
     }
   });
 
-  it('the shared Input still owns masking and adds no autofill of its own', () => {
+  it('the shared Input still owns masking and leaves autofill hints opt-in', () => {
     const input = read('components/Input.js');
     expect(input).toMatch(/secureTextEntry=\{hidden\}/);
     expect(input).not.toMatch(/importantForAutofill/);

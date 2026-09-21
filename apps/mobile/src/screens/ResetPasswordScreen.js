@@ -4,11 +4,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { BowlMark } from '../theme/brandKit';
-import Input from '../components/Input';
+import Input, { PasswordRequirements } from '../components/Input';
 import Button from '../components/Button';
 import { useAuth } from '../context/AuthContext';
 import * as authService from '../api/authService';
-import { getAuthErrorMessage } from '../api/errorMessages';
+import {
+  getAuthErrorMessage,
+  getAuthFieldErrors,
+  getNewPasswordValidationError,
+} from '../api/errorMessages';
 
 // Reached only via the wecooked://reset-password?token=... deep link (see
 // RootNavigator's `linking` config). The token lives ONLY in route.params —
@@ -32,6 +36,7 @@ export default function ResetPasswordScreen({ navigation, route }) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [succeeded, setSucceeded] = useState(false);
   const inFlightRef = useRef(false);
@@ -65,14 +70,16 @@ export default function ResetPasswordScreen({ navigation, route }) {
     if (inFlightRef.current || tokenMissing) return;
     setError(null);
 
-    if (newPassword.length < 8) {
-      setError('New password must be at least 8 characters.');
+    const passwordError = getNewPasswordValidationError(newPassword);
+    if (passwordError) {
+      setFieldErrors({ newPassword: passwordError });
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError("New passwords don't match.");
+      setFieldErrors({ confirmPassword: 'Passwords do not match.' });
       return;
     }
+    setFieldErrors({});
 
     inFlightRef.current = true;
     setSubmitting(true);
@@ -92,7 +99,11 @@ export default function ResetPasswordScreen({ navigation, route }) {
       await endLocalSession();
       if (mountedRef.current) setSucceeded(true);
     } catch (err) {
-      if (mountedRef.current) setError(getAuthErrorMessage(err));
+      if (mountedRef.current) {
+        const apiFieldErrors = getAuthFieldErrors(err, ['newPassword']);
+        setFieldErrors(apiFieldErrors);
+        if (Object.keys(apiFieldErrors).length === 0) setError(getAuthErrorMessage(err));
+      }
     } finally {
       inFlightRef.current = false;
       if (mountedRef.current) setSubmitting(false);
@@ -154,27 +165,42 @@ export default function ResetPasswordScreen({ navigation, route }) {
 
               <Input
                 label="New Password"
+                required
                 icon="lock-closed-outline"
                 value={newPassword}
-                onChangeText={setNewPassword}
+                onChangeText={(value) => {
+                  setNewPassword(value);
+                  setFieldErrors((current) => ({ ...current, newPassword: null }));
+                }}
                 placeholder="At least 8 characters"
                 secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
                 spellCheck={false}
+                autoComplete="new-password"
+                textContentType="newPassword"
                 editable={!submitting}
+                error={fieldErrors.newPassword}
               />
+              <PasswordRequirements value={newPassword} />
               <Input
                 label="Confirm New Password"
+                required
                 icon="lock-closed-outline"
                 value={confirmPassword}
-                onChangeText={setConfirmPassword}
+                onChangeText={(value) => {
+                  setConfirmPassword(value);
+                  setFieldErrors((current) => ({ ...current, confirmPassword: null }));
+                }}
                 placeholder="Re-enter new password"
                 secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
                 spellCheck={false}
+                autoComplete="new-password"
+                textContentType="newPassword"
                 editable={!submitting}
+                error={fieldErrors.confirmPassword}
                 style={{ marginBottom: spacing.sm }}
               />
 

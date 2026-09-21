@@ -3,8 +3,65 @@
 // exposes stacks or DB internals, never logs tokens/credentials.
 
 import { ApiError } from './client';
+import {
+  EMAIL_MAX_CHARS,
+  NEW_PASSWORD_ERROR_MESSAGES,
+  PASSWORD_MAX_UTF8_BYTES,
+  utf8ByteLength,
+  validateNewPassword,
+} from '@wecooked/contracts';
 
 const FALLBACK = 'Something went wrong. Please try again.';
+// Mirrors Zod v4's email syntax used by the authoritative API schema. The
+// shared package owns the maximum; this local check exists only for early UX.
+const EMAIL_PATTERN = /^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9-]*\.)+[A-Za-z]{2,}$/;
+
+export const PASSWORD_TOO_LONG_MESSAGE = 'Password is too long. Please use a shorter password.';
+
+export function getEmailValidationError(value) {
+  const email = value.trim();
+  if (!email) return 'Email is required.';
+  if (email.length > EMAIL_MAX_CHARS) {
+    return `Email must be ${EMAIL_MAX_CHARS} characters or fewer.`;
+  }
+  if (!EMAIL_PATTERN.test(email)) return 'Enter a valid email address.';
+  return null;
+}
+
+export function getLegacyPasswordValidationError(value, label = 'Password') {
+  if (!value) return `${label} is required.`;
+  if (utf8ByteLength(value) > PASSWORD_MAX_UTF8_BYTES) return PASSWORD_TOO_LONG_MESSAGE;
+  return null;
+}
+
+export function getNewPasswordValidationError(value) {
+  const errors = validateNewPassword(value);
+  if (errors.includes(NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES)) {
+    return PASSWORD_TOO_LONG_MESSAGE;
+  }
+  if (errors.includes(NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED)) {
+    return NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED;
+  }
+  return errors[0] || null;
+}
+
+export function getAuthFieldErrors(err, allowedFields) {
+  if (!(err instanceof ApiError) || err.code !== 'VALIDATION_ERROR') return {};
+
+  const allowed = new Set(allowedFields);
+  return err.details.reduce((fieldErrors, detail) => {
+    const field = typeof detail?.field === 'string' ? detail.field.split('.').pop() : null;
+    if (!allowed.has(field) || typeof detail?.message !== 'string' || !detail.message) {
+      return fieldErrors;
+    }
+    const message =
+      detail.message === NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES
+        ? PASSWORD_TOO_LONG_MESSAGE
+        : detail.message;
+    fieldErrors[field] = fieldErrors[field] ? `${fieldErrors[field]} ${message}` : message;
+    return fieldErrors;
+  }, {});
+}
 
 // Fixed, safe strings for the native Google adapter's stable codes
 // (see src/native/googleSignIn.js). These errors are NOT ApiErrors. Raw native
