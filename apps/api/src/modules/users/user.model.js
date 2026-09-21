@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { EMAIL_MAX_CHARS } = require('@wecooked/contracts');
 
 const SOCIAL_AUTH_PROVIDERS = ['google', 'apple', 'facebook'];
 const ROLES = Object.freeze(['user', 'moderator', 'admin']);
@@ -50,6 +51,7 @@ const userSchema = new mongoose.Schema(
       required: true,
       trim: true,
       lowercase: true,
+      maxlength: EMAIL_MAX_CHARS,
       unique: true,
     },
     // select: false keeps the hash out of normal queries; auth code must

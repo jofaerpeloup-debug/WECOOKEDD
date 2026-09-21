@@ -14,6 +14,7 @@ const {
   getPasswordByteLength,
   MAX_PASSWORD_BYTES,
 } = require('../src/shared/security/password');
+const { utf8ByteLength, PASSWORD_MAX_UTF8_BYTES } = require('@wecooked/contracts');
 
 test('hashPassword produces a bcrypt hash, never the plaintext', async () => {
   const hash = await hashPassword('correct horse battery staple');
@@ -48,6 +49,8 @@ test('getPasswordByteLength counts UTF-8 bytes, not characters', () => {
 
 test('MAX_PASSWORD_BYTES matches bcrypt\'s 72-byte input limit', () => {
   assert.equal(MAX_PASSWORD_BYTES, 72);
+  assert.equal(MAX_PASSWORD_BYTES, PASSWORD_MAX_UTF8_BYTES);
+  assert.equal(getPasswordByteLength, utf8ByteLength);
 });
 
 test('comparePassword rejects a password over the 72-byte limit rather than letting bcrypt silently truncate it into a match', async () => {

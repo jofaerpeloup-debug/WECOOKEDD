@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { EMAIL_MAX_CHARS } = require('@wecooked/contracts');
 const { loadEnv } = require('../../../config/env');
 const { AppError } = require('../../../shared/errors/app-error');
 
@@ -6,7 +7,7 @@ const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com'];
 const CLOCK_TOLERANCE_SECONDS = 60;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const emailSchema = z.string().trim().toLowerCase().email().max(320);
+const emailSchema = z.string().trim().toLowerCase().email().max(EMAIL_MAX_CHARS);
 
 function invalidCredentialError() {
   return new AppError('Google credential is invalid or expired.', {

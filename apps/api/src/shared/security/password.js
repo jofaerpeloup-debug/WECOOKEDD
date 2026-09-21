@@ -1,14 +1,12 @@
 const bcrypt = require('bcryptjs');
 const { loadEnv } = require('../../config/env');
+const { PASSWORD_MAX_UTF8_BYTES, utf8ByteLength } = require('@wecooked/contracts');
 
 // bcrypt only considers the first 72 bytes of its input; anything beyond
 // that is silently ignored, which would let two different passwords hash
 // identically. Reject before hashing rather than truncate silently.
-const MAX_PASSWORD_BYTES = 72;
-
-function getPasswordByteLength(password) {
-  return Buffer.byteLength(password, 'utf8');
-}
+const MAX_PASSWORD_BYTES = PASSWORD_MAX_UTF8_BYTES;
+const getPasswordByteLength = utf8ByteLength;
 
 async function hashPassword(password) {
   const { bcryptRounds } = loadEnv();
