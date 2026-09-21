@@ -25,6 +25,34 @@ import {
   getNewPasswordValidationError,
 } from '../api/errorMessages';
 
+export function getRegistrationPasswordAutofillProps(platform) {
+  // On iOS, cancelling a generated Strong Password can visually clear the
+  // native field without reporting an empty value to React. Without a native
+  // cancellation event to reconcile that divergence, do not opt this one
+  // registration field into the generated-password flow. Other platforms keep
+  // the standard new-password hint.
+  return platform === 'ios'
+    ? { textContentType: 'none' }
+    : { autoComplete: 'new-password' };
+}
+
+export function prepareRegistrationSubmission({ name, email, password }) {
+  const trimmedName = name.trim();
+  const trimmedEmail = email.trim();
+  const fieldErrors = {
+    name: trimmedName ? null : 'Name is required.',
+    email: getEmailValidationError(email),
+    password: getNewPasswordValidationError(password),
+  };
+
+  return {
+    fieldErrors,
+    payload: Object.values(fieldErrors).some(Boolean)
+      ? null
+      : { name: trimmedName, email: trimmedEmail, password },
+  };
+}
+
 export default function RegisterScreen({ navigation }) {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
@@ -71,15 +99,11 @@ export default function RegisterScreen({ navigation }) {
     if (inFlightRef.current) return; // guard against rapid duplicate submissions
     google.cancel();
     setError(null);
-    const trimmedName = name.trim();
-    const trimmedEmail = email.trim();
-    const nextFieldErrors = {
-      name: trimmedName ? null : 'Name is required.',
-      email: getEmailValidationError(email),
-      password: getNewPasswordValidationError(password),
-    };
-    if (Object.values(nextFieldErrors).some(Boolean)) {
-      setFieldErrors(nextFieldErrors);
+    // Validate and submit one immutable snapshot so no fallback/default value
+    // can differ from the password state represented by the checklist.
+    const submission = prepareRegistrationSubmission({ name, email, password });
+    if (!submission.payload) {
+      setFieldErrors(submission.fieldErrors);
       return;
     }
     setFieldErrors({});
@@ -90,7 +114,7 @@ export default function RegisterScreen({ navigation }) {
       // other server-owned fields are never supplied. The backend always
       // creates a normal user and returns a full session, so this also signs
       // the new account in; RootNavigator then swaps to the authed stack.
-      await signUp({ name: trimmedName, email: trimmedEmail, password });
+      await signUp(submission.payload);
     } catch (err) {
       const apiFieldErrors = getAuthFieldErrors(err, ['name', 'email', 'password']);
       setFieldErrors(apiFieldErrors);
@@ -191,8 +215,7 @@ export default function RegisterScreen({ navigation }) {
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
-            autoComplete="new-password"
-            textContentType="newPassword"
+            {...getRegistrationPasswordAutofillProps(Platform.OS)}
             editable={!busy}
             error={fieldErrors.password}
           />

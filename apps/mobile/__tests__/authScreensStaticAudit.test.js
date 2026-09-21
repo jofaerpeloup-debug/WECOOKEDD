@@ -150,9 +150,8 @@ describe('the real auth wiring is still in place', () => {
 
   it('Register registers through useAuth().signUp with only name/email/password', () => {
     expect(raw.Register).toMatch(/const \{ signUp \} = useAuth\(\)/);
-    expect(raw.Register).toMatch(
-      /await signUp\(\{ name: trimmedName, email: trimmedEmail, password \}\)/
-    );
+    expect(raw.Register).toMatch(/await signUp\(submission\.payload\)/);
+    expect(raw.Register).toMatch(/\{ name: trimmedName, email: trimmedEmail, password \}/);
   });
 
   it('both screens guard against duplicate submissions', () => {
@@ -531,8 +530,13 @@ describe('auth fields expose supported keyboard and password-manager hints', () 
   it('distinguishes current-password login from new-password registration', () => {
     expect(passwordField('Login')).toMatch(/autoComplete="current-password"/);
     expect(passwordField('Login')).toMatch(/textContentType="password"/);
-    expect(passwordField('Register')).toMatch(/autoComplete="new-password"/);
-    expect(passwordField('Register')).toMatch(/textContentType="newPassword"/);
+    expect(passwordField('Register')).toMatch(
+      /getRegistrationPasswordAutofillProps\(Platform\.OS\)/
+    );
+    expect(raw.Register).toMatch(
+      /platform === 'ios'[\s\S]*?\{ textContentType: 'none' \}[\s\S]*?\{ autoComplete: 'new-password' \}/
+    );
+    expect(passwordField('Register')).not.toMatch(/textContentType="newPassword"/);
   });
 
   it.each(['Login', 'Register'])(
@@ -572,9 +576,8 @@ describe('auth fields expose supported keyboard and password-manager hints', () 
   it('neither screen transforms the password before submitting it', () => {
     // name/email are trimmed by design; the password must reach the API
     // byte-for-byte or bcrypt.compare can never match at login.
-    expect(raw.Register).toMatch(
-      /await signUp\(\{ name: trimmedName, email: trimmedEmail, password \}\)/
-    );
+    expect(raw.Register).toMatch(/await signUp\(submission\.payload\)/);
+    expect(raw.Register).toMatch(/\{ name: trimmedName, email: trimmedEmail, password \}/);
     expect(raw.Login).toMatch(/await signIn\(\{ email: trimmedEmail, password \}\)/);
     for (const name of ['Login', 'Register']) {
       expect(code[name]).not.toMatch(

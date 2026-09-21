@@ -57,18 +57,25 @@ import {
   getLegacyPasswordValidationError,
   getNewPasswordValidationError,
 } from '../src/api/errorMessages';
-import Input, { getInputAccessibilityProps } from '../src/components/Input';
+import Input, { PasswordRequirements, getInputAccessibilityProps } from '../src/components/Input';
 
 const SRC = path.join(__dirname, '../src');
 const read = (relativePath) => fs.readFileSync(path.join(SRC, relativePath), 'utf8');
 
 function elementsOfType(node, type) {
+  if (Array.isArray(node)) return node.flatMap((child) => elementsOfType(child, type));
   if (!node || typeof node !== 'object') return [];
   const matches = node.type === type ? [node] : [];
   const children = Array.isArray(node.props?.children)
     ? node.props.children
     : [node.props?.children];
   return matches.concat(children.flatMap((child) => elementsOfType(child, type)));
+}
+
+function requirementLabels(value) {
+  return elementsOfType(PasswordRequirements({ value }), 'Text')
+    .map((element) => element.props.accessibilityLabel)
+    .filter(Boolean);
 }
 
 describe('shared Input accessibility behavior', () => {
@@ -267,6 +274,40 @@ describe('mobile auth validation mirrors the shared contract', () => {
   });
 });
 
+describe('registration password checklist transitions', () => {
+  const validPassword = 'Generated1!';
+
+  beforeEach(() => {
+    mockStateSetters.length = 0;
+  });
+
+  it('keeps an empty password incomplete', () => {
+    const labels = requirementLabels('');
+    expect(labels).toEqual(expect.arrayContaining([
+      'Not met: At least 8 characters',
+      'Not met: One uppercase letter',
+      'Not met: One lowercase letter',
+      'Not met: One number',
+      'Not met: One of ! @ # $ % & * ? _ - .',
+    ]));
+    expect(
+      elementsOfType(PasswordRequirements({ value: '' }), 'Text')
+        .some((element) => element.props.children === 'Meets password requirements')
+    ).toBe(false);
+  });
+
+  it('reflects an autofill-like valid value and then an explicit clear immediately', () => {
+    expect(requirementLabels(validPassword).every((label) => label.startsWith('Met:'))).toBe(true);
+    expect(requirementLabels('').some((label) => label.startsWith('Not met:'))).toBe(true);
+  });
+
+  it('updates immediately when a valid value becomes invalid', () => {
+    expect(requirementLabels(validPassword).every((label) => label.startsWith('Met:'))).toBe(true);
+    expect(requirementLabels('Generated1').find((label) => label.includes('One of')))
+      .toBe('Not met: One of ! @ # $ % & * ? _ - .');
+  });
+});
+
 describe('field-level API validation mapping', () => {
   it('maps and preserves email/password messages while ignoring unrelated fields', () => {
     const error = new ApiError('Request validation failed.', {
@@ -324,7 +365,8 @@ describe('shared Input and auth-screen UX invariants', () => {
 
   it('registration has no confirm-password field and sends only name/email/password', () => {
     expect(register).not.toMatch(/confirmPassword|Confirm Password/);
-    expect(register).toMatch(/signUp\(\{ name: trimmedName, email: trimmedEmail, password \}\)/);
+    expect(register).toMatch(/prepareRegistrationSubmission\(\{ name, email, password \}\)/);
+    expect(register).toMatch(/await signUp\(submission\.payload\)/);
     expect(register).toMatch(/<PasswordRequirements value=\{password\} \/>/);
   });
 
