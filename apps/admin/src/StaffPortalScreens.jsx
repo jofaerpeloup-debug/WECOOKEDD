@@ -3,21 +3,43 @@ import {
   AlertCircle, ArrowRight, Check, CheckCircle2, Clock, Eye, EyeOff,
   Leaf, Lock, Mail, ShieldAlert, User, XCircle,
 } from 'lucide-react';
-import { staffErrorMessage } from './staffErrorMessage.js';
+import { EMAIL_MAX_CHARS } from '@wecooked/contracts';
+import {
+  hasStaffAuthErrors,
+  loginPayload,
+  passwordRequirementState,
+  registrationPayload,
+  validateStaffLogin,
+  validateStaffRegistration,
+} from './staffContracts.js';
+import { staffErrorMessage, staffFieldErrors } from './staffErrorMessage.js';
 
-function passwordRules(password, name, email) {
-  const lower = password.toLowerCase();
-  const namePart = name.trim().toLowerCase();
-  const emailPart = email.trim().toLowerCase().split('@')[0];
-  return {
-    length: password.length >= 8,
-    mixedCase: /[a-z]/.test(password) && /[A-Z]/.test(password),
-    number: /[0-9]/.test(password),
-    symbol: /[^A-Za-z0-9]/.test(password),
-    noNameOrEmail:
-      (!namePart || !lower.includes(namePart)) &&
-      (!emailPart || !lower.includes(emailPart)),
-  };
+function FieldErrors({ id, messages = [] }) {
+  if (!messages.length) return null;
+  return (
+    <ul id={id} className="wc-auth-field-errors" role="alert">
+      {messages.map((message) => <li key={message}>{message}</li>)}
+    </ul>
+  );
+}
+
+export function PasswordRequirements({ password }) {
+  const state = passwordRequirementState(password);
+  return (
+    <div id="staff-password-requirements" className="wc-pw-requirements" aria-live="polite">
+      <div className="wc-pw-title">Password requirements</div>
+      <ul className="wc-pw-checklist">
+        {state.requirements.map(({ message, label, met }) => (
+          <li key={message} className={met ? 'ok' : ''} aria-label={`${met ? 'Met' : 'Not met'}: ${label}`}>
+            {met ? <Check size={13} /> : <span className="wc-pw-dot" />}{label}
+          </li>
+        ))}
+      </ul>
+      {state.meetsRequirements && (
+        <div className="wc-pw-complete">Meets password requirements</div>
+      )}
+    </div>
+  );
 }
 
 function PortalFrame({ icon, title, subtitle, children }) {
@@ -44,15 +66,26 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [resetStatus, setResetStatus] = useState('');
   const [resetting, setResetting] = useState(false);
   const applying = mode === 'apply';
-  const rules = passwordRules(password, name, email);
+
+  function updateField(field, value, setter) {
+    setter(value);
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }
 
   function switchMode(next) {
     setMode(next);
+    setFieldErrors({});
     setError('');
     setResetStatus('');
     setPassword('');
@@ -60,21 +93,28 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
 
   async function submit(event) {
     event.preventDefault();
+    const values = { name, email, password };
+    const validationErrors = applying
+      ? validateStaffRegistration(values)
+      : validateStaffLogin(values);
+
+    setFieldErrors(validationErrors);
     setError('');
-    if (!email.trim() || !password || (applying && !name.trim())) {
-      setError(applying ? 'Fill in your name, email, and password.' : 'Enter your email and password.');
-      return;
-    }
-    if (applying && !Object.values(rules).every(Boolean)) {
-      setError('Your password does not meet all the requirements below.');
-      return;
-    }
+    if (hasStaffAuthErrors(validationErrors)) return;
+
     setSubmitting(true);
     try {
-      if (applying) await onRegisterAndApply({ name, email, password });
-      else await onSignIn({ email, password });
+      if (applying) await onRegisterAndApply(registrationPayload(values));
+      else await onSignIn(loginPayload(values));
     } catch (requestError) {
-      setError(staffErrorMessage(requestError, 'Unable to continue. Check your details and try again.'));
+      const apiFieldErrors = staffFieldErrors(
+        requestError,
+        applying ? ['name', 'email', 'password'] : ['email', 'password'],
+      );
+      setFieldErrors(apiFieldErrors);
+      if (!hasStaffAuthErrors(apiFieldErrors)) {
+        setError(staffErrorMessage(requestError, 'Unable to continue. Check your details and try again.'));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -105,56 +145,68 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
         ? 'Create a WeCooked account and submit your Moderator application.'
         : 'Existing staff and account holders can sign in here.'}
     >
-      <form onSubmit={submit}>
+      <form onSubmit={submit} noValidate>
         {applying && (
           <div className="wc-auth-field">
-            <label htmlFor="staff-apply-name">Name</label>
+            <label htmlFor="staff-apply-name">Name <span aria-hidden="true">*</span></label>
             <div className="wc-auth-input-wrap">
               <User size={15} />
-              <input id="staff-apply-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" required />
+              <input
+                id="staff-apply-name"
+                value={name}
+                onChange={(e) => updateField('name', e.target.value, setName)}
+                autoComplete="name"
+                required
+                aria-invalid={Boolean(fieldErrors.name?.length)}
+                aria-describedby={fieldErrors.name?.length ? 'staff-name-error' : undefined}
+              />
             </div>
+            <FieldErrors id="staff-name-error" messages={fieldErrors.name} />
           </div>
         )}
         <div className="wc-auth-field">
-          <label htmlFor="staff-auth-email">Email</label>
+          <label htmlFor="staff-auth-email">Email <span aria-hidden="true">*</span></label>
           <div className="wc-auth-input-wrap">
             <Mail size={15} />
-            <input id="staff-auth-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
+            <input
+              id="staff-auth-email"
+              type="email"
+              value={email}
+              onChange={(e) => updateField('email', e.target.value, setEmail)}
+              autoComplete="username"
+              maxLength={EMAIL_MAX_CHARS}
+              required
+              aria-invalid={Boolean(fieldErrors.email?.length)}
+              aria-describedby={fieldErrors.email?.length ? 'staff-email-error' : undefined}
+            />
           </div>
+          <FieldErrors id="staff-email-error" messages={fieldErrors.email} />
         </div>
         <div className="wc-auth-field">
-          <label htmlFor="staff-auth-password">Password</label>
+          <label htmlFor="staff-auth-password">Password <span aria-hidden="true">*</span></label>
           <div className="wc-auth-input-wrap">
             <Lock size={15} />
             <input
               id="staff-auth-password"
               type={showPassword ? 'text' : 'password'}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => updateField('password', e.target.value, setPassword)}
               autoComplete={applying ? 'new-password' : 'current-password'}
               required
+              aria-invalid={Boolean(fieldErrors.password?.length)}
+              aria-describedby={[
+                fieldErrors.password?.length ? 'staff-password-error' : '',
+                applying ? 'staff-password-requirements' : '',
+              ].filter(Boolean).join(' ') || undefined}
             />
-            <button type="button" className="wc-auth-eye" onClick={() => setShowPassword((shown) => !shown)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+            <button type="button" className="wc-auth-eye" onClick={() => setShowPassword((shown) => !shown)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
               {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
             </button>
           </div>
+          <FieldErrors id="staff-password-error" messages={fieldErrors.password} />
         </div>
 
-        {applying && (
-          <ul className="wc-pw-checklist" aria-label="Password requirements">
-            {[
-              ['length', 'Contains at least 8 characters'],
-              ['mixedCase', 'Contains lower and upper case letters'],
-              ['number', 'Contains at least one number'],
-              ['symbol', 'Contains at least one special symbol'],
-              ['noNameOrEmail', 'Does not contain your name or email'],
-            ].map(([key, label]) => (
-              <li key={key} className={rules[key] ? 'ok' : ''}>
-                {rules[key] ? <Check size={13} /> : <span className="wc-pw-dot" />}{label}
-              </li>
-            ))}
-          </ul>
-        )}
+        {applying && <PasswordRequirements password={password} />}
 
         {!applying && (
           <div className="wc-auth-switch" style={{ textAlign: 'right', marginTop: -6 }}>
@@ -275,6 +327,11 @@ export function StaffPortalScreenStyles() {
     .wc-admin *:focus-visible { outline:2px solid var(--saffron); outline-offset:2px; }
     .wc-btn-secondary { display:flex; align-items:center; justify-content:center; gap:6px; background:transparent; color:var(--sage-deep); border:1px solid var(--sage-mid); padding:9px 16px; border-radius:8px; font-size:14px; font-weight:600; }
     .wc-btn-secondary:disabled { opacity:.6; cursor:default; }
+    .wc-auth-field-errors { margin:5px 0 0; padding-left:18px; color:var(--clay); font-size:12px; line-height:1.4; }
+    .wc-pw-requirements { margin:-4px 0 14px; }
+    .wc-pw-title { margin-bottom:6px; color:var(--ink); font-size:12px; font-weight:700; }
+    .wc-pw-requirements .wc-pw-checklist { margin:0; }
+    .wc-pw-complete { margin-top:7px; color:var(--sage-deep); font-size:12px; font-weight:700; }
     .wc-portal-notice { background:rgba(192,213,194,.45); border:1px solid var(--sage-light); border-radius:8px; padding:10px 12px; font-size:12.5px; line-height:1.45; margin-bottom:12px; }
     .wc-portal-step { display:flex; align-items:center; gap:9px; padding:9px 0; color:var(--ink); font-size:13px; }
     .wc-portal-step svg { color:var(--sage-deep); flex-shrink:0; }
