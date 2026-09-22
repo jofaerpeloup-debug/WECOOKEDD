@@ -6,7 +6,7 @@ const { verifyRequiredIndexes } = require('./config/required-indexes');
 async function start() {
   const env = loadEnv();
 
-  await connectDatabase(env.mongodbUri);
+  await connectDatabase(env.mongodbUri, env.nodeEnv);
 
   // Read-only. Refuses to serve traffic when the unique auth-identity index is
   // missing or has drifted. This check never creates or repairs THAT index —

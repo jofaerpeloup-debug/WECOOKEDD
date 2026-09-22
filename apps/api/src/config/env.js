@@ -55,6 +55,26 @@ const googleOAuthClientIdsSchema = z
     'Each GOOGLE_OAUTH_CLIENT_IDS entry must be 255 characters or fewer'
   );
 
+function hasExplicitMongoDatabase(uri) {
+  const schemeEnd = uri.indexOf('://');
+  const pathStart = uri.indexOf('/', schemeEnd + 3);
+  if (schemeEnd < 0 || pathStart < 0) {
+    return false;
+  }
+
+  const encodedName = uri.slice(pathStart + 1).split(/[?#]/, 1)[0];
+  if (!encodedName) {
+    return false;
+  }
+
+  try {
+    const name = decodeURIComponent(encodedName);
+    return name.trim().length > 0 && !name.includes('/');
+  } catch {
+    return false;
+  }
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -90,6 +110,13 @@ const envSchema = z
     CLOUDINARY_RECIPE_FOLDER: z.string().trim().max(255).optional().default('wecooked/recipes'),
   })
   .superRefine((value, ctx) => {
+    if (value.NODE_ENV === 'production' && !hasExplicitMongoDatabase(value.MONGODB_URI)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MONGODB_URI'],
+        message: 'MONGODB_URI must explicitly select a database in production',
+      });
+    }
     if (value.NODE_ENV === 'production' && requiresHttpsUpgrade(value.PASSWORD_RESET_URL)) {
       ctx.addIssue({
         code: 'custom',

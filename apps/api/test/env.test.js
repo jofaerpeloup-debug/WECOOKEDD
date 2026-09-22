@@ -95,6 +95,42 @@ test('parseEnv rejects a MONGODB_URI without a mongodb scheme', () => {
   );
 });
 
+test('parseEnv requires an explicitly selected MongoDB database in production', () => {
+  for (const mongodbUri of [
+    'mongodb+srv://cluster.example.net',
+    'mongodb+srv://cluster.example.net/?retryWrites=true&w=majority',
+  ]) {
+    assert.throws(
+      () =>
+        parseEnv({
+          ...REQUIRED_EMAIL_ENV,
+          NODE_ENV: 'production',
+          MONGODB_URI: mongodbUri,
+          JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+          PASSWORD_RESET_URL: 'https://example.com/reset-password',
+          EMAIL_VERIFICATION_URL: 'https://example.com/verify-email',
+        }),
+      /MONGODB_URI must explicitly select a database in production/
+    );
+  }
+});
+
+test('parseEnv accepts an explicitly selected MongoDB database in production', () => {
+  const result = parseEnv({
+    ...REQUIRED_EMAIL_ENV,
+    NODE_ENV: 'production',
+    MONGODB_URI: 'mongodb+srv://cluster.example.net/wecooked?retryWrites=true&w=majority',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    PASSWORD_RESET_URL: 'https://example.com/reset-password',
+    EMAIL_VERIFICATION_URL: 'https://example.com/verify-email',
+  });
+
+  assert.equal(
+    result.mongodbUri,
+    'mongodb+srv://cluster.example.net/wecooked?retryWrites=true&w=majority'
+  );
+});
+
 test('parseEnv rejects a non-numeric PORT', () => {
   assert.throws(() =>
     parseEnv({

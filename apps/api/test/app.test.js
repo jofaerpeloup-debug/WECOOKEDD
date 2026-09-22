@@ -13,6 +13,13 @@ const { createApp } = require('../src/app');
 
 const app = createApp();
 
+test('direct/local requests keep proxy trust disabled', async () => {
+  const response = await request(app).get('/api/v1/health');
+
+  assert.equal(response.status, 200);
+  assert.equal(app.get('trust proxy'), false);
+});
+
 test('GET /api/v1/health returns the standard success envelope', async () => {
   const response = await request(app).get('/api/v1/health');
 
