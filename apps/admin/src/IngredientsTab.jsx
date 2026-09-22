@@ -13,6 +13,11 @@ import {
 } from './ingredientOptions.js';
 
 const PAGE_LIMIT = 20;
+export const INGREDIENT_FORM_LIMITS = Object.freeze({
+  name: 100,
+  aliases: 20,
+  alias: 100,
+});
 
 // Turns any thrown error into one safe, human sentence. Backend `AppError`
 // messages are already safe to show; our ApiError network message is ours;
@@ -35,16 +40,72 @@ function arraysEqual(a = [], b = []) {
   return a.every((v, i) => v === b[i]);
 }
 
-function parseAliases(text) {
-  return text
-    .split(',')
-    .map((a) => a.trim())
-    .filter(Boolean);
+export function analyzeAliases(text = '') {
+  const parts = String(text).split(',');
+  const entries = parts.map((alias) => alias.trim()).filter(Boolean);
+  const aliases = [];
+  const seen = new Set();
+
+  for (const entry of entries) {
+    // Mirror the service's whitespace normalization and case-insensitive
+    // duplicate key while preserving the first-seen spelling/casing.
+    const normalized = entry.replace(/\s+/g, ' ');
+    const key = normalized.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      aliases.push(normalized);
+    }
+  }
+
+  return {
+    aliases,
+    entries,
+    duplicateCount: entries.length - aliases.length,
+    hasBlankEntries: String(text).trim() !== '' && parts.some((part) => !part.trim()),
+  };
+}
+
+export function validateIngredientForm(form) {
+  const errors = {};
+  const name = String(form.name ?? '').trim();
+  const aliasAnalysis = analyzeAliases(form.aliasesText);
+  const categoryValues = new Set(INGREDIENT_CATEGORIES.map(({ value }) => value));
+  const allergenValues = new Set(INGREDIENT_ALLERGEN_TAGS.map(({ value }) => value));
+
+  if (!name) {
+    errors.name = 'Ingredient name is required.';
+  } else if (name.length > INGREDIENT_FORM_LIMITS.name) {
+    errors.name = `Ingredient name must be ${INGREDIENT_FORM_LIMITS.name} characters or fewer.`;
+  }
+
+  if (aliasAnalysis.entries.length > INGREDIENT_FORM_LIMITS.aliases) {
+    errors.aliases = `You can add up to ${INGREDIENT_FORM_LIMITS.aliases} aliases.`;
+  } else if (aliasAnalysis.entries.some((alias) => alias.length > INGREDIENT_FORM_LIMITS.alias)) {
+    errors.aliases = `Each alias must be ${INGREDIENT_FORM_LIMITS.alias} characters or fewer.`;
+  }
+
+  if (!categoryValues.has(form.category)) errors.category = 'Choose a valid category.';
+  if (!Array.isArray(form.allergenTags)
+      || form.allergenTags.some((tag) => !allergenValues.has(tag))) {
+    errors.allergenTags = 'Choose only supported allergen tags.';
+  }
+  if (typeof form.isActive !== 'boolean') errors.isActive = 'Choose a valid status.';
+
+  return errors;
+}
+
+export function ingredientFormValues(form) {
+  return {
+    name: String(form.name ?? '').trim(),
+    aliases: analyzeAliases(form.aliasesText).aliases,
+    category: form.category,
+    allergenTags: form.allergenTags,
+  };
 }
 
 // Maps backend VALIDATION_ERROR details ([{ field, message }]) onto the form's
 // fields. Field paths look like "name", "aliases.0", "allergenTags.1".
-function fieldErrorsFromDetails(details = []) {
+export function ingredientFieldErrorsFromDetails(details = []) {
   const out = {};
   for (const d of details) {
     const field = String(d.field || '');
@@ -54,6 +115,12 @@ function fieldErrorsFromDetails(details = []) {
     else if (field.startsWith('allergenTags')) out.allergenTags = d.message;
   }
   return out;
+}
+
+export function clearIngredientFieldError(errors, field) {
+  const next = { ...errors };
+  delete next[field];
+  return next;
 }
 
 function useIngredients() {
@@ -225,6 +292,9 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
         .wc-ing-pagination button:disabled { opacity: 0.4; cursor: default; }
         .wc-ing-modal-hint { font-size: 11.5px; color: var(--stone); margin-top: 4px; line-height: 1.4; }
         .wc-ing-field-error { color: var(--clay); font-size: 12px; margin-top: 5px; }
+        .wc-field input[aria-invalid="true"], .wc-field select[aria-invalid="true"] {
+          border-color: var(--clay);
+        }
         .wc-ing-archived-note {
           font-size: 12.5px; color: var(--stone); line-height: 1.5;
           background: var(--parchment); border: 1px solid var(--stone-light);
@@ -436,7 +506,7 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
   );
 }
 
-function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
+export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
   const editing = Boolean(ingredient);
 
   const [form, setForm] = useState(() => ({
@@ -449,8 +519,15 @@ function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const aliasAnalysis = analyzeAliases(form.aliasesText);
+  const canonicalNameLength = form.name.trim().length;
+
+  const clearFieldError = (field) => {
+    setFieldErrors((errors) => clearIngredientFieldError(errors, field));
+  };
 
   const toggleAllergen = (tag) => {
+    clearFieldError('allergenTags');
     setForm((f) => ({
       ...f,
       allergenTags: f.allergenTags.includes(tag)
@@ -460,21 +537,20 @@ function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
   };
 
   const buildPayload = () => {
-    const name = form.name.trim();
-    const aliases = parseAliases(form.aliasesText);
+    const values = ingredientFormValues(form);
 
     if (!editing) {
-      return { name, aliases, category: form.category, allergenTags: form.allergenTags };
+      return values;
     }
 
     // PATCH: only send what actually changed, so an unchanged submit is a
     // no-op and the API never re-normalizes fields needlessly.
     const patch = {};
-    if (name !== ingredient.name) patch.name = name;
-    if (!arraysEqual(aliases, ingredient.aliases || [])) patch.aliases = aliases;
-    if (form.category !== ingredient.category) patch.category = form.category;
-    if (!arraysEqual(form.allergenTags, ingredient.allergenTags || [])) {
-      patch.allergenTags = form.allergenTags;
+    if (values.name !== ingredient.name) patch.name = values.name;
+    if (!arraysEqual(values.aliases, ingredient.aliases || [])) patch.aliases = values.aliases;
+    if (values.category !== ingredient.category) patch.category = values.category;
+    if (!arraysEqual(values.allergenTags, ingredient.allergenTags || [])) {
+      patch.allergenTags = values.allergenTags;
     }
     if (form.isActive !== ingredient.isActive) patch.isActive = form.isActive;
     return patch;
@@ -485,8 +561,9 @@ function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
     setFormError('');
     setFieldErrors({});
 
-    if (!form.name.trim()) {
-      setFieldErrors({ name: 'Name is required.' });
+    const errors = validateIngredientForm(form);
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
       return;
     }
 
@@ -503,7 +580,7 @@ function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
     } catch (err) {
       if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       if (err instanceof ApiError && err.isValidationError) {
-        setFieldErrors(fieldErrorsFromDetails(err.details));
+        setFieldErrors(ingredientFieldErrorsFromDetails(err.details));
         setFormError('Please fix the highlighted fields.');
       } else {
         setFormError(toMessage(err));
@@ -532,34 +609,63 @@ function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
 
         <form onSubmit={submit}>
           <div className="wc-field">
-            <label>Name</label>
+            <label htmlFor="ingredient-name">Name</label>
             <input
+              id="ingredient-name"
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              onChange={(e) => {
+                clearFieldError('name');
+                setForm({ ...form, name: e.target.value });
+              }}
               placeholder="e.g. Butter"
+              required
+              aria-invalid={Boolean(fieldErrors.name)}
+              aria-describedby="ingredient-name-hint ingredient-name-error"
               autoFocus
             />
-            {fieldErrors.name && <div className="wc-ing-field-error">{fieldErrors.name}</div>}
-          </div>
-
-          <div className="wc-field">
-            <label>Aliases</label>
-            <input
-              value={form.aliasesText}
-              onChange={(e) => setForm({ ...form, aliasesText: e.target.value })}
-              placeholder="e.g. sweet cream butter, unsalted butter"
-            />
-            <div className="wc-ing-modal-hint">
-              Separate with commas. Used so a search for any alias finds this ingredient.
+            <div id="ingredient-name-hint" className="wc-ing-modal-hint">
+              {canonicalNameLength}/{INGREDIENT_FORM_LIMITS.name} trimmed characters.
             </div>
-            {fieldErrors.aliases && <div className="wc-ing-field-error">{fieldErrors.aliases}</div>}
+            {fieldErrors.name && (
+              <div id="ingredient-name-error" className="wc-ing-field-error">{fieldErrors.name}</div>
+            )}
           </div>
 
           <div className="wc-field">
-            <label>Category</label>
+            <label htmlFor="ingredient-aliases">Aliases</label>
+            <input
+              id="ingredient-aliases"
+              value={form.aliasesText}
+              onChange={(e) => {
+                clearFieldError('aliases');
+                setForm({ ...form, aliasesText: e.target.value });
+              }}
+              placeholder="e.g. sweet cream butter, unsalted butter"
+              aria-invalid={Boolean(fieldErrors.aliases)}
+              aria-describedby="ingredient-aliases-hint ingredient-aliases-error"
+            />
+            <div id="ingredient-aliases-hint" className="wc-ing-modal-hint">
+              Separate with commas. {aliasAnalysis.entries.length}/{INGREDIENT_FORM_LIMITS.aliases}{' '}
+              entries; {INGREDIENT_FORM_LIMITS.alias} characters each. Blank entries are ignored.
+              {aliasAnalysis.duplicateCount > 0 && (
+                <> {aliasAnalysis.duplicateCount} case-insensitive duplicate{aliasAnalysis.duplicateCount === 1 ? '' : 's'} will be removed, keeping the first spelling.</>
+              )}
+            </div>
+            {fieldErrors.aliases && (
+              <div id="ingredient-aliases-error" className="wc-ing-field-error">{fieldErrors.aliases}</div>
+            )}
+          </div>
+
+          <div className="wc-field">
+            <label htmlFor="ingredient-category">Category</label>
             <select
+              id="ingredient-category"
               value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
+              onChange={(e) => {
+                clearFieldError('category');
+                setForm({ ...form, category: e.target.value });
+              }}
+              aria-invalid={Boolean(fieldErrors.category)}
             >
               {INGREDIENT_CATEGORIES.map((c) => (
                 <option key={c.value} value={c.value}>{c.label}</option>

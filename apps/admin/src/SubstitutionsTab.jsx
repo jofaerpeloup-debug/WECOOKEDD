@@ -41,7 +41,7 @@ function arraysEqual(a = [], b = []) {
 }
 
 // contexts + aliases share the same "comma-separated free text" entry style.
-function parseContexts(text) {
+export function parseContexts(text = '') {
   return text
     .split(',')
     .map((c) => c.trim())
@@ -51,7 +51,7 @@ function parseContexts(text) {
 // Maps backend VALIDATION_ERROR details ([{ field, message }]) onto the form's
 // fields. Field paths (see validate.middleware.js) look like
 // "sourceIngredientId", "ratio.substituteAmount", "contexts.0", "notes".
-function fieldErrorsFromDetails(details = []) {
+export function substitutionFieldErrorsFromDetails(details = []) {
   const out = {};
   for (const d of details) {
     const field = String(d.field || '');
@@ -60,9 +60,14 @@ function fieldErrorsFromDetails(details = []) {
     else if (field.startsWith('ratio')) out.ratio = d.message;
     else if (field.startsWith('contexts')) out.contexts = d.message;
     else if (field === 'notes') out.notes = d.message;
-    else out.form = d.message;
   }
   return out;
+}
+
+export function clearSubstitutionFieldErrors(errors, fields) {
+  const next = { ...errors };
+  for (const field of fields) delete next[field];
+  return next;
 }
 
 function ratiosEqual(a, b) {
@@ -77,9 +82,49 @@ function formatRatio(ratio) {
 // A finite number strictly greater than zero — mirrors the backend
 // ratioAmountSchema so the admin gets immediate feedback, without changing the
 // authoritative check.
-function isPositiveAmount(value) {
+export function isPositiveAmount(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0;
+}
+
+export function validateSubstitutionForm(form) {
+  const errors = {};
+  if (!form.source) errors.source = 'Choose a source ingredient.';
+  if (!form.substitute) errors.substitute = 'Choose a substitute ingredient.';
+  if (form.source && form.substitute && form.source.id === form.substitute.id) {
+    errors.substitute = 'Source and substitute must be different ingredients.';
+  }
+  if (!isPositiveAmount(form.sourceAmount) || !isPositiveAmount(form.substituteAmount)) {
+    errors.ratio = 'Ratio must be greater than 0.';
+  }
+
+  const contexts = parseContexts(form.contextsText);
+  if (contexts.length > MAX_CONTEXTS) {
+    errors.contexts = `You can add up to ${MAX_CONTEXTS} contexts.`;
+  } else if (contexts.some((context) => context.length > MAX_CONTEXT_LENGTH)) {
+    errors.contexts = `Each context must be ${MAX_CONTEXT_LENGTH} characters or fewer.`;
+  }
+
+  if (String(form.notes ?? '').trim().length > MAX_NOTES_LENGTH) {
+    errors.notes = `Notes must be ${MAX_NOTES_LENGTH} characters or fewer.`;
+  }
+  if (form.isActive !== undefined && typeof form.isActive !== 'boolean') {
+    errors.isActive = 'Choose a valid status.';
+  }
+  return errors;
+}
+
+export function substitutionFormValues(form) {
+  return {
+    sourceIngredientId: form.source.id,
+    substituteIngredientId: form.substitute.id,
+    ratio: {
+      sourceAmount: Number(form.sourceAmount),
+      substituteAmount: Number(form.substituteAmount),
+    },
+    contexts: parseContexts(form.contextsText),
+    notes: String(form.notes ?? '').trim(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +150,8 @@ function IngredientPicker({
   onChange,
   placeholder = 'Search ingredients…',
   ariaLabel,
+  ariaInvalid = false,
+  ariaDescribedBy,
   autoFocus = false,
   compact = false,
   disabled = false,
@@ -171,7 +218,11 @@ function IngredientPicker({
 
   if (value) {
     return (
-      <div className={`wc-sub-picker ${compact ? 'compact' : ''}`}>
+      <div
+        className={`wc-sub-picker ${compact ? 'compact' : ''}`}
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
+      >
         <div className="wc-sub-picker-selected">
           <span className="wc-sub-picker-name">{value.name}</span>
           {!disabled && (
@@ -190,7 +241,11 @@ function IngredientPicker({
   }
 
   return (
-    <div className={`wc-sub-picker ${compact ? 'compact' : ''}`}>
+    <div
+      className={`wc-sub-picker ${compact ? 'compact' : ''}`}
+      aria-invalid={ariaInvalid}
+      aria-describedby={ariaDescribedBy}
+    >
       <div className="wc-sub-picker-input">
         <Search size={14} />
         <input
@@ -198,6 +253,8 @@ function IngredientPicker({
           value={query}
           placeholder={placeholder}
           aria-label={ariaLabel}
+          aria-invalid={ariaInvalid}
+          aria-describedby={ariaDescribedBy}
           autoFocus={autoFocus}
           disabled={disabled}
           onFocus={() => setOpen(true)}
@@ -456,6 +513,9 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
         .wc-table .wc-icon-btn:disabled { opacity: 0.5; cursor: default; }
         .wc-sub-modal-hint { font-size: 11.5px; color: var(--stone); margin-top: 4px; line-height: 1.4; }
         .wc-sub-field-error { color: var(--clay); font-size: 12px; margin-top: 5px; }
+        .wc-field input[aria-invalid="true"], .wc-field textarea[aria-invalid="true"] {
+          border-color: var(--clay);
+        }
         .wc-sub-archived-note {
           font-size: 12.5px; color: var(--stone); line-height: 1.5;
           background: var(--parchment); border: 1px solid var(--stone-light);
@@ -487,6 +547,10 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
           border: 1px solid var(--stone-light);
           background: var(--parchment);
           font-size: 13px; color: var(--ink);
+        }
+        .wc-sub-picker[aria-invalid="true"] .wc-sub-picker-input,
+        .wc-sub-picker[aria-invalid="true"] .wc-sub-picker-selected {
+          border-color: var(--clay);
         }
         .wc-sub-picker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .wc-sub-picker-clear {
@@ -760,7 +824,7 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
 // ---------------------------------------------------------------------------
 // Create / edit modal
 // ---------------------------------------------------------------------------
-function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost }) {
+export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost }) {
   const editing = Boolean(substitution);
 
   const [form, setForm] = useState(() => ({
@@ -781,63 +845,37 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const contextCount = parseContexts(form.contextsText).length;
+  const canonicalNotesLength = form.notes.trim().length;
 
-  const setField = (patch) => setForm((f) => ({ ...f, ...patch }));
+  const setField = (patch, errorFields = []) => {
+    setForm((f) => ({ ...f, ...patch }));
+    if (errorFields.length > 0) {
+      setFieldErrors((errors) => clearSubstitutionFieldErrors(errors, errorFields));
+    }
+  };
 
   const buildPayload = () => {
-    const contexts = parseContexts(form.contextsText);
-    const notes = form.notes.trim();
-    const ratio = {
-      sourceAmount: Number(form.sourceAmount),
-      substituteAmount: Number(form.substituteAmount),
-    };
+    const values = substitutionFormValues(form);
 
     if (!editing) {
-      return {
-        sourceIngredientId: form.source.id,
-        substituteIngredientId: form.substitute.id,
-        ratio,
-        contexts,
-        notes,
-      };
+      return values;
     }
 
     // PATCH: only send what actually changed, so an unchanged submit is a
     // no-op and the API never re-normalizes / re-validates fields needlessly.
     const patch = {};
-    if (form.source.id !== substitution.sourceIngredient?.id) {
-      patch.sourceIngredientId = form.source.id;
+    if (values.sourceIngredientId !== substitution.sourceIngredient?.id) {
+      patch.sourceIngredientId = values.sourceIngredientId;
     }
-    if (form.substitute.id !== substitution.substituteIngredient?.id) {
-      patch.substituteIngredientId = form.substitute.id;
+    if (values.substituteIngredientId !== substitution.substituteIngredient?.id) {
+      patch.substituteIngredientId = values.substituteIngredientId;
     }
-    if (!ratiosEqual(ratio, substitution.ratio)) patch.ratio = ratio;
-    if (!arraysEqual(contexts, substitution.contexts || [])) patch.contexts = contexts;
-    if (notes !== (substitution.notes || '')) patch.notes = notes;
+    if (!ratiosEqual(values.ratio, substitution.ratio)) patch.ratio = values.ratio;
+    if (!arraysEqual(values.contexts, substitution.contexts || [])) patch.contexts = values.contexts;
+    if (values.notes !== (substitution.notes || '')) patch.notes = values.notes;
     if (form.isActive !== substitution.isActive) patch.isActive = form.isActive;
     return patch;
-  };
-
-  const validate = () => {
-    const errs = {};
-    if (!form.source) errs.source = 'Choose a source ingredient.';
-    if (!form.substitute) errs.substitute = 'Choose a substitute ingredient.';
-    if (form.source && form.substitute && form.source.id === form.substitute.id) {
-      errs.substitute = 'Source and substitute must be different ingredients.';
-    }
-    if (!isPositiveAmount(form.sourceAmount) || !isPositiveAmount(form.substituteAmount)) {
-      errs.ratio = 'Both ratio amounts must be numbers greater than zero.';
-    }
-    const contexts = parseContexts(form.contextsText);
-    if (contexts.length > MAX_CONTEXTS) {
-      errs.contexts = `A maximum of ${MAX_CONTEXTS} contexts is allowed.`;
-    } else if (contexts.some((c) => c.length > MAX_CONTEXT_LENGTH)) {
-      errs.contexts = `Each context must be ${MAX_CONTEXT_LENGTH} characters or fewer.`;
-    }
-    if (form.notes.trim().length > MAX_NOTES_LENGTH) {
-      errs.notes = `Notes must be ${MAX_NOTES_LENGTH} characters or fewer.`;
-    }
-    return errs;
   };
 
   const submit = async (e) => {
@@ -846,7 +884,7 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
     setFormError('');
     setFieldErrors({});
 
-    const errs = validate();
+    const errs = validateSubstitutionForm(form);
     if (Object.keys(errs).length > 0) {
       setFieldErrors(errs);
       return;
@@ -865,7 +903,7 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
     } catch (err) {
       if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
       if (err instanceof ApiError && err.isValidationError) {
-        setFieldErrors(fieldErrorsFromDetails(err.details));
+        setFieldErrors(substitutionFieldErrorsFromDetails(err.details));
         setFormError('Please fix the highlighted fields.');
       } else {
         // 409 duplicate pair, 400 SUBSTITUTION_SAME_INGREDIENT / INGREDIENT_INACTIVE,
@@ -899,29 +937,35 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
             <label>Source ingredient</label>
             <IngredientPicker
               value={form.source}
-              onChange={(v) => setField({ source: v })}
+              onChange={(v) => setField({ source: v }, ['source', 'substitute'])}
               placeholder="Search ingredients…"
               ariaLabel="Source ingredient"
+              ariaInvalid={Boolean(fieldErrors.source)}
+              ariaDescribedBy="substitution-source-hint substitution-source-error"
             />
-            <div className="wc-sub-modal-hint">
+            <div id="substitution-source-hint" className="wc-sub-modal-hint">
               The ingredient a recipe calls for. Only active ingredients can be used.
             </div>
-            {fieldErrors.source && <div className="wc-sub-field-error">{fieldErrors.source}</div>}
+            {fieldErrors.source && (
+              <div id="substitution-source-error" className="wc-sub-field-error">{fieldErrors.source}</div>
+            )}
           </div>
 
           <div className="wc-field">
             <label>Substitute ingredient</label>
             <IngredientPicker
               value={form.substitute}
-              onChange={(v) => setField({ substitute: v })}
+              onChange={(v) => setField({ substitute: v }, ['substitute'])}
               placeholder="Search ingredients…"
               ariaLabel="Substitute ingredient"
+              ariaInvalid={Boolean(fieldErrors.substitute)}
+              ariaDescribedBy="substitution-substitute-hint substitution-substitute-error"
             />
-            <div className="wc-sub-modal-hint">
+            <div id="substitution-substitute-hint" className="wc-sub-modal-hint">
               What can be used instead. This relationship is one-directional.
             </div>
             {fieldErrors.substitute && (
-              <div className="wc-sub-field-error">{fieldErrors.substitute}</div>
+              <div id="substitution-substitute-error" className="wc-sub-field-error">{fieldErrors.substitute}</div>
             )}
           </div>
 
@@ -932,10 +976,12 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
                 <input
                   type="number"
                   step="any"
-                  min="0"
                   value={form.sourceAmount}
-                  onChange={(e) => setField({ sourceAmount: e.target.value })}
+                  onChange={(e) => setField({ sourceAmount: e.target.value }, ['ratio'])}
                   aria-label="Source amount"
+                  aria-invalid={Boolean(fieldErrors.ratio)}
+                  aria-describedby="substitution-ratio-hint substitution-ratio-error"
+                  required
                   placeholder="1"
                 />
               </div>
@@ -944,34 +990,41 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
                 <input
                   type="number"
                   step="any"
-                  min="0"
                   value={form.substituteAmount}
-                  onChange={(e) => setField({ substituteAmount: e.target.value })}
+                  onChange={(e) => setField({ substituteAmount: e.target.value }, ['ratio'])}
                   aria-label="Substitute amount"
+                  aria-invalid={Boolean(fieldErrors.ratio)}
+                  aria-describedby="substitution-ratio-hint substitution-ratio-error"
+                  required
                   placeholder="0.75"
                 />
               </div>
             </div>
-            <div className="wc-sub-modal-hint">
+            <div id="substitution-ratio-hint" className="wc-sub-modal-hint">
               “{form.sourceAmount || '1'} : {form.substituteAmount || '?'}” means use that many parts
-              substitute for every {form.sourceAmount || '1'} part source. No unit conversion is applied.
+              substitute for every {form.sourceAmount || '1'} part source. Each amount must be a
+              finite number greater than 0. No unit conversion is applied.
             </div>
-            {fieldErrors.ratio && <div className="wc-sub-field-error">{fieldErrors.ratio}</div>}
+            {fieldErrors.ratio && (
+              <div id="substitution-ratio-error" className="wc-sub-field-error">{fieldErrors.ratio}</div>
+            )}
           </div>
 
           <div className="wc-field">
             <label>Contexts</label>
             <input
               value={form.contextsText}
-              onChange={(e) => setField({ contextsText: e.target.value })}
+              onChange={(e) => setField({ contextsText: e.target.value }, ['contexts'])}
               placeholder="e.g. baking, frying"
+              aria-invalid={Boolean(fieldErrors.contexts)}
+              aria-describedby="substitution-contexts-hint substitution-contexts-error"
             />
-            <div className="wc-sub-modal-hint">
-              Separate with commas. Optional — when this swap only applies to certain uses. Max{' '}
-              {MAX_CONTEXTS}, {MAX_CONTEXT_LENGTH} characters each.
+            <div id="substitution-contexts-hint" className="wc-sub-modal-hint">
+              Separate with commas. Optional — when this swap only applies to certain uses.{' '}
+              {contextCount}/{MAX_CONTEXTS} contexts; {MAX_CONTEXT_LENGTH} characters each.
             </div>
             {fieldErrors.contexts && (
-              <div className="wc-sub-field-error">{fieldErrors.contexts}</div>
+              <div id="substitution-contexts-error" className="wc-sub-field-error">{fieldErrors.contexts}</div>
             )}
           </div>
 
@@ -981,11 +1034,17 @@ function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost })
               className="wc-textarea"
               rows={3}
               value={form.notes}
-              onChange={(e) => setField({ notes: e.target.value })}
+              onChange={(e) => setField({ notes: e.target.value }, ['notes'])}
               placeholder="Optional guidance, e.g. “Adds a slight fruitiness — best in savoury dishes.”"
+              aria-invalid={Boolean(fieldErrors.notes)}
+              aria-describedby="substitution-notes-hint substitution-notes-error"
             />
-            <div className="wc-sub-modal-hint">Optional. Max {MAX_NOTES_LENGTH} characters.</div>
-            {fieldErrors.notes && <div className="wc-sub-field-error">{fieldErrors.notes}</div>}
+            <div id="substitution-notes-hint" className="wc-sub-modal-hint">
+              Optional. {canonicalNotesLength}/{MAX_NOTES_LENGTH} trimmed characters.
+            </div>
+            {fieldErrors.notes && (
+              <div id="substitution-notes-error" className="wc-sub-field-error">{fieldErrors.notes}</div>
+            )}
           </div>
 
           {editing && (
