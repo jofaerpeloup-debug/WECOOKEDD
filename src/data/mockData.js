@@ -337,7 +337,7 @@ export const recipes = [
     id: 'r12', title: 'Bulalo', imgLabel: 'bulalo', category: 'ulam', cuisine: 'Luzon',
     minutes: 120, difficulty: 'Medium', servings: 5, rating: 4.8, reviews: 265,
     vibe: ['cozy', 'impress'], dietary: ['glutenfree'],
-    image: require('../../assets/recipe-beef-caldereta.jpg'),
+    image:'https://i.pinimg.com/1200x/2e/04/e3/2e04e3e6806372ac38859c950d962f4e.jpg',
     description: 'Beef shank and bone marrow simmered for hours into a deeply savory, restorative soup.',
     ingredients: [
       { name: 'Beef shank with bone marrow', qty: '1.2 kg' },
@@ -424,7 +424,7 @@ export const recipes = [
     id: 'r15', title: 'Ube Halaya', imgLabel: 'ube halaya', category: 'desserts', cuisine: 'Visayas',
     minutes: 40, difficulty: 'Easy', servings: 6, rating: 4.8, reviews: 270,
     vibe: ['cozy', 'fresh'], dietary: ['vegan', 'vegetarian', 'glutenfree'],
-    image: require('../../assets/recipe-turon.jpg'),
+    image:'https://i.pinimg.com/736x/36/37/13/363713f8380dfcdab52188ebd38db4f4.jpg',
     description: 'Purple yam slowly cooked with coconut milk and sugar into a sweet, vibrant jam.',
     ingredients: [
       { name: 'Grated ube (purple yam)', qty: '1 kg' },
@@ -506,7 +506,7 @@ export const recipes = [
     id: 'r18', title: 'Dinuguan', imgLabel: 'dinuguan', category: 'ulam', cuisine: 'Luzon',
     minutes: 50, difficulty: 'Medium', servings: 4, rating: 4.6, reviews: 224,
     vibe: ['cozy', 'impress'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1445979323117-80453f573b71?w=800&q=80',
+    image: 'https://i.pinimg.com/736x/2a/7e/93/2a7e93fa74117509f1e169d2ec2c2f6e.jpg',
     description: "Pork simmered in a rich, tangy pig's blood stew with vinegar and chili — nicknamed \"chocolate meat\" for its deep, dark color.",
     ingredients: [
       { name: 'Pork belly or shoulder', qty: '500 g' },
@@ -561,7 +561,7 @@ export const recipes = [
     id: 'r20', title: 'Pancit Palabok', imgLabel: 'pancit palabok', category: 'noodles', cuisine: 'Luzon',
     minutes: 40, difficulty: 'Medium', servings: 4, rating: 4.7, reviews: 298,
     vibe: ['impress', 'cozy'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1707322540603-b6c343602676?w=800&q=80',
+    image: 'https://i.pinimg.com/originals/7e/5f/2e/7e5f2e3009cdde0692580ceb65a1faaa.jpg',
     description: 'Rice noodles draped in a rich shrimp and annatto sauce, topped with pork cracklings, egg, and scallions.',
     ingredients: [
       { name: 'Rice noodles (palabok noodles)', qty: '400 g' },
@@ -676,7 +676,7 @@ export const recipes = [
     id: 'r24', title: 'Bibingka', imgLabel: 'bibingka', category: 'desserts', cuisine: 'Luzon',
     minutes: 40, difficulty: 'Medium', servings: 6, rating: 4.6, reviews: 178,
     vibe: ['cozy', 'impress'], dietary: ['vegetarian'],
-    image: 'https://images.unsplash.com/photo-1604813959885-2f7432915bc5?w=800&q=80',
+    image: 'https://i.pinimg.com/736x/fa/8d/9a/fa8d9ad5edb07c2cac0ea07929434ebc.jpg',
     description: 'A fluffy baked rice cake cooked on banana leaves, topped with salted egg and cheese — a Christmas morning classic.',
     ingredients: [
       { name: 'Rice flour (galapong)', qty: '2 cups' },
@@ -724,7 +724,7 @@ export const recipes = [
     id: 'r26', title: 'Chopsuey', imgLabel: 'chopsuey', category: 'vegetable', cuisine: 'Fusion',
     minutes: 20, difficulty: 'Easy', servings: 4, rating: 4.6, reviews: 142,
     vibe: ['fresh', 'quick'], dietary: ['vegetarian'],
-    image: 'https://images.unsplash.com/photo-1614955177711-2540ad25432b?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/ef/d1/5e/efd15ea6a4a6a8af3f35cbefdc68421d.jpg',
     description: 'A bright, garlicky stir-fry of cabbage, carrots, snap peas, and cauliflower in a light savory sauce — a quick veggie-packed side or light meal.',
     ingredients: [
       { name: 'Cabbage', qty: '2 cups, shredded' },
@@ -897,13 +897,13 @@ export const recipes = [
       { title: 'Season and serve', instruction: 'Season with salt to taste, ladle into bowls, and serve with rice.', seconds: 60 },
     ],
   },
-];
+]; 
 
 export const CRAVINGS = [
   { key: 'breakfast', label: 'Breakfast', image: 'https://images.unsplash.com/photo-1705088293300-8fc8c7be90e2?w=300&q=80' },
   { key: 'noodles', label: 'Noodles', image: 'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=300&q=80' },
   { key: 'ulam', label: 'Ulam', image: require('../../assets/recipe-chicken-adobo.jpg') },
-  { key: 'desserts', label: 'Desserts', image: require('../../assets/recipe-halo-halo.jpg') },
+  { key: 'desserts', label: 'Desserts', image: 'https://i.pinimg.com/1200x/39/3b/eb/393beb2737427e082f4d0f76bbbdec3d.jpg' },
   { key: 'vegetable', label: 'Vegetable', image: require('../../assets/recipe-pinakbet.png') },
 ];
 
@@ -1637,6 +1637,7 @@ export const communityPosts = [
     image: 'https://images.unsplash.com/photo-1553108850-0c04e29adf36?w=800&q=80',
     caption: 'Sunday meal-prepped a big batch of chicken adobo from the app — freezes perfectly for the week. 🍗',
     recipeTag: 'Chicken Adobo',
+    recipeId: 'r1',
     likes: 128,
     comments: 14,
   },
@@ -1647,6 +1648,7 @@ export const communityPosts = [
     image: 'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=800&q=80',
     caption: 'First time making pancit canton and it actually came out right. Thanks for the noodle-soaking tip!',
     recipeTag: 'Pancit Canton',
+    recipeId: 'r3',
     likes: 76,
     comments: 6,
   },

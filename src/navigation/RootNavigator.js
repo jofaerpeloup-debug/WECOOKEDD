@@ -13,6 +13,7 @@ import DiscoverScreen from '../screens/DiscoverScreen';
 import TrendingScreen from '../screens/TrendingScreen';
 import CookingHistoryScreen from '../screens/CookingHistoryScreen';
 import RecipeDetailScreen from '../screens/RecipeDetailScreen';
+import RecipeIngredientsScreen from '../screens/RecipeIngredientsScreen';
 import CookModeScreen from '../screens/CookModeScreen';
 import MealPlanScreen from '../screens/MealPlanScreen';
 import CollectionDetailScreen from '../screens/CollectionDetailScreen';
@@ -65,6 +66,7 @@ export default function RootNavigator() {
         <Stack.Screen name="Trending" component={TrendingScreen} />
         <Stack.Screen name="CookingHistory" component={CookingHistoryScreen} />
         <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
+        <Stack.Screen name="RecipeIngredients" component={RecipeIngredientsScreen} />
         <Stack.Screen
           name="CookMode"
           component={CookModeScreen}
