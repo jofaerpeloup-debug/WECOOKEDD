@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useMemo } from 'react';
 import {
   LayoutDashboard, ChefHat, Users, X,
-  Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
+  Leaf, TrendingUp, Clock, Check, CheckCircle2, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle,
   Accessibility, ChevronDown, Carrot, ShieldAlert, Replace, ShieldCheck, UserCog,
 } from 'lucide-react';
@@ -31,6 +31,7 @@ import {
   StaffBootstrapError,
   StaffPortalAuthScreen,
   StaffPortalScreenStyles,
+  SupportingAuthFrame,
   VerifyEmailState,
 } from './StaffPortalScreens.jsx';
 import {
@@ -2199,8 +2200,8 @@ function VerifyEmailScreen({ account, onResend, onCheckAgain, onSignOut }) {
   );
 }
 
-function ResetPasswordScreen({ token, onClearToken, onDone }) {
-  const [status, setStatus] = useState('ready'); // ready | invalid | done
+export function ResetPasswordScreen({ token, onClearToken, onDone, initialStatus = 'ready' }) {
+  const [status, setStatus] = useState(initialStatus); // ready | invalid | done
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -2239,46 +2240,59 @@ function ResetPasswordScreen({ token, onClearToken, onDone }) {
     }
   }
 
+  const presentation = status === 'invalid'
+    ? {
+        icon: <AlertCircle size={20} />,
+        title: 'Reset link unavailable',
+        subtitle: error || 'This reset link is invalid, expired, or has already been used.',
+      }
+    : status === 'done'
+      ? {
+          icon: <CheckCircle2 size={20} />,
+          title: 'Password updated',
+          subtitle: 'Your password has been updated. You can now sign in with your new password.',
+        }
+      : {
+          icon: <Lock size={20} />,
+          title: 'Reset your password',
+          subtitle: 'Choose a new password for your WeCooked account.',
+        };
+
   return (
-    <div className="wc-auth-wrap">
-      <div className="wc-auth-bg" />
-      <div className="wc-auth-tagline">
-        <div className="wc-auth-visual-title wc-serif">Good food, well organized.</div>
-        <div className="wc-auth-visual-sub">Manage WeCooked&rsquo;s recipes and members from one place.</div>
-      </div>
-      <div className="wc-auth-panel">
-        <div className="wc-auth-badge">
-          <Lock size={20} color="#4A5D4E" />
-        </div>
-        <div className="wc-auth-title wc-serif">Reset your password</div>
+    <SupportingAuthFrame
+      icon={presentation.icon}
+      eyebrow="Account recovery"
+      title={presentation.title}
+      subtitle={presentation.subtitle}
+    >
 
         {status === 'invalid' && (
           <>
-            <div className="wc-auth-error"><AlertCircle size={14} /> {error || 'This reset link is invalid or has expired.'}</div>
+            <span className="wc-visually-hidden" role="alert">{presentation.subtitle}</span>
             <button type="button" className="wc-btn-primary wc-auth-submit" onClick={onDone}>
-              Back to sign in
+              Back to Sign In
             </button>
           </>
         )}
 
         {status === 'done' && (
           <>
-            <div className="wc-auth-sub">Your password has been updated.</div>
+            <span className="wc-visually-hidden" role="status">Password updated successfully.</span>
             <button type="button" className="wc-btn-primary wc-auth-submit" onClick={onDone}>
-              Continue to sign in
+              Continue to Sign In
             </button>
           </>
         )}
 
         {status === 'ready' && (
           <>
-            <div className="wc-auth-sub">Choose a new password for your WeCooked account.</div>
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={handleSubmit} aria-busy={submitting}>
               <div className="wc-auth-field">
-                <label>New password</label>
+                <label htmlFor="reset-new-password">New Password <span aria-hidden="true">*</span></label>
                 <div className="wc-auth-input-wrap">
                   <Lock size={15} />
                   <input
+                    id="reset-new-password"
                     type={showPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={(e) => { setNewPassword(e.target.value); setFieldErrors({}); }}
@@ -2293,6 +2307,7 @@ function ResetPasswordScreen({ token, onClearToken, onDone }) {
                     className="wc-auth-eye"
                     onClick={() => setShowPassword((s) => !s)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
                   >
                     {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
@@ -2302,10 +2317,11 @@ function ResetPasswordScreen({ token, onClearToken, onDone }) {
               <PasswordRequirements password={newPassword} />
 
               <div className="wc-auth-field">
-                <label>Confirm password</label>
+                <label htmlFor="reset-confirm-password">Confirm Password <span aria-hidden="true">*</span></label>
                 <div className="wc-auth-input-wrap">
                   <Lock size={15} />
                   <input
+                    id="reset-confirm-password"
                     type={showPassword ? 'text' : 'password'}
                     value={confirmPassword}
                     onChange={(e) => { setConfirmPassword(e.target.value); setFieldErrors({}); }}
@@ -2319,7 +2335,7 @@ function ResetPasswordScreen({ token, onClearToken, onDone }) {
               </div>
               <FieldErrors id="reset-confirm-password-error" messages={fieldErrors.confirmPassword} />
 
-              {error && <div className="wc-auth-error"><AlertCircle size={14} /> {error}</div>}
+              {error && <div className="wc-auth-error" role="alert"><AlertCircle size={14} /> {error}</div>}
 
               <button type="submit" className="wc-btn-primary wc-auth-submit" disabled={submitting}>
                 {submitting ? 'Saving…' : 'Save new password'}
@@ -2327,8 +2343,7 @@ function ResetPasswordScreen({ token, onClearToken, onDone }) {
             </form>
           </>
         )}
-      </div>
-    </div>
+    </SupportingAuthFrame>
   );
 }
 

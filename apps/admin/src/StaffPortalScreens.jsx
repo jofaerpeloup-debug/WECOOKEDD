@@ -49,21 +49,29 @@ export function PasswordRequirements({ password }) {
   );
 }
 
-function PortalFrame({ icon, title, subtitle, children }) {
+export function SupportingAuthFrame({ icon, eyebrow, title, subtitle, children }) {
   return (
-    <div className="wc-auth-wrap">
-      <div className="wc-auth-bg" />
-      <div className="wc-auth-tagline">
-        <div className="wc-auth-visual-title wc-serif">Good food, thoughtfully managed.</div>
-        <div className="wc-auth-visual-sub">Help keep the WeCooked catalog useful, reliable, and welcoming.</div>
-      </div>
-      <div className="wc-auth-panel">
-        <div className="wc-auth-badge">{icon}</div>
-        <div className="wc-auth-title wc-serif">{title}</div>
-        {subtitle && <div className="wc-auth-sub">{subtitle}</div>}
-        {children}
-      </div>
-    </div>
+    <main className="wc-support-auth">
+      <header className="wc-support-auth__brand" aria-label="WeCooked Staff Portal">
+        <span className="wc-staff-auth__brand-mark" aria-hidden="true"><Leaf size={18} strokeWidth={2.25} /></span>
+        <span className="wc-staff-auth__wordmark">WeCooked</span>
+        <span className="wc-staff-auth__designation">Staff Portal</span>
+      </header>
+
+      <section className="wc-support-auth__panel" aria-labelledby="supporting-auth-title">
+        <div className="wc-support-auth__status-icon" aria-hidden="true">{icon}</div>
+        {eyebrow && <p className="wc-support-auth__eyebrow">{eyebrow}</p>}
+        <h1 id="supporting-auth-title">{title}</h1>
+        {subtitle && <div className="wc-support-auth__sub">{subtitle}</div>}
+        <div className="wc-support-auth__content">{children}</div>
+      </section>
+
+      <aside className="wc-support-auth__context" aria-label="Staff Portal context">
+        <p className="wc-support-auth__context-kicker">Thoughtful tools for trusted teams</p>
+        <p className="wc-support-auth__context-title">Good food, thoughtfully managed.</p>
+        <p>Help keep the WeCooked catalog useful, reliable, and welcoming.</p>
+      </aside>
+    </main>
   );
 }
 
@@ -159,6 +167,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
   const [resetStatus, setResetStatus] = useState('');
   const [resetting, setResetting] = useState(false);
   const applying = mode === 'apply';
+  const forgot = mode === 'forgot';
 
   function updateField(field, value, setter) {
     setter(value);
@@ -207,9 +216,10 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
     }
   }
 
-  async function forgotPassword() {
+  async function forgotPassword(event) {
+    event.preventDefault();
     if (!email.trim()) {
-      setResetStatus('Enter your email above first, then choose Forgot password.');
+      setResetStatus('Enter your email above first.');
       return;
     }
     setResetting(true);
@@ -222,6 +232,42 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
     } finally {
       setResetting(false);
     }
+  }
+
+  if (forgot) {
+    return (
+      <SupportingAuthFrame
+        icon={<Mail size={20} />}
+        eyebrow="Account recovery"
+        title="Forgot your password?"
+        subtitle="Enter the email used for your WeCooked account. We’ll send reset instructions when the account is eligible."
+      >
+        <form onSubmit={forgotPassword} noValidate aria-busy={resetting}>
+          <div className="wc-auth-field">
+            <label htmlFor="staff-forgot-email">Email <span aria-hidden="true">*</span></label>
+            <div className="wc-auth-input-wrap">
+              <Mail size={15} />
+              <input
+                id="staff-forgot-email"
+                type="email"
+                value={email}
+                onChange={(changeEvent) => setEmail(changeEvent.target.value)}
+                autoComplete="username"
+                maxLength={EMAIL_MAX_CHARS}
+                required
+              />
+            </div>
+          </div>
+          {resetStatus && <div className="wc-support-auth__notice" role="status">{resetStatus}</div>}
+          <button type="submit" className="wc-btn-primary wc-auth-submit" disabled={resetting}>
+            {resetting ? 'Sending…' : 'Send Reset Instructions'} <ArrowRight size={15} />
+          </button>
+        </form>
+        <div className="wc-auth-switch">
+          <button type="button" onClick={() => switchMode('signin')}>Back to Sign In</button>
+        </div>
+      </SupportingAuthFrame>
+    );
   }
 
   const formContent = (
@@ -292,10 +338,9 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
 
         {!applying && (
           <div className="wc-auth-switch wc-auth-forgot">
-            <button type="button" onClick={forgotPassword} disabled={resetting}>{resetting ? 'Sending…' : 'Forgot password?'}</button>
+            <button type="button" onClick={() => switchMode('forgot')}>Forgot password?</button>
           </div>
         )}
-        {resetStatus && <div className="wc-auth-note" role="status">{resetStatus}</div>}
         {error && <div className="wc-auth-error" role="alert"><AlertCircle size={14} /> {error}</div>}
         {applying && (
           <p className="wc-apply-form__review-note">
@@ -344,13 +389,13 @@ export function ConsumerScreen({ user, notice, onApply, onSignOut }) {
     finally { setBusy(false); }
   }
   return (
-    <PortalFrame icon={<ShieldAlert size={20} color="#4A5D4E" />} title="No staff access" subtitle={<>You&rsquo;re signed in as <strong>{user?.email}</strong>. You don&rsquo;t currently have staff access.</>}>
-      {notice && <div className="wc-portal-notice" role="status">{notice}</div>}
-      <div className="wc-auth-sub">Want to help manage WeCooked recipes?</div>
+    <SupportingAuthFrame icon={<ShieldAlert size={20} />} eyebrow="Account active" title="Staff access not enabled" subtitle={<>You&rsquo;re signed in as <strong>{user?.email}</strong>. This valid account does not currently have Staff Portal access.</>}>
+      {notice && <div className="wc-support-auth__notice" role="status">{notice}</div>}
+      <p className="wc-support-auth__prompt">Want to help manage WeCooked recipes? You can submit a Moderator application for review.</p>
       <ActionError message={error} />
       <button type="button" className="wc-btn-primary wc-auth-submit" onClick={apply} disabled={busy}>{busy ? 'Submitting…' : notice ? 'Retry Application' : 'Apply as Moderator'}</button>
       <div className="wc-auth-switch"><button type="button" onClick={onSignOut}>Sign Out</button></div>
-    </PortalFrame>
+    </SupportingAuthFrame>
   );
 }
 
@@ -365,14 +410,14 @@ export function VerifyEmailState({ user, onResend, onRefresh, onSignOut }) {
     finally { setBusy(''); }
   }
   return (
-    <PortalFrame icon={<Mail size={20} color="#4A5D4E" />} title="Moderator Application" subtitle={<>Email verification required for <strong>{user?.email}</strong>.</>}>
-      <div className="wc-portal-step"><Clock size={17} /> Open the verification email, follow its link, then refresh your status.</div>
-      {message && <div className="wc-portal-notice" role="status">{message}</div>}
+    <SupportingAuthFrame icon={<Mail size={20} />} eyebrow="Verification required" title="Verify your email" subtitle={<>Confirm <strong>{user?.email}</strong> before your Moderator application can move forward.</>}>
+      <div className="wc-support-auth__step"><Clock size={17} /> <span>Open the verification email, follow its link, then refresh your status.</span></div>
+      {message && <div className="wc-support-auth__notice" role="status">{message}</div>}
       <ActionError message={error} />
       <button type="button" className="wc-btn-primary wc-auth-submit" onClick={() => run('resend', onResend)} disabled={Boolean(busy)}>{busy === 'resend' ? 'Sending…' : 'Resend Verification Email'}</button>
       <button type="button" className="wc-btn-secondary wc-auth-submit" onClick={() => run('refresh', onRefresh)} disabled={Boolean(busy)}>{busy === 'refresh' ? 'Refreshing…' : 'Refresh Status'}</button>
       <div className="wc-auth-switch"><button type="button" onClick={onSignOut}>Sign Out</button></div>
-    </PortalFrame>
+    </SupportingAuthFrame>
   );
 }
 
@@ -385,13 +430,13 @@ export function PendingState({ onRefresh, onSignOut }) {
     finally { setBusy(false); }
   }
   return (
-    <PortalFrame icon={<Clock size={20} color="#4A5D4E" />} title="Moderator Application" subtitle="Your application is waiting for Admin review.">
-      <div className="wc-portal-step"><CheckCircle2 size={17} /> Email verified</div>
-      <div className="wc-portal-step"><Clock size={17} /> Moderator application pending Admin review</div>
+    <SupportingAuthFrame icon={<Clock size={20} />} eyebrow="Application status" title="Under review" subtitle="Your Moderator application is waiting for Admin review. We don’t provide an approval timeline.">
+      <div className="wc-support-auth__step"><CheckCircle2 size={17} /> <span>Email verified</span></div>
+      <div className="wc-support-auth__step"><Clock size={17} /> <span>Moderator application pending Admin review</span></div>
       <ActionError message={error} />
       <button type="button" className="wc-btn-primary wc-auth-submit" onClick={refresh} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh Status'}</button>
       <div className="wc-auth-switch"><button type="button" onClick={onSignOut}>Sign Out</button></div>
-    </PortalFrame>
+    </SupportingAuthFrame>
   );
 }
 
@@ -404,21 +449,21 @@ export function RejectedState({ reason, onApplyAgain, onSignOut }) {
     finally { setBusy(false); }
   }
   return (
-    <PortalFrame icon={<XCircle size={20} color="#B15A3E" />} title="Moderator application not approved" subtitle="You can review the decision and submit a new application.">
-      <div className="wc-portal-reason"><strong>Reason</strong><span>{reason || 'No reason was provided.'}</span></div>
+    <SupportingAuthFrame icon={<XCircle size={20} />} eyebrow="Application status" title="Application not approved" subtitle="Your account remains active. You can review the decision and submit a new Moderator application.">
+      {reason && <div className="wc-support-auth__reason"><strong>Reason</strong><span>{reason}</span></div>}
       <ActionError message={error} />
       <button type="button" className="wc-btn-primary wc-auth-submit" onClick={applyAgain} disabled={busy}>{busy ? 'Submitting…' : 'Apply Again'}</button>
       <div className="wc-auth-switch"><button type="button" onClick={onSignOut}>Sign Out</button></div>
-    </PortalFrame>
+    </SupportingAuthFrame>
   );
 }
 
 export function StaffBootstrapError({ message, onRetry, onSignOut }) {
   return (
-    <PortalFrame icon={<AlertCircle size={20} color="#B15A3E" />} title="Staff Portal unavailable" subtitle={message}>
+    <SupportingAuthFrame icon={<AlertCircle size={20} />} eyebrow="Connection issue" title="Staff Portal unavailable" subtitle={message}>
       <button type="button" className="wc-btn-primary wc-auth-submit" onClick={() => Promise.resolve(onRetry()).catch(() => {})}>Try Again</button>
       <div className="wc-auth-switch"><button type="button" onClick={onSignOut}>Sign Out</button></div>
-    </PortalFrame>
+    </SupportingAuthFrame>
   );
 }
 
@@ -431,9 +476,5 @@ export function StaffPortalScreenStyles() {
     .wc-pw-title { margin-bottom:6px; color:var(--ink); font-size:12px; font-weight:700; }
     .wc-pw-requirements .wc-pw-checklist { margin:0; }
     .wc-pw-complete { margin-top:7px; color:var(--sage-deep); font-size:12px; font-weight:700; }
-    .wc-portal-notice { background:rgba(192,213,194,.45); border:1px solid var(--sage-light); border-radius:8px; padding:10px 12px; font-size:12.5px; line-height:1.45; margin-bottom:12px; }
-    .wc-portal-step { display:flex; align-items:center; gap:9px; padding:9px 0; color:var(--ink); font-size:13px; }
-    .wc-portal-step svg { color:var(--sage-deep); flex-shrink:0; }
-    .wc-portal-reason { display:flex; flex-direction:column; gap:5px; padding:12px; border-radius:9px; background:rgba(177,90,62,.1); border:1px solid rgba(177,90,62,.25); font-size:13px; line-height:1.45; margin-bottom:12px; }
   `}</style>;
 }
