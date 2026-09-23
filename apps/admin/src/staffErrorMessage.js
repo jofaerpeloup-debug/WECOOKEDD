@@ -2,6 +2,9 @@ import { ApiError } from './apiClient.js';
 
 const STAFF_ERROR_MESSAGES = Object.freeze({
   AUTH_INVALID_CREDENTIALS: 'Invalid email or password.',
+  AUTH_PASSWORD_CHANGE_UNAVAILABLE: 'Password change is not available for this account.',
+  AUTH_PASSWORD_RESET_TOKEN_INVALID:
+    'This reset link is invalid, expired, or has already been used.',
   MODERATOR_APPLICATION_PASSWORD_REQUIRED:
     'A WeCooked password is required to apply. Provider-only accounts are not eligible yet.',
   MODERATOR_APPLICATION_NOT_ELIGIBLE:
@@ -21,9 +24,18 @@ const STAFF_ERROR_MESSAGES = Object.freeze({
 });
 
 export function staffFieldErrors(error, allowedFields = []) {
-  if (!(error instanceof ApiError) || error.code !== 'VALIDATION_ERROR') return {};
+  if (!(error instanceof ApiError)) return {};
 
   const allowed = new Set(allowedFields);
+  const accountErrorField = {
+    AUTH_CURRENT_PASSWORD_INVALID: 'currentPassword',
+    NEW_PASSWORD_SAME_AS_CURRENT: 'newPassword',
+  }[error.code];
+  if (accountErrorField && allowed.has(accountErrorField)) {
+    return { [accountErrorField]: [error.message] };
+  }
+  if (error.code !== 'VALIDATION_ERROR') return {};
+
   const fieldErrors = {};
   for (const detail of error.details) {
     const field = typeof detail?.field === 'string' ? detail.field : '';

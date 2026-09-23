@@ -14,7 +14,7 @@ import {
 } from './staffContracts.js';
 import { staffErrorMessage, staffFieldErrors } from './staffErrorMessage.js';
 
-function FieldErrors({ id, messages = [] }) {
+export function FieldErrors({ id, messages = [] }) {
   if (!messages.length) return null;
   return (
     <ul id={id} className="wc-auth-field-errors" role="alert">
@@ -60,7 +60,7 @@ function PortalFrame({ icon, title, subtitle, children }) {
   );
 }
 
-export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPassword }) {
+export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPassword, notice = '' }) {
   const [mode, setMode] = useState('signin');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -145,6 +145,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
         ? 'Create a WeCooked account and submit your Moderator application.'
         : 'Existing staff and account holders can sign in here.'}
     >
+      {notice && <div className="wc-settings-success" role="status">{notice}</div>}
       <form onSubmit={submit} noValidate>
         {applying && (
           <div className="wc-auth-field">

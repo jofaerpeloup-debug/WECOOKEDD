@@ -52,6 +52,18 @@ export function requestBackendPasswordReset(email) {
   return execute(staffRequests.forgotPassword(email));
 }
 
+export function resetBackendPassword(token, newPassword) {
+  return execute(staffRequests.resetPassword(token, newPassword));
+}
+
+export function changeBackendPassword(currentPassword, newPassword) {
+  return execute(staffRequests.changePassword(currentPassword, newPassword));
+}
+
+export function updateBackendName(name) {
+  return execute(staffRequests.updateName(name));
+}
+
 export function resendBackendVerification(email) {
   return api.post('/auth/resend-verification', {
     auth: false,

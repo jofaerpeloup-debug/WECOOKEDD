@@ -12,6 +12,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const STAFF_AUTH_ERROR_MESSAGES = Object.freeze({
   NAME_REQUIRED: 'Name is required.',
+  NAME_MAX_CHARS: 'Name must be 100 characters or fewer.',
   EMAIL_REQUIRED: 'Email is required.',
   EMAIL_INVALID: 'Enter a valid email address.',
   EMAIL_MAX_CHARS: `Email must be ${EMAIL_MAX_CHARS} characters or fewer.`,
@@ -81,6 +82,22 @@ export function validateStaffRegistration({ name, email, password }) {
   };
 }
 
+export function validateStaffName(name) {
+  const normalizedName = name.trim();
+  if (!normalizedName) return [STAFF_AUTH_ERROR_MESSAGES.NAME_REQUIRED];
+  if (normalizedName.length > 100) return [STAFF_AUTH_ERROR_MESSAGES.NAME_MAX_CHARS];
+  return [];
+}
+
+export function validateCurrentPassword(password) {
+  const errors = [];
+  if (!password) errors.push(STAFF_AUTH_ERROR_MESSAGES.PASSWORD_REQUIRED);
+  if (utf8ByteLength(password) > PASSWORD_MAX_UTF8_BYTES) {
+    errors.push(STAFF_AUTH_ERROR_MESSAGES.PASSWORD_MAX_BYTES);
+  }
+  return errors;
+}
+
 export function validateStaffLogin({ email, password }) {
   const passwordErrors = [];
   if (!password) passwordErrors.push(STAFF_AUTH_ERROR_MESSAGES.PASSWORD_REQUIRED);
@@ -102,6 +119,9 @@ export const staffPaths = Object.freeze({
   state: '/staff/me',
   applications: '/staff/moderator-applications',
   forgotPassword: '/auth/forgot-password',
+  resetPassword: '/auth/reset-password',
+  changePassword: '/auth/change-password',
+  currentUser: '/users/me',
   approve: (applicationId) => `/staff/moderator-applications/${encodeURIComponent(applicationId)}/approve`,
   reject: (applicationId) => `/staff/moderator-applications/${encodeURIComponent(applicationId)}/reject`,
   demote: (userId) => `/staff/moderators/${encodeURIComponent(userId)}/demote`,
@@ -150,4 +170,38 @@ export const staffRequests = Object.freeze({
     auth: false,
     body: { email: email.trim().toLowerCase() },
   }),
+  resetPassword: (token, newPassword) => ({
+    method: 'POST',
+    path: staffPaths.resetPassword,
+    auth: false,
+    body: { token, newPassword },
+  }),
+  changePassword: (currentPassword, newPassword) => ({
+    method: 'POST',
+    path: staffPaths.changePassword,
+    body: { currentPassword, newPassword },
+  }),
+  updateName: (name) => ({
+    method: 'PATCH',
+    path: staffPaths.currentUser,
+    body: { name: name.trim() },
+  }),
 });
+
+export function backendStaffIdentity(user) {
+  if (!user) return null;
+  return {
+    name: user.name || '',
+    email: user.email || '',
+    emailVerified: Boolean(user.emailVerified),
+  };
+}
+
+export function resetTokenFromHash(hash) {
+  if (typeof hash !== 'string' || !hash.startsWith('#')) return null;
+  try {
+    return new URLSearchParams(hash.slice(1)).get('token') || null;
+  } catch {
+    return null;
+  }
+}

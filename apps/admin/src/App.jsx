@@ -11,9 +11,7 @@ import {
 import { useCallback, useRef } from 'react';
 import { auth } from './firebase.js';
 import {
-  toAccount, logIn, logOutUser,
-  updateUserProfile, changeUserPassword, deleteCurrentAccount,
-  requestPasswordReset, verifyResetCode, confirmReset,
+  logIn, logOutUser, requestUserEmailChange, deleteCurrentAccount,
 } from './auth.js';
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
@@ -26,7 +24,9 @@ import UsersTab from './UsersTab.jsx';
 import StaffManagementTab from './StaffManagementTab.jsx';
 import {
   ConsumerScreen,
+  FieldErrors,
   PendingState,
+  PasswordRequirements,
   RejectedState,
   StaffBootstrapError,
   StaffPortalAuthScreen,
@@ -35,13 +35,25 @@ import {
 } from './StaffPortalScreens.jsx';
 import {
   applyAsModerator,
+  changeBackendPassword,
   getStaffState,
   requestBackendPasswordReset,
+  resetBackendPassword,
   resendBackendVerification,
+  updateBackendName,
 } from './staffApi.js';
 import { getCatalogPolicy, getPortalDestination, getSafeNavigation } from './portalPolicy.js';
-import { staffErrorMessage } from './staffErrorMessage.js';
+import { staffErrorMessage, staffFieldErrors } from './staffErrorMessage.js';
 import { registerModeratorApplicant, retryModeratorApplication } from './staffOnboarding.js';
+import {
+  backendStaffIdentity,
+  hasStaffAuthErrors,
+  passwordRequirementState,
+  resetTokenFromHash,
+  validateCurrentPassword,
+  validateStaffName,
+} from './staffContracts.js';
+import { completeStaffPasswordChange, updateStaffName } from './staffAccountActions.js';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 
@@ -97,9 +109,8 @@ async function safeDelete(key, shared = false) {
 function WeCookedAdminApp() {
   // Backend local auth is the authoritative gate for this dashboard and for
   // every WeCooked REST API call. Firebase auth is kept alongside it, best
-  // effort, only so the Firebase-Auth-backed admin account flows (profile,
-  // password, email, verification, delete-account) keep working — see
-  // docs/architecture/admin-api-integration.md.
+  // effort, only for the legacy email-change and delete-account surfaces that
+  // remain until SP2B.
   const backend = useBackendAuth();
 
   const [tab, setTab] = useState('overview');
@@ -117,7 +128,8 @@ function WeCookedAdminApp() {
   const [recipeStats, setRecipeStats] = useState({ total: 0, latest: [] });
   const [userCounts, setUserCounts] = useState({ total: 0, active: 0, suspended: 0 });
 
-  const [account, setAccount] = useState(null);
+  const [firebaseAccountEmail, setFirebaseAccountEmail] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -127,18 +139,17 @@ function WeCookedAdminApp() {
   const [displayPrefs, setDisplayPrefs] = useState({ theme: 'light', reduceMotion: false });
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
-  const [resetOobCode, setResetOobCode] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('mode') === 'resetPassword' ? params.get('oobCode') : null;
-  });
+  const [resetToken, setResetToken] = useState(() => resetTokenFromHash(window.location.hash));
+
+  function removeResetTokenFromUrl() {
+    const url = new URL(window.location.href);
+    url.hash = '';
+    window.history.replaceState({}, '', url.pathname + url.search);
+  }
 
   function clearResetLink() {
-    setResetOobCode(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('mode');
-    url.searchParams.delete('oobCode');
-    url.searchParams.delete('apiKey');
-    window.history.replaceState({}, '', url.pathname + url.search);
+    setResetToken(null);
+    removeResetTokenFromUrl();
   }
 
   const refreshStaffState = useCallback(async ({ showLoading = true } = {}) => {
@@ -186,12 +197,10 @@ function WeCookedAdminApp() {
   }, [staffState.data?.mode]);
 
   useEffect(() => {
-    // Firebase auth runs in the background purely for the Firebase-Auth-backed
-    // admin account flows (profile, password, email, verification,
-    // delete-account); the dashboard gate itself is driven by backend auth, not
-    // this. `account` feeds the profile menu / Settings identity.
+    // Keep only an availability flag for the SP2B email/delete compatibility
+    // surfaces. Displayed identity never derives from this observer.
     const unsub = auth.onAuthStateChanged((user) => {
-      setAccount(toAccount(user));
+      setFirebaseAccountEmail(user?.email || '');
     });
     return unsub;
   }, []);
@@ -299,21 +308,18 @@ function WeCookedAdminApp() {
     // Backend login is authoritative — it throws on bad credentials, a
     // suspended account, or the API being unreachable, and the sign-in form
     // surfaces that message.
+    setAuthNotice('');
     await backend.login(email, password);
-    // Best effort: mirror the sign-in to Firebase so the Firebase-Auth-backed
-    // admin account flows keep working for admins whose credentials also exist
-    // there. A failure here is expected for backend-only admins and must not
-    // block.
+    // Best effort: mirror the sign-in to Firebase so the SP2B email-change and
+    // delete-account compatibility surfaces keep working for admins whose
+    // credentials also exist there. A failure here is expected for
+    // backend-only admins and must not block.
     try {
       await logIn(email, password);
     } catch (err) {
       console.warn('Firebase sign-in unavailable (account flows will be limited):', err?.code || err);
     }
     return true;
-  }
-
-  async function forgotPassword(email) {
-    await requestPasswordReset(email);
   }
 
   async function forgotStaffPassword(email) {
@@ -357,28 +363,38 @@ function WeCookedAdminApp() {
     setProfileMenuOpen(false);
   }
 
-  async function updateProfile({ name, email }) {
-    const updated = await updateUserProfile(name, email);
-    setAccount(updated);
+  async function updateProfile({ name }) {
+    return updateStaffName({
+      requestUpdate: updateBackendName,
+      refreshUser: backend.refreshUser,
+    }, name);
   }
 
   async function changePassword({ currentPassword, newPassword }) {
-    await changeUserPassword(currentPassword, newPassword);
+    await completeStaffPasswordChange({
+      requestChange: changeBackendPassword,
+      clearSession: backend.clearSession,
+      signOutFirebase: logOutUser,
+    }, { currentPassword, newPassword });
+    setSettingsOpen(false);
+    setAuthNotice('Your password was updated. Sign in again with your new password.');
+  }
+
+  async function requestEmailChange(email) {
+    await requestUserEmailChange(email);
   }
 
   function updateDisplayPrefs(patch) {
     setDisplayPrefs((prev) => ({ ...prev, ...patch }));
   }
 
-  // Identity shown in the sidebar / menus. Prefer the Firebase account object
-  // (it carries the fields those Firebase-specific modals still expect); fall
-  // back to the backend user so a backend-only admin still gets a profile menu
-  // and a working "Log out".
-  const identity =
-    account ||
-    (backend.user
-      ? { name: backend.user.name, email: backend.user.email, emailVerified: backend.user.emailVerified }
-      : null);
+  // The REST-hydrated backend user is the sole displayed Staff identity.
+  const identity = backendStaffIdentity(backend.user);
+  const firebaseAccountAvailable = Boolean(
+    firebaseAccountEmail
+      && identity?.email
+      && firebaseAccountEmail.trim().toLowerCase() === identity.email.trim().toLowerCase(),
+  );
 
   const portalDestination = getPortalDestination(staffState.data?.mode);
   const catalogPolicy = getCatalogPolicy(staffState.data?.mode);
@@ -1047,15 +1063,20 @@ function WeCookedAdminApp() {
 
       <StaffPortalScreenStyles />
 
-      {resetOobCode ? (
-        <ResetPasswordScreen oobCode={resetOobCode} onDone={clearResetLink} />
+      {resetToken ? (
+        <ResetPasswordScreen token={resetToken} onClearToken={removeResetTokenFromUrl} onDone={clearResetLink} />
       ) : backend.status === 'checking' || (backend.status === 'authenticated' && ['idle', 'loading'].includes(staffState.status)) ? (
         <div className="wc-loading">
           <Leaf size={26} />
           <span>Loading Staff Portal…</span>
         </div>
       ) : backend.status !== 'authenticated' ? (
-        <StaffPortalAuthScreen onRegisterAndApply={registerAndApply} onSignIn={signIn} onForgotPassword={forgotStaffPassword} />
+        <StaffPortalAuthScreen
+          onRegisterAndApply={registerAndApply}
+          onSignIn={signIn}
+          onForgotPassword={forgotStaffPassword}
+          notice={authNotice}
+        />
       ) : staffState.status === 'error' ? (
         <StaffBootstrapError message={staffState.error} onRetry={refreshStaffState} onSignOut={signOut} />
       ) : portalDestination === 'consumer' ? (
@@ -1138,7 +1159,7 @@ function WeCookedAdminApp() {
                 onOpenHelp={() => { setHelpOpen(true); setProfileMenuOpen(false); }}
                 onOpenDisplay={() => { setDisplayOpen(true); setProfileMenuOpen(false); }}
               />
-              {account && (
+              {firebaseAccountAvailable && (
                 <button className="wc-reset-btn" onClick={() => setConfirmDeleteAccount(true)}>
                   Delete admin account
                 </button>
@@ -1193,6 +1214,8 @@ function WeCookedAdminApp() {
               onClose={() => setSettingsOpen(false)}
               onUpdateProfile={updateProfile}
               onChangePassword={changePassword}
+              onRequestEmailChange={requestEmailChange}
+              firebaseAccountAvailable={firebaseAccountAvailable}
             />
           )}
           {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
@@ -1360,68 +1383,96 @@ function ProfileMenu({
   );
 }
 
-function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) {
+function SettingsModal({
+  account,
+  onClose,
+  onUpdateProfile,
+  onChangePassword,
+  onRequestEmailChange,
+  firebaseAccountAvailable,
+}) {
   const [name, setName] = useState(account.name || '');
   const [email, setEmail] = useState(account.email || '');
+  const [profileFieldErrors, setProfileFieldErrors] = useState({});
   const [profileError, setProfileError] = useState('');
   const [profileSaved, setProfileSaved] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [emailRequested, setEmailRequested] = useState(false);
+  const [requestingEmail, setRequestingEmail] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [passwordFieldErrors, setPasswordFieldErrors] = useState({});
   const [passwordError, setPasswordError] = useState('');
-  const [passwordSaved, setPasswordSaved] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
-
-  const passwordRules = checkPasswordRules(newPassword, name, email);
-  const passwordValid = Object.values(passwordRules).every(Boolean);
 
   async function submitProfile(e) {
     e.preventDefault();
+    const fieldErrors = { name: validateStaffName(name) };
+    setProfileFieldErrors(fieldErrors);
     setProfileError('');
     setProfileSaved(false);
-    if (!name.trim() || !email.trim()) {
-      setProfileError('Name and email can’t be empty.');
-      return;
-    }
-    const emailChanged = email.trim().toLowerCase() !== (account.email || '').toLowerCase();
+    if (hasStaffAuthErrors(fieldErrors)) return;
     setSavingProfile(true);
     try {
-      await onUpdateProfile({ name, email });
-      setProfileSaved(emailChanged ? 'email-pending' : true);
+      await onUpdateProfile({ name });
+      setName(name.trim());
+      setProfileSaved(true);
     } catch (err) {
-      setProfileError(err && err.message ? err.message : String(err));
+      const apiFieldErrors = staffFieldErrors(err, ['name']);
+      setProfileFieldErrors(apiFieldErrors);
+      if (!hasStaffAuthErrors(apiFieldErrors)) {
+        setProfileError(staffErrorMessage(err, 'Unable to update your name.'));
+      }
     } finally {
       setSavingProfile(false);
     }
   }
 
+  async function submitEmailChange(e) {
+    e.preventDefault();
+    setEmailError('');
+    setEmailRequested(false);
+    if (!email.trim()) {
+      setEmailError('Email is required.');
+      return;
+    }
+    if (email.trim().toLowerCase() === (account.email || '').toLowerCase()) {
+      setEmailError('Enter a different email address.');
+      return;
+    }
+    setRequestingEmail(true);
+    try {
+      await onRequestEmailChange(email);
+      setEmailRequested(true);
+    } catch (err) {
+      setEmailError(err && err.message ? err.message : String(err));
+    } finally {
+      setRequestingEmail(false);
+    }
+  }
+
   async function submitPassword(e) {
     e.preventDefault();
+    const fieldErrors = {
+      currentPassword: validateCurrentPassword(currentPassword),
+      newPassword: passwordRequirementState(newPassword).errors,
+      confirmNewPassword: newPassword === confirmNewPassword ? [] : ['New passwords don’t match.'],
+    };
+    setPasswordFieldErrors(fieldErrors);
     setPasswordError('');
-    setPasswordSaved(false);
-    if (!currentPassword || !newPassword) {
-      setPasswordError('Fill in both password fields.');
-      return;
-    }
-    if (!passwordValid) {
-      setPasswordError('New password doesn’t meet all the requirements below.');
-      return;
-    }
-    if (newPassword !== confirmNewPassword) {
-      setPasswordError('New passwords don’t match.');
-      return;
-    }
+    if (hasStaffAuthErrors(fieldErrors)) return;
     setSavingPassword(true);
     try {
       await onChangePassword({ currentPassword, newPassword });
-      setPasswordSaved(true);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmNewPassword('');
     } catch (err) {
-      setPasswordError(err && err.message ? err.message : String(err));
+      const apiFieldErrors = staffFieldErrors(err, ['currentPassword', 'newPassword']);
+      setPasswordFieldErrors(apiFieldErrors);
+      if (!hasStaffAuthErrors(apiFieldErrors)) {
+        setPasswordError(staffErrorMessage(err, 'Unable to update your password.'));
+      }
     } finally {
       setSavingPassword(false);
     }
@@ -1438,26 +1489,58 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
         <form onSubmit={submitProfile}>
           <div className="wc-field">
             <label>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
+            <input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setProfileFieldErrors({});
+              }}
+              required
+              aria-invalid={Boolean(profileFieldErrors.name?.length)}
+              aria-describedby={profileFieldErrors.name?.length ? 'settings-name-error' : undefined}
+            />
           </div>
-          <div className="wc-field">
-            <label>Email</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </div>
+          <FieldErrors id="settings-name-error" messages={profileFieldErrors.name} />
           {profileError && (
             <div className="wc-auth-error"><AlertCircle size={14} /> {profileError}</div>
           )}
-          {profileSaved === 'email-pending' && (
-            <div className="wc-settings-success">
-              <Check size={14} /> Name updated. Check your new email inbox to confirm the email change.
-            </div>
-          )}
-          {profileSaved === true && (
-            <div className="wc-settings-success"><Check size={14} /> Profile updated.</div>
+          {profileSaved && (
+            <div className="wc-settings-success"><Check size={14} /> Name updated.</div>
           )}
           <div className="wc-modal-actions">
             <button type="submit" className="wc-btn-primary" disabled={savingProfile}>
               {savingProfile ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+
+        <div className="wc-settings-divider" />
+
+        <h3 className="wc-settings-subhead">Change email</h3>
+        <p className="wc-auth-note" style={{ textAlign: 'left' }}>
+          Email changes remain on the legacy account service until SP2B. Your displayed and sign-in email remains the WeCooked backend email.
+        </p>
+        <form onSubmit={submitEmailChange}>
+          <div className="wc-field">
+            <label>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setEmailError(''); setEmailRequested(false); }}
+              required
+              disabled={!firebaseAccountAvailable}
+            />
+          </div>
+          {!firebaseAccountAvailable && (
+            <div className="wc-auth-note">Legacy email change is unavailable for this backend-only account.</div>
+          )}
+          {emailError && <div className="wc-auth-error"><AlertCircle size={14} /> {emailError}</div>}
+          {emailRequested && (
+            <div className="wc-settings-success"><Check size={14} /> Check the new inbox to confirm the legacy email change.</div>
+          )}
+          <div className="wc-modal-actions">
+            <button type="submit" className="wc-btn-secondary" disabled={requestingEmail || !firebaseAccountAvailable}>
+              {requestingEmail ? 'Sending…' : 'Request email change'}
             </button>
           </div>
         </form>
@@ -1471,60 +1554,43 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
             <input
               type="password"
               value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
+              onChange={(e) => { setCurrentPassword(e.target.value); setPasswordFieldErrors({}); }}
               autoComplete="current-password"
               required
+              aria-invalid={Boolean(passwordFieldErrors.currentPassword?.length)}
+              aria-describedby={passwordFieldErrors.currentPassword?.length ? 'settings-current-password-error' : undefined}
             />
           </div>
+          <FieldErrors id="settings-current-password-error" messages={passwordFieldErrors.currentPassword} />
           <div className="wc-field">
             <label>New password</label>
             <input
               type="password"
               value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
+              onChange={(e) => { setNewPassword(e.target.value); setPasswordFieldErrors({}); }}
               autoComplete="new-password"
               required
+              aria-invalid={Boolean(passwordFieldErrors.newPassword?.length)}
+              aria-describedby="staff-password-requirements settings-new-password-error"
             />
           </div>
-          {newPassword && (
-            <ul className="wc-pw-checklist">
-              <li className={passwordRules.length ? 'ok' : ''}>
-                {passwordRules.length ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains at least 8 characters
-              </li>
-              <li className={passwordRules.mixedCase ? 'ok' : ''}>
-                {passwordRules.mixedCase ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains both lower and upper case letters
-              </li>
-              <li className={passwordRules.number ? 'ok' : ''}>
-                {passwordRules.number ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains at least one number (0-9)
-              </li>
-              <li className={passwordRules.symbol ? 'ok' : ''}>
-                {passwordRules.symbol ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains at least one special symbol
-              </li>
-              <li className={passwordRules.noNameOrEmail ? 'ok' : ''}>
-                {passwordRules.noNameOrEmail ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Does not contain your name or email
-              </li>
-            </ul>
-          )}
+          <FieldErrors id="settings-new-password-error" messages={passwordFieldErrors.newPassword} />
+          <PasswordRequirements password={newPassword} />
           <div className="wc-field">
             <label>Confirm new password</label>
             <input
               type="password"
               value={confirmNewPassword}
-              onChange={(e) => setConfirmNewPassword(e.target.value)}
+              onChange={(e) => { setConfirmNewPassword(e.target.value); setPasswordFieldErrors({}); }}
               autoComplete="new-password"
               required
+              aria-invalid={Boolean(passwordFieldErrors.confirmNewPassword?.length)}
+              aria-describedby={passwordFieldErrors.confirmNewPassword?.length ? 'settings-confirm-password-error' : undefined}
             />
           </div>
+          <FieldErrors id="settings-confirm-password-error" messages={passwordFieldErrors.confirmNewPassword} />
           {passwordError && (
             <div className="wc-auth-error"><AlertCircle size={14} /> {passwordError}</div>
-          )}
-          {passwordSaved && (
-            <div className="wc-settings-success"><Check size={14} /> Password updated.</div>
           )}
           <div className="wc-modal-actions">
             <button type="submit" className="wc-btn-primary" disabled={savingPassword}>
@@ -1540,7 +1606,7 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
 const HELP_FAQS = [
   {
     q: 'Where is my data stored?',
-    a: 'Ingredients, substitutions, recipes, users, and staff applications live in the WeCooked backend (REST API + MongoDB). Firebase remains only for legacy account utilities and a best-effort sign-in mirror; it does not determine Staff Portal access.',
+    a: 'Ingredients, substitutions, recipes, users, and staff applications live in the WeCooked backend (REST API + MongoDB). Firebase remains only for the legacy email-change/account-delete surfaces and their best-effort sign-in mirror; it does not determine Staff Portal access or displayed identity.',
   },
   {
     q: 'How do I add another admin?',
@@ -2137,50 +2203,41 @@ function VerifyEmailScreen({ account, onResend, onCheckAgain, onSignOut }) {
   );
 }
 
-function ResetPasswordScreen({ oobCode, onDone }) {
-  const [status, setStatus] = useState('verifying'); // verifying | ready | invalid | done
-  const [email, setEmail] = useState('');
+function ResetPasswordScreen({ token, onClearToken, onDone }) {
+  const [status, setStatus] = useState('ready'); // ready | invalid | done
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    verifyResetCode(oobCode)
-      .then((resolvedEmail) => {
-        if (!cancelled) { setEmail(resolvedEmail); setStatus('ready'); }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err && err.message ? err.message : String(err));
-          setStatus('invalid');
-        }
-      });
-    return () => { cancelled = true; };
-  }, [oobCode]);
-
-  const passwordRules = checkPasswordRules(newPassword, '', email);
-  const passwordValid = Object.values(passwordRules).every(Boolean);
-
   async function handleSubmit(e) {
     e.preventDefault();
+    const validationErrors = {
+      newPassword: passwordRequirementState(newPassword).errors,
+      confirmPassword: newPassword === confirmPassword ? [] : ['Passwords don’t match.'],
+    };
+    setFieldErrors(validationErrors);
     setError('');
-    if (!passwordValid) {
-      setError('Your password doesn’t meet all the requirements below.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('Passwords don’t match.');
-      return;
-    }
+    if (hasStaffAuthErrors(validationErrors)) return;
     setSubmitting(true);
     try {
-      await confirmReset(oobCode, newPassword);
+      await resetBackendPassword(token, newPassword);
+      onClearToken();
       setStatus('done');
     } catch (err) {
-      setError(err && err.message ? err.message : String(err));
+      const apiFieldErrors = staffFieldErrors(err, ['token', 'newPassword']);
+      if (err?.code === 'AUTH_PASSWORD_RESET_TOKEN_INVALID' || apiFieldErrors.token?.length) {
+        onClearToken();
+        setError('This reset link is invalid, expired, or has already been used.');
+        setStatus('invalid');
+      } else {
+        setFieldErrors(apiFieldErrors);
+        if (!hasStaffAuthErrors(apiFieldErrors)) {
+          setError(staffErrorMessage(err, 'Unable to reset your password.'));
+        }
+      }
     } finally {
       setSubmitting(false);
     }
@@ -2198,10 +2255,6 @@ function ResetPasswordScreen({ oobCode, onDone }) {
           <Lock size={20} color="#4A5D4E" />
         </div>
         <div className="wc-auth-title wc-serif">Reset your password</div>
-
-        {status === 'verifying' && (
-          <div className="wc-auth-sub">Checking your reset link…</div>
-        )}
 
         {status === 'invalid' && (
           <>
@@ -2223,7 +2276,7 @@ function ResetPasswordScreen({ oobCode, onDone }) {
 
         {status === 'ready' && (
           <>
-            <div className="wc-auth-sub">Choose a new password for <strong>{email}</strong>.</div>
+            <div className="wc-auth-sub">Choose a new password for your WeCooked account.</div>
             <form onSubmit={handleSubmit}>
               <div className="wc-auth-field">
                 <label>New password</label>
@@ -2232,10 +2285,12 @@ function ResetPasswordScreen({ oobCode, onDone }) {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
+                    onChange={(e) => { setNewPassword(e.target.value); setFieldErrors({}); }}
                     placeholder="Create a password"
                     autoComplete="new-password"
                     required
+                    aria-invalid={Boolean(fieldErrors.newPassword?.length)}
+                    aria-describedby="staff-password-requirements reset-new-password-error"
                   />
                   <button
                     type="button"
@@ -2247,29 +2302,8 @@ function ResetPasswordScreen({ oobCode, onDone }) {
                   </button>
                 </div>
               </div>
-
-              <ul className="wc-pw-checklist">
-                <li className={passwordRules.length ? 'ok' : ''}>
-                  {passwordRules.length ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains at least 8 characters
-                </li>
-                <li className={passwordRules.mixedCase ? 'ok' : ''}>
-                  {passwordRules.mixedCase ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains both lower (a-z) and upper case letters (A-Z)
-                </li>
-                <li className={passwordRules.number ? 'ok' : ''}>
-                  {passwordRules.number ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains at least one number (0-9)
-                </li>
-                <li className={passwordRules.symbol ? 'ok' : ''}>
-                  {passwordRules.symbol ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains at least one special symbol (!@#$%^&*…)
-                </li>
-                <li className={passwordRules.noNameOrEmail ? 'ok' : ''}>
-                  {passwordRules.noNameOrEmail ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Does not contain your name or email address
-                </li>
-              </ul>
+              <FieldErrors id="reset-new-password-error" messages={fieldErrors.newPassword} />
+              <PasswordRequirements password={newPassword} />
 
               <div className="wc-auth-field">
                 <label>Confirm password</label>
@@ -2278,13 +2312,16 @@ function ResetPasswordScreen({ oobCode, onDone }) {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    onChange={(e) => { setConfirmPassword(e.target.value); setFieldErrors({}); }}
                     placeholder="Repeat password"
                     autoComplete="new-password"
                     required
+                    aria-invalid={Boolean(fieldErrors.confirmPassword?.length)}
+                    aria-describedby={fieldErrors.confirmPassword?.length ? 'reset-confirm-password-error' : undefined}
                   />
                 </div>
               </div>
+              <FieldErrors id="reset-confirm-password-error" messages={fieldErrors.confirmPassword} />
 
               {error && <div className="wc-auth-error"><AlertCircle size={14} /> {error}</div>}
 

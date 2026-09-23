@@ -95,3 +95,32 @@ test('unrelated details are ignored and invalid credentials remain generic', () 
   assert.deepEqual(staffFieldErrors(invalidCredentials, ['email', 'password']), {});
   assert.equal(staffErrorMessage(invalidCredentials), 'Invalid email or password.');
 });
+
+test('account credential errors map to the correct fields', () => {
+  const currentPassword = new ApiError('Current password is incorrect.', {
+    code: 'AUTH_CURRENT_PASSWORD_INVALID',
+    status: 400,
+  });
+  assert.deepEqual(staffFieldErrors(currentPassword, ['currentPassword', 'newPassword']), {
+    currentPassword: ['Current password is incorrect.'],
+  });
+
+  const samePassword = new ApiError('New password must be different from your current password.', {
+    code: 'NEW_PASSWORD_SAME_AS_CURRENT',
+    status: 400,
+  });
+  assert.deepEqual(staffFieldErrors(samePassword, ['currentPassword', 'newPassword']), {
+    newPassword: ['New password must be different from your current password.'],
+  });
+});
+
+test('invalid, expired, and replayed reset tokens receive stable safe copy', () => {
+  const error = new ApiError('Password reset token is invalid or expired.', {
+    code: 'AUTH_PASSWORD_RESET_TOKEN_INVALID',
+    status: 400,
+  });
+  assert.equal(
+    staffErrorMessage(error),
+    'This reset link is invalid, expired, or has already been used.',
+  );
+});

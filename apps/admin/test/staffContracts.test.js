@@ -1,17 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  backendStaffIdentity,
   emptyStaffActionBody,
   hasStaffAuthErrors,
   loginPayload,
   passwordRequirementState,
   registrationPayload,
   rejectionPayload,
+  resetTokenFromHash,
   STAFF_AUTH_ERROR_MESSAGES,
   staffPaths,
   staffRequests,
   validateStaffEmail,
+  validateCurrentPassword,
   validateStaffLogin,
+  validateStaffName,
   validateStaffRegistration,
 } from '../src/staffContracts.js';
 import {
@@ -150,4 +154,58 @@ test('Staff Portal password reset uses the public backend contract', () => {
     auth: false,
     body: { email: 'applicant@example.com' },
   });
+});
+
+test('Staff account REST mutations use the exact backend contracts', () => {
+  assert.deepEqual(staffRequests.updateName('  Ada Lovelace  '), {
+    method: 'PATCH',
+    path: '/users/me',
+    body: { name: 'Ada Lovelace' },
+  });
+  assert.deepEqual(staffRequests.changePassword('legacy password', 'ValidPass1!'), {
+    method: 'POST',
+    path: '/auth/change-password',
+    body: { currentPassword: 'legacy password', newPassword: 'ValidPass1!' },
+  });
+  assert.deepEqual(staffRequests.resetPassword('reset-token', 'ValidPass1!'), {
+    method: 'POST',
+    path: '/auth/reset-password',
+    auth: false,
+    body: { token: 'reset-token', newPassword: 'ValidPass1!' },
+  });
+});
+
+test('Staff name and current-password validation match backend boundary rules', () => {
+  assert.deepEqual(validateStaffName('  Ada  '), []);
+  assert.deepEqual(validateStaffName('   '), [STAFF_AUTH_ERROR_MESSAGES.NAME_REQUIRED]);
+  assert.deepEqual(validateStaffName(` ${'a'.repeat(101)} `), [STAFF_AUTH_ERROR_MESSAGES.NAME_MAX_CHARS]);
+
+  assert.deepEqual(validateCurrentPassword('legacy password'), []);
+  assert.deepEqual(validateCurrentPassword(''), [STAFF_AUTH_ERROR_MESSAGES.PASSWORD_REQUIRED]);
+  assert.deepEqual(
+    validateCurrentPassword('a'.repeat(73)),
+    [STAFF_AUTH_ERROR_MESSAGES.PASSWORD_MAX_BYTES],
+  );
+});
+
+test('display identity is projected only from the backend user', () => {
+  assert.deepEqual(backendStaffIdentity({
+    name: 'Mongo Name',
+    email: 'mongo@example.com',
+    emailVerified: true,
+    role: 'admin',
+  }), {
+    name: 'Mongo Name',
+    email: 'mongo@example.com',
+    emailVerified: true,
+  });
+  assert.equal(backendStaffIdentity(null), null);
+});
+
+test('backend reset tokens are read only from the URL fragment', () => {
+  assert.equal(resetTokenFromHash('#token=abc_def-123'), 'abc_def-123');
+  assert.equal(resetTokenFromHash('#other=value&token=encoded%2Dtoken'), 'encoded-token');
+  assert.equal(resetTokenFromHash('?token=query-token'), null);
+  assert.equal(resetTokenFromHash('#oobCode=firebase-code'), null);
+  assert.equal(resetTokenFromHash(''), null);
 });
