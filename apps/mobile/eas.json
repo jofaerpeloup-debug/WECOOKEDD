@@ -16,6 +16,16 @@
       "ios": {
         "simulator": true
       }
+    },
+    "preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://wecooked-api.onrender.com"
+      },
+      "android": {
+        "buildType": "apk"
+      }
     }
   }
 }
