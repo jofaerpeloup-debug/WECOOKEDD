@@ -111,6 +111,10 @@ async function verifyCredentials(email, password) {
   return user;
 }
 
+function getUserIfPasswordHashMatches(userId, passwordHash) {
+  return userRepository.findByIdWithPasswordHash(userId, passwordHash);
+}
+
 function getUserById(id) {
   return userRepository.findById(id);
 }
@@ -546,6 +550,7 @@ async function verifyEmailWithToken({ rawToken }) {
 module.exports = {
   registerUser,
   verifyCredentials,
+  getUserIfPasswordHashMatches,
   getUserById,
   getPublicUsersByIds,
   getUserByAuthIdentity,

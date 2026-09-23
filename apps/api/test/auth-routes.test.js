@@ -568,6 +568,9 @@ test('POST /api/v1/auth/register still succeeds when verification email delivery
 test('POST /api/v1/auth/login succeeds with valid credentials and creates a session', async (t) => {
   const passwordHash = await hashPassword('correct-password');
   t.mock.method(userRepository, 'findByEmailWithPassword', async () => fakeUserDoc({ passwordHash }));
+  t.mock.method(userRepository, 'findByIdWithPasswordHash', async () =>
+    fakeUserDoc({ passwordHash: undefined })
+  );
   let sessionCreated = false;
   t.mock.method(sessionRepository, 'createSession', async ({ userId }) => {
     sessionCreated = true;
@@ -697,6 +700,9 @@ test('POST /api/v1/auth/login: admin credentials return role "admin" in the resp
   const passwordHash = await hashPassword('correct-password');
   t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
     fakeUserDoc({ passwordHash, role: 'admin' })
+  );
+  t.mock.method(userRepository, 'findByIdWithPasswordHash', async () =>
+    fakeUserDoc({ passwordHash: undefined, role: 'admin' })
   );
   t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
 

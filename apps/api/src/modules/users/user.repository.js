@@ -69,6 +69,14 @@ function findByIdWithPassword(id) {
   return User.findById(id).select('+passwordHash');
 }
 
+// Post-session login fence. Matching the exact bcrypt digest that was
+// successfully compared proves the credential snapshot is still current at
+// this point. The digest stays in the query predicate and is not selected into
+// the returned user document.
+function findByIdWithPasswordHash(id, passwordHash) {
+  return User.findOne({ _id: id, passwordHash });
+}
+
 // Staff-application eligibility needs to know whether a local credential
 // exists, but the hash must never leave the service boundary. Keep this as an
 // explicit opt-in path rather than weakening passwordHash's select:false
@@ -242,6 +250,7 @@ module.exports = {
   findByEmail,
   findByEmailWithPassword,
   findByIdWithPassword,
+  findByIdWithPasswordHash,
   findModeratorApplicantById,
   promoteEligibleUserToModerator,
   demoteModeratorToUser,
