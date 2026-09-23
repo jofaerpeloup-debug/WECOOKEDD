@@ -453,10 +453,6 @@ function WeCookedAdminApp() {
           font-family: inherit;
           font-size: 14px;
         }
-        .wc-admin *:focus-visible {
-          outline: none;
-        }
-
         .wc-sidebar {
           width: 220px;
           flex-shrink: 0;

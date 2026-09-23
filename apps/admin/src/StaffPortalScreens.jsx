@@ -325,7 +325,6 @@ export function StaffBootstrapError({ message, onRetry, onSignOut }) {
 
 export function StaffPortalScreenStyles() {
   return <style>{`
-    .wc-admin *:focus-visible { outline:2px solid var(--saffron); outline-offset:2px; }
     .wc-btn-secondary { display:flex; align-items:center; justify-content:center; gap:6px; background:transparent; color:var(--sage-deep); border:1px solid var(--sage-mid); padding:9px 16px; border-radius:8px; font-size:14px; font-weight:600; }
     .wc-btn-secondary:disabled { opacity:.6; cursor:default; }
     .wc-auth-field-errors { margin:5px 0 0; padding-left:18px; color:var(--clay); font-size:12px; line-height:1.4; }
