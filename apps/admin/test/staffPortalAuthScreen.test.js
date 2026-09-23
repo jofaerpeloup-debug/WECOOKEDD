@@ -59,7 +59,7 @@ test('password requirements component reflects every shared-validator requiremen
   assert.ok(changedBackToInvalid.includes('Not met: No unsupported characters'));
 });
 
-test('login renders web form semantics without the new-password checklist', () => {
+test('login renders the editorial sign-in state and preserves every auth entry point', () => {
   const markup = renderToStaticMarkup(React.createElement(StaffPortalAuthScreen, {
     onSignIn: async () => {},
     onRegisterAndApply: async () => {},
@@ -70,7 +70,16 @@ test('login renders web form semantics without the new-password checklist', () =
   assert.ok(markup.includes('type="email"'));
   assert.ok(markup.includes('autoComplete="username"'));
   assert.ok(markup.includes('autoComplete="current-password"'));
+  assert.ok(markup.includes('KEEP EVERY'));
+  assert.ok(markup.includes('COOKABLE.'));
+  assert.ok(markup.includes('Manage recipe quality, ingredients, moderation, and catalog reliability'));
+  assert.ok(markup.includes('Staff Portal'));
+  assert.ok(markup.includes('Show password'));
   assert.ok(markup.includes('aria-pressed="false"'));
+  assert.ok(markup.includes('Forgot password?'));
+  assert.ok(markup.includes('Sign In'));
+  assert.ok(markup.includes('Apply as Moderator'));
+  assert.ok(markup.includes('fetchpriority="high"'));
   assert.ok(!markup.includes('Password requirements'));
   assert.ok(!markup.includes('staff-apply-name'));
 });

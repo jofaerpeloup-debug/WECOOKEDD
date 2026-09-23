@@ -13,6 +13,7 @@ import {
   validateStaffRegistration,
 } from './staffContracts.js';
 import { staffErrorMessage, staffFieldErrors } from './staffErrorMessage.js';
+import staffSignInHero from './assets/auth/staff-sign-in-adobo.jpg';
 
 export function FieldErrors({ id, messages = [] }) {
   if (!messages.length) return null;
@@ -57,6 +58,48 @@ function PortalFrame({ icon, title, subtitle, children }) {
         {children}
       </div>
     </div>
+  );
+}
+
+function StaffSignInFrame({ children }) {
+  return (
+    <main className="wc-staff-auth">
+      <header className="wc-staff-auth__brand" aria-label="WeCooked Staff Portal">
+        <span className="wc-staff-auth__brand-mark" aria-hidden="true"><Leaf size={18} strokeWidth={2.25} /></span>
+        <span className="wc-staff-auth__wordmark">WeCooked</span>
+        <span className="wc-staff-auth__designation">Staff Portal</span>
+      </header>
+
+      <section className="wc-staff-auth__intro" aria-labelledby="staff-auth-hero-title">
+        <h1 id="staff-auth-hero-title" className="wc-staff-auth__headline">
+          <span>KEEP EVERY</span>
+          <span>RECIPE</span>
+          <span className="wc-staff-auth__headline-accent">COOKABLE.</span>
+        </h1>
+        <p className="wc-staff-auth__lede">
+          Manage recipe quality, ingredients, moderation, and catalog reliability for a better food community.
+        </p>
+      </section>
+
+      <figure className="wc-staff-auth__media">
+        <img
+          src={staffSignInHero}
+          alt="Chicken adobo with rice and egg in a ceramic bowl"
+          width="1536"
+          height="1024"
+          decoding="async"
+          fetchpriority="high"
+        />
+      </figure>
+
+      <section className="wc-staff-auth__access" aria-labelledby="staff-sign-in-title">
+        <div className="wc-staff-auth__panel">
+          <h2 id="staff-sign-in-title">Staff Portal</h2>
+          <p className="wc-staff-auth__support">Sign in with your WeCooked account to continue.</p>
+          {children}
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -137,16 +180,10 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
     }
   }
 
-  return (
-    <PortalFrame
-      icon={<Leaf size={20} color="#4A5D4E" />}
-      title="WeCooked Staff Portal"
-      subtitle={applying
-        ? 'Create a WeCooked account and submit your Moderator application.'
-        : 'Existing staff and account holders can sign in here.'}
-    >
+  const formContent = (
+    <>
       {notice && <div className="wc-settings-success" role="status">{notice}</div>}
-      <form onSubmit={submit} noValidate>
+      <form onSubmit={submit} noValidate aria-busy={submitting}>
         {applying && (
           <div className="wc-auth-field">
             <label htmlFor="staff-apply-name">Name <span aria-hidden="true">*</span></label>
@@ -210,7 +247,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
         {applying && <PasswordRequirements password={password} />}
 
         {!applying && (
-          <div className="wc-auth-switch" style={{ textAlign: 'right', marginTop: -6 }}>
+          <div className="wc-auth-switch wc-auth-forgot">
             <button type="button" onClick={forgotPassword} disabled={resetting}>{resetting ? 'Sending…' : 'Forgot password?'}</button>
           </div>
         )}
@@ -228,7 +265,25 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
         )}
       </div>
       {applying && <div className="wc-auth-note">Submitting this form applies for review; it does not grant staff access immediately.</div>}
-    </PortalFrame>
+    </>
+  );
+
+  if (applying) {
+    return (
+      <PortalFrame
+        icon={<Leaf size={20} color="#4A5D4E" />}
+        title="WeCooked Staff Portal"
+        subtitle="Create a WeCooked account and submit your Moderator application."
+      >
+        {formContent}
+      </PortalFrame>
+    );
+  }
+
+  return (
+    <StaffSignInFrame>
+      {formContent}
+    </StaffSignInFrame>
   );
 }
 
