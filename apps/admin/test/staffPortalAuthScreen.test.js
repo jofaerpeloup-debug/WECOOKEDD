@@ -83,3 +83,31 @@ test('login renders the editorial sign-in state and preserves every auth entry p
   assert.ok(!markup.includes('Password requirements'));
   assert.ok(!markup.includes('staff-apply-name'));
 });
+
+test('application mode renders the structured Moderator application without changing auth fields', () => {
+  const markup = renderToStaticMarkup(React.createElement(StaffPortalAuthScreen, {
+    onSignIn: async () => {},
+    onRegisterAndApply: async () => {},
+    onForgotPassword: async () => {},
+    initialMode: 'apply',
+  }));
+
+  assert.ok(markup.includes('Apply as Moderator.'));
+  assert.ok(markup.includes('Application details'));
+  assert.ok(markup.includes('Staff access is reviewed before it is granted.'));
+  assert.ok(markup.includes('class="wc-apply-form"'));
+  assert.ok(markup.includes('for="staff-apply-name"'));
+  assert.ok(markup.includes('autoComplete="name"'));
+  assert.ok(markup.includes('for="staff-auth-email"'));
+  assert.ok(markup.includes('type="email"'));
+  assert.ok(markup.includes('autoComplete="username"'));
+  assert.ok(markup.includes('for="staff-auth-password"'));
+  assert.ok(markup.includes('autoComplete="new-password"'));
+  assert.ok(markup.includes('Password requirements'));
+  assert.ok(markup.includes('staff-password-requirements'));
+  assert.ok(markup.includes('Create account and apply'));
+  assert.ok(markup.includes('does not grant staff access immediately'));
+  assert.ok(markup.includes('Already have an account?'));
+  assert.ok(!markup.includes('Forgot password?'));
+  assert.ok(!markup.includes('staff-sign-in-title'));
+});

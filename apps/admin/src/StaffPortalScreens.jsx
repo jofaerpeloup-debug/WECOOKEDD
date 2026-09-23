@@ -26,8 +26,9 @@ export function FieldErrors({ id, messages = [] }) {
 
 export function PasswordRequirements({ password }) {
   const state = passwordRequirementState(password);
+  const metCount = state.requirements.filter(({ met }) => met).length;
   return (
-    <div id="staff-password-requirements" className="wc-pw-requirements" aria-live="polite">
+    <div id="staff-password-requirements" className="wc-pw-requirements">
       <div className="wc-pw-title">Password requirements</div>
       <ul className="wc-pw-checklist">
         {state.requirements.map(({ message, label, met }) => (
@@ -36,6 +37,11 @@ export function PasswordRequirements({ password }) {
           </li>
         ))}
       </ul>
+      <span className="wc-visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+        {state.meetsRequirements
+          ? 'All password requirements met.'
+          : `${metCount} of ${state.requirements.length} password requirements met.`}
+      </span>
       {state.meetsRequirements && (
         <div className="wc-pw-complete">Meets password requirements</div>
       )}
@@ -103,8 +109,46 @@ function StaffSignInFrame({ children }) {
   );
 }
 
-export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPassword, notice = '' }) {
-  const [mode, setMode] = useState('signin');
+function ModeratorApplicationFrame({ children }) {
+  return (
+    <main className="wc-moderator-apply">
+      <section className="wc-moderator-apply__context" aria-labelledby="moderator-application-title">
+        <header className="wc-moderator-apply__brand" aria-label="WeCooked Staff Portal">
+          <span className="wc-staff-auth__brand-mark" aria-hidden="true"><Leaf size={18} strokeWidth={2.25} /></span>
+          <span className="wc-staff-auth__wordmark">WeCooked</span>
+          <span className="wc-staff-auth__designation">Staff Portal</span>
+        </header>
+
+        <div className="wc-moderator-apply__intro">
+          <p className="wc-moderator-apply__eyebrow">Moderator application</p>
+          <h1 id="moderator-application-title">Apply as Moderator.</h1>
+          <p>
+            Help maintain recipe and catalog quality with access designed for careful, consistent moderation.
+          </p>
+        </div>
+
+        <div className="wc-moderator-apply__review">
+          <ShieldAlert size={18} aria-hidden="true" />
+          <span>Staff access is reviewed before it is granted.</span>
+        </div>
+      </section>
+
+      <section className="wc-moderator-apply__form-region" aria-labelledby="moderator-application-form-title">
+        <div className="wc-moderator-apply__form-surface">
+          <p className="wc-moderator-apply__form-kicker">Staff access request</p>
+          <h2 id="moderator-application-form-title">Application details</h2>
+          <p className="wc-moderator-apply__form-support">
+            Create your WeCooked account and submit it for Moderator review.
+          </p>
+          {children}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPassword, notice = '', initialMode = 'signin' }) {
+  const [mode, setMode] = useState(initialMode);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -183,9 +227,9 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
   const formContent = (
     <>
       {notice && <div className="wc-settings-success" role="status">{notice}</div>}
-      <form onSubmit={submit} noValidate aria-busy={submitting}>
+      <form className={applying ? 'wc-apply-form' : undefined} onSubmit={submit} noValidate aria-busy={submitting}>
         {applying && (
-          <div className="wc-auth-field">
+          <div className="wc-auth-field wc-apply-form__name">
             <label htmlFor="staff-apply-name">Name <span aria-hidden="true">*</span></label>
             <div className="wc-auth-input-wrap">
               <User size={15} />
@@ -202,7 +246,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
             <FieldErrors id="staff-name-error" messages={fieldErrors.name} />
           </div>
         )}
-        <div className="wc-auth-field">
+        <div className={`wc-auth-field${applying ? ' wc-apply-form__email' : ''}`}>
           <label htmlFor="staff-auth-email">Email <span aria-hidden="true">*</span></label>
           <div className="wc-auth-input-wrap">
             <Mail size={15} />
@@ -220,7 +264,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
           </div>
           <FieldErrors id="staff-email-error" messages={fieldErrors.email} />
         </div>
-        <div className="wc-auth-field">
+        <div className={`wc-auth-field${applying ? ' wc-apply-form__password' : ''}`}>
           <label htmlFor="staff-auth-password">Password <span aria-hidden="true">*</span></label>
           <div className="wc-auth-input-wrap">
             <Lock size={15} />
@@ -253,6 +297,11 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
         )}
         {resetStatus && <div className="wc-auth-note" role="status">{resetStatus}</div>}
         {error && <div className="wc-auth-error" role="alert"><AlertCircle size={14} /> {error}</div>}
+        {applying && (
+          <p className="wc-apply-form__review-note">
+            Submitting applies for review; it does not grant staff access immediately.
+          </p>
+        )}
         <button type="submit" className="wc-btn-primary wc-auth-submit" disabled={submitting}>
           {submitting ? 'Please wait…' : applying ? 'Create account and apply' : 'Sign In'} <ArrowRight size={15} />
         </button>
@@ -264,19 +313,14 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
           <>Want to help manage WeCooked recipes? <button type="button" onClick={() => switchMode('apply')}>Apply as Moderator</button></>
         )}
       </div>
-      {applying && <div className="wc-auth-note">Submitting this form applies for review; it does not grant staff access immediately.</div>}
     </>
   );
 
   if (applying) {
     return (
-      <PortalFrame
-        icon={<Leaf size={20} color="#4A5D4E" />}
-        title="WeCooked Staff Portal"
-        subtitle="Create a WeCooked account and submit your Moderator application."
-      >
+      <ModeratorApplicationFrame>
         {formContent}
-      </PortalFrame>
+      </ModeratorApplicationFrame>
     );
   }
 
