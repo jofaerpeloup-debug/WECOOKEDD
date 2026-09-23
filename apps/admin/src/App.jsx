@@ -1097,50 +1097,57 @@ function WeCookedAdminApp() {
         <StaffBootstrapError message="The Staff Portal returned an unsupported access state." onRetry={() => refreshStaffState()} onSignOut={signOut} />
       ) : (
         <>
-          <aside className="wc-sidebar">
+          <aside className="wc-sidebar wc-staff-sidebar">
             <div className="wc-brand">
               <div className="wc-brand-badge">
                 <Leaf size={18} color="#4A5D4E" />
               </div>
               <div>
                 <div className="wc-brand-name">WeCooked</div>
-                <div className="wc-brand-sub">Staff Portal · Admin</div>
+                <div className="wc-brand-sub">Staff Portal</div>
+                <div className="wc-role-label">Admin</div>
               </div>
             </div>
-            <nav className="wc-nav">
+            <nav className="wc-nav" aria-label="Admin workspace">
               <button
                 className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
                 onClick={() => setTab('overview')}
+                aria-current={tab === 'overview' ? 'page' : undefined}
               >
                 <LayoutDashboard size={17} /> Overview
               </button>
               <button
                 className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
                 onClick={() => setTab('recipes')}
+                aria-current={tab === 'recipes' ? 'page' : undefined}
               >
                 <ChefHat size={17} /> Recipes
               </button>
               <button
                 className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
                 onClick={() => setTab('ingredients')}
+                aria-current={tab === 'ingredients' ? 'page' : undefined}
               >
                 <Carrot size={17} /> Ingredients
               </button>
               <button
                 className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
                 onClick={() => setTab('substitutions')}
+                aria-current={tab === 'substitutions' ? 'page' : undefined}
               >
                 <Replace size={17} /> Substitutions
               </button>
               <button
                 className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
                 onClick={() => setTab('users')}
+                aria-current={tab === 'users' ? 'page' : undefined}
               >
                 <Users size={17} /> Users
               </button>
               <button
                 className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
                 onClick={() => setTab('staff')}
+                aria-current={tab === 'staff' ? 'page' : undefined}
               >
                 <UserCog size={17} /> Staff Management
               </button>
@@ -1164,7 +1171,7 @@ function WeCookedAdminApp() {
             </div>
           </aside>
 
-          <main className="wc-main">
+          <main className="wc-main wc-staff-main">
             {tab === 'overview' && (
               <OverviewTab
                 metrics={metrics}
@@ -1266,26 +1273,35 @@ function ModeratorWorkspace({
         .wc-moderator-area { border:1px solid var(--stone-light); border-radius:11px; padding:16px; display:flex; flex-direction:column; gap:8px; color:var(--ink); background:var(--parchment); }
         .wc-moderator-area svg { color:var(--sage-deep); }
         .wc-moderator-area span { font-size:11.5px; color:var(--stone); }
-        .wc-moderator-identity { padding:8px; color:var(--sage-light); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; }
         @media (max-width:760px) { .wc-moderator-areas { grid-template-columns:1fr; } }
       `}</style>
-      <aside className="wc-sidebar">
+      <aside className="wc-sidebar wc-staff-sidebar">
         <div className="wc-brand">
           <div className="wc-brand-badge"><Leaf size={18} color="#4A5D4E" /></div>
-          <div><div className="wc-brand-name">WeCooked</div><div className="wc-brand-sub">Staff Portal · Moderator</div></div>
+          <div>
+            <div className="wc-brand-name">WeCooked</div>
+            <div className="wc-brand-sub">Staff Portal</div>
+            <div className="wc-role-label">Moderator</div>
+          </div>
         </div>
-        <nav className="wc-nav">
-          <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')}><LayoutDashboard size={17} /> Overview</button>
+        <nav className="wc-nav" aria-label="Moderator workspace">
+          <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')} aria-current={tab === 'moderator-home' ? 'page' : undefined}><LayoutDashboard size={17} /> Overview</button>
           {areas.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}><Icon size={17} /> {label}</button>
+            <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}><Icon size={17} /> {label}</button>
           ))}
         </nav>
         <div className="wc-sidebar-footer">
-          <div className="wc-moderator-identity">{identity?.name || identity?.email}<br />{identity?.email}</div>
-          <button className="wc-nav-item" onClick={onSignOut}><LogOut size={17} /> Sign Out</button>
+          <div className="wc-staff-identity">
+            <span className="wc-profile-avatar" aria-hidden="true">{initials(identity?.name, identity?.email)}</span>
+            <span className="wc-profile-info">
+              <span className="wc-profile-name">{identity?.name || 'Moderator'}</span>
+              <span className="wc-profile-email">{identity?.email}</span>
+            </span>
+          </div>
+          <button className="wc-nav-item wc-signout-item" onClick={onSignOut}><LogOut size={17} /> Sign Out</button>
         </div>
       </aside>
-      <main className="wc-main">
+      <main className="wc-main wc-staff-main">
         {tab === 'recipes' && (
           <RecipesTab
             canWrite={catalogPolicy.canWriteCatalog}
@@ -1339,7 +1355,7 @@ function initials(name, email) {
   return (email || '?').trim().slice(0, 2).toUpperCase();
 }
 
-function ProfileMenu({
+export function ProfileMenu({
   account, open, onToggle, onClose, onSignOut,
   onOpenSettings, onOpenHelp, onOpenDisplay,
 }) {
@@ -1347,7 +1363,13 @@ function ProfileMenu({
 
   return (
     <div className="wc-profile">
-      <button className="wc-profile-btn" onClick={onToggle} aria-expanded={open}>
+      <button
+        className="wc-profile-btn"
+        onClick={onToggle}
+        aria-label={open ? 'Close account menu' : 'Open account menu'}
+        aria-expanded={open}
+        aria-controls={open ? 'wc-account-menu' : undefined}
+      >
         <span className="wc-profile-avatar">{initials(account.name, account.email)}</span>
         <span className="wc-profile-info">
           <span className="wc-profile-name">{account.name || 'Admin'}</span>
@@ -1359,7 +1381,7 @@ function ProfileMenu({
       {open && (
         <>
           <div className="wc-profile-backdrop" onClick={onClose} />
-          <div className="wc-profile-dropdown">
+          <div className="wc-profile-dropdown" id="wc-account-menu">
             <button className="wc-dropdown-item" onClick={onOpenSettings}>
               <Settings size={15} /> Settings &amp; privacy
             </button>
