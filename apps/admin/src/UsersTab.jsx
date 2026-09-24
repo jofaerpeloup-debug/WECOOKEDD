@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Search, Users, AlertCircle, Check,
-  ChevronLeft, ChevronRight, Ban, RotateCcw,
+  Ban, RotateCcw,
 } from 'lucide-react';
 import { ApiError } from './apiClient.js';
 import { listUsers, updateUser } from './userApi.js';
 import {
   USER_ROLE_FILTERS, USER_STATUS_FILTERS, USER_SORTS, ROLE_LABELS, STATUS_LABELS,
 } from './userOptions.js';
+import ManagementPagination from './ManagementPagination.jsx';
 
 // Admin Users tab — REST-backed, consistent with IngredientsTab /
 // SubstitutionsTab / RecipesTab.
@@ -171,7 +172,12 @@ export default function UsersTab({ currentUserId, onAuthorityLost }) {
   // Same guard as RecipesTab.
   const rowBusyRef = useRef(false);
 
-  const totalPages = pagination?.totalPages ?? 1;
+  useEffect(() => {
+    if (!loading && pagination && filters.page > Math.max(pagination.totalPages, 1)) {
+      patchFilters({ page: Math.max(pagination.totalPages, 1) });
+    }
+  }, [filters.page, loading, pagination, patchFilters]);
+
   const hasFilters = Boolean(filters.search || filters.role || filters.status);
   const anyBusy = Boolean(busyRowId);
 
@@ -269,7 +275,7 @@ export default function UsersTab({ currentUserId, onAuthorityLost }) {
   };
 
   return (
-    <div>
+    <div className="wc-management-page">
       <style>{`
         .wc-usr-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .wc-usr-select {
@@ -383,6 +389,10 @@ export default function UsersTab({ currentUserId, onAuthorityLost }) {
         </div>
       )}
 
+      {!error && !loading && (
+        <ManagementPagination pagination={pagination} noun="user" onPageChange={(page) => patchFilters({ page })} />
+      )}
+
       {!error && (
         <div className="wc-table-wrap">
           {loading && items.length === 0 ? (
@@ -447,26 +457,6 @@ export default function UsersTab({ currentUserId, onAuthorityLost }) {
               </tbody>
             </table>
           )}
-        </div>
-      )}
-
-      {!error && totalPages > 1 && (
-        <div className="wc-usr-pagination">
-          <button
-            disabled={filters.page <= 1}
-            onClick={() => patchFilters({ page: filters.page - 1 })}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={15} />
-          </button>
-          <span>Page {pagination.page} of {totalPages}</span>
-          <button
-            disabled={filters.page >= totalPages}
-            onClick={() => patchFilters({ page: filters.page + 1 })}
-            aria-label="Next page"
-          >
-            <ChevronRight size={15} />
-          </button>
         </div>
       )}
 

@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   RotateCcw,
   ShieldAlert,
 } from 'lucide-react';
@@ -15,6 +13,7 @@ import {
   listAuditLogs,
   validateAuditLogResponse,
 } from './auditLogApi.js';
+import ManagementPagination from './ManagementPagination.jsx';
 
 const PAGE_LIMIT = 20;
 const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
@@ -285,11 +284,8 @@ export function AuditLogsView({
   onRetry,
   onPageChange,
 }) {
-  const totalPages = pagination?.totalPages || 0;
-  const currentPage = pagination?.page || 1;
-
   return (
-    <div className="wc-audit">
+    <div className="wc-audit wc-management-page">
       <header className="wc-audit-header">
         <div>
           <p className="wc-audit-eyebrow">Monitoring</p>
@@ -390,6 +386,7 @@ export function AuditLogsView({
           </div>
         ) : (
           <>
+            <ManagementPagination pagination={pagination} noun="record" onPageChange={onPageChange} />
             <div className="wc-audit-table-wrap">
               <table className="wc-audit-table">
                 <caption>Administrative audit records, newest first</caption>
@@ -434,27 +431,6 @@ export function AuditLogsView({
                   ))}
                 </tbody>
               </table>
-            </div>
-            <div className="wc-audit-pagination" aria-label="Audit log pagination">
-              <p>
-                Page {currentPage} of {totalPages} · {pagination.total} total record{pagination.total === 1 ? '' : 's'}
-              </p>
-              <div>
-                <button
-                  type="button"
-                  disabled={currentPage <= 1}
-                  onClick={() => onPageChange(currentPage - 1)}
-                >
-                  <ChevronLeft size={15} aria-hidden="true" /> Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => onPageChange(currentPage + 1)}
-                >
-                  Next <ChevronRight size={15} aria-hidden="true" />
-                </button>
-              </div>
             </div>
           </>
         )}

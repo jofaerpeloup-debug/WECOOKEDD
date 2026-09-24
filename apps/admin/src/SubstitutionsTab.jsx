@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Search, Plus, Pencil, X, Check, AlertCircle, Replace,
-  Archive, ArchiveRestore, ChevronLeft, ChevronRight,
+  Archive, ArchiveRestore,
 } from 'lucide-react';
 import { ApiError } from './apiClient.js';
 import {
@@ -13,6 +13,7 @@ import {
   SUBSTITUTION_STATUS_FILTERS, SUBSTITUTION_SORTS,
   MAX_CONTEXTS, MAX_CONTEXT_LENGTH, MAX_NOTES_LENGTH,
 } from './substitutionOptions.js';
+import ManagementPagination from './ManagementPagination.jsx';
 
 const PAGE_LIMIT = 20;
 const INGREDIENT_PICKER_LIMIT = 10;
@@ -419,7 +420,12 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
   const [rowError, setRowError] = useState(null); // { id, message }
   const [busyRowId, setBusyRowId] = useState(null); // a row mutation is in flight
 
-  const totalPages = pagination?.totalPages ?? 1;
+  useEffect(() => {
+    if (!loading && pagination && filters.page > Math.max(pagination.totalPages, 1)) {
+      patchFilters({ page: Math.max(pagination.totalPages, 1) });
+    }
+  }, [filters.page, loading, pagination, patchFilters]);
+
   const hasFilters = Boolean(
     filters.source || filters.substitute || filters.context || filters.status !== 'active',
   );
@@ -450,7 +456,7 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
   };
 
   return (
-    <div>
+    <div className="wc-management-page">
       <style>{`
         .wc-sub-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .wc-sub-select {
@@ -661,6 +667,10 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
         </div>
       )}
 
+      {!error && !loading && (
+        <ManagementPagination pagination={pagination} noun="substitution" onPageChange={(page) => patchFilters({ page })} />
+      )}
+
       {!error && (
         <div className="wc-table-wrap">
           {loading && items.length === 0 ? (
@@ -786,26 +796,6 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
           The active view hides any substitution whose ingredient has since been archived, so a
           page can show fewer than {PAGE_LIMIT} rows and the total can be a slight overcount. Switch
           status to “All” to see and clean those up.
-        </div>
-      )}
-
-      {!error && totalPages > 1 && (
-        <div className="wc-sub-pagination">
-          <button
-            disabled={filters.page <= 1}
-            onClick={() => patchFilters({ page: filters.page - 1 })}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={15} />
-          </button>
-          <span>Page {pagination.page} of {totalPages}</span>
-          <button
-            disabled={filters.page >= totalPages}
-            onClick={() => patchFilters({ page: filters.page + 1 })}
-            aria-label="Next page"
-          >
-            <ChevronRight size={15} />
-          </button>
         </div>
       )}
 

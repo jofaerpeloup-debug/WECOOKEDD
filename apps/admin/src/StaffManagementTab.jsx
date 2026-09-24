@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle, Check, ChevronLeft, ChevronRight, Clock, RefreshCw,
+  AlertCircle, Check, Clock, RefreshCw,
   ShieldCheck, UserMinus, X,
 } from 'lucide-react';
 import {
@@ -12,6 +12,7 @@ import {
 } from './staffApi.js';
 import { staffErrorMessage } from './staffErrorMessage.js';
 import { classifyApprovedApplications } from './approvedApplicationPolicy.js';
+import ManagementPagination from './ManagementPagination.jsx';
 
 const STATUSES = ['pending', 'approved', 'rejected'];
 const PAGE_LIMIT = 20;
@@ -161,12 +162,15 @@ export default function StaffManagementTab({ onAuthorityLost }) {
   const totalPages = status === 'approved'
     ? Math.max(1, Math.ceil(totalItems / PAGE_LIMIT))
     : state.pagination?.totalPages || 1;
+  useEffect(() => {
+    if (!state.loading && page > totalPages) setPage(totalPages);
+  }, [page, state.loading, totalPages]);
   const rows = status === 'approved'
     ? approvedRows.slice((page - 1) * PAGE_LIMIT, page * PAGE_LIMIT)
     : state.applications.map((application) => ({ application }));
 
   return (
-    <>
+    <div className="wc-management-page">
       <style>{`
         .wc-staff-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
         .wc-staff-tabs { display:flex; gap:6px; padding:4px; border-radius:10px; background:var(--parchment); }
@@ -215,6 +219,14 @@ export default function StaffManagementTab({ onAuthorityLost }) {
       {notice && <div className="wc-staff-notice" role="status"><Check size={15} /> {notice}</div>}
       {state.error && <div className="wc-staff-alert" role="alert"><AlertCircle size={15} /> {state.error}</div>}
 
+      {!state.loading && !state.error && state.pagination && (
+        <ManagementPagination
+          pagination={{ page, limit: PAGE_LIMIT, total: totalItems, totalPages }}
+          noun="application"
+          onPageChange={setPage}
+        />
+      )}
+
       <div className="wc-table-wrap">
         {state.loading ? <div className="wc-staff-empty">Loading applications…</div>
           : !state.error && rows.length === 0 ? <div className="wc-staff-empty">No {status} applications.</div>
@@ -257,15 +269,7 @@ export default function StaffManagementTab({ onAuthorityLost }) {
             )}
       </div>
 
-      {state.pagination && totalPages > 1 && (
-        <div className="wc-staff-pagination">
-          <button type="button" className="wc-staff-button secondary" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page <= 1}><ChevronLeft size={14} /> Previous</button>
-          <span>Page {page} of {totalPages}</span>
-          <button type="button" className="wc-staff-button secondary" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page >= totalPages}>Next <ChevronRight size={14} /></button>
-        </div>
-      )}
-
       {dialog && <DecisionDialog action={dialog.action} application={dialog.application} busy={actionBusy} error={actionError} onCancel={() => { if (!actionBusy) setDialog(null); }} onConfirm={confirmAction} />}
-    </>
+    </div>
   );
 }

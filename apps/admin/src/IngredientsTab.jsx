@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Search, Plus, Pencil, X, Check, AlertCircle, Carrot,
-  Archive, ArchiveRestore, ChevronLeft, ChevronRight,
+  Archive, ArchiveRestore,
 } from 'lucide-react';
 import { ApiError } from './apiClient.js';
 import {
@@ -11,6 +11,7 @@ import {
   INGREDIENT_CATEGORIES, INGREDIENT_ALLERGEN_TAGS, INGREDIENT_SORTS,
   INGREDIENT_STATUS_FILTERS, CATEGORY_LABELS, ALLERGEN_LABELS, DEFAULT_CATEGORY,
 } from './ingredientOptions.js';
+import ManagementPagination from './ManagementPagination.jsx';
 
 const PAGE_LIMIT = 20;
 const INGREDIENT_CATEGORY_VALUES = new Set(
@@ -241,7 +242,11 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
   const [confirmArchiveId, setConfirmArchiveId] = useState(null);
   const [rowError, setRowError] = useState(null); // { id, message }
 
-  const totalPages = pagination?.totalPages ?? 1;
+  useEffect(() => {
+    if (!loading && pagination && filters.page > Math.max(pagination.totalPages, 1)) {
+      patchFilters({ page: Math.max(pagination.totalPages, 1) });
+    }
+  }, [filters.page, loading, pagination, patchFilters]);
 
   const runRowAction = async (id, action) => {
     setRowError(null);
@@ -262,7 +267,7 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
   };
 
   return (
-    <div>
+    <div className="wc-management-page">
       <style>{`
         .wc-ing-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .wc-ing-select {
@@ -378,6 +383,10 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
         </div>
       )}
 
+      {!error && !loading && (
+        <ManagementPagination pagination={pagination} noun="ingredient" onPageChange={(page) => patchFilters({ page })} />
+      )}
+
       {!error && (
         <div className="wc-table-wrap">
         {loading && items.length === 0 ? (
@@ -483,26 +492,6 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
             </tbody>
           </table>
         )}
-        </div>
-      )}
-
-      {!error && totalPages > 1 && (
-        <div className="wc-ing-pagination">
-          <button
-            disabled={filters.page <= 1}
-            onClick={() => patchFilters({ page: filters.page - 1 })}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={15} />
-          </button>
-          <span>Page {pagination.page} of {totalPages}</span>
-          <button
-            disabled={filters.page >= totalPages}
-            onClick={() => patchFilters({ page: filters.page + 1 })}
-            aria-label="Next page"
-          >
-            <ChevronRight size={15} />
-          </button>
         </div>
       )}
 
