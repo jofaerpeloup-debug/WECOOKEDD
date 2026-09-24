@@ -48,6 +48,14 @@ test('authenticated navigation exposes labels and current-page semantics', () =>
   assert.match(appSource, /aria-current=\{tab === id \? 'page' : undefined\}/);
 });
 
+test('Admin and Moderator navigation use role-appropriate visual groups', () => {
+  assert.match(appSource, /className="wc-nav-section-label">Main/);
+  assert.match(appSource, /className="wc-nav-section-label">Management/);
+  assert.match(appSource, /className="wc-nav-section-label">Catalog/);
+  assert.match(shellCss, /\.wc-nav-group/);
+  assert.match(shellCss, /\.wc-nav-section-label/);
+});
+
 test('role and existing account treatments remain explicit for both workspaces', () => {
   assert.match(appSource, /<div className="wc-role-label">Admin<\/div>/);
   assert.match(appSource, /<div className="wc-role-label">Moderator<\/div>/);

@@ -169,6 +169,7 @@ test('Admin Overview presents only supported REST-backed totals and latest recip
   }
   assert.match(markup, /Admin Overview/);
   assert.match(markup, /Latest recipes/);
+  assert.equal((markup.match(/wc-dashboard-stat-icon/g) || []).length, 4);
 });
 
 test('fabricated trends, activity, and chart data are removed from the dashboard source', () => {
@@ -230,6 +231,8 @@ test('Moderator home exposes only its three catalog work areas', () => {
 
 test('dashboard styling is namespaced, responsive, and uses semantic colors', () => {
   assert.match(dashboardCss, /^\.wc-admin \.wc-dashboard/m);
+  assert.match(dashboardCss, /\.wc-dashboard-columns\s*\{[^}]*align-items:\s*stretch/s);
+  assert.match(dashboardCss, /\.wc-dashboard-shortcuts\s*\{[^}]*grid-template-rows:\s*repeat\(3, minmax\(58px, 1fr\)\)/s);
   assert.match(dashboardCss, /@media \(max-width: 900px\)/);
   assert.match(dashboardCss, /@media \(max-width: 700px\)/);
   assert.match(dashboardCss, /@media \(max-width: 480px\)/);

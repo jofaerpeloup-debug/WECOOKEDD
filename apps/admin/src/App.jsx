@@ -59,55 +59,61 @@ const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 export function AdminNavigation({ tab, setTab }) {
   return (
     <nav className="wc-nav" aria-label="Admin workspace">
-      <button
-        className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
-        onClick={() => setTab('overview')}
-        aria-current={tab === 'overview' ? 'page' : undefined}
-      >
-        <LayoutDashboard size={17} /> Overview
-      </button>
-      <button
-        className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
-        onClick={() => setTab('recipes')}
-        aria-current={tab === 'recipes' ? 'page' : undefined}
-      >
-        <ChefHat size={17} /> Recipes
-      </button>
-      <button
-        className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
-        onClick={() => setTab('ingredients')}
-        aria-current={tab === 'ingredients' ? 'page' : undefined}
-      >
-        <Carrot size={17} /> Ingredients
-      </button>
-      <button
-        className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
-        onClick={() => setTab('substitutions')}
-        aria-current={tab === 'substitutions' ? 'page' : undefined}
-      >
-        <Replace size={17} /> Substitutions
-      </button>
-      <button
-        className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
-        onClick={() => setTab('users')}
-        aria-current={tab === 'users' ? 'page' : undefined}
-      >
-        <Users size={17} /> Users
-      </button>
-      <button
-        className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
-        onClick={() => setTab('staff')}
-        aria-current={tab === 'staff' ? 'page' : undefined}
-      >
-        <UserCog size={17} /> Staff Management
-      </button>
-      <button
-        className={`wc-nav-item ${tab === 'audit-logs' ? 'active' : ''}`}
-        onClick={() => setTab('audit-logs')}
-        aria-current={tab === 'audit-logs' ? 'page' : undefined}
-      >
-        <ScrollText size={17} /> Audit Logs
-      </button>
+      <div className="wc-nav-group">
+        <p className="wc-nav-section-label">Main</p>
+        <button
+          className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
+          onClick={() => setTab('overview')}
+          aria-current={tab === 'overview' ? 'page' : undefined}
+        >
+          <LayoutDashboard size={17} /> Overview
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
+          onClick={() => setTab('recipes')}
+          aria-current={tab === 'recipes' ? 'page' : undefined}
+        >
+          <ChefHat size={17} /> Recipes
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
+          onClick={() => setTab('ingredients')}
+          aria-current={tab === 'ingredients' ? 'page' : undefined}
+        >
+          <Carrot size={17} /> Ingredients
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
+          onClick={() => setTab('substitutions')}
+          aria-current={tab === 'substitutions' ? 'page' : undefined}
+        >
+          <Replace size={17} /> Substitutions
+        </button>
+      </div>
+      <div className="wc-nav-group">
+        <p className="wc-nav-section-label">Management</p>
+        <button
+          className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
+          onClick={() => setTab('users')}
+          aria-current={tab === 'users' ? 'page' : undefined}
+        >
+          <Users size={17} /> Users
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
+          onClick={() => setTab('staff')}
+          aria-current={tab === 'staff' ? 'page' : undefined}
+        >
+          <UserCog size={17} /> Staff Management
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'audit-logs' ? 'active' : ''}`}
+          onClick={() => setTab('audit-logs')}
+          aria-current={tab === 'audit-logs' ? 'page' : undefined}
+        >
+          <ScrollText size={17} /> Audit Logs
+        </button>
+      </div>
     </nav>
   );
 }
@@ -1293,10 +1299,16 @@ export function ModeratorWorkspace({
           </div>
         </div>
         <nav className="wc-nav" aria-label="Moderator workspace">
-          <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')} aria-current={tab === 'moderator-home' ? 'page' : undefined}><LayoutDashboard size={17} /> Overview</button>
-          {areas.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}><Icon size={17} /> {label}</button>
-          ))}
+          <div className="wc-nav-group">
+            <p className="wc-nav-section-label">Main</p>
+            <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')} aria-current={tab === 'moderator-home' ? 'page' : undefined}><LayoutDashboard size={17} /> Overview</button>
+          </div>
+          <div className="wc-nav-group">
+            <p className="wc-nav-section-label">Catalog</p>
+            {areas.map(({ id, label, icon: Icon }) => (
+              <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}><Icon size={17} /> {label}</button>
+            ))}
+          </div>
         </nav>
         <div className="wc-sidebar-footer">
           <div className="wc-staff-identity">
@@ -1829,16 +1841,20 @@ export function OverviewTab({ metrics, latestRecipes, recipeStatus, userStatus, 
           <span className="wc-dashboard-sr-only" role="status">Loading current totals…</span>
         )}
         <div className="wc-dashboard-stat">
-          <p>Recipes</p><strong>{recipeValue}</strong><span>Current catalog total</span>
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><ChefHat size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Recipes</span><strong>{recipeValue}</strong><span className="wc-dashboard-stat-detail">Current catalog total</span></span>
         </div>
         <div className="wc-dashboard-stat">
-          <p>Users</p><strong>{userValue(metrics.totalUsers)}</strong><span>All user accounts</span>
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><Users size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Users</span><strong>{userValue(metrics.totalUsers)}</strong><span className="wc-dashboard-stat-detail">All user accounts</span></span>
         </div>
         <div className="wc-dashboard-stat">
-          <p>Active users</p><strong>{userValue(metrics.activeUsers)}</strong><span>Accounts with active status</span>
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><CheckCircle2 size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Active users</span><strong>{userValue(metrics.activeUsers)}</strong><span className="wc-dashboard-stat-detail">Accounts with active status</span></span>
         </div>
         <div className="wc-dashboard-stat">
-          <p>Suspended users</p><strong>{userValue(metrics.suspendedUsers)}</strong><span>Accounts with suspended status</span>
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><ShieldAlert size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Suspended users</span><strong>{userValue(metrics.suspendedUsers)}</strong><span className="wc-dashboard-stat-detail">Accounts with suspended status</span></span>
         </div>
       </section>
 
