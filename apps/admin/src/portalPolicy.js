@@ -5,6 +5,7 @@ export const ADMIN_NAVIGATION = Object.freeze([
   'substitutions',
   'users',
   'staff',
+  'audit-logs',
 ]);
 
 export const MODERATOR_NAVIGATION = Object.freeze([

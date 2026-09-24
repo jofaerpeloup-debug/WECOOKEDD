@@ -3,7 +3,7 @@ import {
   LayoutDashboard, ChefHat, Users, X,
   Leaf, Check, CheckCircle2, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle,
-  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace, ShieldCheck, UserCog,
+  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace, ShieldCheck, UserCog, ScrollText,
 } from 'lucide-react';
 import { useCallback, useRef } from 'react';
 import { auth } from './firebase.js';
@@ -19,6 +19,7 @@ import SubstitutionsTab from './SubstitutionsTab.jsx';
 import RecipesTab from './RecipesTab.jsx';
 import UsersTab from './UsersTab.jsx';
 import StaffManagementTab from './StaffManagementTab.jsx';
+import AuditLogsTab from './AuditLogsTab.jsx';
 import {
   ConsumerScreen,
   FieldErrors,
@@ -54,6 +55,62 @@ import {
 import { completeStaffPasswordChange, updateStaffName } from './staffAccountActions.js';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
+
+export function AdminNavigation({ tab, setTab }) {
+  return (
+    <nav className="wc-nav" aria-label="Admin workspace">
+      <button
+        className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
+        onClick={() => setTab('overview')}
+        aria-current={tab === 'overview' ? 'page' : undefined}
+      >
+        <LayoutDashboard size={17} /> Overview
+      </button>
+      <button
+        className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
+        onClick={() => setTab('recipes')}
+        aria-current={tab === 'recipes' ? 'page' : undefined}
+      >
+        <ChefHat size={17} /> Recipes
+      </button>
+      <button
+        className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
+        onClick={() => setTab('ingredients')}
+        aria-current={tab === 'ingredients' ? 'page' : undefined}
+      >
+        <Carrot size={17} /> Ingredients
+      </button>
+      <button
+        className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
+        onClick={() => setTab('substitutions')}
+        aria-current={tab === 'substitutions' ? 'page' : undefined}
+      >
+        <Replace size={17} /> Substitutions
+      </button>
+      <button
+        className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
+        onClick={() => setTab('users')}
+        aria-current={tab === 'users' ? 'page' : undefined}
+      >
+        <Users size={17} /> Users
+      </button>
+      <button
+        className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
+        onClick={() => setTab('staff')}
+        aria-current={tab === 'staff' ? 'page' : undefined}
+      >
+        <UserCog size={17} /> Staff Management
+      </button>
+      <button
+        className={`wc-nav-item ${tab === 'audit-logs' ? 'active' : ''}`}
+        onClick={() => setTab('audit-logs')}
+        aria-current={tab === 'audit-logs' ? 'page' : undefined}
+      >
+        <ScrollText size={17} /> Audit Logs
+      </button>
+    </nav>
+  );
+}
 
 function authoritativePaginationTotal(pagination) {
   const total = pagination?.total;
@@ -1109,50 +1166,7 @@ function WeCookedAdminApp() {
                 <div className="wc-role-label">Admin</div>
               </div>
             </div>
-            <nav className="wc-nav" aria-label="Admin workspace">
-              <button
-                className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
-                onClick={() => setTab('overview')}
-                aria-current={tab === 'overview' ? 'page' : undefined}
-              >
-                <LayoutDashboard size={17} /> Overview
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
-                onClick={() => setTab('recipes')}
-                aria-current={tab === 'recipes' ? 'page' : undefined}
-              >
-                <ChefHat size={17} /> Recipes
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
-                onClick={() => setTab('ingredients')}
-                aria-current={tab === 'ingredients' ? 'page' : undefined}
-              >
-                <Carrot size={17} /> Ingredients
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
-                onClick={() => setTab('substitutions')}
-                aria-current={tab === 'substitutions' ? 'page' : undefined}
-              >
-                <Replace size={17} /> Substitutions
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
-                onClick={() => setTab('users')}
-                aria-current={tab === 'users' ? 'page' : undefined}
-              >
-                <Users size={17} /> Users
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
-                onClick={() => setTab('staff')}
-                aria-current={tab === 'staff' ? 'page' : undefined}
-              >
-                <UserCog size={17} /> Staff Management
-              </button>
-            </nav>
+            <AdminNavigation tab={tab} setTab={setTab} />
             <div className="wc-sidebar-footer">
               <ProfileMenu
                 account={identity}
@@ -1213,6 +1227,8 @@ function WeCookedAdminApp() {
             )}
 
             {tab === 'staff' && <StaffManagementTab onAuthorityLost={refreshAuthority} />}
+
+            {tab === 'audit-logs' && <AuditLogsTab onAuthorityLost={refreshAuthority} />}
           </main>
 
           {settingsOpen && (

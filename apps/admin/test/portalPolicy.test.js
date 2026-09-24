@@ -39,11 +39,15 @@ test('staff modes resolve to explicit portal destinations', () => {
 test('navigation is role-specific and stale tabs are replaced safely', () => {
   assert.ok(getAllowedNavigation('admin').includes('users'));
   assert.ok(getAllowedNavigation('admin').includes('staff'));
+  assert.ok(getAllowedNavigation('admin').includes('audit-logs'));
   assert.deepEqual(getAllowedNavigation('moderator'), [
     'moderator-home', 'recipes', 'ingredients', 'substitutions',
   ]);
   assert.equal(getSafeNavigation('admin', 'users'), 'users');
+  assert.equal(getSafeNavigation('admin', 'audit-logs'), 'audit-logs');
   assert.equal(getSafeNavigation('moderator', 'users'), 'moderator-home');
+  assert.equal(getSafeNavigation('moderator', 'audit-logs'), 'moderator-home');
+  assert.equal(getSafeNavigation('consumer', 'audit-logs'), null);
   assert.equal(getSafeNavigation('consumer', 'recipes'), null);
   assert.equal(getSafeNavigation('pending', 'staff'), null);
 });
