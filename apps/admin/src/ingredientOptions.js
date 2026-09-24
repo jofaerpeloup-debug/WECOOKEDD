@@ -1,29 +1,37 @@
-// Frontend-safe mirror of the backend ingredient enums.
+// Shared category values and labels come from @wecooked/contracts.
 //
-// Source of truth: apps/api/src/modules/ingredients/ingredient.model.js
-// (CATEGORIES, ALLERGEN_TAGS) and ingredient.validation.js (sort values).
-// Keep these lists in sync with the backend — the API rejects any value it
-// does not recognise with a 400 VALIDATION_ERROR. When packages/contracts
-// starts carrying public API contracts, this belongs there.
+// Allergen and sort options remain frontend mirrors of their API enums and
+// must stay in sync because the API rejects unrecognized values.
 
-export const INGREDIENT_CATEGORIES = [
-  { value: 'produce', label: 'Produce' },
-  { value: 'meat', label: 'Meat' },
-  { value: 'seafood', label: 'Seafood' },
-  { value: 'dairy', label: 'Dairy' },
-  { value: 'egg', label: 'Egg' },
-  { value: 'grain', label: 'Grain' },
-  { value: 'legume', label: 'Legume' },
-  { value: 'nutSeed', label: 'Nut / seed' },
-  { value: 'herb', label: 'Herb' },
-  { value: 'spice', label: 'Spice' },
-  { value: 'oilFat', label: 'Oil / fat' },
-  { value: 'sweetener', label: 'Sweetener' },
-  { value: 'baking', label: 'Baking' },
-  { value: 'condiment', label: 'Condiment' },
-  { value: 'beverage', label: 'Beverage' },
-  { value: 'other', label: 'Other' },
-];
+import {
+  INGREDIENT_CATEGORIES as INGREDIENT_CATEGORY_VALUES,
+  INGREDIENT_CATEGORY_LABELS,
+} from '@wecooked/contracts';
+
+if (!Array.isArray(INGREDIENT_CATEGORY_VALUES)) {
+  throw new TypeError('@wecooked/contracts must provide INGREDIENT_CATEGORIES as an array.');
+}
+
+if (
+  !INGREDIENT_CATEGORY_LABELS
+  || typeof INGREDIENT_CATEGORY_LABELS !== 'object'
+  || Array.isArray(INGREDIENT_CATEGORY_LABELS)
+) {
+  throw new TypeError('@wecooked/contracts must provide INGREDIENT_CATEGORY_LABELS as an object.');
+}
+
+for (const value of INGREDIENT_CATEGORY_VALUES) {
+  if (typeof INGREDIENT_CATEGORY_LABELS[value] !== 'string' || !INGREDIENT_CATEGORY_LABELS[value].trim()) {
+    throw new TypeError(`@wecooked/contracts must provide a label for ingredient category "${value}".`);
+  }
+}
+
+// API validation and the Mongoose enum consume this same shared allowlist.
+// The Staff Portal only derives the select-friendly presentation shape.
+export const INGREDIENT_CATEGORIES = INGREDIENT_CATEGORY_VALUES.map((value) => ({
+  value,
+  label: INGREDIENT_CATEGORY_LABELS[value],
+}));
 
 export const INGREDIENT_ALLERGEN_TAGS = [
   { value: 'milk', label: 'Milk' },

@@ -85,6 +85,22 @@ test('GET /api/v1/ingredients is readable by an authenticated normal user', asyn
   assert.equal(response.body.data.pagination.total, 1);
 });
 
+test('GET /api/v1/ingredients keeps a legacy Other record readable', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findMany', async () => [
+    fakeIngredientDoc({ name: 'Legacy ingredient', category: 'other' }),
+  ]);
+  t.mock.method(ingredientRepository, 'countByFilter', async () => 1);
+
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const response = await request(app)
+    .get('/api/v1/ingredients')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.ingredients[0].category, 'other');
+});
+
 test('GET /api/v1/ingredients?status=all is rejected for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
@@ -120,6 +136,25 @@ test('GET /api/v1/ingredients rejects an invalid query param with the standard V
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('GET /api/v1/ingredients filters by Protein, Pantry, and Soy', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const seenCategories = [];
+  t.mock.method(ingredientRepository, 'findMany', async ({ filter }) => {
+    seenCategories.push(filter.category);
+    return [];
+  });
+  t.mock.method(ingredientRepository, 'countByFilter', async () => 0);
+
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const response = await request(app)
+      .get(`/api/v1/ingredients?category=${category}`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(response.status, 200, `expected ${category} filter to succeed`);
+  }
+  assert.deepEqual(seenCategories, ['protein', 'pantry', 'soy']);
 });
 
 test('GET /api/v1/ingredients/:id returns 404 for an archived ingredient requested by a normal user', async (t) => {
@@ -195,6 +230,42 @@ test('POST /api/v1/ingredients creates an ingredient for a moderator and never r
   assert.equal(JSON.stringify(response.body).includes('normalizedName'), false);
 });
 
+test('POST /api/v1/ingredients accepts Protein, Pantry, and Soy and keeps Soy allergen-independent', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'createIngredient', async (data) => fakeIngredientDoc(data));
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const response = await request(app)
+      .post('/api/v1/ingredients')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: `${category} ingredient`, category });
+
+    assert.equal(response.status, 201, `expected ${category} create to succeed`);
+    assert.equal(response.body.data.ingredient.category, category);
+    assert.deepEqual(response.body.data.ingredient.allergenTags, []);
+  }
+});
+
+test('POST /api/v1/ingredients rejects retired Other before persistence', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  let createCalled = false;
+  t.mock.method(ingredientRepository, 'createIngredient', async () => {
+    createCalled = true;
+    return fakeIngredientDoc();
+  });
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .post('/api/v1/ingredients')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ name: 'Legacy ingredient', category: 'other' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(createCalled, false);
+});
+
 test('POST /api/v1/ingredients rejects a client-supplied isActive field before it reaches the service', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
@@ -253,6 +324,43 @@ test('PATCH /api/v1/ingredients/:id applies a partial update for a moderator', a
 
   assert.equal(response.status, 200);
   assert.equal(response.body.data.ingredient.name, 'Salted Butter');
+});
+
+test('PATCH /api/v1/ingredients/:id accepts Protein, Pantry, and Soy categories', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'updateById', async (id, update) =>
+    fakeIngredientDoc({ _id: id, category: update.$set.category })
+  );
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const response = await request(app)
+      .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ category });
+
+    assert.equal(response.status, 200, `expected edit to ${category} to succeed`);
+    assert.equal(response.body.data.ingredient.category, category);
+  }
+});
+
+test('PATCH /api/v1/ingredients/:id rejects retired Other before persistence', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  let updateCalled = false;
+  t.mock.method(ingredientRepository, 'updateById', async () => {
+    updateCalled = true;
+    return fakeIngredientDoc();
+  });
+
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/ingredients/${INGREDIENT_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ category: 'other' });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(updateCalled, false);
 });
 
 test('PATCH /api/v1/ingredients/:id keeps isActive=true reactivation supported for a moderator', async (t) => {

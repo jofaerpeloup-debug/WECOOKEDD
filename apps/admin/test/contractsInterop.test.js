@@ -26,8 +26,14 @@ function virtualContractsEntry() {
       if (id !== virtualEntryId) return null;
 
       return `
-        import { NEW_PASSWORD_ERROR_MESSAGES } from '@wecooked/contracts';
+        import {
+          INGREDIENT_CATEGORIES,
+          INGREDIENT_CATEGORY_LABELS,
+          NEW_PASSWORD_ERROR_MESSAGES,
+        } from '@wecooked/contracts';
         export const minimumPasswordMessage = NEW_PASSWORD_ERROR_MESSAGES.MIN_CHARS;
+        export const ingredientCategories = INGREDIENT_CATEGORIES;
+        export const soyCategoryLabel = INGREDIENT_CATEGORY_LABELS.soy;
       `;
     },
   };
@@ -53,6 +59,11 @@ test('Staff production config bundles named exports from the CommonJS contracts 
 
 test('Staff development config optimizes and resolves the contracts workspace dependency', async () => {
   const config = await loadStaffConfig('serve', 'development');
+  assert.equal(
+    config.optimizeDeps?.force,
+    true,
+    'Expected development startup to refresh the mutable workspace contracts bundle',
+  );
   assert.ok(
     config.optimizeDeps?.include?.includes('@wecooked/contracts'),
     'Expected the contracts workspace package in optimizeDeps.include',

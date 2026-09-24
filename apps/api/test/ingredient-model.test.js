@@ -51,6 +51,19 @@ test('category is required and constrained to the controlled enum', async () => 
 
   const invalid = new Ingredient({ name: 'Sugar', normalizedName: 'sugar', category: 'not-a-category' });
   await assert.rejects(() => invalid.validate());
+
+  assert.deepEqual(Ingredient.CATEGORIES, [
+    'produce', 'meat', 'seafood', 'dairy', 'egg', 'grain', 'legume', 'nutSeed',
+    'herb', 'spice', 'oilFat', 'sweetener', 'baking', 'condiment', 'beverage',
+    'protein', 'pantry', 'soy',
+  ]);
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const valid = new Ingredient({ name: category, normalizedName: category, category });
+    await valid.validate();
+  }
+
+  const retired = new Ingredient({ name: 'Other', normalizedName: 'other', category: 'other' });
+  await assert.rejects(() => retired.validate());
 });
 
 test('allergenTags default to [] and reject values outside the controlled enum', async () => {
@@ -91,4 +104,19 @@ test('toPublicIngredient exposes id (not _id) and hides normalizedName/__v', () 
   assert.equal('_id' in publicIngredient, false);
   assert.equal('__v' in publicIngredient, false);
   assert.equal(JSON.stringify(publicIngredient).includes('normalizedName'), false);
+});
+
+test('a hydrated legacy Other ingredient remains readable and serializable', () => {
+  const legacy = Ingredient.hydrate({
+    _id: '507f1f77bcf86cd799439011',
+    name: 'Legacy ingredient',
+    normalizedName: 'legacy ingredient',
+    category: 'other',
+    allergenTags: [],
+    isActive: true,
+  });
+
+  const serialized = toPublicIngredient(legacy);
+  assert.equal(serialized.category, 'other');
+  assert.deepEqual(serialized.allergenTags, []);
 });

@@ -13,6 +13,9 @@ import {
 } from './ingredientOptions.js';
 
 const PAGE_LIMIT = 20;
+const INGREDIENT_CATEGORY_VALUES = new Set(
+  INGREDIENT_CATEGORIES.map(({ value }) => value),
+);
 export const INGREDIENT_FORM_LIMITS = Object.freeze({
   name: 100,
   aliases: 20,
@@ -69,7 +72,6 @@ export function validateIngredientForm(form) {
   const errors = {};
   const name = String(form.name ?? '').trim();
   const aliasAnalysis = analyzeAliases(form.aliasesText);
-  const categoryValues = new Set(INGREDIENT_CATEGORIES.map(({ value }) => value));
   const allergenValues = new Set(INGREDIENT_ALLERGEN_TAGS.map(({ value }) => value));
 
   if (!name) {
@@ -84,7 +86,7 @@ export function validateIngredientForm(form) {
     errors.aliases = `Each alias must be ${INGREDIENT_FORM_LIMITS.alias} characters or fewer.`;
   }
 
-  if (!categoryValues.has(form.category)) errors.category = 'Choose a valid category.';
+  if (!INGREDIENT_CATEGORY_VALUES.has(form.category)) errors.category = 'Choose a valid category.';
   if (!Array.isArray(form.allergenTags)
       || form.allergenTags.some((tag) => !allergenValues.has(tag))) {
     errors.allergenTags = 'Choose only supported allergen tags.';
@@ -121,6 +123,16 @@ export function clearIngredientFieldError(errors, field) {
   const next = { ...errors };
   delete next[field];
   return next;
+}
+
+export function ingredientCategoryLabel(category) {
+  if (CATEGORY_LABELS[category]) return CATEGORY_LABELS[category];
+  if (category === 'other') return 'Other (legacy)';
+  return category;
+}
+
+export function editableIngredientCategory(category) {
+  return INGREDIENT_CATEGORY_VALUES.has(category) ? category : '';
 }
 
 function useIngredients() {
@@ -400,7 +412,7 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
                   <td className="wc-ing-aliases">
                     {ing.aliases && ing.aliases.length > 0 ? ing.aliases.join(', ') : '—'}
                   </td>
-                  <td>{CATEGORY_LABELS[ing.category] || ing.category}</td>
+                  <td>{ingredientCategoryLabel(ing.category)}</td>
                   <td>
                     {ing.allergenTags && ing.allergenTags.length > 0
                       ? ing.allergenTags.map((t) => (
@@ -512,7 +524,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
   const [form, setForm] = useState(() => ({
     name: ingredient?.name || '',
     aliasesText: (ingredient?.aliases || []).join(', '),
-    category: ingredient?.category || DEFAULT_CATEGORY,
+    category: ingredient ? editableIngredientCategory(ingredient.category) : DEFAULT_CATEGORY,
     allergenTags: ingredient?.allergenTags || [],
     isActive: ingredient ? ingredient.isActive : true,
   }));
@@ -658,6 +670,12 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
 
           <div className="wc-field">
             <label htmlFor="ingredient-category">Category</label>
+            {editing && !INGREDIENT_CATEGORY_VALUES.has(ingredient.category) && (
+              <div className="wc-ing-modal-hint">
+                Current legacy category: {ingredientCategoryLabel(ingredient.category)}. Choose an
+                approved category before saving.
+              </div>
+            )}
             <select
               id="ingredient-category"
               value={form.category}
@@ -666,7 +684,11 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
                 setForm({ ...form, category: e.target.value });
               }}
               aria-invalid={Boolean(fieldErrors.category)}
+              required
             >
+              {form.category === '' && (
+                <option value="" disabled>Choose a category</option>
+              )}
               {INGREDIENT_CATEGORIES.map((c) => (
                 <option key={c.value} value={c.value}>{c.label}</option>
               ))}

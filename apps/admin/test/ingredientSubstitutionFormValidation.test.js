@@ -14,23 +14,29 @@ const vite = await createServer({
   appType: 'custom',
   esbuild: { jsx: 'automatic' },
   optimizeDeps: { noDiscovery: true },
+  ssr: { external: ['@wecooked/contracts'] },
 });
 
-const [ingredientModule, substitutionModule] = await Promise.all([
+const [ingredientModule, substitutionModule, ingredientOptionsModule] = await Promise.all([
   vite.ssrLoadModule('/src/IngredientsTab.jsx'),
   vite.ssrLoadModule('/src/SubstitutionsTab.jsx'),
+  vite.ssrLoadModule('/src/ingredientOptions.js'),
 ]);
 
 after(() => vite.close());
 
 const {
+  default: IngredientsTab,
   IngredientModal,
   analyzeAliases,
   clearIngredientFieldError,
+  editableIngredientCategory,
+  ingredientCategoryLabel,
   ingredientFieldErrorsFromDetails,
   ingredientFormValues,
   validateIngredientForm,
 } = ingredientModule;
+const { INGREDIENT_CATEGORIES } = ingredientOptionsModule;
 const {
   SubstitutionModal,
   clearSubstitutionFieldErrors,
@@ -65,14 +71,14 @@ function validSubstitution(overrides = {}) {
   };
 }
 
-function renderIngredientModal(name) {
+function renderIngredientModal(name, category = 'dairy', allergenTags = ['milk']) {
   return renderToStaticMarkup(createElement(IngredientModal, {
     ingredient: {
       id: 'ingredient-id',
       name,
       aliases: [],
-      category: 'dairy',
-      allergenTags: ['milk'],
+      category,
+      allergenTags,
       isActive: true,
     },
     onClose() {},
@@ -166,6 +172,62 @@ test('ingredient category, allergens, and active state remain controlled', () =>
     /supported allergen/i,
   );
   assert.match(validateIngredientForm(validIngredient({ isActive: 'yes' })).isActive, /valid status/i);
+});
+
+test('production ingredient options initialize with the labeled shared taxonomy', () => {
+  assert.ok(Array.isArray(INGREDIENT_CATEGORIES));
+
+  const values = INGREDIENT_CATEGORIES.map(({ value }) => value);
+  assert.ok(values.includes('produce'));
+  assert.ok(values.includes('protein'));
+  assert.ok(values.includes('pantry'));
+  assert.ok(values.includes('soy'));
+  assert.equal(values.includes('other'), false);
+  assert.ok(
+    INGREDIENT_CATEGORIES.every(
+      ({ label }) => typeof label === 'string' && label.trim().length > 0,
+    ),
+    'Expected every selectable ingredient category to have a human-readable label',
+  );
+
+  for (const category of ['protein', 'pantry', 'soy']) {
+    assert.deepEqual(validateIngredientForm(validIngredient({ category })), {});
+  }
+  assert.match(validateIngredientForm(validIngredient({ category: 'other' })).category, /valid category/i);
+});
+
+test('Add/Edit category dropdowns and the category filter expose the approved taxonomy only', () => {
+  const editMarkup = renderIngredientModal('Butter');
+  const filterMarkup = renderToStaticMarkup(createElement(IngredientsTab));
+
+  for (const markup of [editMarkup, filterMarkup]) {
+    assert.match(markup, /<option value="protein">Protein<\/option>/);
+    assert.match(markup, /<option value="pantry">Pantry<\/option>/);
+    assert.match(markup, /<option value="soy">Soy<\/option>/);
+    assert.doesNotMatch(markup, /<option value="other">/);
+  }
+});
+
+test('legacy Other remains readable but edit requires an approved replacement', () => {
+  const markup = renderIngredientModal('Legacy ingredient', 'other', []);
+
+  assert.equal(ingredientCategoryLabel('other'), 'Other (legacy)');
+  assert.equal(editableIngredientCategory('other'), '');
+  assert.match(markup, /Current legacy category: Other \(legacy\)/);
+  assert.match(markup, /<option value="" disabled="" selected="">Choose a category<\/option>/);
+  assert.doesNotMatch(markup, /<option value="other">/);
+  assert.match(validateIngredientForm(validIngredient({ category: '' })).category, /valid category/i);
+});
+
+test('Soy category and Soy allergen remain independent fields', () => {
+  const form = validIngredient({ category: 'soy', allergenTags: [] });
+  assert.deepEqual(validateIngredientForm(form), {});
+  assert.deepEqual(ingredientFormValues(form), {
+    name: 'Butter',
+    aliases: [],
+    category: 'soy',
+    allergenTags: [],
+  });
 });
 
 test('substitution requires selected, distinct source and replacement ingredients', () => {

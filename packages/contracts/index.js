@@ -3,6 +3,48 @@ const PASSWORD_MAX_UTF8_BYTES = 72;
 const PASSWORD_ALLOWED_SPECIAL_CHARS = '!@#$%&*?_-.';
 const EMAIL_MAX_CHARS = 254;
 
+const INGREDIENT_CATEGORIES = Object.freeze([
+  'produce',
+  'meat',
+  'seafood',
+  'dairy',
+  'egg',
+  'grain',
+  'legume',
+  'nutSeed',
+  'herb',
+  'spice',
+  'oilFat',
+  'sweetener',
+  'baking',
+  'condiment',
+  'beverage',
+  'protein',
+  'pantry',
+  'soy',
+]);
+
+const INGREDIENT_CATEGORY_LABELS = Object.freeze({
+  produce: 'Produce',
+  meat: 'Meat',
+  seafood: 'Seafood',
+  dairy: 'Dairy',
+  egg: 'Egg',
+  grain: 'Grain',
+  legume: 'Legume',
+  nutSeed: 'Nut / seed',
+  herb: 'Herb',
+  spice: 'Spice',
+  oilFat: 'Oil / fat',
+  sweetener: 'Sweetener',
+  baking: 'Baking',
+  condiment: 'Condiment',
+  beverage: 'Beverage',
+  protein: 'Protein',
+  pantry: 'Pantry',
+  soy: 'Soy',
+});
+
 const UPPERCASE_LETTER_PATTERN = /\p{Lu}/u;
 const LOWERCASE_LETTER_PATTERN = /\p{Ll}/u;
 const ASCII_DIGIT_PATTERN = /[0-9]/;
@@ -77,6 +119,8 @@ module.exports = {
   PASSWORD_MAX_UTF8_BYTES,
   PASSWORD_ALLOWED_SPECIAL_CHARS,
   EMAIL_MAX_CHARS,
+  INGREDIENT_CATEGORIES,
+  INGREDIENT_CATEGORY_LABELS,
   NEW_PASSWORD_ERROR_MESSAGES,
   utf8ByteLength,
   validateNewPassword,

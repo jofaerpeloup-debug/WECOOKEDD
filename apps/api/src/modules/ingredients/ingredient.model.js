@@ -1,23 +1,7 @@
 const mongoose = require('mongoose');
-
-const CATEGORIES = [
-  'produce',
-  'meat',
-  'seafood',
-  'dairy',
-  'egg',
-  'grain',
-  'legume',
-  'nutSeed',
-  'herb',
-  'spice',
-  'oilFat',
-  'sweetener',
-  'baking',
-  'condiment',
-  'beverage',
-  'other',
-];
+// Enum validation governs new values. MongoDB can still hydrate legacy
+// `other` records so read paths remain compatible while writes retire it.
+const { INGREDIENT_CATEGORIES: CATEGORIES } = require('@wecooked/contracts');
 
 const ALLERGEN_TAGS = [
   'milk',
