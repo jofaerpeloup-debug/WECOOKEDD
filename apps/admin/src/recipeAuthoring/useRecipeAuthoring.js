@@ -4,6 +4,9 @@ import {
   createDraft, getRecipe, publishRecipe, updateRecipe, uploadRecipeImage,
 } from '../recipeApi.js';
 import {
+  createDraftAndRefresh, publishRecipeAndRefresh, updateRecipeAndRefresh,
+} from '../recipeCatalogMutations.js';
+import {
   AUTHORING_STEPS, buildStepPatch, createDraftBody, formFromRecipe, mutationBody,
   publicationReadiness, publishBody, stepForField, validateStep,
 } from './recipeAuthoringModel.js';
@@ -79,12 +82,14 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
       let token = state.updatedAt;
       let savedBase = state.saved;
       if (!recipeId) {
-        latest = await createDraft(createDraftBody(state.form));
+        latest = await createDraftAndRefresh(createDraftBody(state.form), onSaved, createDraft);
         draftCreated = true;
         recipeId = latest.id;
         token = latest.updatedAt;
         savedBase = formFromRecipe(latest);
         dispatch({ type: 'DRAFT_CREATED', recipe: latest, status: selectedFile ? 'uploading' : 'saving' });
+        // Draft creation is independently authoritative. The mutation helper
+        // has already refreshed the catalog before optional follow-up work.
       }
 
       let patch = buildStepPatch(savedBase, state.form, step);
@@ -99,7 +104,9 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
       if (uploaded) {
         patch = { ...patch, imageUrl: uploaded.url, imageAssetId: uploaded.assetId };
       }
-      if (Object.keys(patch).length) latest = await updateRecipe(recipeId, mutationBody(patch, token));
+      if (Object.keys(patch).length) {
+        latest = await updateRecipeAndRefresh(recipeId, mutationBody(patch, token), onSaved, updateRecipe);
+      }
       else if (!latest) {
         dispatch({ type: 'SAVE_SUCCESS', notice: state.publicationStatus === 'published' ? 'All changes are saved.' : 'Draft is saved.' });
         if (advance) setStep(AUTHORING_STEPS[AUTHORING_STEPS.indexOf(step) + 1]);
@@ -108,7 +115,6 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
 
       dispatch({ type: 'SAVE_SUCCESS', recipe: latest, step, preserveWorking: true, clearUpload: Boolean(uploaded), notice: state.publicationStatus === 'published' ? 'Changes saved and visible to users.' : 'Draft saved.' });
       if (uploaded) setSelectedFile(null);
-      onSaved?.(latest);
       if (advance) setStep(AUTHORING_STEPS[AUTHORING_STEPS.indexOf(step) + 1]);
       return true;
     } catch (error) {
@@ -142,9 +148,8 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
     flightRef.current = true;
     dispatch({ type: 'MUTATION_START', status: 'publishing' });
     try {
-      const latest = await publishRecipe(state.recipeId, publishBody(state.updatedAt));
+      const latest = await publishRecipeAndRefresh(state.recipeId, publishBody(state.updatedAt), onPublished, publishRecipe);
       dispatch({ type: 'LOAD_SUCCESS', recipe: latest, keepStep: true });
-      onPublished?.(latest);
     } catch (error) {
       if (error?.code === 'RECIPE_EDIT_CONFLICT') dispatch({ type: 'CONFLICT' });
       else if (error?.code === 'RECIPE_ARCHIVED') dispatch({ type: 'SAVE_FAILURE', message: 'Restore this archived Draft before publishing.' });

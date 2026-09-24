@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Archive, ArchiveRestore, ChefHat, ChevronLeft, ChevronRight, Plus, Search } from 'lucide-react';
 import { ApiError } from './apiClient.js';
 import { archiveRecipe, listRecipes, restoreRecipe } from './recipeApi.js';
+import { archiveRecipeAndRefresh, restoreRecipeAndRefresh } from './recipeCatalogMutations.js';
 import IngredientPicker from './IngredientPicker.jsx';
 import {
   DIETARY_TAG_LABELS, DIFFICULTY_LABELS, MAX_PREP_TIME_MINUTES,
@@ -63,10 +64,9 @@ export default function RecipesTab({ canWrite = false, canUploadRecipeImage = fa
     rowFlight.current = true; setRowState({ id: recipe.id, error: '' }); setNotice('');
     try {
       const updated = action === 'archive'
-        ? await archiveRecipe(recipe.id, recipe.updatedAt)
-        : await restoreRecipe(recipe.id, recipe.updatedAt);
+        ? await archiveRecipeAndRefresh(recipe.id, recipe.updatedAt, reload, archiveRecipe)
+        : await restoreRecipeAndRefresh(recipe.id, recipe.updatedAt, reload, restoreRecipe);
       setNotice(`${updated.title} is now ${action === 'archive' ? 'archived' : 'restored'}.`);
-      reload();
     } catch (error) {
       if (error instanceof ApiError && error.isForbidden) onAuthorityLost?.();
       setRowState({ id: recipe.id, error: error?.code === 'RECIPE_EDIT_CONFLICT' ? 'This recipe changed. Reload the table and try again.' : message(error) });

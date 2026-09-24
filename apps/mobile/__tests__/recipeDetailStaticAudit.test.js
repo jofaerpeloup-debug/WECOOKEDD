@@ -60,7 +60,8 @@ describe('RecipeDetail (API mode) keeps our real recipe data architecture', () =
   it('preserves loading / error / retry / not-found handling', () => {
     expect(apiCode).toMatch(/ActivityIndicator/);
     expect(apiCode).toMatch(/setNotFound\(true\)/);
-    expect(apiCode).toMatch(/err\.isNotFound \|\| err\.code === 'RECIPE_NOT_FOUND'/);
+    expect(apiCode).toMatch(/classifyRecipeDetailFailure\(err,/);
+    expect(apiCode).toMatch(/failure === 'unavailable'/);
     expect(apiCode).toMatch(/onRetry=\{retry\}/);
     expect(apiCode).toMatch(/let cancelled = false;/);
     expect(apiCode).toMatch(/if \(cancelled \|\| gen !== genRef\.current\) return;/);

@@ -26,13 +26,14 @@ import { useSavedRecipes } from '../context/SavedRecipesContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { ingredientSwaps } from '../data/mockData';
 import { imageSource } from '../utils/image';
-import { ApiError } from '../api/client';
 import { getRecipe } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { getRecipeReviews, createReview, updateReview } from '../api/reviewService';
 import { getReviewErrorMessage } from '../api/reviewErrors';
 import { getRecipeStatus } from '../api/cookHistoryService';
 import { difficultyLabel, unitLabel } from '../api/recipeOptions';
+import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
+import { classifyRecipeDetailFailure } from '../utils/recipeFreshnessState';
 import {
   formatMinutes,
   // Aliased: this file already declares a local `formatQuantity` used by the
@@ -224,21 +225,29 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
   const [nonce, setNonce] = useState(0);
   const genRef = useRef(0);
 
+  useRecipeScreenRefresh(() => {
+    // Invalidate synchronously so the old request cannot commit while React is
+    // scheduling the nonce-driven replacement request.
+    genRef.current += 1;
+    setNonce((value) => value + 1);
+  });
+
   // Fetch the authoritative recipe. Guarded against unmount, a stale response,
   // and a recipe-id change (each firing bumps the generation).
   useEffect(() => {
     let cancelled = false;
     const gen = ++genRef.current;
-    setFetchError(null);
     setNotFound(false);
     (async () => {
       try {
         const fresh = await getRecipe(recipeId);
         if (cancelled || gen !== genRef.current) return;
         setFetched(fresh);
+        setFetchError(null);
       } catch (err) {
         if (cancelled || gen !== genRef.current) return;
-        if (err instanceof ApiError && (err.isNotFound || err.code === 'RECIPE_NOT_FOUND')) {
+        const failure = classifyRecipeDetailFailure(err, Boolean(fetched || hasRecipeDetailData(initialRecipe)));
+        if (failure === 'unavailable') {
           setNotFound(true);
         } else {
           setFetchError(getRecipeErrorMessage(err));
@@ -297,10 +306,9 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
     <ApiRecipeDetail
       navigation={navigation}
       recipe={recipe}
-      // Only show the inline "couldn't refresh" banner while we're still on the
-      // list object; once the authoritative copy is in, there's nothing to warn
-      // about.
-      refreshError={fetched ? null : fetchError}
+      // A transient refresh failure never discards the last valid detail. Keep
+      // it visible and report the refresh problem inline until a later success.
+      refreshError={fetchError}
       onRetryRefresh={retry}
     />
   );
