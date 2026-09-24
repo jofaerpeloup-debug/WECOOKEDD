@@ -10,6 +10,8 @@ import {
   rejectionPayload,
   resetTokenFromHash,
   STAFF_AUTH_ERROR_MESSAGES,
+  STAFF_PASSWORD_UI_MESSAGES,
+  staffPasswordFieldErrors,
   staffPaths,
   staffRequests,
   validateStaffEmail,
@@ -109,19 +111,34 @@ test('login remains legacy-compatible and enforces only nonempty and 72 UTF-8 by
 });
 
 test('password checklist state is derived from shared validator messages', () => {
+  const empty = passwordRequirementState('');
+  assert.equal(empty.hasUnsupportedCharacters, false);
+  assert.equal(empty.isTooLong, false);
+
   const valid = passwordRequirementState('ValidPass1!');
   assert.equal(valid.meetsRequirements, true);
   assert.ok(valid.requirements.every(({ met }) => met));
 
   const invalid = passwordRequirementState('ValidPass1!^');
   assert.equal(invalid.meetsRequirements, false);
-  assert.equal(
-    invalid.requirements.find(({ message }) => message === NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED)?.met,
-    false,
-  );
+  assert.equal(invalid.hasUnsupportedCharacters, true);
+  assert.equal(invalid.isTooLong, false);
   assert.deepEqual(invalid.errors, validateNewPassword('ValidPass1!^'));
   assert.equal(hasStaffAuthErrors({ name: [], email: [], password: [] }), false);
   assert.equal(hasStaffAuthErrors({ password: invalid.errors }), true);
+});
+
+test('Staff password presentation keeps technical limits out of normal guidance', () => {
+  assert.equal(STAFF_PASSWORD_UI_MESSAGES.UNSUPPORTED, "That symbol isn't supported. Try a different symbol.");
+  assert.equal(STAFF_PASSWORD_UI_MESSAGES.MAX_BYTES, 'Password is too long. Please use a shorter password.');
+  assert.deepEqual(
+    staffPasswordFieldErrors([
+      NEW_PASSWORD_ERROR_MESSAGES.UPPERCASE,
+      NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED,
+      NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES,
+    ]),
+    [NEW_PASSWORD_ERROR_MESSAGES.UPPERCASE],
+  );
 });
 
 test('staff action contracts use exact endpoints and bodies', () => {

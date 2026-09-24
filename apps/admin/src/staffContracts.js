@@ -1,7 +1,6 @@
 import {
   EMAIL_MAX_CHARS,
   NEW_PASSWORD_ERROR_MESSAGES,
-  PASSWORD_ALLOWED_SPECIAL_CHARS,
   PASSWORD_MAX_UTF8_BYTES,
   PASSWORD_MIN_CHARS,
   utf8ByteLength,
@@ -18,6 +17,11 @@ export const STAFF_AUTH_ERROR_MESSAGES = Object.freeze({
   EMAIL_MAX_CHARS: `Email must be ${EMAIL_MAX_CHARS} characters or fewer.`,
   PASSWORD_REQUIRED: 'Password is required.',
   PASSWORD_MAX_BYTES: `Password must be ${PASSWORD_MAX_UTF8_BYTES} UTF-8 bytes or fewer.`,
+});
+
+export const STAFF_PASSWORD_UI_MESSAGES = Object.freeze({
+  UNSUPPORTED: "That symbol isn't supported. Try a different symbol.",
+  MAX_BYTES: 'Password is too long. Please use a shorter password.',
 });
 
 export const PASSWORD_REQUIREMENTS = Object.freeze([
@@ -39,17 +43,16 @@ export const PASSWORD_REQUIREMENTS = Object.freeze([
   }),
   Object.freeze({
     message: NEW_PASSWORD_ERROR_MESSAGES.SPECIAL,
-    label: `One of ${PASSWORD_ALLOWED_SPECIAL_CHARS.split('').join(' ')}`,
-  }),
-  Object.freeze({
-    message: NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED,
-    label: 'No unsupported characters',
-  }),
-  Object.freeze({
-    message: NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES,
-    label: `${PASSWORD_MAX_UTF8_BYTES} UTF-8 bytes or fewer`,
+    label: 'At least one symbol',
   }),
 ]);
+
+export function staffPasswordFieldErrors(messages = []) {
+  return messages.filter((message) => (
+    message !== NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED
+    && message !== NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES
+  ));
+}
 
 export function passwordRequirementState(password) {
   const errors = new Set(validateNewPassword(password));
@@ -59,6 +62,8 @@ export function passwordRequirementState(password) {
       met: !errors.has(requirement.message),
     })),
     errors: [...errors],
+    hasUnsupportedCharacters: password.length > 0 && errors.has(NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED),
+    isTooLong: errors.has(NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES),
     meetsRequirements: errors.size === 0,
   };
 }

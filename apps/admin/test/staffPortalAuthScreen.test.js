@@ -41,7 +41,13 @@ test.after(async () => {
   await server.close();
 });
 
-test('password requirements component reflects every shared-validator requirement', () => {
+test('password requirements present five user-facing rules with neutral, success, and contextual error states', () => {
+  const emptyMarkup = renderToStaticMarkup(
+    React.createElement(PasswordRequirements, { password: '' }),
+  );
+  assert.ok(emptyMarkup.includes('class="neutral"'));
+  assert.ok(!emptyMarkup.includes('wc-pw-context-error'));
+
   const invalidMarkup = renderToStaticMarkup(
     React.createElement(PasswordRequirements, { password: 'Password1^' }),
   );
@@ -51,14 +57,16 @@ test('password requirements component reflects every shared-validator requiremen
     'One uppercase letter',
     'One lowercase letter',
     'One number',
-    'One of ! @ # $ % &amp; * ? _ - .',
-    'No unsupported characters',
-    '72 UTF-8 bytes or fewer',
+    'At least one symbol',
   ]) {
     assert.ok(invalidMarkup.includes(label), `Expected checklist label: ${label}`);
   }
   assert.ok(!invalidMarkup.includes('Meets password requirements'));
   assert.ok(!invalidMarkup.includes('Strong password'));
+  assert.ok(invalidMarkup.includes('class="neutral"'));
+  assert.ok(!invalidMarkup.includes('Supported symbols'));
+  assert.ok(!invalidMarkup.includes('UTF-8'));
+  assert.ok(!invalidMarkup.includes('No unsupported characters'));
 
   const validMarkup = renderToStaticMarkup(
     React.createElement(PasswordRequirements, { password: 'ValidPass1!' }),
@@ -66,10 +74,17 @@ test('password requirements component reflects every shared-validator requiremen
   assert.ok(validMarkup.includes('Meets password requirements'));
 
   const changedBackToInvalid = renderToStaticMarkup(
-    React.createElement(PasswordRequirements, { password: 'ValidPass1! ' }),
+    React.createElement(PasswordRequirements, { password: 'ValidPass1! ', revealErrors: true }),
   );
   assert.ok(!changedBackToInvalid.includes('Meets password requirements'));
-  assert.ok(changedBackToInvalid.includes('Not met: No unsupported characters'));
+  assert.ok(changedBackToInvalid.includes('class="wc-pw-context-error"'));
+  assert.ok(changedBackToInvalid.includes("That symbol isn&#x27;t supported. Try a different symbol."));
+
+  const tooLong = renderToStaticMarkup(
+    React.createElement(PasswordRequirements, { password: `Aa1!${'b'.repeat(69)}`, revealErrors: true }),
+  );
+  assert.ok(tooLong.includes('Password is too long. Please use a shorter password.'));
+  assert.ok(!tooLong.includes('UTF-8'));
 });
 
 test('login renders the editorial sign-in state and preserves every auth entry point', () => {
@@ -105,9 +120,9 @@ test('application mode renders the structured Moderator application without chan
     initialMode: 'apply',
   }));
 
-  assert.ok(markup.includes('Apply as Moderator.'));
-  assert.ok(markup.includes('Application details'));
-  assert.ok(markup.includes('Staff access is reviewed before it is granted.'));
+  assert.ok(markup.includes('Apply as Moderator'));
+  assert.ok(markup.includes('Moderator application'));
+  assert.ok(markup.includes('Applications are reviewed before Staff access is granted.'));
   assert.ok(markup.includes('class="wc-apply-form"'));
   assert.ok(markup.includes('for="staff-apply-name"'));
   assert.ok(markup.includes('autoComplete="name"'));
@@ -117,9 +132,12 @@ test('application mode renders the structured Moderator application without chan
   assert.ok(markup.includes('for="staff-auth-password"'));
   assert.ok(markup.includes('autoComplete="new-password"'));
   assert.ok(markup.includes('Password requirements'));
+  assert.ok(markup.includes('class="neutral"'));
+  assert.ok(!markup.includes('Supported symbols'));
+  assert.ok(!markup.includes('UTF-8'));
   assert.ok(markup.includes('staff-password-requirements'));
   assert.ok(markup.includes('Create account and apply'));
-  assert.ok(markup.includes('does not grant staff access immediately'));
+  assert.equal(markup.match(/Applications are reviewed before Staff access is granted\./g)?.length, 1);
   assert.ok(markup.includes('Already have an account?'));
   assert.ok(!markup.includes('Forgot password?'));
   assert.ok(!markup.includes('staff-sign-in-title'));

@@ -296,12 +296,13 @@
 }
 
 .wc-moderator-apply {
-  display: grid;
-  grid-template-columns: minmax(18rem, 0.82fr) minmax(36rem, 1.48fr);
+  display: flex;
+  flex-direction: column;
   width: 100%;
+  min-width: 0;
   min-height: 100vh;
   min-height: 100svh;
-  padding: clamp(1.5rem, 3vw, 3.5rem);
+  padding: clamp(1rem, 2vw, 1.5rem);
   background: var(--background);
   color: var(--text-primary);
   font-family: var(--font-ui);
@@ -319,30 +320,15 @@
   border: 0;
 }
 
-.wc-moderator-apply__context {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: clamp(1.5rem, 3vw, 3rem);
-  border: var(--border-width-strong) solid var(--border-strong);
-  border-right: 0;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  background: var(--background-subtle);
-}
-
 .wc-moderator-apply__brand {
   display: flex;
   align-items: center;
+  width: min(100%, 30rem);
+  margin: 0 auto var(--space-3);
 }
 
-.wc-moderator-apply__intro {
-  margin: auto 0;
-  padding: clamp(2.5rem, 8vh, 5rem) 0;
-}
-
-.wc-moderator-apply__eyebrow,
 .wc-moderator-apply__form-kicker {
-  margin: 0 0 var(--space-3);
+  margin: 0 0 var(--space-1);
   color: var(--accent);
   font-size: 0.6875rem;
   font-weight: 850;
@@ -350,96 +336,52 @@
   text-transform: uppercase;
 }
 
-.wc-moderator-apply__intro h1 {
-  max-width: 8ch;
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(3rem, 4.4vw, 4.75rem);
-  font-weight: 700;
-  letter-spacing: -0.055em;
-  line-height: 0.92;
-}
-
-.wc-moderator-apply__intro > p:last-child {
-  max-width: 27rem;
-  margin: var(--space-5) 0 0;
-  color: var(--text-secondary);
-  font-size: 0.9375rem;
-  line-height: 1.65;
-}
-
-.wc-moderator-apply__review {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: var(--border-width) solid var(--border-strong);
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  line-height: 1.45;
-}
-
-.wc-moderator-apply__review svg {
-  flex: 0 0 auto;
-  color: var(--primary);
-}
-
 .wc-moderator-apply__form-region {
   display: flex;
+  flex: 1;
   align-items: center;
+  justify-content: center;
   min-width: 0;
-  padding: clamp(1.5rem, 3vw, 3rem);
-  border: var(--border-width-strong) solid var(--border-strong);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--surface);
+  width: 100%;
 }
 
 .wc-moderator-apply__form-surface {
-  width: min(100%, 48rem);
-  margin: 0 auto;
+  width: min(100%, 30rem);
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--space-6);
+  border: var(--border-width-strong) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
 }
 
-.wc-moderator-apply__form-surface h2 {
+.wc-moderator-apply__form-surface h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(2rem, 3vw, 2.75rem);
+  font-size: clamp(2.25rem, 2.75vw, 2.625rem);
+  font-weight: 700;
   letter-spacing: -0.04em;
   line-height: 1;
 }
 
 .wc-moderator-apply__form-support {
-  margin: var(--space-2) 0 var(--space-5);
+  margin: var(--space-1) 0 var(--space-4);
   color: var(--text-secondary);
   font-size: 0.875rem;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .wc-moderator-apply .wc-apply-form {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: var(--space-4);
-}
-
-.wc-moderator-apply .wc-apply-form > * {
-  grid-column: 1 / -1;
-}
-
-.wc-moderator-apply .wc-apply-form__name {
-  grid-column: 1;
-}
-
-.wc-moderator-apply .wc-apply-form__email {
-  grid-column: 2;
+  display: block;
 }
 
 .wc-moderator-apply .wc-auth-field {
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .wc-moderator-apply .wc-auth-field label {
   display: block;
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
   color: var(--text-primary);
   font-size: 0.75rem;
   font-weight: 800;
@@ -504,15 +446,15 @@
 }
 
 .wc-moderator-apply .wc-pw-requirements {
-  margin: 0 0 var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--background-subtle);
 }
 
 .wc-moderator-apply .wc-pw-title {
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
   color: var(--text-primary);
   font-size: 0.75rem;
   font-weight: 800;
@@ -521,13 +463,14 @@
 .wc-moderator-apply .wc-pw-checklist {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2) var(--space-4);
+  gap: var(--space-1) var(--space-3);
   margin: 0;
 }
 
 .wc-moderator-apply .wc-pw-checklist li {
   min-width: 0;
-  opacity: 0.72;
+  color: var(--text-secondary);
+  opacity: 1;
   line-height: 1.35;
 }
 
@@ -538,6 +481,21 @@
 
 .wc-moderator-apply .wc-pw-checklist li.ok svg {
   color: currentColor;
+}
+
+.wc-moderator-apply .wc-pw-checklist li.error,
+.wc-moderator-apply .wc-pw-context-error {
+  color: var(--destructive);
+}
+
+.wc-moderator-apply .wc-pw-checklist li.error svg {
+  flex: 0 0 auto;
+}
+
+.wc-moderator-apply .wc-pw-context-error {
+  margin: var(--space-1) 0 0;
+  font-size: 0.6875rem;
+  line-height: 1.45;
 }
 
 .wc-moderator-apply .wc-pw-complete {
@@ -552,16 +510,9 @@
   line-height: 1.45;
 }
 
-.wc-apply-form__review-note {
-  margin: 0 0 var(--space-2);
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  line-height: 1.45;
-}
-
 .wc-moderator-apply .wc-auth-submit.wc-btn-primary {
   min-height: var(--control-height-lg);
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
   border: var(--border-width-strong) solid var(--primary);
   border-radius: var(--radius-sm);
   background: var(--primary);
@@ -583,8 +534,8 @@
 }
 
 .wc-moderator-apply .wc-auth-switch {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
   border-top: var(--border-width) solid var(--border);
   color: var(--text-secondary);
   opacity: 1;
@@ -1022,95 +973,44 @@
 
 @media (max-height: 50rem) and (min-width: 64.0625rem) {
   .wc-moderator-apply {
-    padding: 1.25rem 2rem;
-  }
-
-  .wc-moderator-apply__context,
-  .wc-moderator-apply__form-region {
-    padding: 1.5rem 2rem;
-  }
-
-  .wc-moderator-apply__intro {
-    padding: 2rem 0;
-  }
-
-  .wc-moderator-apply__intro h1 {
-    font-size: 3.5rem;
+    padding: 1rem 1.5rem;
   }
 
   .wc-moderator-apply__form-support {
     margin-bottom: var(--space-3);
   }
+
+  .wc-moderator-apply__brand {
+    margin-bottom: var(--space-2);
+  }
 }
 
 @media (max-width: 64rem) {
   .wc-moderator-apply {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 0;
-  }
-
-  .wc-moderator-apply__context {
-    padding: 1.5rem clamp(1.25rem, 5vw, 3rem);
-    border: 0;
-    border-bottom: var(--border-width-strong) solid var(--border-strong);
-    border-radius: 0;
-  }
-
-  .wc-moderator-apply__intro {
-    padding: 3rem 0 2rem;
-  }
-
-  .wc-moderator-apply__intro h1 {
-    max-width: none;
-    font-size: clamp(3rem, 8vw, 4.5rem);
-  }
-
-  .wc-moderator-apply__review {
-    max-width: 32rem;
-  }
-
-  .wc-moderator-apply__form-region {
-    padding: 2rem clamp(1.25rem, 5vw, 3rem) 3rem;
-    border: 0;
-    border-radius: 0;
+    padding: 1.25rem clamp(1.25rem, 5vw, 3rem) 2rem;
   }
 
   .wc-moderator-apply__form-surface {
-    width: min(100%, 44rem);
-    margin: 0;
+    width: min(100%, 30rem);
   }
 }
 
 @media (max-width: 37.5rem) {
-  .wc-moderator-apply__context {
-    padding-top: 1.125rem;
+  .wc-moderator-apply {
+    padding: 1.125rem 1rem 1.5rem;
   }
 
-  .wc-moderator-apply__intro {
-    padding: 2rem 0 1.5rem;
+  .wc-moderator-apply__brand {
+    margin-bottom: var(--space-4);
   }
 
-  .wc-moderator-apply__intro h1 {
-    max-width: 8ch;
-    font-size: clamp(2.75rem, 12vw, 3.5rem);
+  .wc-moderator-apply__form-surface {
+    padding: 1.5rem 1.25rem;
   }
 
-  .wc-moderator-apply__form-region {
-    padding-top: 1.5rem;
-    padding-bottom: 2rem;
-  }
-
-  .wc-moderator-apply__form-surface h2 {
+  .wc-moderator-apply__form-surface h1 {
     font-size: 2.25rem;
-  }
-
-  .wc-moderator-apply .wc-apply-form {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .wc-moderator-apply .wc-apply-form__name,
-  .wc-moderator-apply .wc-apply-form__email {
-    grid-column: 1;
+    overflow-wrap: anywhere;
   }
 
   .wc-moderator-apply .wc-pw-checklist {

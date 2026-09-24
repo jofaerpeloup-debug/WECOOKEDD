@@ -9,6 +9,8 @@ import {
   loginPayload,
   passwordRequirementState,
   registrationPayload,
+  STAFF_PASSWORD_UI_MESSAGES,
+  staffPasswordFieldErrors,
   validateStaffLogin,
   validateStaffRegistration,
 } from './staffContracts.js';
@@ -24,7 +26,7 @@ export function FieldErrors({ id, messages = [] }) {
   );
 }
 
-export function PasswordRequirements({ password }) {
+export function PasswordRequirements({ password, revealErrors = false }) {
   const state = passwordRequirementState(password);
   const metCount = state.requirements.filter(({ met }) => met).length;
   return (
@@ -32,15 +34,27 @@ export function PasswordRequirements({ password }) {
       <div className="wc-pw-title">Password requirements</div>
       <ul className="wc-pw-checklist">
         {state.requirements.map(({ message, label, met }) => (
-          <li key={message} className={met ? 'ok' : ''} aria-label={`${met ? 'Met' : 'Not met'}: ${label}`}>
-            {met ? <Check size={13} /> : <span className="wc-pw-dot" />}{label}
+          <li
+            key={message}
+            className={met ? 'ok' : revealErrors ? 'error' : 'neutral'}
+            aria-label={`${met ? 'Met' : revealErrors ? 'Not met' : 'Pending'}: ${label}`}
+          >
+            {met ? <Check size={13} /> : revealErrors ? <XCircle size={13} /> : <span className="wc-pw-dot" />}{label}
           </li>
         ))}
       </ul>
+      {state.hasUnsupportedCharacters && (
+        <p className="wc-pw-context-error" role="status">{STAFF_PASSWORD_UI_MESSAGES.UNSUPPORTED}</p>
+      )}
+      {state.isTooLong && (
+        <p className="wc-pw-context-error" role="status">{STAFF_PASSWORD_UI_MESSAGES.MAX_BYTES}</p>
+      )}
       <span className="wc-visually-hidden" role="status" aria-live="polite" aria-atomic="true">
         {state.meetsRequirements
           ? 'All password requirements met.'
-          : `${metCount} of ${state.requirements.length} password requirements met.`}
+          : state.hasUnsupportedCharacters || state.isTooLong
+            ? 'Password needs changes before it can be submitted.'
+            : `${metCount} of ${state.requirements.length} password requirements met.`}
       </span>
       {state.meetsRequirements && (
         <div className="wc-pw-complete">Meets password requirements</div>
@@ -120,33 +134,18 @@ function StaffSignInFrame({ children }) {
 function ModeratorApplicationFrame({ children }) {
   return (
     <main className="wc-moderator-apply">
-      <section className="wc-moderator-apply__context" aria-labelledby="moderator-application-title">
-        <header className="wc-moderator-apply__brand" aria-label="WeCooked Staff Portal">
-          <span className="wc-staff-auth__brand-mark" aria-hidden="true"><Leaf size={18} strokeWidth={2.25} /></span>
-          <span className="wc-staff-auth__wordmark">WeCooked</span>
-          <span className="wc-staff-auth__designation">Staff Portal</span>
-        </header>
-
-        <div className="wc-moderator-apply__intro">
-          <p className="wc-moderator-apply__eyebrow">Moderator application</p>
-          <h1 id="moderator-application-title">Apply as Moderator.</h1>
-          <p>
-            Help maintain recipe and catalog quality with access designed for careful, consistent moderation.
-          </p>
-        </div>
-
-        <div className="wc-moderator-apply__review">
-          <ShieldAlert size={18} aria-hidden="true" />
-          <span>Staff access is reviewed before it is granted.</span>
-        </div>
-      </section>
+      <header className="wc-moderator-apply__brand" aria-label="WeCooked Staff Portal">
+        <span className="wc-staff-auth__brand-mark" aria-hidden="true"><Leaf size={18} strokeWidth={2.25} /></span>
+        <span className="wc-staff-auth__wordmark">WeCooked</span>
+        <span className="wc-staff-auth__designation">Staff Portal</span>
+      </header>
 
       <section className="wc-moderator-apply__form-region" aria-labelledby="moderator-application-form-title">
         <div className="wc-moderator-apply__form-surface">
-          <p className="wc-moderator-apply__form-kicker">Staff access request</p>
-          <h2 id="moderator-application-form-title">Application details</h2>
+          <p className="wc-moderator-apply__form-kicker">Moderator application</p>
+          <h1 id="moderator-application-form-title">Apply as Moderator</h1>
           <p className="wc-moderator-apply__form-support">
-            Create your WeCooked account and submit it for Moderator review.
+            Applications are reviewed before Staff access is granted.
           </p>
           {children}
         </div>
@@ -161,6 +160,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [passwordTouched, setPasswordTouched] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -185,10 +185,12 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
     setError('');
     setResetStatus('');
     setPassword('');
+    setPasswordTouched(false);
   }
 
   async function submit(event) {
     event.preventDefault();
+    if (applying) setPasswordTouched(true);
     const values = { name, email, password };
     const validationErrors = applying
       ? validateStaffRegistration(values)
@@ -319,6 +321,7 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => updateField('password', e.target.value, setPassword)}
+              onBlur={() => applying && setPasswordTouched(true)}
               autoComplete={applying ? 'new-password' : 'current-password'}
               required
               aria-invalid={Boolean(fieldErrors.password?.length)}
@@ -331,10 +334,13 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
               {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
             </button>
           </div>
-          <FieldErrors id="staff-password-error" messages={fieldErrors.password} />
+          <FieldErrors
+            id="staff-password-error"
+            messages={applying ? staffPasswordFieldErrors(fieldErrors.password) : fieldErrors.password}
+          />
         </div>
 
-        {applying && <PasswordRequirements password={password} />}
+        {applying && <PasswordRequirements password={password} revealErrors={passwordTouched} />}
 
         {!applying && (
           <div className="wc-auth-switch wc-auth-forgot">
@@ -342,11 +348,6 @@ export function StaffPortalAuthScreen({ onSignIn, onRegisterAndApply, onForgotPa
           </div>
         )}
         {error && <div className="wc-auth-error" role="alert"><AlertCircle size={14} /> {error}</div>}
-        {applying && (
-          <p className="wc-apply-form__review-note">
-            Submitting applies for review; it does not grant staff access immediately.
-          </p>
-        )}
         <button type="submit" className="wc-btn-primary wc-auth-submit" disabled={submitting}>
           {submitting ? 'Please wait…' : applying ? 'Create account and apply' : 'Sign In'} <ArrowRight size={15} />
         </button>
