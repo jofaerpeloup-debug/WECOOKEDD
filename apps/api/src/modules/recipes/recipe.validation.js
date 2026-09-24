@@ -19,7 +19,29 @@ const {
   MAX_IMAGE_ASSET_ID_LENGTH,
 } = require('./recipe.model');
 
+function collapseWhitespace(value) {
+  return value.trim().replace(/\s+/gu, ' ');
+}
+
+function unicodeLetterCount(value) {
+  return (value.match(/\p{L}/gu) || []).length;
+}
+
 const titleSchema = z
+  .string('Title must be a string.')
+  .transform(collapseWhitespace)
+  .pipe(
+    z
+      .string()
+      .min(2, 'Title must be at least 2 characters.')
+      .max(MAX_TITLE_LENGTH, `Title must be ${MAX_TITLE_LENGTH} characters or fewer.`)
+  )
+  .refine((value) => unicodeLetterCount(value) >= 2, 'Title must contain at least 2 letters.');
+
+// Existing stored recipes were accepted with any non-empty title. Keep that
+// historical completeness rule for consumer visibility, restore, and audit
+// tooling; all authoring request schemas below use the stricter titleSchema.
+const legacyTitleSchema = z
   .string()
   .trim()
   .min(1, 'Title is required.')
@@ -52,23 +74,37 @@ const dietaryTagSchema = z.enum(DIETARY_TAGS, 'Invalid dietary tag.');
 
 const prepTimeMinutesSchema = z
   .number()
-  .int('prepTimeMinutes must be an integer.')
-  .min(0, 'prepTimeMinutes must be zero or greater.')
-  .max(MAX_PREP_TIME_MINUTES, `prepTimeMinutes must be ${MAX_PREP_TIME_MINUTES} or fewer.`);
+  .int(`Prep time must be a whole number from 1 to ${MAX_PREP_TIME_MINUTES}.`)
+  .min(1, `Prep time must be a whole number from 1 to ${MAX_PREP_TIME_MINUTES}.`)
+  .max(MAX_PREP_TIME_MINUTES, `Prep time must be a whole number from 1 to ${MAX_PREP_TIME_MINUTES}.`);
 
 const cookTimeMinutesSchema = z
   .number()
-  .int('cookTimeMinutes must be an integer.')
-  .min(0, 'cookTimeMinutes must be zero or greater.')
-  .max(MAX_COOK_TIME_MINUTES, `cookTimeMinutes must be ${MAX_COOK_TIME_MINUTES} or fewer.`);
+  .int(`Cook time must be a whole number from 3 to ${MAX_COOK_TIME_MINUTES}.`)
+  .min(3, `Cook time must be a whole number from 3 to ${MAX_COOK_TIME_MINUTES}.`)
+  .max(MAX_COOK_TIME_MINUTES, `Cook time must be a whole number from 3 to ${MAX_COOK_TIME_MINUTES}.`);
+
+const legacyPrepTimeMinutesSchema = z.number().int().min(0).max(MAX_PREP_TIME_MINUTES);
+const legacyCookTimeMinutesSchema = z.number().int().min(0).max(MAX_COOK_TIME_MINUTES);
 
 const servingsSchema = z
   .number()
-  .int('servings must be an integer.')
-  .min(1, 'servings must be at least 1.')
-  .max(MAX_SERVINGS, `servings must be ${MAX_SERVINGS} or fewer.`);
+  .int(`Servings must be a whole number from 1 to ${MAX_SERVINGS}.`)
+  .min(1, `Servings must be a whole number from 1 to ${MAX_SERVINGS}.`)
+  .max(MAX_SERVINGS, `Servings must be a whole number from 1 to ${MAX_SERVINGS}.`);
 
 const instructionItemSchema = z
+  .string('Instruction must be a string.')
+  .transform((value) => value.trim())
+  .pipe(
+    z
+      .string()
+      .min(3, 'Instruction must be at least 3 characters.')
+      .max(MAX_INSTRUCTION_LENGTH, `Instruction must be ${MAX_INSTRUCTION_LENGTH} characters or fewer.`)
+  )
+  .refine((value) => /\p{L}/u.test(value), 'Instruction must contain text.');
+
+const legacyInstructionItemSchema = z
   .string()
   .trim()
   .min(1, 'Instruction step cannot be empty.')
@@ -88,6 +124,11 @@ const draftInstructionsArraySchema = z
   .array(instructionItemSchema)
   .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} instruction steps is allowed.`);
 
+const legacyInstructionsArraySchema = z
+  .array(legacyInstructionItemSchema)
+  .min(1, 'At least one instruction step is required.')
+  .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} instruction steps is allowed.`);
+
 // Structured cooking-steps input. Mongo still persists `instructions:
 // string[]` as the source of truth (see recipe.model.js /
 // docs/architecture/recipes.md) — the service normalizes a valid `steps`
@@ -100,6 +141,13 @@ const stepItemSchema = z
       .int('step order must be an integer.')
       .positive('step order must be a positive integer.'),
     text: instructionItemSchema,
+  })
+  .strict();
+
+const legacyStepItemSchema = z
+  .object({
+    order: z.number().int().positive(),
+    text: legacyInstructionItemSchema,
   })
   .strict();
 
@@ -120,6 +168,21 @@ const stepsArraySchema = z
 
 const draftStepsArraySchema = z
   .array(stepItemSchema)
+  .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} steps is allowed.`)
+  .superRefine((steps, ctx) => {
+    const orders = steps.map((step) => step.order);
+    if (new Set(orders).size !== orders.length) {
+      ctx.addIssue({ code: 'custom', message: 'step order values must be unique.' });
+    }
+    const sorted = [...orders].sort((a, b) => a - b);
+    if (!sorted.every((value, index) => value === index + 1)) {
+      ctx.addIssue({ code: 'custom', message: 'step order values must be contiguous starting at 1.' });
+    }
+  });
+
+const legacyStepsArraySchema = z
+  .array(legacyStepItemSchema)
+  .min(1, 'At least one step is required.')
   .max(MAX_INSTRUCTIONS, `A maximum of ${MAX_INSTRUCTIONS} steps is allowed.`)
   .superRefine((steps, ctx) => {
     const orders = steps.map((step) => step.order);
@@ -172,8 +235,8 @@ const recipeIngredientUsageSchema = z
     ingredientId: objectIdSchema,
     quantity: z
       .number()
-      .finite('quantity must be a finite number.')
-      .positive('quantity must be greater than zero.')
+      .finite('Quantity must be greater than 0.')
+      .positive('Quantity must be greater than 0.')
       .nullable()
       .optional(),
     unit: unitSchema,
@@ -282,7 +345,7 @@ const publishedRecipeFields = {
   region: slugFieldSchema.optional(),
   category: slugFieldSchema.optional(),
   difficulty: difficultySchema,
-  prepTimeMinutes: prepTimeMinutesSchema,
+  prepTimeMinutes: prepTimeMinutesSchema.optional(),
   cookTimeMinutes: cookTimeMinutesSchema,
   servings: servingsSchema,
   ingredients: ingredientsArraySchema,
@@ -313,6 +376,18 @@ function refinePublishedRecipe(body, ctx) {
 // deliberately not part of persisted recipe structure.
 const publishedRecipeBodySchema = z
   .object(publishedRecipeFields)
+  .strict()
+  .superRefine(refinePublishedRecipe);
+
+const legacyPublishedRecipeBodySchema = z
+  .object({
+    ...publishedRecipeFields,
+    title: legacyTitleSchema,
+    prepTimeMinutes: legacyPrepTimeMinutesSchema.optional(),
+    cookTimeMinutes: legacyCookTimeMinutesSchema,
+    instructions: legacyInstructionsArraySchema.optional(),
+    steps: legacyStepsArraySchema.optional(),
+  })
   .strict()
   .superRefine(refinePublishedRecipe);
 
@@ -415,4 +490,10 @@ module.exports = {
   publishRecipeSchema,
   lifecycleRecipeSchema,
   publishedRecipeBodySchema,
+  legacyPublishedRecipeBodySchema,
+  prepTimeMinutesSchema,
+  cookTimeMinutesSchema,
+  titleSchema,
+  draftInstructionsArraySchema,
+  draftStepsArraySchema,
 };

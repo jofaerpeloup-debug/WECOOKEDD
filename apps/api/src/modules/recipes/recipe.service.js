@@ -2,7 +2,15 @@ const recipeRepository = require('./recipe.repository');
 const ingredientService = require('../ingredients/ingredient.service');
 const { AppError } = require('../../shared/errors/app-error');
 const imageProvider = require('../uploads/cloudinary-image.provider');
-const { publishedRecipeBodySchema } = require('./recipe.validation');
+const {
+  publishedRecipeBodySchema,
+  legacyPublishedRecipeBodySchema,
+  prepTimeMinutesSchema,
+  cookTimeMinutesSchema,
+  titleSchema,
+  draftInstructionsArraySchema,
+  draftStepsArraySchema,
+} = require('./recipe.validation');
 const { consumerPublicationFilter } = require('./recipe.visibility');
 
 const SORT_MAP = {
@@ -91,8 +99,23 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function collapseWhitespace(value) {
-  return value.trim().replace(/\s+/g, ' ');
+function parseAuthoringValue(schema, value, field) {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw incompleteRecipeError(result.error.issues.map((issue) => ({
+      ...issue,
+      path: [field, ...issue.path],
+    })));
+  }
+  return result.data;
+}
+
+function normalizeTitle(value) {
+  return parseAuthoringValue(titleSchema, value, 'title');
+}
+
+function normalizeOptionalTime(schema, value, field) {
+  return value === undefined ? undefined : parseAuthoringValue(schema, value, field);
 }
 
 function normalizeDietaryTags(tags = []) {
@@ -106,9 +129,10 @@ function normalizeDietaryTags(tags = []) {
 // equivalent. Legacy `instructions` input passes straight through.
 function toInstructionsList({ instructions, steps }) {
   if (steps !== undefined) {
-    return [...steps].sort((a, b) => a.order - b.order).map((step) => step.text.trim());
+    const parsed = parseAuthoringValue(draftStepsArraySchema, steps, 'steps');
+    return [...parsed].sort((a, b) => a.order - b.order).map((step) => step.text);
   }
-  return (instructions || []).map((step) => step.trim());
+  return parseAuthoringValue(draftInstructionsArraySchema, instructions || [], 'instructions');
 }
 
 // Every referenced Ingredient — including entries marked optional — must
@@ -183,7 +207,14 @@ function assertPublishedComplete(recipe) {
 }
 
 function isPublishedComplete(recipe) {
-  return publishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe)).success;
+  return legacyPublishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe)).success;
+}
+
+function assertLegacyPublishedComplete(recipe) {
+  const result = legacyPublishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe));
+  if (!result.success) {
+    throw incompleteRecipeError(result.error.issues);
+  }
 }
 
 // A recipe is "usable" for a non-admin view when it is itself active and
@@ -251,11 +282,11 @@ async function createRecipe({
   await assertIngredientsActive(ingredients);
 
   const doc = {
-    title: collapseWhitespace(title),
+    title: normalizeTitle(title),
     description: description.trim(),
     difficulty,
-    prepTimeMinutes,
-    cookTimeMinutes,
+    prepTimeMinutes: normalizeOptionalTime(prepTimeMinutesSchema, prepTimeMinutes, 'prepTimeMinutes'),
+    cookTimeMinutes: normalizeOptionalTime(cookTimeMinutesSchema, cookTimeMinutes, 'cookTimeMinutes'),
     servings,
     ingredients: normalizeIngredients(ingredients),
     instructions: toInstructionsList({ instructions, steps }),
@@ -273,21 +304,24 @@ async function createRecipe({
   if (region !== undefined) doc.region = region;
   if (category !== undefined) doc.category = category;
 
+  assertPublishedComplete(doc);
   return recipeRepository.createRecipe(doc);
 }
 
 async function createDraft(input, { actorId } = {}) {
   const doc = {
-    title: collapseWhitespace(input.title),
+    title: normalizeTitle(input.title),
     publicationStatus: 'draft',
     isActive: true,
     createdBy: actorId ?? null,
     updatedBy: actorId ?? null,
   };
   if (input.description !== undefined) doc.description = input.description.trim();
-  for (const field of ['region', 'category', 'difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']) {
+  for (const field of ['region', 'category', 'difficulty', 'servings']) {
     if (input[field] !== undefined) doc[field] = input[field];
   }
+  if (input.prepTimeMinutes !== undefined) doc.prepTimeMinutes = normalizeOptionalTime(prepTimeMinutesSchema, input.prepTimeMinutes, 'prepTimeMinutes');
+  if (input.cookTimeMinutes !== undefined) doc.cookTimeMinutes = normalizeOptionalTime(cookTimeMinutesSchema, input.cookTimeMinutes, 'cookTimeMinutes');
   if (input.ingredients !== undefined) {
     if (input.ingredients.length > 0) await assertIngredientsActive(input.ingredients);
     doc.ingredients = normalizeIngredients(input.ingredients);
@@ -442,7 +476,7 @@ async function updateRecipe(id, patch, { actorId } = {}) {
   // Fields removed from the document rather than set — an explicit `null` for
   // an optional slug field clears it (see recipe.validation.js).
   const unset = {};
-  if (patch.title !== undefined) update.title = collapseWhitespace(patch.title);
+  if (patch.title !== undefined) update.title = normalizeTitle(patch.title);
   if (patch.description !== undefined) {
     if (patch.description === null) unset.description = '';
     else update.description = patch.description.trim();
@@ -455,10 +489,16 @@ async function updateRecipe(id, patch, { actorId } = {}) {
     if (patch.category === null) unset.category = '';
     else update.category = patch.category;
   }
-  for (const field of ['difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']) {
+  for (const field of ['difficulty', 'servings']) {
     if (patch[field] !== undefined) {
       if (patch[field] === null) unset[field] = '';
       else update[field] = patch[field];
+    }
+  }
+  for (const [field, schema] of [['prepTimeMinutes', prepTimeMinutesSchema], ['cookTimeMinutes', cookTimeMinutesSchema]]) {
+    if (patch[field] !== undefined) {
+      if (patch[field] === null) unset[field] = '';
+      else update[field] = normalizeOptionalTime(schema, patch[field], field);
     }
   }
   if (patch.instructions !== undefined || patch.steps !== undefined) {
@@ -499,11 +539,13 @@ async function updateRecipe(id, patch, { actorId } = {}) {
     ...update,
   };
   for (const field of Object.keys(unset)) delete merged[field];
-  // New published records are always checked after every edit. Transitional
-  // legacy records are also fully checked when ingredient/step completeness
-  // can be changed; unrelated legacy edits remain deploy-compatible.
+  // Published records retain the pre-M25B completeness check after every
+  // edit so unrelated repairs do not strand an older title/instruction. Any
+  // newly supplied title or instruction has already passed the new-write
+  // schema above. Transitional missing-status records keep the narrower
+  // compatibility handling below.
   if (existing.publicationStatus === 'published') {
-    assertPublishedComplete(merged);
+    assertLegacyPublishedComplete(merged);
   } else if (effectivePublicationStatus(existing) === 'published') {
     // Legacy records were created under the complete contract. Prevent the
     // only structurally-valid PATCH operations that could make one
@@ -518,7 +560,7 @@ async function updateRecipe(id, patch, { actorId } = {}) {
     ) {
       throw incompleteRecipeError([{ path: ['instructions'], message: 'At least one instruction step is required.' }]);
     }
-    const clearedRequiredField = ['description', 'difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings']
+    const clearedRequiredField = ['description', 'difficulty', 'cookTimeMinutes', 'servings']
       .find((field) => patch[field] === null);
     if (clearedRequiredField) {
       throw incompleteRecipeError([{
@@ -583,7 +625,7 @@ async function restoreRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
   if (!existing) throw notFoundError();
   assertCurrentPrecondition(existing, expectedUpdatedAt);
   if (effectivePublicationStatus(existing) === 'published') {
-    assertPublishedComplete(existing);
+    assertLegacyPublishedComplete(existing);
     await assertIngredientsActive(existing.ingredients || []);
   }
   const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;

@@ -35,13 +35,14 @@ export function emptyRecipeForm() {
   return {
     title: '', description: '', imageUrl: null,
     ingredients: [blankIngredient()], instructions: [''],
-    difficulty: '', prepTimeMinutes: '', cookTimeMinutes: '', servings: '',
+    difficulty: '', prepTimeMinutes: '', cookTimeHours: '', cookTimeMinutePart: '', servings: '',
     region: '', category: '', dietaryTags: [],
   };
 }
 
 export function formFromRecipe(recipe) {
   if (!recipe) return emptyRecipeForm();
+  const cookTime = splitDuration(recipe.cookTimeMinutes);
   return {
     title: recipe.title ?? '', description: recipe.description ?? '', imageUrl: recipe.imageUrl ?? null,
     ingredients: recipe.ingredients?.length ? recipe.ingredients.map((entry, index) => ({
@@ -52,13 +53,66 @@ export function formFromRecipe(recipe) {
     })) : [blankIngredient()],
     instructions: recipe.instructions?.length ? [...recipe.instructions] : [''],
     difficulty: recipe.difficulty ?? '', prepTimeMinutes: valueOrBlank(recipe.prepTimeMinutes),
-    cookTimeMinutes: valueOrBlank(recipe.cookTimeMinutes), servings: valueOrBlank(recipe.servings),
+    cookTimeHours: cookTime.hours, cookTimeMinutePart: cookTime.minutes, servings: valueOrBlank(recipe.servings),
     region: recipe.region ?? '', category: recipe.category ?? '', dietaryTags: [...(recipe.dietaryTags || [])],
   };
 }
 
 function valueOrBlank(value) { return value == null ? '' : String(value); }
 function collapsed(value) { return String(value ?? '').trim().replace(/\s+/g, ' '); }
+function unicodeLetterCount(value) { return (value.match(/\p{L}/gu) || []).length; }
+
+export function parseIngredientQuantity(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  let quantity;
+  let match = text.match(/^(\d+)\s+(\d+)\s*\/\s*(\d+)$/);
+  if (match) {
+    const [, whole, numerator, denominator] = match.map(Number);
+    if (numerator <= 0 || denominator <= 0) return null;
+    quantity = whole + (numerator / denominator);
+  } else {
+    match = text.match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (match) {
+      const [, numerator, denominator] = match.map(Number);
+      if (numerator <= 0 || denominator <= 0) return null;
+      quantity = numerator / denominator;
+    } else if (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) {
+      quantity = Number(text);
+    } else {
+      return null;
+    }
+  }
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
+}
+
+export function splitDuration(totalMinutes) {
+  if (totalMinutes === '' || totalMinutes == null) return { hours: '', minutes: '' };
+  const total = Number(totalMinutes);
+  if (!Number.isInteger(total) || total < 0) return { hours: '', minutes: '' };
+  return { hours: String(Math.floor(total / 60)), minutes: String(total % 60) };
+}
+
+export function combineDuration(hours, minutes) {
+  const hoursText = String(hours ?? '').trim();
+  const minutesText = String(minutes ?? '').trim();
+  if (!hoursText && !minutesText) return null;
+  if ((hoursText && !/^\d+$/.test(hoursText)) || (minutesText && !/^\d+$/.test(minutesText))) return null;
+  const parsedHours = hoursText ? Number(hoursText) : 0;
+  const parsedMinutes = minutesText ? Number(minutesText) : 0;
+  if (!Number.isInteger(parsedHours) || parsedHours < 0 || !Number.isInteger(parsedMinutes) || parsedMinutes < 0 || parsedMinutes > 59) return null;
+  return (parsedHours * 60) + parsedMinutes;
+}
+
+export function formatDuration(totalMinutes) {
+  if (totalMinutes === '' || totalMinutes == null) return '—';
+  const total = Number(totalMinutes);
+  if (!Number.isInteger(total) || total < 0) return '—';
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (!hours) return `${minutes} min`;
+  return `${hours} hr${minutes ? ` ${minutes} min` : ''}`;
+}
 function isBlankIngredient(row) {
   return !row?.ingredient?.id && String(row?.quantity ?? '').trim() === '' && String(row?.note ?? '').trim() === ''
     && !row?.optional && (!row?.unit || row.unit === 'g');
@@ -70,7 +124,7 @@ function hasAnyIngredientValue(row) {
 export function normalizeIngredients(rows = []) {
   return rows.filter((row) => !isBlankIngredient(row)).map((row) => {
     const item = { ingredientId: row.ingredient?.id || '', unit: row.unit, optional: Boolean(row.optional) };
-    if (row.unit !== TO_TASTE_UNIT && String(row.quantity ?? '').trim() !== '') item.quantity = Number(row.quantity);
+    if (row.unit !== TO_TASTE_UNIT && String(row.quantity ?? '').trim() !== '') item.quantity = parseIngredientQuantity(row.quantity);
     const note = String(row.note ?? '').trim();
     if (note) item.note = note;
     return item;
@@ -88,7 +142,7 @@ export function normalizeSection(form, step) {
   if (step === 'details') return {
     difficulty: form.difficulty || '',
     prepTimeMinutes: form.prepTimeMinutes === '' ? '' : Number(form.prepTimeMinutes),
-    cookTimeMinutes: form.cookTimeMinutes === '' ? '' : Number(form.cookTimeMinutes),
+    cookTimeMinutes: combineDuration(form.cookTimeHours, form.cookTimeMinutePart) ?? '',
     servings: form.servings === '' ? '' : Number(form.servings),
     region: normalizeSlugInput(form.region), category: normalizeSlugInput(form.category),
     dietaryTags: [...new Set(form.dietaryTags || [])].sort(),
@@ -99,7 +153,8 @@ export function normalizeSection(form, step) {
 function error(errors, field, message) { if (!errors[field]) errors[field] = message; }
 function validateInteger(errors, field, value, min, max, label, required) {
   if (value === '' || value == null) { if (required) error(errors, field, `${label} is required.`); return; }
-  const number = Number(value);
+  const text = String(value).trim();
+  const number = /^-?\d+$/.test(text) ? Number(text) : Number.NaN;
   if (!Number.isInteger(number) || number < min || number > max) error(errors, field, `${label} must be a whole number from ${min} to ${max}.`);
 }
 
@@ -107,36 +162,49 @@ export function validateStep(form, step, { published = false } = {}) {
   const errors = {};
   if (step === 'basics') {
     const title = collapsed(form.title);
-    if (!title) error(errors, 'title', 'Title is required.');
+    if (title.length < 2) error(errors, 'title', 'Title must be at least 2 characters.');
     else if (title.length > MAX_TITLE_LENGTH) error(errors, 'title', `Title must be ${MAX_TITLE_LENGTH} characters or fewer.`);
+    else if (unicodeLetterCount(title) < 2) error(errors, 'title', 'Title must contain at least 2 letters.');
     const description = String(form.description ?? '').trim();
     if (published && !description) error(errors, 'description', 'Description is required for a Published recipe.');
     else if (description.length > MAX_DESCRIPTION_LENGTH) error(errors, 'description', `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.`);
   }
   if (step === 'ingredients') {
     const rows = form.ingredients || [];
-    const persisted = rows.filter((row) => !isBlankIngredient(row));
+    const persisted = rows.map((row, index) => ({ row, index })).filter(({ row }) => !isBlankIngredient(row));
     if (published && persisted.length === 0) error(errors, 'ingredients', 'At least one ingredient is required for a Published recipe.');
     if (persisted.length > MAX_INGREDIENTS) error(errors, 'ingredients', `A maximum of ${MAX_INGREDIENTS} ingredients is allowed.`);
-    persisted.forEach((row, index) => {
+    persisted.forEach(({ row, index }) => {
       if (!hasAnyIngredientValue(row)) return;
       if (!row.ingredient?.id) error(errors, `ingredients.${index}.ingredient`, 'Choose an ingredient.');
       if (!UNITS.has(row.unit)) error(errors, `ingredients.${index}.unit`, 'Choose a valid unit.');
-      if (row.unit !== TO_TASTE_UNIT && !(Number.isFinite(Number(row.quantity)) && Number(row.quantity) > 0)) error(errors, `ingredients.${index}.quantity`, 'Enter a quantity greater than zero.');
+      if (row.unit !== TO_TASTE_UNIT && parseIngredientQuantity(row.quantity) == null) error(errors, `ingredients.${index}.quantity`, 'Enter a positive number, fraction, or mixed fraction.');
       if (String(row.note ?? '').trim().length > MAX_INGREDIENT_NOTE_LENGTH) error(errors, `ingredients.${index}.note`, `Note must be ${MAX_INGREDIENT_NOTE_LENGTH} characters or fewer.`);
     });
   }
   if (step === 'instructions') {
-    const instructions = normalizeInstructions(form.instructions);
+    const instructions = (form.instructions || [])
+      .map((text, index) => ({ text: String(text ?? '').trim(), index }))
+      .filter(({ text }) => text.length > 0);
     if (published && instructions.length === 0) error(errors, 'instructions', 'At least one instruction is required for a Published recipe.');
     if (instructions.length > MAX_INSTRUCTIONS) error(errors, 'instructions', `A maximum of ${MAX_INSTRUCTIONS} instructions is allowed.`);
-    instructions.forEach((text, index) => { if (text.length > MAX_INSTRUCTION_LENGTH) error(errors, `instructions.${index}`, `Instruction must be ${MAX_INSTRUCTION_LENGTH} characters or fewer.`); });
+    instructions.forEach(({ text, index }) => {
+      if (text.length < 3) error(errors, `instructions.${index}`, 'Instruction must be at least 3 characters.');
+      else if (text.length > MAX_INSTRUCTION_LENGTH) error(errors, `instructions.${index}`, `Instruction must be ${MAX_INSTRUCTION_LENGTH} characters or fewer.`);
+      else if (!/\p{L}/u.test(text)) error(errors, `instructions.${index}`, 'Instruction must contain text.');
+    });
   }
   if (step === 'details') {
     if (form.difficulty && !DIFFICULTIES.has(form.difficulty)) error(errors, 'difficulty', 'Choose a valid difficulty.');
     if (published && !form.difficulty) error(errors, 'difficulty', 'Difficulty is required for a Published recipe.');
-    validateInteger(errors, 'prepTimeMinutes', form.prepTimeMinutes, 0, MAX_PREP_TIME_MINUTES, 'Prep time', published);
-    validateInteger(errors, 'cookTimeMinutes', form.cookTimeMinutes, 0, MAX_COOK_TIME_MINUTES, 'Cook time', published);
+    validateInteger(errors, 'prepTimeMinutes', form.prepTimeMinutes, 1, MAX_PREP_TIME_MINUTES, 'Prep time', false);
+    const cookTime = combineDuration(form.cookTimeHours, form.cookTimeMinutePart);
+    const hasCookTime = String(form.cookTimeHours ?? '').trim() !== '' || String(form.cookTimeMinutePart ?? '').trim() !== '';
+    if (!hasCookTime) {
+      if (published) error(errors, 'cookTimeMinutes', 'Cooking time is required.');
+    } else if (cookTime == null || cookTime < 3 || cookTime > MAX_COOK_TIME_MINUTES) {
+      error(errors, 'cookTimeMinutes', `Cooking time must use whole hours and 0–59 minutes, totaling 3 to ${MAX_COOK_TIME_MINUTES} minutes.`);
+    }
     validateInteger(errors, 'servings', form.servings, 1, MAX_SERVINGS, 'Servings', published);
     for (const field of ['region', 'category']) {
       const value = normalizeSlugInput(form[field]);

@@ -12,7 +12,10 @@ export function totalTimeMinutes(recipe) {
 
 export function formatMinutes(minutes) {
   const m = Math.max(0, Math.round(Number(minutes) || 0));
-  return `${m} min`;
+  const hours = Math.floor(m / 60);
+  const remainingMinutes = m % 60;
+  if (!hours) return `${remainingMinutes} min`;
+  return `${hours} hr${remainingMinutes ? ` ${remainingMinutes} min` : ''}`;
 }
 
 // "45 min" from prep + cook — the only time figure the backend supports.

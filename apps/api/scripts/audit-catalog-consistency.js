@@ -3,7 +3,7 @@ const { loadEnv } = require('../src/config/env');
 const Recipe = require('../src/modules/recipes/recipe.model');
 const Ingredient = require('../src/modules/ingredients/ingredient.model');
 const Substitution = require('../src/modules/substitutions/substitution.model');
-const { publishedRecipeBodySchema } = require('../src/modules/recipes/recipe.validation');
+const { legacyPublishedRecipeBodySchema } = require('../src/modules/recipes/recipe.validation');
 
 const TOOL_NAME = 'catalog-consistency-audit';
 const SCHEMA_VERSION = 1;
@@ -266,7 +266,7 @@ function classifyRecipe(recipe, ingredientsById) {
 
   const lifecycle = lifecycleLabel(activity, publication);
   if (publication === 'PUBLISHED' || publication === 'LEGACY_PUBLISHED') {
-    const result = publishedRecipeBodySchema.safeParse(buildPublishedValidationInput(recipe));
+    const result = legacyPublishedRecipeBodySchema.safeParse(buildPublishedValidationInput(recipe));
     if (!result.success) {
       const fields = [...new Set(result.error.issues.map((issue) => issue.path.join('.') || '(root)'))]
         .sort()

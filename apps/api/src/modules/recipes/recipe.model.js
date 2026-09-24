@@ -20,6 +20,14 @@ const MAX_INGREDIENT_NOTE_LENGTH = 200;
 const MAX_IMAGE_URL_LENGTH = 2000;
 const MAX_IMAGE_ASSET_ID_LENGTH = 255;
 
+function collapseWhitespace(value) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/gu, ' ') : value;
+}
+
+function hasUnicodeLetter(value) {
+  return typeof value === 'string' && /\p{L}/u.test(value);
+}
+
 // One entry per (ingredientId, use) pair — the same canonical Ingredient may
 // legitimately appear twice in the same recipe (e.g. garlic for a marinade
 // and again for garnish), so entries are never deduplicated.
@@ -65,7 +73,7 @@ function isStructurallyValidStepArray(arr) {
   return (
     Array.isArray(arr) &&
     arr.length <= MAX_INSTRUCTIONS &&
-    arr.every((step) => typeof step === 'string' && step.length > 0)
+    arr.every((step) => typeof step === 'string' && step.length >= 3 && hasUnicodeLetter(step))
   );
 }
 
@@ -75,7 +83,13 @@ const recipeSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      set: collapseWhitespace,
+      minlength: 2,
       maxlength: MAX_TITLE_LENGTH,
+      validate: {
+        validator: (value) => typeof value === 'string' && (value.match(/\p{L}/gu) || []).length >= 2,
+        message: 'Title must contain at least 2 letters.',
+      },
     },
     description: {
       type: String,
@@ -106,7 +120,7 @@ const recipeSchema = new mongoose.Schema(
     },
     prepTimeMinutes: {
       type: Number,
-      min: 0,
+      min: 1,
       max: MAX_PREP_TIME_MINUTES,
       validate: {
         validator: Number.isInteger,
@@ -115,7 +129,8 @@ const recipeSchema = new mongoose.Schema(
     },
     cookTimeMinutes: {
       type: Number,
-      min: 0,
+      required() { return this.publicationStatus === 'published'; },
+      min: 3,
       max: MAX_COOK_TIME_MINUTES,
       validate: {
         validator: Number.isInteger,

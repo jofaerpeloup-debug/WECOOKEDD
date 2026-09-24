@@ -1,6 +1,6 @@
 import { CheckCircle2, CircleAlert, ImageOff } from 'lucide-react';
 import { DIETARY_TAG_LABELS, DIFFICULTY_LABELS, UNIT_LABELS, slugLabel } from '../recipeOptions.js';
-import { STEP_LABELS, statusLabel } from './recipeAuthoringModel.js';
+import { STEP_LABELS, combineDuration, formatDuration, statusLabel } from './recipeAuthoringModel.js';
 
 const shown = (value, suffix = '') => value === '' || value == null ? '—' : `${value}${suffix}`;
 
@@ -29,7 +29,7 @@ export default function RecipeReview({ form, readiness, onNavigate, recipeMeta, 
         <section><h3>Details</h3><dl>
           <div><dt>Difficulty</dt><dd>{DIFFICULTY_LABELS[form.difficulty] || shown(form.difficulty)}</dd></div>
           <div><dt>Prep</dt><dd>{shown(form.prepTimeMinutes, ' min')}</dd></div>
-          <div><dt>Cook</dt><dd>{shown(form.cookTimeMinutes, ' min')}</dd></div>
+          <div><dt>Cook</dt><dd>{formatDuration(combineDuration(form.cookTimeHours, form.cookTimeMinutePart))}</dd></div>
           <div><dt>Servings</dt><dd>{shown(form.servings)}</dd></div>
           {form.region && <div><dt>Region</dt><dd>{slugLabel(form.region)}</dd></div>}
           {form.category && <div><dt>Category</dt><dd>{slugLabel(form.category)}</dd></div>}

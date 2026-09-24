@@ -1,7 +1,8 @@
 import { ArrowDown, ArrowUp, ImageOff, Plus, Trash2 } from 'lucide-react';
 import IngredientPicker from '../IngredientPicker.jsx';
 import {
-  MAX_DESCRIPTION_LENGTH, MAX_INGREDIENTS, MAX_INSTRUCTION_LENGTH, MAX_INSTRUCTIONS,
+  MAX_DESCRIPTION_LENGTH, MAX_INGREDIENTS, MAX_INSTRUCTION_LENGTH,
+  MAX_INSTRUCTIONS, MAX_PREP_TIME_MINUTES, MAX_SERVINGS,
   RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_UNITS, TO_TASTE_UNIT,
 } from '../recipeOptions.js';
 import { blankIngredient } from './recipeAuthoringModel.js';
@@ -16,7 +17,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }
   if (currentStep === 'review') return <RecipeReview form={form} readiness={readiness} onNavigate={setStep} recipeMeta={state} />;
 
   if (currentStep === 'basics') return <div className="wc-author-fields">
-    <label>Title <span aria-hidden="true">*</span><input autoFocus value={form.title} maxLength={150} aria-invalid={Boolean(fieldErrors.title)} onChange={(e) => change('title', e.target.value)} /></label><FieldError message={fieldErrors.title} />
+    <label>Title <span aria-hidden="true">*</span><input autoFocus value={form.title} aria-invalid={Boolean(fieldErrors.title)} onChange={(e) => change('title', e.target.value)} /></label><FieldError message={fieldErrors.title} />
     <label>Description<textarea rows="5" value={form.description} maxLength={MAX_DESCRIPTION_LENGTH} aria-invalid={Boolean(fieldErrors.description)} onChange={(e) => change('description', e.target.value)} /></label><div className="wc-author-hint">{form.description.length}/{MAX_DESCRIPTION_LENGTH}</div><FieldError message={fieldErrors.description} />
     <fieldset className="wc-author-image"><legend>Image (optional)</legend>
       {(selectedFile || form.imageUrl) ? <img src={selectedFile ? previewUrl : form.imageUrl} alt="Recipe preview" /> : <div className="wc-author-image-fallback"><ImageOff size={25} /> No image selected</div>}
@@ -38,7 +39,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }
     return <div><div className="wc-author-section-intro"><p>Blank rows are ignored. Partially completed rows must be finished before saving.</p><button type="button" className="wc-btn-secondary" disabled={form.ingredients.length >= MAX_INGREDIENTS || busy} onClick={() => change('ingredients', [...form.ingredients, blankIngredient()])}><Plus size={15} /> Add ingredient</button></div><FieldError message={err(fieldErrors, 'ingredients')} />
       {form.ingredients.map((row, index) => <div className="wc-author-ingredient" key={row.key}>
         <span className="wc-author-row-number">{index + 1}</span><IngredientPicker value={row.ingredient} disabled={busy} ariaLabel={`Ingredient ${index + 1}`} onChange={(ingredient) => updateRow(index, { ingredient })} />
-        <label>Quantity<input type="number" min="0" step="any" disabled={row.unit === TO_TASTE_UNIT || busy} value={row.quantity} aria-invalid={Boolean(fieldErrors[`ingredients.${index}.quantity`])} onChange={(e) => updateRow(index, { quantity: e.target.value })} /></label>
+        <label>Quantity<input type="text" inputMode="decimal" placeholder="e.g. 1 1/2" disabled={row.unit === TO_TASTE_UNIT || busy} value={row.quantity} aria-invalid={Boolean(fieldErrors[`ingredients.${index}.quantity`])} onChange={(e) => updateRow(index, { quantity: e.target.value })} /></label>
         <label>Unit<select value={row.unit} disabled={busy} onChange={(e) => updateRow(index, { unit: e.target.value, quantity: e.target.value === TO_TASTE_UNIT ? '' : row.quantity })}>{RECIPE_UNITS.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></label>
         <label className="wc-author-check"><input type="checkbox" checked={row.optional} disabled={busy} onChange={(e) => updateRow(index, { optional: e.target.checked })} /> Optional</label>
         <label className="wc-author-note">Note<input value={row.note} maxLength={200} disabled={busy} onChange={(e) => updateRow(index, { note: e.target.value })} /></label>
@@ -57,7 +58,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }
 
   return <div className="wc-author-fields wc-author-details">
     <label>Difficulty<select value={form.difficulty} aria-invalid={Boolean(fieldErrors.difficulty)} onChange={(e) => change('difficulty', e.target.value)}><option value="">Not set</option>{RECIPE_DIFFICULTIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><FieldError message={fieldErrors.difficulty} />
-    <div className="wc-author-grid"><label>Prep time (minutes)<input type="number" min="0" value={form.prepTimeMinutes} aria-invalid={Boolean(fieldErrors.prepTimeMinutes)} onChange={(e) => change('prepTimeMinutes', e.target.value)} /></label><label>Cook time (minutes)<input type="number" min="0" value={form.cookTimeMinutes} aria-invalid={Boolean(fieldErrors.cookTimeMinutes)} onChange={(e) => change('cookTimeMinutes', e.target.value)} /></label><label>Servings<input type="number" min="1" value={form.servings} aria-invalid={Boolean(fieldErrors.servings)} onChange={(e) => change('servings', e.target.value)} /></label></div>
+    <div className="wc-author-grid"><label>Prep time (minutes)<input type="number" inputMode="numeric" min="1" max={MAX_PREP_TIME_MINUTES} step="1" value={form.prepTimeMinutes} aria-invalid={Boolean(fieldErrors.prepTimeMinutes)} onChange={(e) => change('prepTimeMinutes', e.target.value)} /></label><fieldset className="wc-author-duration"><legend>Cooking time</legend><div><label>Hours<input type="number" inputMode="numeric" min="0" max="24" step="1" value={form.cookTimeHours} aria-invalid={Boolean(fieldErrors.cookTimeMinutes)} onChange={(e) => change('cookTimeHours', e.target.value)} /></label><label>Minutes<input type="number" inputMode="numeric" min="0" max="59" step="1" value={form.cookTimeMinutePart} aria-invalid={Boolean(fieldErrors.cookTimeMinutes)} onChange={(e) => change('cookTimeMinutePart', e.target.value)} /></label></div></fieldset><label>Servings<input type="number" inputMode="numeric" min="1" max={MAX_SERVINGS} step="1" value={form.servings} aria-invalid={Boolean(fieldErrors.servings)} onChange={(e) => change('servings', e.target.value)} /></label></div>
     <FieldError message={fieldErrors.prepTimeMinutes || fieldErrors.cookTimeMinutes || fieldErrors.servings} />
     <div className="wc-author-grid"><label>Region<input value={form.region} aria-invalid={Boolean(fieldErrors.region)} placeholder="e.g. central-luzon" onChange={(e) => change('region', e.target.value)} /></label><label>Category<input value={form.category} aria-invalid={Boolean(fieldErrors.category)} placeholder="e.g. main-dish" onChange={(e) => change('category', e.target.value)} /></label></div><FieldError message={fieldErrors.region || fieldErrors.category} />
     <fieldset><legend>Dietary tags</legend><div className="wc-author-tags">{RECIPE_DIETARY_TAGS.map((tag) => <label className="wc-author-check" key={tag.value}><input type="checkbox" checked={form.dietaryTags.includes(tag.value)} onChange={(e) => change('dietaryTags', e.target.checked ? [...form.dietaryTags, tag.value] : form.dietaryTags.filter((value) => value !== tag.value))} /> {tag.label}</label>)}</div></fieldset><FieldError message={fieldErrors.dietaryTags} />
