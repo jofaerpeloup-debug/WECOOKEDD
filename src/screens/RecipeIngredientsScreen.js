@@ -23,7 +23,7 @@ export default function RecipeIngredientsScreen({ navigation, route }) {
         {ingredients.map((ing, i) => (
           <View key={i} style={styles.row}>
             <View style={styles.rowLeft}>
-              <Text style={styles.plus}>+</Text>
+              <Text style={styles.plus}>−</Text>
               <Text style={styles.name}>{ing.name}</Text>
             </View>
             {!!ing.qty && <Text style={styles.qty}>{ing.qty}</Text>}

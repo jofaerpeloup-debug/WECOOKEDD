@@ -20,9 +20,11 @@ import { metaLine, scaleQty } from '../utils/recipe';
 import { useAi } from '../context/AiContext';
 import { useProfile } from '../context/ProfileContext';
 import { askChef, recipesMentioned } from '../utils/aiChef';
+import { loadJSON, saveJSON } from '../utils/storage';
 
-// The chat is intentionally not persisted — every time you open Ask the Chef
-// it starts fresh with one of these openers.
+const CHAT_HISTORY_KEY = 'wecooked:assistantChats';
+
+// Used when starting a fresh conversation.
 const GREETINGS = [
   "Hi! I'm your kitchen assistant. What are you in the mood to cook?",
   "Hey there — hungry? Tell me what you're craving.",
@@ -227,6 +229,10 @@ export default function AssistantScreen({ navigation }) {
   const { hasKey, apiKey } = useAi();
   const { profile } = useProfile();
   const [messages, setMessages] = useState(() => [freshGreeting()]);
+  const [chats, setChats] = useState([]);
+  const [chatId, setChatId] = useState(() => `chat-${Date.now()}`);
+  const [showHistory, setShowHistory] = useState(false);
+  const readyRef = useRef(false);
   const [input, setInput] = useState('');
   const [kbVisible, setKbVisible] = useState(false);
   const [sending, setSending] = useState(false);
@@ -235,6 +241,30 @@ export default function AssistantScreen({ navigation }) {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    (async () => {
+      const stored = await loadJSON(CHAT_HISTORY_KEY, []);
+      if (Array.isArray(stored) && stored.length) {
+        setChats(stored);
+        setChatId(stored[0].id);
+        setMessages(Array.isArray(stored[0].messages) && stored[0].messages.length ? stored[0].messages : [freshGreeting()]);
+      }
+      readyRef.current = true;
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!readyRef.current) return;
+    const firstUserMessage = messages.find((m) => m.from === 'user');
+    if (!firstUserMessage) return;
+    const chat = { id: chatId, title: firstUserMessage.text, updatedAt: Date.now(), messages };
+    setChats((previous) => {
+      const next = [chat, ...previous.filter((item) => item.id !== chatId)].slice(0, 50);
+      saveJSON(CHAT_HISTORY_KEY, next);
+      return next;
+    });
+  }, [messages, chatId]);
 
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -250,7 +280,17 @@ export default function AssistantScreen({ navigation }) {
     };
   }, []);
 
-  const clearChat = () => setMessages([freshGreeting()]);
+  const clearChat = () => {
+    setChatId(`chat-${Date.now()}`);
+    setMessages([freshGreeting()]);
+    setShowHistory(false);
+  };
+
+  const openChat = (chat) => {
+    setChatId(chat.id);
+    setMessages(chat.messages);
+    setShowHistory(false);
+  };
 
   const scrollSoon = () => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
 
@@ -326,6 +366,9 @@ export default function AssistantScreen({ navigation }) {
           <MaterialCommunityIcons name="chef-hat" size={16} color={colors.sageDeep} />
         </View>
         <Text style={styles.headerTitle} accessibilityRole="header">Ask the Chef</Text>
+        <Pressable style={styles.iconBtn} hitSlop={8} onPress={() => setShowHistory((v) => !v)} accessibilityRole="button" accessibilityLabel="Chat history">
+          <Ionicons name="time-outline" size={16} color={colors.ink} />
+        </Pressable>
         {messages.length > 1 && (
           <Pressable
             hitSlop={8}
@@ -338,7 +381,27 @@ export default function AssistantScreen({ navigation }) {
         )}
       </View>
 
-      <ScrollView
+      {showHistory ? (
+        <ScrollView style={styles.scrollFlex} contentContainerStyle={styles.scroll}>
+          <View style={styles.historyHeader}>
+            <Text style={styles.historyTitle}>Chat history</Text>
+            <Pressable onPress={clearChat} style={styles.newChatBtn} accessibilityRole="button">
+              <Ionicons name="add" size={16} color={colors.onAccent} />
+              <Text style={styles.newChatText}>New chat</Text>
+            </Pressable>
+          </View>
+          {chats.length ? chats.map((chat) => (
+            <Pressable key={chat.id} style={styles.historyItem} onPress={() => openChat(chat)}>
+              <Ionicons name="chatbubble-ellipses-outline" size={17} color={colors.sageDeep} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.historyItemTitle} numberOfLines={1}>{chat.title}</Text>
+                <Text style={styles.historyItemMeta}>{new Date(chat.updatedAt).toLocaleString()}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={15} color={colors.inkFaint} />
+            </Pressable>
+          )) : <Text style={styles.historyEmpty}>Your conversations will appear here.</Text>}
+        </ScrollView>
+      ) : <ScrollView
         ref={scrollRef}
         style={styles.scrollFlex}
         contentContainerStyle={styles.scroll}
@@ -422,9 +485,9 @@ export default function AssistantScreen({ navigation }) {
             </View>
           </View>
         )}
-      </ScrollView>
+      </ScrollView>}
 
-      <View style={[styles.composer, { paddingBottom: kbVisible ? spacing.sm : Math.max(insets.bottom, spacing.md) }]}>
+      {!showHistory && <View style={[styles.composer, { paddingBottom: kbVisible ? spacing.sm : Math.max(insets.bottom, spacing.md) }]}>
         <TextInput
           style={styles.input}
           placeholder="Ask anything..."
@@ -444,7 +507,7 @@ export default function AssistantScreen({ navigation }) {
         >
           <Ionicons name="arrow-up" size={18} color={colors.onAccent} />
         </Pressable>
-      </View>
+      </View>}
     </KeyboardAvoidingView>
   );
 }
@@ -470,6 +533,14 @@ function makeStyles(colors) {
       justifyContent: 'center',
     },
     headerTitle: { flex: 1, fontFamily: typography.display.fontFamily, fontSize: 19, color: colors.ink },
+    historyHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
+    historyTitle: { fontFamily: typography.display.fontFamily, fontSize: 19, color: colors.ink },
+    newChatBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: colors.sageDeep },
+    newChatText: { fontFamily: typography.body.semibold, fontSize: 12, color: colors.onAccent },
+    historyItem: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.paper, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.hairline },
+    historyItemTitle: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
+    historyItemMeta: { fontFamily: typography.body.fontFamily, fontSize: 10.5, color: colors.inkFaint, marginTop: 3 },
+    historyEmpty: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkSoft, textAlign: 'center', marginTop: spacing.xl },
     scrollFlex: { flex: 1 },
     scroll: { padding: spacing.xl, paddingBottom: spacing.lg, gap: 14 },
     introIcon: {

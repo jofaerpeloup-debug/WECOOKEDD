@@ -11,6 +11,7 @@ import { useTabBarScroll, TAB_BAR_CLEARANCE } from '../components/TabBarContext'
 import { tapLight, tapMedium } from '../utils/haptics';
 import { recipes, chef } from '../data/mockData';
 import { useCommunity } from '../context/CommunityContext';
+import { useProfile } from '../context/ProfileContext';
 import { imageSource } from '../utils/image';
 import { timeAgo } from '../utils/time';
 import useFakeRefresh from '../hooks/useFakeRefresh';
@@ -24,6 +25,7 @@ const FEED_TABS = [
 
 export default function CommunityScreen({ navigation, route }) {
   const { colors, shadow } = useTheme();
+  const { profile } = useProfile();
   const styles = makeStyles(colors, shadow);
   // Rendered as the "Community" bottom tab (no back arrow); the `asTab`
   // guard mirrors the Swaps tab so a future pushed instance still works.
@@ -75,6 +77,7 @@ export default function CommunityScreen({ navigation, route }) {
       image: selectedRecipe?.image,
       recipeTag: selectedRecipe?.title,
       recipeId: selectedRecipe?.id,
+      author: { name: profile.name, avatar: profile.avatar },
     });
     setCaption('');
     setSelectedRecipeId(null);
@@ -125,7 +128,7 @@ export default function CommunityScreen({ navigation, route }) {
 
       <View style={styles.composeCard}>
         <View style={styles.composeHeader}>
-          <AppImage source={imageSource(chef.avatar)} style={styles.avatar} />
+          <AppImage source={imageSource(profile.avatar)} style={styles.avatar} />
           <TextInput
             style={styles.composeInput}
             placeholder="Share what you're cooking..."
@@ -183,7 +186,9 @@ export default function CommunityScreen({ navigation, route }) {
     const myComments = post.myComments || [];
     const commentCount = (post.comments || 0) + myComments.length;
     const commentsOpen = openComments === post.id;
-    const isMine = post.author.name === chef.name;
+    const isMine = post.author.isMe || post.author.name === profile.name || post.author.name === chef.name;
+    const authorName = post.author.isMe ? profile.name : post.author.name;
+    const authorAvatar = post.author.isMe ? profile.avatar : post.author.avatar;
     const following = isFollowing(post.author.name);
     const bookmarked = isBookmarked(post.id);
     const taggedRecipe = post.recipeId
@@ -194,9 +199,9 @@ export default function CommunityScreen({ navigation, route }) {
     return (
       <FadeInView style={styles.card} delay={Math.min(index, 6) * 45}>
         <View style={styles.postHeader}>
-          <AppImage source={imageSource(post.author.avatar)} style={styles.avatar} />
+          <AppImage source={imageSource(authorAvatar)} style={styles.avatar} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.authorName}>{post.author.name}</Text>
+            <Text style={styles.authorName}>{authorName}</Text>
             <Text style={styles.time}>{post.ts ? timeAgo(post.ts) : post.time}</Text>
           </View>
           {!isMine && (
@@ -207,7 +212,7 @@ export default function CommunityScreen({ navigation, route }) {
                 toggleFollow(post.author.name);
               }}
               accessibilityRole="button"
-              accessibilityLabel={following ? `Unfollow ${post.author.name}` : `Follow ${post.author.name}`}
+              accessibilityLabel={following ? `Unfollow ${authorName}` : `Follow ${authorName}`}
               accessibilityState={{ selected: following }}
             >
               <Text style={[styles.followBtnText, following && styles.followBtnTextOn]}>

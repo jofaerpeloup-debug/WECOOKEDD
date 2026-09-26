@@ -21,9 +21,10 @@ const genCommentId = () => `comment-${Date.now()}-${nextCommentId++}`;
 // posts (ids like 'c1'), which keep their static `time` string as-is.
 function backfillTimestamps(list) {
   return list.map((p) => {
-    if (p.ts) return p;
+    const isUserPost = /^post-\d+-/.test(String(p.id));
+    const author = isUserPost && !p.author?.isMe ? { ...p.author, isMe: true } : p.author;
     const m = /^post-(\d+)-/.exec(p.id);
-    return m ? { ...p, ts: Number(m[1]) } : p;
+    return { ...p, ...(author ? { author } : {}), ...(!p.ts && m ? { ts: Number(m[1]) } : {}) };
   });
 }
 
@@ -68,10 +69,10 @@ export function CommunityProvider({ children }) {
     saveJSON(BOOKMARKS_KEY, Array.from(bookmarkedIds));
   }, [bookmarkedIds]);
 
-  const addPost = ({ caption, image, recipeTag, recipeId }) => {
+  const addPost = ({ caption, image, recipeTag, recipeId, author }) => {
     const post = {
       id: genId(),
-      author: { name: chef.name, avatar: chef.avatar },
+      author: { name: author?.name || chef.name, avatar: author?.avatar || chef.avatar, isMe: true },
       // A real timestamp, not a frozen "Just now" string — CommunityScreen
       // derives the displayed label from this with timeAgo() so it actually
       // counts up as time passes, instead of staying stuck at "Just now"

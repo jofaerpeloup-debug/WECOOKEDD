@@ -223,7 +223,7 @@ export default function RecipeDetailScreen({ navigation, route }) {
             {scaledIngredients.map((ing, i) => (
               <View key={i} style={styles.ingRow}>
                 <View style={styles.ingLeft}>
-                  <Text style={styles.plus}>+</Text>
+                  <Text style={styles.plus}>−</Text>
                   <Text style={styles.ingName}>{ing.name}</Text>
                 </View>
                 <Text style={styles.ingQty}>{ing.qty}</Text>
