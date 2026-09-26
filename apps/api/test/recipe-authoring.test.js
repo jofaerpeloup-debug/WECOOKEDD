@@ -8,8 +8,11 @@ const ingredientService = require('../src/modules/ingredients/ingredient.service
 const recipeService = require('../src/modules/recipes/recipe.service');
 const {
   createDraftSchema,
+  createRecipeSchema,
   updateRecipeSchema,
   publishRecipeSchema,
+  publishedRecipeBodySchema,
+  legacyPublishedRecipeBodySchema,
 } = require('../src/modules/recipes/recipe.validation');
 const { toPublicRecipe, toStaffRecipe } = require('../src/modules/recipes/recipe.serializer');
 const Recipe = require('../src/modules/recipes/recipe.model');
@@ -40,6 +43,11 @@ function fullRecipe(overrides = {}) {
   };
 }
 
+function publishedBody(overrides = {}) {
+  const { _id, isActive, publicationStatus, updatedAt, ...body } = fullRecipe(overrides);
+  return body;
+}
+
 function populated(recipe) {
   return {
     ...recipe,
@@ -60,6 +68,110 @@ test('Draft validation accepts title-only and empty sections but rejects malform
     false
   );
   assert.equal(createDraftSchema.safeParse({ body: { title: 'Draft', instructions: [' '] } }).success, false);
+});
+
+test('new-write title validation normalizes whitespace and enforces Unicode-aware product rules', () => {
+  const parseTitle = (title) => createDraftSchema.safeParse({ body: { title } });
+  for (const title of ['A', '1', '12', '@@@', '!!', '   ']) {
+    assert.equal(parseTitle(title).success, false, title);
+  }
+  for (const title of ['Ab', 'Chicken Adobo', '7-Minute Egg', 'Fish & Chips', 'Crème brûlée', 'Paksiw #2']) {
+    assert.equal(parseTitle(title).success, true, title);
+  }
+  const normalized = parseTitle('  Crème   brûlée  ');
+  assert.equal(normalized.success, true);
+  assert.equal(normalized.data.body.title, 'Crème brûlée');
+  assert.equal(parseTitle(`Ab${'x'.repeat(148)}`).success, true);
+  assert.equal(parseTitle(`Ab${'x'.repeat(149)}`).success, false);
+  assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { title: '7' } }).success, false);
+});
+
+test('new-write instruction validation is Unicode-aware for instructions and structured steps', () => {
+  const draftInstructions = (instructions) => createDraftSchema.safeParse({ body: { title: 'Ab', instructions } });
+  const draftSteps = (steps) => createDraftSchema.safeParse({ body: { title: 'Ab', steps } });
+  assert.equal(draftInstructions([]).success, true);
+  for (const text of ['A', '12', '@@', '   ', '@@@']) {
+    assert.equal(draftInstructions([text]).success, false, text);
+    assert.equal(draftSteps([{ order: 1, text }]).success, false, `step: ${text}`);
+  }
+  for (const text of ['Mix', 'Añade', 'Add 2 cups of water.', 'Bake at 180°C.']) {
+    assert.equal(draftInstructions([text]).success, true, text);
+    assert.equal(draftSteps([{ order: 1, text }]).success, true, `step: ${text}`);
+  }
+  assert.equal(draftInstructions(['A'.repeat(1000)]).success, true);
+  assert.equal(draftInstructions(['A'.repeat(1001)]).success, false);
+
+  const complete = publishedBody();
+  assert.equal(publishedRecipeBodySchema.safeParse({ ...complete, instructions: [] }).success, false);
+  assert.equal(publishedRecipeBodySchema.safeParse({ ...complete, instructions: ['Mix'] }).success, true);
+});
+
+test('new-write prep and cook time boundaries enforce optional prep and 3-minute cooking minimum', () => {
+  const params = { recipeId: RECIPE_ID };
+  for (const value of [0, -1, 1.5, 101]) {
+    assert.equal(updateRecipeSchema.safeParse({ params, body: { servings: value } }).success, false, `servings ${value}`);
+  }
+  for (const value of [1, 100]) {
+    assert.equal(updateRecipeSchema.safeParse({ params, body: { servings: value } }).success, true, `servings ${value}`);
+  }
+  assert.equal(createDraftSchema.safeParse({ body: { title: 'Draft' } }).success, true);
+  for (const value of [0, -1, 1.5, 1441, '1']) assert.equal(updateRecipeSchema.safeParse({ params, body: { prepTimeMinutes: value } }).success, false, `prep ${value}`);
+  for (const value of [1, 1440]) assert.equal(updateRecipeSchema.safeParse({ params, body: { prepTimeMinutes: value } }).success, true, `prep ${value}`);
+  for (const value of [0, 1, 2, -1, 1.5, 1441, '3']) assert.equal(updateRecipeSchema.safeParse({ params, body: { cookTimeMinutes: value } }).success, false, `cook ${value}`);
+  for (const value of [3, 60, 90, 1440]) assert.equal(updateRecipeSchema.safeParse({ params, body: { cookTimeMinutes: value } }).success, true, `cook ${value}`);
+
+  const withoutPrep = publishedBody({ prepTimeMinutes: undefined });
+  assert.equal(publishedRecipeBodySchema.safeParse(withoutPrep).success, true);
+  assert.equal(publishedRecipeBodySchema.safeParse({ ...withoutPrep, cookTimeMinutes: undefined }).success, false);
+  assert.equal(publishedRecipeBodySchema.safeParse({ ...withoutPrep, cookTimeMinutes: 2 }).success, false);
+  assert.equal(publishedRecipeBodySchema.safeParse({ ...withoutPrep, cookTimeMinutes: 3 }).success, true);
+
+  const ingredientBody = (quantity, unit = 'g') => ({
+    title: 'Ab',
+    ingredients: [{ ingredientId: INGREDIENT_ID, quantity, unit }],
+  });
+  for (const quantity of [0, -1]) {
+    assert.equal(createDraftSchema.safeParse({ body: ingredientBody(quantity) }).success, false, `quantity ${quantity}`);
+  }
+  assert.equal(createDraftSchema.safeParse({ body: ingredientBody(0.25) }).success, true);
+  assert.equal(createDraftSchema.safeParse({ body: ingredientBody(undefined, 'toTaste') }).success, true);
+  assert.equal(createDraftSchema.safeParse({ body: ingredientBody(1, 'toTaste') }).success, false);
+});
+
+test('legacy completeness accepts stored zero times and optional prep for consumer visibility', async (t) => {
+  const legacy = publishedBody({ prepTimeMinutes: 0, cookTimeMinutes: 0 });
+  assert.equal(legacyPublishedRecipeBodySchema.safeParse(legacy).success, true);
+  assert.equal(publishedRecipeBodySchema.safeParse(legacy).success, false);
+
+  let current = populated(fullRecipe({ prepTimeMinutes: 0, cookTimeMinutes: 0 }));
+  delete current.publicationStatus;
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => current);
+  assert.ok(await recipeService.findUsableRecipeById(RECIPE_ID));
+
+  current = populated(fullRecipe({ prepTimeMinutes: undefined, cookTimeMinutes: 3, publicationStatus: 'published' }));
+  assert.ok(await recipeService.findUsableRecipeById(RECIPE_ID));
+});
+
+test('ingredient API remains numeric and preserves decimals and toTaste semantics', () => {
+  const ingredientBody = (quantity, unit = 'g') => ({
+    title: 'Ab',
+    ingredients: [{ ingredientId: INGREDIENT_ID, quantity, unit }],
+  });
+  for (const quantity of [0, -1]) {
+    assert.equal(createDraftSchema.safeParse({ body: ingredientBody(quantity) }).success, false, `quantity ${quantity}`);
+  }
+  assert.equal(createDraftSchema.safeParse({ body: ingredientBody(0.25) }).success, true);
+  assert.equal(createDraftSchema.safeParse({ body: ingredientBody(undefined, 'toTaste') }).success, true);
+  assert.equal(createDraftSchema.safeParse({ body: ingredientBody(1, 'toTaste') }).success, false);
+});
+
+test('legacy completeness remains permissive while every new complete-recipe write uses the new rules', () => {
+  const legacy = publishedBody({ title: 'A', instructions: ['Go'] });
+  assert.equal(legacyPublishedRecipeBodySchema.safeParse(legacy).success, true);
+  assert.equal(publishedRecipeBodySchema.safeParse(legacy).success, false);
+  assert.equal(createRecipeSchema.safeParse({
+    body: { ...legacy, confirmFilipinoCuisine: true },
+  }).success, false);
 });
 
 test('Recipe model declares independent publication metadata without a legacy-changing default and additive indexes', () => {
@@ -146,6 +258,37 @@ test('consumer eligibility hides Drafts while preserving otherwise-usable legacy
   current = { ...draft };
   delete current.publicationStatus;
   assert.ok(await recipeService.findUsableRecipeById(RECIPE_ID));
+
+  current = populated(fullRecipe({ title: 'A', instructions: ['Go'] }));
+  delete current.publicationStatus;
+  assert.ok(await recipeService.findUsableRecipeById(RECIPE_ID));
+});
+
+test('service normalization enforces new title and instruction rules even without request middleware', async (t) => {
+  let existing = fullRecipe({ ingredients: [], instructions: [] });
+  let update;
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(recipeRepository, 'updateById', async (id, operations) => {
+    update = operations;
+    return { ...existing, ...operations.$set };
+  });
+  await assert.rejects(() => recipeService.createDraft({ title: '1' }, { actorId: MODERATOR_ID }), { code: 'RECIPE_INCOMPLETE' });
+  await assert.rejects(
+    () => recipeService.updateRecipe(RECIPE_ID, { instructions: ['12'] }, { actorId: MODERATOR_ID }),
+    { code: 'RECIPE_INCOMPLETE' }
+  );
+  await assert.rejects(
+    () => recipeService.updateRecipe(RECIPE_ID, { prepTimeMinutes: 0 }, { actorId: MODERATOR_ID }),
+    { code: 'RECIPE_INCOMPLETE' }
+  );
+  await assert.rejects(
+    () => recipeService.updateRecipe(RECIPE_ID, { cookTimeMinutes: 2 }, { actorId: MODERATOR_ID }),
+    { code: 'RECIPE_INCOMPLETE' }
+  );
+
+  existing = fullRecipe({ title: 'A', instructions: ['Go'], publicationStatus: 'published' });
+  await recipeService.updateRecipe(RECIPE_ID, { description: 'Legacy recipe repair.' }, { actorId: MODERATOR_ID });
+  assert.equal(update.$set.description, 'Legacy recipe repair.');
 });
 
 test('consumer list/detail/usability fail closed for incomplete legacy and explicit Published records', async (t) => {
@@ -263,6 +406,15 @@ test('publish rejects an incomplete Draft and optimistic PATCH returns controlle
   );
 });
 
+test('publish applies new title and instruction rules to otherwise complete Drafts', async (t) => {
+  let existing = fullRecipe({ title: 'A' });
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  await assert.rejects(() => recipeService.publishRecipe(RECIPE_ID, {}, { actorId: MODERATOR_ID }), { code: 'RECIPE_INCOMPLETE' });
+
+  existing = fullRecipe({ instructions: ['Go'] });
+  await assert.rejects(() => recipeService.publishRecipe(RECIPE_ID, {}, { actorId: MODERATOR_ID }), { code: 'RECIPE_INCOMPLETE' });
+});
+
 test('Draft partial edits may remain incomplete; Published edits may not empty required arrays', async (t) => {
   let existing = fullRecipe({ ingredients: [], instructions: [] });
   t.mock.method(recipeRepository, 'findRawById', async () => existing);
@@ -298,12 +450,15 @@ test('Draft null clears become whitelisted $unset operations and retain the conc
   assert.equal(mutation.options.expectedUpdatedAt, UPDATED_AT.toISOString());
 });
 
-test('Published and effective legacy-Published recipes reject required scalar null clears', async (t) => {
+test('Published recipes allow optional prep clears but reject required scalar clears', async (t) => {
   let existing = fullRecipe({ publicationStatus: 'published' });
   let updates = 0;
   t.mock.method(recipeRepository, 'findRawById', async () => existing);
   t.mock.method(recipeRepository, 'updateById', async () => { updates += 1; return existing; });
 
+  await assert.doesNotReject(
+    () => recipeService.updateRecipe(RECIPE_ID, { prepTimeMinutes: null }, { actorId: MODERATOR_ID })
+  );
   await assert.rejects(
     () => recipeService.updateRecipe(RECIPE_ID, { description: null }, { actorId: MODERATOR_ID }),
     { code: 'RECIPE_INCOMPLETE' }
@@ -311,11 +466,14 @@ test('Published and effective legacy-Published recipes reject required scalar nu
 
   existing = fullRecipe();
   delete existing.publicationStatus;
+  await assert.doesNotReject(
+    () => recipeService.updateRecipe(RECIPE_ID, { prepTimeMinutes: null }, { actorId: MODERATOR_ID })
+  );
   await assert.rejects(
     () => recipeService.updateRecipe(RECIPE_ID, { servings: null }, { actorId: MODERATOR_ID }),
     { code: 'RECIPE_INCOMPLETE' }
   );
-  assert.equal(updates, 0);
+  assert.equal(updates, 2);
 });
 
 test('archive preserves publication state and Draft restore does not require publish completeness', async (t) => {

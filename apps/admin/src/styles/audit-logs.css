@@ -1,0 +1,333 @@
+.wc-admin .wc-audit {
+  width: 100%;
+  min-width: 0;
+  max-width: 1180px;
+  margin: 0 auto;
+  color: var(--text-primary);
+}
+
+.wc-admin .wc-audit-header {
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-width-strong) solid var(--border-strong);
+}
+
+.wc-admin .wc-audit-eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.wc-admin .wc-audit-header h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.7rem, 2.4vw, 2.1rem);
+  line-height: 1.1;
+}
+
+.wc-admin .wc-audit-header p:last-child {
+  max-width: 68ch;
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.wc-admin .wc-audit-filters,
+.wc-admin .wc-audit-results {
+  min-width: 0;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.wc-admin .wc-audit-filters {
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+}
+
+.wc-admin .wc-audit-filter-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.wc-admin .wc-audit-filter-grid label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wc-admin .wc-audit-filter-grid label > span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.wc-admin .wc-audit-filter-grid input,
+.wc-admin .wc-audit-filter-grid select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--control-height-md);
+  padding: 8px 10px;
+  color: var(--text-primary);
+  border: var(--border-width) solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-background);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.wc-admin .wc-audit-filter-error {
+  margin: var(--space-3) 0 0;
+  color: var(--destructive);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.wc-admin .wc-audit-filter-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.wc-admin .wc-audit-primary,
+.wc-admin .wc-audit-secondary,
+.wc-admin .wc-audit-pagination button,
+.wc-admin .wc-audit-state button {
+  display: inline-flex;
+  min-height: var(--control-height-md);
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border: var(--border-width) solid var(--primary);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wc-admin .wc-audit-primary,
+.wc-admin .wc-audit-state button {
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.wc-admin .wc-audit-secondary,
+.wc-admin .wc-audit-pagination button {
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+}
+
+.wc-admin .wc-audit-results {
+  min-height: 180px;
+  overflow: hidden;
+}
+
+.wc-admin .wc-audit-state {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.wc-admin .wc-audit-state strong {
+  color: var(--text-primary);
+}
+
+.wc-admin .wc-audit-state-forbidden svg,
+.wc-admin .wc-audit-state-unauthorized svg,
+.wc-admin .wc-audit-state-error svg {
+  color: var(--destructive);
+}
+
+.wc-admin .wc-audit-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.wc-admin .wc-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.79rem;
+}
+
+.wc-admin .wc-audit-table caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.wc-admin .wc-audit-table th,
+.wc-admin .wc-audit-table td {
+  padding: 12px 13px;
+  border-bottom: var(--border-width) solid var(--border);
+  vertical-align: top;
+  text-align: left;
+}
+
+.wc-admin .wc-audit-table th {
+  color: var(--text-secondary);
+  background: var(--background-subtle);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.wc-admin .wc-audit-table td strong,
+.wc-admin .wc-audit-table td code,
+.wc-admin .wc-audit-table td > span {
+  display: block;
+}
+
+.wc-admin .wc-audit-table code,
+.wc-admin .wc-audit-id {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.wc-admin .wc-audit-detail {
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.wc-admin .wc-audit-outcome {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  font-weight: 800;
+}
+
+.wc-admin .wc-audit-outcome-success {
+  color: var(--success);
+}
+
+.wc-admin .wc-audit-outcome-partial_failure {
+  color: var(--warning);
+}
+
+.wc-admin .wc-audit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--background-subtle);
+}
+
+.wc-admin .wc-audit-pagination p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.wc-admin .wc-audit-pagination > div {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.wc-admin .wc-audit-pagination button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wc-admin .wc-audit-primary:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+@media (max-width: 980px) {
+  .wc-admin .wc-audit-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .wc-admin .wc-audit-table-wrap {
+    padding: var(--space-3);
+    overflow: visible;
+  }
+
+  .wc-admin .wc-audit-table,
+  .wc-admin .wc-audit-table tbody,
+  .wc-admin .wc-audit-table tr,
+  .wc-admin .wc-audit-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .wc-admin .wc-audit-table thead {
+    display: none;
+  }
+
+  .wc-admin .wc-audit-table tr {
+    margin-bottom: var(--space-3);
+    overflow: hidden;
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-elevated);
+  }
+
+  .wc-admin .wc-audit-table tr:last-child {
+    margin-bottom: 0;
+  }
+
+  .wc-admin .wc-audit-table td {
+    display: grid;
+    grid-template-columns: minmax(92px, 28%) minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: 10px 12px;
+  }
+
+  .wc-admin .wc-audit-table td::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+}
+
+@media (max-width: 520px) {
+  .wc-admin .wc-audit-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wc-admin .wc-audit-filter-actions,
+  .wc-admin .wc-audit-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wc-admin .wc-audit-filter-actions button,
+  .wc-admin .wc-audit-pagination > div,
+  .wc-admin .wc-audit-pagination button {
+    width: 100%;
+  }
+
+  .wc-admin .wc-audit-table td {
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
+}

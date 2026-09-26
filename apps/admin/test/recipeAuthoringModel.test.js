@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildStepPatch, createDraftBody, emptyRecipeForm, firstIncompleteStep, formFromRecipe,
-  mutationBody, normalizeIngredients, normalizeInstructions, publicationReadiness,
-  publishBody, statusLabel, stepForField, validateStep,
+  combineDuration, formatDuration, mutationBody, normalizeIngredients, normalizeInstructions,
+  parseIngredientQuantity, publicationReadiness, publishBody, splitDuration, statusLabel,
+  stepForField, validateStep,
 } from '../src/recipeAuthoring/recipeAuthoringModel.js';
 
 test('normalization omits blank placeholders and preserves complete rows in order', () => {
@@ -22,13 +23,100 @@ test('Draft step validation allows empty sections but blocks partial ingredient 
   assert.match(validateStep(form, 'ingredients')['ingredients.0.ingredient'], /Choose/);
 });
 
+test('title validation uses normalized Unicode-aware rules and exact boundaries', () => {
+  const form = emptyRecipeForm();
+  const titleError = (title) => { form.title = title; return validateStep(form, 'basics').title; };
+  for (const title of ['A', '1', '12', '@@@', '!!', '   ']) assert.ok(titleError(title), title);
+  for (const title of ['Ab', 'Chicken Adobo', '7-Minute Egg', 'Fish & Chips', 'Crème brûlée', 'Paksiw #2']) {
+    assert.equal(titleError(title), undefined, title);
+  }
+  assert.equal(titleError(`Ab${'x'.repeat(148)}`), undefined);
+  assert.match(titleError(`Ab${'x'.repeat(149)}`), /150/);
+  form.title = '  Crème   brûlée  ';
+  assert.deepEqual(createDraftBody(form), { title: 'Crème brûlée' });
+});
+
+test('instruction validation preserves displayed row indexes and enforces meaningful text', () => {
+  const form = emptyRecipeForm();
+  form.instructions = ['', 'A', '12', '@@@', 'Mix', 'Añade', 'Add 2 cups of water.', 'Bake at 180°C.'];
+  const errors = validateStep(form, 'instructions');
+  assert.match(errors['instructions.1'], /at least 3/);
+  assert.match(errors['instructions.2'], /at least 3/);
+  assert.match(errors['instructions.3'], /contain text/);
+  for (const index of [4, 5, 6, 7]) assert.equal(errors[`instructions.${index}`], undefined);
+
+  form.instructions = ['', 'A'.repeat(1000)];
+  assert.deepEqual(validateStep(form, 'instructions'), {});
+  form.instructions = ['', 'A'.repeat(1001)];
+  assert.match(validateStep(form, 'instructions')['instructions.1'], /1000/);
+});
+
+test('ingredient quantities parse positive integers, decimals, fractions, and mixed fractions into numbers', () => {
+  for (const [input, expected] of [['1/2', 0.5], ['1/4', 0.25], ['3/4', 0.75], ['1 1/2', 1.5], ['2 1/4', 2.25], ['0.5', 0.5], ['2', 2]]) {
+    assert.equal(parseIngredientQuantity(input), expected, input);
+  }
+  for (const input of ['', '0', '-1', '1/0', '1//2', '/', 'word', 'Infinity', '1.5.2']) {
+    assert.equal(parseIngredientQuantity(input), null, input);
+  }
+
+  const form = emptyRecipeForm();
+  const validIngredient = { ingredient: { id: 'i1', name: 'Garlic' }, quantity: '1 1/2', unit: 'g', optional: false, note: '' };
+  form.ingredients = [form.ingredients[0], { ...validIngredient, quantity: '0' }];
+  assert.equal(validateStep(form, 'ingredients')['ingredients.0.quantity'], undefined);
+  assert.match(validateStep(form, 'ingredients')['ingredients.1.quantity'], /positive/);
+  form.ingredients = [{ ...validIngredient }];
+  assert.deepEqual(validateStep(form, 'ingredients'), {});
+  assert.equal(normalizeIngredients(form.ingredients)[0].quantity, 1.5);
+  form.ingredients = [{ ...validIngredient, quantity: '', unit: 'toTaste' }];
+  assert.deepEqual(validateStep(form, 'ingredients'), {});
+  assert.equal('quantity' in normalizeIngredients(form.ingredients)[0], false);
+});
+
+test('prep time is optional but supplied values must be whole minutes from 1 to 1440', () => {
+  const form = emptyRecipeForm();
+  const errorFor = (field, value) => { form[field] = value; return validateStep(form, 'details')[field]; };
+  for (const value of ['0', '-1', '1.5', '101']) assert.ok(errorFor('servings', value), value);
+  for (const value of ['1', '100']) assert.equal(errorFor('servings', value), undefined, value);
+  for (const value of ['0', '-1', '1.5', '1441', 'abc']) assert.ok(errorFor('prepTimeMinutes', value), value);
+  for (const value of ['', '1', '1440']) assert.equal(errorFor('prepTimeMinutes', value), undefined, value);
+  assert.equal(validateStep(form, 'details', { published: true }).prepTimeMinutes, undefined);
+});
+
+test('cooking time uses hours and minutes, enforces total boundaries, and hydrates totals', () => {
+  assert.equal(combineDuration('1', '30'), 90);
+  assert.equal(combineDuration('0', '3'), 3);
+  assert.equal(combineDuration('24', '0'), 1440);
+  assert.equal(combineDuration('24', '1'), 1441);
+  for (const pair of [['-1', '0'], ['1.5', '0'], ['1e1', '0'], ['1', '60'], ['1', '-1'], ['x', '3']]) assert.equal(combineDuration(...pair), null);
+  assert.deepEqual(splitDuration(90), { hours: '1', minutes: '30' });
+  assert.deepEqual(splitDuration(60), { hours: '1', minutes: '0' });
+
+  const form = emptyRecipeForm();
+  assert.equal(validateStep(form, 'details').cookTimeMinutes, undefined);
+  assert.match(validateStep(form, 'details', { published: true }).cookTimeMinutes, /required/);
+  for (const [hours, minutes] of [['0', '0'], ['0', '1'], ['0', '2'], ['24', '1'], ['1', '60']]) {
+    form.cookTimeHours = hours; form.cookTimeMinutePart = minutes;
+    assert.ok(validateStep(form, 'details').cookTimeMinutes, `${hours}h ${minutes}m`);
+  }
+  for (const [hours, minutes] of [['0', '3'], ['1', '0'], ['1', '30'], ['24', '0']]) {
+    form.cookTimeHours = hours; form.cookTimeMinutePart = minutes;
+    assert.equal(validateStep(form, 'details').cookTimeMinutes, undefined, `${hours}h ${minutes}m`);
+  }
+  const hydrated = formFromRecipe({ title: 'Adobo', cookTimeMinutes: 90 });
+  assert.equal(hydrated.cookTimeHours, '1');
+  assert.equal(hydrated.cookTimeMinutePart, '30');
+  assert.equal(formatDuration(90), '1 hr 30 min');
+  assert.equal(formatDuration(60), '1 hr');
+  assert.equal(formatDuration(45), '45 min');
+});
+
 test('Published validation and readiness require all publication fields', () => {
   const form = emptyRecipeForm();
   form.title = 'Adobo';
   let readiness = publicationReadiness(form);
   assert.equal(readiness.complete, false);
   assert.equal(firstIncompleteStep(form), 'basics');
-  form.description = 'A Filipino classic.'; form.difficulty = 'easy'; form.prepTimeMinutes = '10'; form.cookTimeMinutes = '30'; form.servings = '4';
+  form.description = 'A Filipino classic.'; form.difficulty = 'easy'; form.cookTimeHours = '0'; form.cookTimeMinutePart = '30'; form.servings = '4';
   form.ingredients = [{ ingredient: { id: 'i1', name: 'Chicken' }, quantity: '1', unit: 'kg', optional: false, note: '' }];
   form.instructions = ['Simmer until tender.'];
   readiness = publicationReadiness(form);

@@ -4,12 +4,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
-import Input from '../components/Input';
+import Input, { PasswordRequirements } from '../components/Input';
 import Button from '../components/Button';
 import { useAuth } from '../context/AuthContext';
 import * as authService from '../api/authService';
 import { isAvailable as isGoogleAvailable } from '../auth/googleAuthFlow';
-import { getAuthErrorMessage } from '../api/errorMessages';
+import {
+  getAuthErrorMessage,
+  getAuthFieldErrors,
+  getLegacyPasswordValidationError,
+  getNewPasswordValidationError,
+} from '../api/errorMessages';
 
 export default function SecurityScreen({ navigation }) {
   const { colors } = useTheme();
@@ -30,6 +35,7 @@ export default function SecurityScreen({ navigation }) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pwError, setPwError] = useState(null);
+  const [pwFieldErrors, setPwFieldErrors] = useState({});
   const [pwSaving, setPwSaving] = useState(false);
   const pwSavingRef = useRef(false);
 
@@ -37,18 +43,16 @@ export default function SecurityScreen({ navigation }) {
     if (pwSavingRef.current) return;
     setPwError(null);
 
-    if (!currentPassword || !newPassword) {
-      setPwError('Enter your current and new password.');
+    const nextFieldErrors = {
+      currentPassword: getLegacyPasswordValidationError(currentPassword, 'Current password'),
+      newPassword: getNewPasswordValidationError(newPassword),
+      confirmPassword: newPassword === confirmPassword ? null : 'Passwords do not match.',
+    };
+    if (Object.values(nextFieldErrors).some(Boolean)) {
+      setPwFieldErrors(nextFieldErrors);
       return;
     }
-    if (newPassword.length < 8) {
-      setPwError('New password must be at least 8 characters.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPwError("New passwords don't match.");
-      return;
-    }
+    setPwFieldErrors({});
 
     pwSavingRef.current = true;
     setPwSaving(true);
@@ -60,7 +64,11 @@ export default function SecurityScreen({ navigation }) {
         [{ text: 'OK', onPress: () => signOut() }]
       );
     } catch (err) {
-      if (mountedRef.current) setPwError(getAuthErrorMessage(err));
+      if (mountedRef.current) {
+        const apiFieldErrors = getAuthFieldErrors(err, ['currentPassword', 'newPassword']);
+        setPwFieldErrors(apiFieldErrors);
+        if (Object.keys(apiFieldErrors).length === 0) setPwError(getAuthErrorMessage(err));
+      }
     } finally {
       pwSavingRef.current = false;
       if (mountedRef.current) setPwSaving(false);
@@ -147,30 +155,61 @@ export default function SecurityScreen({ navigation }) {
         <Text style={styles.groupTitle}>CHANGE PASSWORD</Text>
         <Input
           label="Current Password"
+          required
           icon="lock-closed-outline"
           value={currentPassword}
-          onChangeText={setCurrentPassword}
+          onChangeText={(value) => {
+            setCurrentPassword(value);
+            setPwFieldErrors((current) => ({ ...current, currentPassword: null }));
+          }}
           secureTextEntry
           placeholder="Enter current password"
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          autoComplete="current-password"
+          textContentType="password"
           editable={!pwSaving}
+          error={pwFieldErrors.currentPassword}
         />
         <Input
           label="New Password"
+          required
           icon="lock-closed-outline"
           value={newPassword}
-          onChangeText={setNewPassword}
+          onChangeText={(value) => {
+            setNewPassword(value);
+            setPwFieldErrors((current) => ({ ...current, newPassword: null }));
+          }}
           secureTextEntry
           placeholder="At least 8 characters"
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          autoComplete="new-password"
+          textContentType="newPassword"
           editable={!pwSaving}
+          error={pwFieldErrors.newPassword}
         />
+        <PasswordRequirements value={newPassword} />
         <Input
           label="Confirm New Password"
+          required
           icon="lock-closed-outline"
           value={confirmPassword}
-          onChangeText={setConfirmPassword}
+          onChangeText={(value) => {
+            setConfirmPassword(value);
+            setPwFieldErrors((current) => ({ ...current, confirmPassword: null }));
+          }}
           secureTextEntry
           placeholder="Re-enter new password"
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          autoComplete="new-password"
+          textContentType="newPassword"
           editable={!pwSaving}
+          error={pwFieldErrors.confirmPassword}
         />
         {pwError ? <Text style={styles.fieldError}>{pwError}</Text> : null}
 

@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createGoogleProvider } = require('../src/modules/auth/providers/google.provider');
+const User = require('../src/modules/users/user.model');
+const { EMAIL_MAX_CHARS } = require('@wecooked/contracts');
 
 const VALID_NONCE = Buffer.alloc(32, 3).toString('base64url');
 const VALID_PAYLOAD = {
@@ -15,6 +17,14 @@ const VALID_PAYLOAD = {
   email_verified: true,
   name: '  Ada\u0000   Lovelace  ',
 };
+
+function emailWithLength(length) {
+  const email = `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(
+    length - 197
+  )}.com`;
+  assert.equal(email.length, length);
+  return email;
+}
 
 function buildProvider({ payload = VALID_PAYLOAD, verifyError } = {}) {
   const captured = {};
@@ -138,6 +148,45 @@ test('email verification requires literal true and a usable email without invali
     assert.equal(identity.email, null);
     assert.equal(identity.emailVerified, false);
   }
+});
+
+test('Google provider accepts and normalizes a valid email at the 254-character maximum', async () => {
+  assert.equal(EMAIL_MAX_CHARS, 254);
+  const email254 = emailWithLength(254);
+  const { provider } = buildProvider({
+    payload: { ...VALID_PAYLOAD, email: `  ${email254.toUpperCase()}  ` },
+  });
+
+  const identity = await provider.verifyGoogleIdToken({ idToken: 'token' });
+
+  assert.equal(identity.email, email254);
+  assert.equal(identity.email.length, 254);
+  assert.equal(identity.emailVerified, true);
+});
+
+test('Google provider rejects a valid 255-character email before social provisioning', async () => {
+  const email255 = emailWithLength(EMAIL_MAX_CHARS + 1);
+  assert.equal(email255.length, 255);
+  const { provider } = buildProvider({ payload: { ...VALID_PAYLOAD, email: email255 } });
+
+  const identity = await provider.verifyGoogleIdToken({ idToken: 'token' });
+
+  assert.equal(identity.email, null);
+  assert.equal(identity.emailVerified, false);
+});
+
+test('Google-provider email acceptance matches the User model 254-character contract', async () => {
+  const modelMaximum = User.schema.path('email').options.maxlength;
+  assert.equal(modelMaximum, 254);
+  assert.equal(modelMaximum, EMAIL_MAX_CHARS);
+
+  const email254 = emailWithLength(254);
+  const { provider } = buildProvider({ payload: { ...VALID_PAYLOAD, email: email254 } });
+  const identity = await provider.verifyGoogleIdToken({ idToken: 'token' });
+  const user = new User({ name: 'Ada', email: identity.email, passwordHash: 'hash' });
+
+  await assert.doesNotReject(() => user.validate());
+  assert.ok(identity.email.length <= modelMaximum);
 });
 
 test('suggested names are capped and fall back when sanitization leaves no name', async () => {

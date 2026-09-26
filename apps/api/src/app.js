@@ -10,6 +10,19 @@ const { createRateLimiter } = require('./middleware/rate-limiter');
 const { notFoundMiddleware } = require('./middleware/not-found.middleware');
 const { errorMiddleware } = require('./middleware/error.middleware');
 
+// Render can route a request through more than one edge/load-balancer hop and
+// guarantees that the first X-Forwarded-For entry is the real client address.
+// Trust that complete chain only in production, where the service is reachable
+// through Render's ingress. Local and test traffic continues to ignore client-
+// supplied forwarding headers.
+function trustRenderProxyChain() {
+  return true;
+}
+
+function configureProxyTrust(app, nodeEnv) {
+  app.set('trust proxy', nodeEnv === 'production' ? trustRenderProxyChain : false);
+}
+
 /**
  * Builds and configures the Express application. Does not call
  * app.listen() and does not connect to MongoDB — safe to import and
@@ -18,6 +31,8 @@ const { errorMiddleware } = require('./middleware/error.middleware');
 function createApp() {
   const env = loadEnv();
   const app = express();
+
+  configureProxyTrust(app, env.nodeEnv);
 
   // Security headers first.
   app.use(helmet());
@@ -65,4 +80,4 @@ function createApp() {
   return app;
 }
 
-module.exports = { createApp };
+module.exports = { createApp, configureProxyTrust };

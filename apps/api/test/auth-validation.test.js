@@ -13,10 +13,30 @@ const {
   socialChallengeSchema,
   googleSocialSchema,
 } = require('../src/modules/auth/auth.validation');
+const {
+  PASSWORD_ALLOWED_SPECIAL_CHARS,
+  EMAIL_MAX_CHARS,
+  utf8ByteLength,
+} = require('@wecooked/contracts');
+
+const VALID_NEW_PASSWORD = 'WeCooked2026!';
+const TOKEN = 'A'.repeat(43);
+
+function register(password, email = 'ada@example.com') {
+  return registerSchema.safeParse({ body: { name: 'Ada', email, password } });
+}
+
+function emailWithLength(length) {
+  const email = `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(
+    length - 197
+  )}.com`;
+  assert.equal(email.length, length);
+  return email;
+}
 
 test('registerSchema accepts a well-formed registration payload', () => {
   const result = registerSchema.safeParse({
-    body: { name: 'Ada Lovelace', email: '  Ada@Example.com ', password: 'a-good-password' },
+    body: { name: 'Ada Lovelace', email: '  Ada@Example.com ', password: VALID_NEW_PASSWORD },
   });
 
   assert.equal(result.success, true);
@@ -26,7 +46,7 @@ test('registerSchema accepts a well-formed registration payload', () => {
 test('registerSchema rejects caller-supplied moderator and admin roles', () => {
   for (const role of ['moderator', 'admin']) {
     const result = registerSchema.safeParse({
-      body: { name: 'Ada', email: 'ada@example.com', password: 'a-good-password', role },
+      body: { name: 'Ada', email: 'ada@example.com', password: VALID_NEW_PASSWORD, role },
     });
     assert.equal(result.success, false);
   }
@@ -43,7 +63,7 @@ test('registerSchema rejects caller-supplied auth internals including legacy aut
       body: {
         name: 'Ada',
         email: 'ada@example.com',
-        password: 'a-good-password',
+        password: VALID_NEW_PASSWORD,
         ...extra,
       },
     });
@@ -51,33 +71,77 @@ test('registerSchema rejects caller-supplied auth internals including legacy aut
   }
 });
 
-test('registerSchema rejects a password shorter than 8 characters', () => {
-  const result = registerSchema.safeParse({
-    body: { name: 'Ada', email: 'ada@example.com', password: 'short' },
-  });
-  assert.equal(result.success, false);
+test('new-password policy enforces the 8-character minimum', () => {
+  assert.equal(register('Aa1!bbb').success, false);
+  assert.equal(register('Aa1!bbbb').success, true);
 });
 
-test('registerSchema rejects a password whose UTF-8 byte length exceeds 72 bytes', () => {
-  const result = registerSchema.safeParse({
-    body: { name: 'Ada', email: 'ada@example.com', password: 'a'.repeat(73) },
-  });
-  assert.equal(result.success, false);
+test('new-password policy requires uppercase, lowercase, digit, and approved special characters', () => {
+  for (const password of ['password1!', 'PASSWORD1!', 'Password!', 'Password123']) {
+    assert.equal(register(password).success, false, `expected ${password} to be rejected`);
+  }
 });
 
-test('registerSchema accepts a password exactly at the 72-byte boundary', () => {
-  const result = registerSchema.safeParse({
-    body: { name: 'Ada', email: 'ada@example.com', password: 'a'.repeat(72) },
-  });
-  assert.equal(result.success, true);
+test('new-password policy accepts every approved special character', () => {
+  assert.equal(PASSWORD_ALLOWED_SPECIAL_CHARS, '!@#$%&*?_-.');
+  for (const special of PASSWORD_ALLOWED_SPECIAL_CHARS) {
+    const password = `Aa1bbbbb${special}`;
+    assert.equal(register(password).success, true, `expected ${special} to be accepted`);
+  }
 });
 
-test('registerSchema does not trim the password', () => {
-  const result = registerSchema.safeParse({
-    body: { name: 'Ada', email: 'ada@example.com', password: '  padded  ' },
-  });
-  assert.equal(result.success, true);
-  assert.equal(result.data.body.password, '  padded  ');
+test('new-password policy rejects non-breaking, invisible, and control characters', () => {
+  for (const password of [
+    'We\u00a0Cooked2026!',
+    'We\u200bCooked2026!',
+    'We\rCooked2026!',
+    'We\u0000Cooked2026!',
+  ]) {
+    assert.equal(register(password).success, false, `expected ${JSON.stringify(password)} to fail`);
+  }
+});
+
+test('new-password policy rejects whitespace, emoji, and unsupported punctuation', () => {
+  for (const password of [
+    'We Cooked2026!',
+    'We\tCooked2026!',
+    'We\nCooked2026!',
+    'Cooking2026!😀',
+    'Cooking2026^',
+    'Cooking2026+',
+    'Cooking2026/',
+  ]) {
+    assert.equal(register(password).success, false, `expected ${JSON.stringify(password)} to fail`);
+  }
+});
+
+test('new-password policy supports Unicode uppercase and lowercase letters', () => {
+  for (const password of ['José#Recipe9', 'MañanaFood2!', 'ÉclairFood7?']) {
+    assert.equal(register(password).success, true, `expected ${password} to be accepted`);
+  }
+});
+
+test('new-password policy does not normalize Unicode input', () => {
+  const composed = 'ÉclairFood7?';
+  const decomposed = composed.normalize('NFD');
+  assert.notEqual(decomposed, composed);
+  assert.equal(register(composed).success, true);
+  assert.equal(register(decomposed).success, false);
+});
+
+test('new-password policy measures its maximum in UTF-8 bytes', () => {
+  const exactly72Bytes = `Áa1!${'b'.repeat(67)}`;
+  const exactly73Bytes = `Áa1!${'b'.repeat(68)}`;
+  assert.equal(utf8ByteLength(exactly72Bytes), 72);
+  assert.equal(utf8ByteLength(exactly73Bytes), 73);
+  assert.equal(register(exactly72Bytes).success, true);
+  assert.equal(register(exactly73Bytes).success, false);
+});
+
+test('new-password policy never silently trims a password', () => {
+  assert.equal(register('Aa1!bbbb').success, true);
+  assert.equal(register(' Aa1!bbbb').success, false);
+  assert.equal(register('Aa1!bbbb ').success, false);
 });
 
 test('loginSchema normalizes email and requires a non-empty password', () => {
@@ -108,6 +172,14 @@ test('loginSchema does not enforce the 8-character minimum (existing accounts ma
   assert.equal(result.success, true);
 });
 
+test('loginSchema remains legacy-compatible and does not require new-password composition', () => {
+  for (const password of ['lowercase', 'UPPERCASE', 'Password', '12345678', 'has spaces']) {
+    const result = loginSchema.safeParse({ body: { email: 'ada@example.com', password } });
+    assert.equal(result.success, true, `expected ${JSON.stringify(password)} to pass`);
+    assert.equal(result.data.body.password, password);
+  }
+});
+
 test('refreshSchema requires a non-empty refreshToken', () => {
   const valid = refreshSchema.safeParse({ body: { refreshToken: 'some-token' } });
   assert.equal(valid.success, true);
@@ -123,12 +195,12 @@ test('refreshSchema requires a non-empty refreshToken', () => {
 const changePassword = (body) => changePasswordSchema.safeParse({ body });
 
 test('changePasswordSchema accepts a well-formed { currentPassword, newPassword }', () => {
-  const result = changePassword({ currentPassword: 'old-password', newPassword: 'a-new-password' });
+  const result = changePassword({ currentPassword: 'old-password', newPassword: VALID_NEW_PASSWORD });
   assert.equal(result.success, true);
 });
 
 test('changePasswordSchema rejects a missing currentPassword', () => {
-  assert.equal(changePassword({ newPassword: 'a-new-password' }).success, false);
+  assert.equal(changePassword({ newPassword: VALID_NEW_PASSWORD }).success, false);
 });
 
 test('changePasswordSchema rejects a missing newPassword', () => {
@@ -142,8 +214,8 @@ test('changePasswordSchema rejects an empty body', () => {
 test('changePasswordSchema rejects an extra confirmPassword field', () => {
   const result = changePassword({
     currentPassword: 'old-password',
-    newPassword: 'a-new-password',
-    confirmPassword: 'a-new-password',
+    newPassword: VALID_NEW_PASSWORD,
+    confirmPassword: VALID_NEW_PASSWORD,
   });
   assert.equal(result.success, false);
 });
@@ -151,7 +223,7 @@ test('changePasswordSchema rejects an extra confirmPassword field', () => {
 test('changePasswordSchema rejects an extra email field', () => {
   const result = changePassword({
     currentPassword: 'old-password',
-    newPassword: 'a-new-password',
+    newPassword: VALID_NEW_PASSWORD,
     email: 'admin@example.com',
   });
   assert.equal(result.success, false);
@@ -160,7 +232,7 @@ test('changePasswordSchema rejects an extra email field', () => {
 test('changePasswordSchema rejects an extra userId field', () => {
   const result = changePassword({
     currentPassword: 'old-password',
-    newPassword: 'a-new-password',
+    newPassword: VALID_NEW_PASSWORD,
     userId: '507f1f77bcf86cd799439011',
   });
   assert.equal(result.success, false);
@@ -169,7 +241,7 @@ test('changePasswordSchema rejects an extra userId field', () => {
 test('changePasswordSchema rejects an extra role field', () => {
   const result = changePassword({
     currentPassword: 'old-password',
-    newPassword: 'a-new-password',
+    newPassword: VALID_NEW_PASSWORD,
     role: 'admin',
   });
   assert.equal(result.success, false);
@@ -177,21 +249,21 @@ test('changePasswordSchema rejects an extra role field', () => {
 
 test('changePasswordSchema rejects an empty currentPassword', () => {
   assert.equal(
-    changePassword({ currentPassword: '', newPassword: 'a-new-password' }).success,
+    changePassword({ currentPassword: '', newPassword: VALID_NEW_PASSWORD }).success,
     false
   );
 });
 
 test('changePasswordSchema rejects a currentPassword over 72 UTF-8 bytes', () => {
   assert.equal(
-    changePassword({ currentPassword: 'a'.repeat(73), newPassword: 'a-new-password' }).success,
+    changePassword({ currentPassword: 'a'.repeat(73), newPassword: VALID_NEW_PASSWORD }).success,
     false
   );
 });
 
 test('changePasswordSchema accepts a currentPassword shorter than 8 chars (existing passwords may predate the minimum)', () => {
   assert.equal(
-    changePassword({ currentPassword: 'short', newPassword: 'a-new-password' }).success,
+    changePassword({ currentPassword: 'short', newPassword: VALID_NEW_PASSWORD }).success,
     true
   );
 });
@@ -205,23 +277,28 @@ test('changePasswordSchema rejects a newPassword shorter than 8 characters', () 
 
 test('changePasswordSchema rejects a newPassword over 72 UTF-8 bytes', () => {
   assert.equal(
-    changePassword({ currentPassword: 'old-password', newPassword: 'a'.repeat(73) }).success,
+    changePassword({ currentPassword: 'old-password', newPassword: `Aa1!${'b'.repeat(69)}` })
+      .success,
     false
   );
 });
 
 test('changePasswordSchema accepts a newPassword exactly at the 72-byte boundary', () => {
   assert.equal(
-    changePassword({ currentPassword: 'old-password', newPassword: 'a'.repeat(72) }).success,
+    changePassword({ currentPassword: 'old-password', newPassword: `Aa1!${'b'.repeat(68)}` })
+      .success,
     true
   );
 });
 
-test('changePasswordSchema does not trim either password and preserves a padded value', () => {
-  const result = changePassword({ currentPassword: '  old  ', newPassword: '  padded value  ' });
-  assert.equal(result.success, true);
-  assert.equal(result.data.body.currentPassword, '  old  ');
-  assert.equal(result.data.body.newPassword, '  padded value  ');
+test('changePasswordSchema preserves a padded current password but rejects a padded new password', () => {
+  const currentOnly = changePassword({ currentPassword: '  old  ', newPassword: VALID_NEW_PASSWORD });
+  assert.equal(currentOnly.success, true);
+  assert.equal(currentOnly.data.body.currentPassword, '  old  ');
+  assert.equal(
+    changePassword({ currentPassword: 'old', newPassword: ` ${VALID_NEW_PASSWORD}` }).success,
+    false
+  );
 });
 
 test('forgotPasswordSchema normalizes email and rejects malformed/extra fields', () => {
@@ -236,20 +313,39 @@ test('forgotPasswordSchema normalizes email and rejects malformed/extra fields',
   );
 });
 
+test('email policy accepts common suffixes, rejects internal whitespace, and enforces 254 characters', () => {
+  for (const email of [
+    'user@example.com',
+    'student@school.edu',
+    'chef@company.org',
+    'user@example.com.ph',
+  ]) {
+    assert.equal(register(VALID_NEW_PASSWORD, email).success, true, `expected ${email} to pass`);
+  }
+  assert.equal(register(VALID_NEW_PASSWORD, 'user @example.com').success, false);
+
+  const maxEmail = emailWithLength(EMAIL_MAX_CHARS);
+  assert.equal(register(VALID_NEW_PASSWORD, maxEmail).success, true);
+  assert.equal(register(VALID_NEW_PASSWORD, emailWithLength(EMAIL_MAX_CHARS + 1)).success, false);
+});
+
 test('resetPasswordSchema enforces token shape, shared password policy, and a strict body', () => {
-  const token = 'A'.repeat(43);
-  const valid = resetPasswordSchema.safeParse({ body: { token, newPassword: 'a-new-password' } });
+  const token = TOKEN;
+  const valid = resetPasswordSchema.safeParse({ body: { token, newPassword: VALID_NEW_PASSWORD } });
   assert.equal(valid.success, true);
-  assert.equal(resetPasswordSchema.safeParse({ body: { token: 'short', newPassword: 'a-new-password' } }).success, false);
+  assert.equal(resetPasswordSchema.safeParse({ body: { token: 'short', newPassword: VALID_NEW_PASSWORD } }).success, false);
   assert.equal(resetPasswordSchema.safeParse({ body: { token, newPassword: '1234567' } }).success, false);
-  assert.equal(resetPasswordSchema.safeParse({ body: { token, newPassword: 'a'.repeat(73) } }).success, false);
   assert.equal(
-    resetPasswordSchema.safeParse({ body: { token, newPassword: '  padded password  ' } }).data.body.newPassword,
-    '  padded password  '
+    resetPasswordSchema.safeParse({ body: { token, newPassword: `Aa1!${'b'.repeat(69)}` } }).success,
+    false
+  );
+  assert.equal(
+    resetPasswordSchema.safeParse({ body: { token, newPassword: ` ${VALID_NEW_PASSWORD}` } }).success,
+    false
   );
   assert.equal(
     resetPasswordSchema.safeParse({
-      body: { token, newPassword: 'a-new-password', confirmPassword: 'a-new-password' },
+      body: { token, newPassword: VALID_NEW_PASSWORD, confirmPassword: VALID_NEW_PASSWORD },
     }).success,
     false
   );

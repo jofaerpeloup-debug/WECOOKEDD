@@ -1,19 +1,14 @@
 ﻿import React, { useState, useEffect, useMemo } from 'react';
 import {
   LayoutDashboard, ChefHat, Users, X,
-  Leaf, TrendingUp, Clock, Check, LogOut, Mail, Lock, Eye, EyeOff,
+  Leaf, Check, CheckCircle2, LogOut, Mail, Lock, Eye, EyeOff,
   AlertCircle, ArrowRight, User, Settings, HelpCircle,
-  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace, ShieldCheck, UserCog,
+  Accessibility, ChevronDown, Carrot, ShieldAlert, Replace, ShieldCheck, UserCog, ScrollText,
 } from 'lucide-react';
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts';
 import { useCallback, useRef } from 'react';
 import { auth } from './firebase.js';
 import {
-  toAccount, logIn, logOutUser,
-  updateUserProfile, changeUserPassword, deleteCurrentAccount,
-  requestPasswordReset, verifyResetCode, confirmReset,
+  logIn, logOutUser, requestUserEmailChange, deleteCurrentAccount,
 } from './auth.js';
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
@@ -24,42 +19,145 @@ import SubstitutionsTab from './SubstitutionsTab.jsx';
 import RecipesTab from './RecipesTab.jsx';
 import UsersTab from './UsersTab.jsx';
 import StaffManagementTab from './StaffManagementTab.jsx';
+import AuditLogsTab from './AuditLogsTab.jsx';
 import {
   ConsumerScreen,
+  FieldErrors,
   PendingState,
+  PasswordRequirements,
   RejectedState,
   StaffBootstrapError,
   StaffPortalAuthScreen,
   StaffPortalScreenStyles,
+  SupportingAuthFrame,
   VerifyEmailState,
 } from './StaffPortalScreens.jsx';
 import {
   applyAsModerator,
+  changeBackendPassword,
   getStaffState,
   requestBackendPasswordReset,
+  resetBackendPassword,
   resendBackendVerification,
+  updateBackendName,
 } from './staffApi.js';
 import { getCatalogPolicy, getPortalDestination, getSafeNavigation } from './portalPolicy.js';
-import { staffErrorMessage } from './staffErrorMessage.js';
+import { staffErrorMessage, staffFieldErrors } from './staffErrorMessage.js';
 import { registerModeratorApplicant, retryModeratorApplication } from './staffOnboarding.js';
+import {
+  backendStaffIdentity,
+  hasStaffAuthErrors,
+  passwordRequirementState,
+  resetTokenFromHash,
+  validateCurrentPassword,
+  validateStaffName,
+} from './staffContracts.js';
+import { completeStaffPasswordChange, updateStaffName } from './staffAccountActions.js';
 
 const DISPLAY_PREFS_KEY = 'wecooked-admin-display-prefs';
 
-const growthData = [
-  { month: 'Mar', users: 340, recipes: 210 },
-  { month: 'Apr', users: 410, recipes: 245 },
-  { month: 'May', users: 505, recipes: 268 },
-  { month: 'Jun', users: 612, recipes: 301 },
-  { month: 'Jul', users: 748, recipes: 329 },
-  { month: 'Aug', users: 890, recipes: 356 },
-];
+export function AdminNavigation({ tab, setTab }) {
+  return (
+    <nav className="wc-nav" aria-label="Admin workspace">
+      <div className="wc-nav-group">
+        <p className="wc-nav-section-label">Main</p>
+        <button
+          className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
+          onClick={() => setTab('overview')}
+          aria-current={tab === 'overview' ? 'page' : undefined}
+        >
+          <LayoutDashboard size={17} /> Overview
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
+          onClick={() => setTab('recipes')}
+          aria-current={tab === 'recipes' ? 'page' : undefined}
+        >
+          <ChefHat size={17} /> Recipes
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
+          onClick={() => setTab('ingredients')}
+          aria-current={tab === 'ingredients' ? 'page' : undefined}
+        >
+          <Carrot size={17} /> Ingredients
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
+          onClick={() => setTab('substitutions')}
+          aria-current={tab === 'substitutions' ? 'page' : undefined}
+        >
+          <Replace size={17} /> Substitutions
+        </button>
+      </div>
+      <div className="wc-nav-group">
+        <p className="wc-nav-section-label">Management</p>
+        <button
+          className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
+          onClick={() => setTab('users')}
+          aria-current={tab === 'users' ? 'page' : undefined}
+        >
+          <Users size={17} /> Users
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
+          onClick={() => setTab('staff')}
+          aria-current={tab === 'staff' ? 'page' : undefined}
+        >
+          <UserCog size={17} /> Staff Management
+        </button>
+        <button
+          className={`wc-nav-item ${tab === 'audit-logs' ? 'active' : ''}`}
+          onClick={() => setTab('audit-logs')}
+          aria-current={tab === 'audit-logs' ? 'page' : undefined}
+        >
+          <ScrollText size={17} /> Audit Logs
+        </button>
+      </div>
+    </nav>
+  );
+}
 
-const activityFeed = [
-  { text: 'Priya Nandakumar saved Saffron Risotto with Charred Leeks', time: '2h ago' },
-  { text: 'New recipe added: Grilled Peach & Burrata Toast', time: '5h ago' },
-  { text: 'Theo Marchetti joined WeCooked', time: '1d ago' },
-  { text: 'New recipe added: Smoky Chickpea Shakshuka', time: '2d ago' },
-];
+function authoritativePaginationTotal(pagination) {
+  const total = pagination?.total;
+  if (!Number.isSafeInteger(total) || total < 0) {
+    throw new Error('Dashboard response has an invalid pagination total.');
+  }
+  return total;
+}
+
+export async function loadRecipeDashboardData(request = listRecipes) {
+  try {
+    const { recipes, pagination } = await request({
+      status: 'all', sort: 'newest', page: 1, limit: 100,
+    });
+    return {
+      status: 'ready',
+      total: authoritativePaginationTotal(pagination),
+      latest: recipes.slice(0, 4),
+    };
+  } catch {
+    return { status: 'error', total: 0, latest: [] };
+  }
+}
+
+export async function loadUserDashboardData(request = listUsers) {
+  try {
+    const [all, active, suspended] = await Promise.all([
+      request({ limit: 1 }),
+      request({ limit: 1, status: 'active' }),
+      request({ limit: 1, status: 'suspended' }),
+    ]);
+    return {
+      status: 'ready',
+      total: authoritativePaginationTotal(all.pagination),
+      active: authoritativePaginationTotal(active.pagination),
+      suspended: authoritativePaginationTotal(suspended.pagination),
+    };
+  } catch {
+    return { status: 'error', total: 0, active: 0, suspended: 0 };
+  }
+}
 
 // Thin wrappers around window.storage that NEVER throw synchronously and never
 // reject -- window.storage itself may be missing in some rendering contexts,
@@ -97,9 +195,8 @@ async function safeDelete(key, shared = false) {
 function WeCookedAdminApp() {
   // Backend local auth is the authoritative gate for this dashboard and for
   // every WeCooked REST API call. Firebase auth is kept alongside it, best
-  // effort, only so the Firebase-Auth-backed admin account flows (profile,
-  // password, email, verification, delete-account) keep working — see
-  // docs/architecture/admin-api-integration.md.
+  // effort, only for the legacy email-change and delete-account surfaces that
+  // remain until SP2B.
   const backend = useBackendAuth();
 
   const [tab, setTab] = useState('overview');
@@ -114,10 +211,11 @@ function WeCookedAdminApp() {
   // Recipe domain. A replacement region/category visualization waits on a
   // content-classification milestone — showing one now would be misleading
   // (no existing recipe is classified yet).
-  const [recipeStats, setRecipeStats] = useState({ total: 0, latest: [] });
-  const [userCounts, setUserCounts] = useState({ total: 0, active: 0, suspended: 0 });
+  const [recipeStats, setRecipeStats] = useState({ status: 'idle', total: 0, latest: [] });
+  const [userCounts, setUserCounts] = useState({ status: 'idle', total: 0, active: 0, suspended: 0 });
 
-  const [account, setAccount] = useState(null);
+  const [firebaseAccountEmail, setFirebaseAccountEmail] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -127,18 +225,17 @@ function WeCookedAdminApp() {
   const [displayPrefs, setDisplayPrefs] = useState({ theme: 'light', reduceMotion: false });
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
-  const [resetOobCode, setResetOobCode] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('mode') === 'resetPassword' ? params.get('oobCode') : null;
-  });
+  const [resetToken, setResetToken] = useState(() => resetTokenFromHash(window.location.hash));
+
+  function removeResetTokenFromUrl() {
+    const url = new URL(window.location.href);
+    url.hash = '';
+    window.history.replaceState({}, '', url.pathname + url.search);
+  }
 
   function clearResetLink() {
-    setResetOobCode(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('mode');
-    url.searchParams.delete('oobCode');
-    url.searchParams.delete('apiKey');
-    window.history.replaceState({}, '', url.pathname + url.search);
+    setResetToken(null);
+    removeResetTokenFromUrl();
   }
 
   const refreshStaffState = useCallback(async ({ showLoading = true } = {}) => {
@@ -186,34 +283,23 @@ function WeCookedAdminApp() {
   }, [staffState.data?.mode]);
 
   useEffect(() => {
-    // Firebase auth runs in the background purely for the Firebase-Auth-backed
-    // admin account flows (profile, password, email, verification,
-    // delete-account); the dashboard gate itself is driven by backend auth, not
-    // this. `account` feeds the profile menu / Settings identity.
+    // Keep only an availability flag for the SP2B email/delete compatibility
+    // surfaces. Displayed identity never derives from this observer.
     const unsub = auth.onAuthStateChanged((user) => {
-      setAccount(toAccount(user));
+      setFirebaseAccountEmail(user?.email || '');
     });
     return unsub;
   }, []);
 
   useEffect(() => {
     // Recipe stats for the Overview tab, straight from the REST API — no
-    // Firestore. Best-effort: a failure just leaves the widgets at zero/empty.
+    // Firestore. The Overview keeps loading and failure distinct from real zero values.
     if (backend.status !== 'authenticated' || backend.user?.role !== 'admin') return undefined;
     let cancelled = false;
+    setRecipeStats((current) => ({ ...current, status: 'loading' }));
     (async () => {
-      try {
-        const { recipes, pagination } = await listRecipes({
-          status: 'all', sort: 'newest', page: 1, limit: 100,
-        });
-        if (cancelled) return;
-        setRecipeStats({
-          total: pagination?.total ?? recipes.length,
-          latest: recipes.slice(0, 4),
-        });
-      } catch {
-        if (!cancelled) setRecipeStats({ total: 0, latest: [] });
-      }
+      const nextState = await loadRecipeDashboardData();
+      if (!cancelled) setRecipeStats(nextState);
     })();
     return () => { cancelled = true; };
   }, [backend.status, backend.user?.role]);
@@ -223,26 +309,14 @@ function WeCookedAdminApp() {
     // Firestore. Refetched whenever the admin lands on Overview so a suspend /
     // reactivate done on the Users tab is reflected. Only pagination.total is
     // read (limit: 1 keeps the payload tiny). Best-effort: a failure just
-    // leaves the cards at zero.
+    // leaves the current totals in an explicit unavailable state.
     if (tab !== 'overview') return undefined;
     if (backend.status !== 'authenticated' || backend.user?.role !== 'admin') return undefined;
     let cancelled = false;
+    setUserCounts((current) => ({ ...current, status: 'loading' }));
     (async () => {
-      try {
-        const [all, active, suspended] = await Promise.all([
-          listUsers({ limit: 1 }),
-          listUsers({ limit: 1, status: 'active' }),
-          listUsers({ limit: 1, status: 'suspended' }),
-        ]);
-        if (cancelled) return;
-        setUserCounts({
-          total: all.pagination?.total ?? 0,
-          active: active.pagination?.total ?? 0,
-          suspended: suspended.pagination?.total ?? 0,
-        });
-      } catch {
-        if (!cancelled) setUserCounts({ total: 0, active: 0, suspended: 0 });
-      }
+      const nextState = await loadUserDashboardData();
+      if (!cancelled) setUserCounts(nextState);
     })();
     return () => { cancelled = true; };
   }, [tab, backend.status, backend.user?.role]);
@@ -299,21 +373,18 @@ function WeCookedAdminApp() {
     // Backend login is authoritative — it throws on bad credentials, a
     // suspended account, or the API being unreachable, and the sign-in form
     // surfaces that message.
+    setAuthNotice('');
     await backend.login(email, password);
-    // Best effort: mirror the sign-in to Firebase so the Firebase-Auth-backed
-    // admin account flows keep working for admins whose credentials also exist
-    // there. A failure here is expected for backend-only admins and must not
-    // block.
+    // Best effort: mirror the sign-in to Firebase so the SP2B email-change and
+    // delete-account compatibility surfaces keep working for admins whose
+    // credentials also exist there. A failure here is expected for
+    // backend-only admins and must not block.
     try {
       await logIn(email, password);
     } catch (err) {
       console.warn('Firebase sign-in unavailable (account flows will be limited):', err?.code || err);
     }
     return true;
-  }
-
-  async function forgotPassword(email) {
-    await requestPasswordReset(email);
   }
 
   async function forgotStaffPassword(email) {
@@ -357,28 +428,38 @@ function WeCookedAdminApp() {
     setProfileMenuOpen(false);
   }
 
-  async function updateProfile({ name, email }) {
-    const updated = await updateUserProfile(name, email);
-    setAccount(updated);
+  async function updateProfile({ name }) {
+    return updateStaffName({
+      requestUpdate: updateBackendName,
+      refreshUser: backend.refreshUser,
+    }, name);
   }
 
   async function changePassword({ currentPassword, newPassword }) {
-    await changeUserPassword(currentPassword, newPassword);
+    await completeStaffPasswordChange({
+      requestChange: changeBackendPassword,
+      clearSession: backend.clearSession,
+      signOutFirebase: logOutUser,
+    }, { currentPassword, newPassword });
+    setSettingsOpen(false);
+    setAuthNotice('Your password was updated. Sign in again with your new password.');
+  }
+
+  async function requestEmailChange(email) {
+    await requestUserEmailChange(email);
   }
 
   function updateDisplayPrefs(patch) {
     setDisplayPrefs((prev) => ({ ...prev, ...patch }));
   }
 
-  // Identity shown in the sidebar / menus. Prefer the Firebase account object
-  // (it carries the fields those Firebase-specific modals still expect); fall
-  // back to the backend user so a backend-only admin still gets a profile menu
-  // and a working "Log out".
-  const identity =
-    account ||
-    (backend.user
-      ? { name: backend.user.name, email: backend.user.email, emailVerified: backend.user.emailVerified }
-      : null);
+  // The REST-hydrated backend user is the sole displayed Staff identity.
+  const identity = backendStaffIdentity(backend.user);
+  const firebaseAccountAvailable = Boolean(
+    firebaseAccountEmail
+      && identity?.email
+      && firebaseAccountEmail.trim().toLowerCase() === identity.email.trim().toLowerCase(),
+  );
 
   const portalDestination = getPortalDestination(staffState.data?.mode);
   const catalogPolicy = getCatalogPolicy(staffState.data?.mode);
@@ -437,10 +518,6 @@ function WeCookedAdminApp() {
           font-family: inherit;
           font-size: 14px;
         }
-        .wc-admin *:focus-visible {
-          outline: none;
-        }
-
         .wc-sidebar {
           width: 220px;
           flex-shrink: 0;
@@ -1047,15 +1124,20 @@ function WeCookedAdminApp() {
 
       <StaffPortalScreenStyles />
 
-      {resetOobCode ? (
-        <ResetPasswordScreen oobCode={resetOobCode} onDone={clearResetLink} />
+      {resetToken ? (
+        <ResetPasswordScreen token={resetToken} onClearToken={removeResetTokenFromUrl} onDone={clearResetLink} />
       ) : backend.status === 'checking' || (backend.status === 'authenticated' && ['idle', 'loading'].includes(staffState.status)) ? (
         <div className="wc-loading">
           <Leaf size={26} />
           <span>Loading Staff Portal…</span>
         </div>
       ) : backend.status !== 'authenticated' ? (
-        <StaffPortalAuthScreen onRegisterAndApply={registerAndApply} onSignIn={signIn} onForgotPassword={forgotStaffPassword} />
+        <StaffPortalAuthScreen
+          onRegisterAndApply={registerAndApply}
+          onSignIn={signIn}
+          onForgotPassword={forgotStaffPassword}
+          notice={authNotice}
+        />
       ) : staffState.status === 'error' ? (
         <StaffBootstrapError message={staffState.error} onRetry={refreshStaffState} onSignOut={signOut} />
       ) : portalDestination === 'consumer' ? (
@@ -1079,54 +1161,18 @@ function WeCookedAdminApp() {
         <StaffBootstrapError message="The Staff Portal returned an unsupported access state." onRetry={() => refreshStaffState()} onSignOut={signOut} />
       ) : (
         <>
-          <aside className="wc-sidebar">
+          <aside className="wc-sidebar wc-staff-sidebar">
             <div className="wc-brand">
               <div className="wc-brand-badge">
                 <Leaf size={18} color="#4A5D4E" />
               </div>
               <div>
                 <div className="wc-brand-name">WeCooked</div>
-                <div className="wc-brand-sub">Staff Portal · Admin</div>
+                <div className="wc-brand-sub">Staff Portal</div>
+                <div className="wc-role-label">Admin</div>
               </div>
             </div>
-            <nav className="wc-nav">
-              <button
-                className={`wc-nav-item ${tab === 'overview' ? 'active' : ''}`}
-                onClick={() => setTab('overview')}
-              >
-                <LayoutDashboard size={17} /> Overview
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'recipes' ? 'active' : ''}`}
-                onClick={() => setTab('recipes')}
-              >
-                <ChefHat size={17} /> Recipes
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'ingredients' ? 'active' : ''}`}
-                onClick={() => setTab('ingredients')}
-              >
-                <Carrot size={17} /> Ingredients
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'substitutions' ? 'active' : ''}`}
-                onClick={() => setTab('substitutions')}
-              >
-                <Replace size={17} /> Substitutions
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'users' ? 'active' : ''}`}
-                onClick={() => setTab('users')}
-              >
-                <Users size={17} /> Users
-              </button>
-              <button
-                className={`wc-nav-item ${tab === 'staff' ? 'active' : ''}`}
-                onClick={() => setTab('staff')}
-              >
-                <UserCog size={17} /> Staff Management
-              </button>
-            </nav>
+            <AdminNavigation tab={tab} setTab={setTab} />
             <div className="wc-sidebar-footer">
               <ProfileMenu
                 account={identity}
@@ -1138,7 +1184,7 @@ function WeCookedAdminApp() {
                 onOpenHelp={() => { setHelpOpen(true); setProfileMenuOpen(false); }}
                 onOpenDisplay={() => { setDisplayOpen(true); setProfileMenuOpen(false); }}
               />
-              {account && (
+              {firebaseAccountAvailable && (
                 <button className="wc-reset-btn" onClick={() => setConfirmDeleteAccount(true)}>
                   Delete admin account
                 </button>
@@ -1146,12 +1192,14 @@ function WeCookedAdminApp() {
             </div>
           </aside>
 
-          <main className="wc-main">
+          <main className="wc-main wc-staff-main">
             {tab === 'overview' && (
               <OverviewTab
                 metrics={metrics}
-                dark={displayPrefs.theme === 'dark'}
                 latestRecipes={recipeStats.latest}
+                recipeStatus={recipeStats.status}
+                userStatus={userCounts.status}
+                onNavigate={setTab}
               />
             )}
 
@@ -1185,6 +1233,8 @@ function WeCookedAdminApp() {
             )}
 
             {tab === 'staff' && <StaffManagementTab onAuthorityLost={refreshAuthority} />}
+
+            {tab === 'audit-logs' && <AuditLogsTab onAuthorityLost={refreshAuthority} />}
           </main>
 
           {settingsOpen && (
@@ -1193,6 +1243,8 @@ function WeCookedAdminApp() {
               onClose={() => setSettingsOpen(false)}
               onUpdateProfile={updateProfile}
               onChangePassword={changePassword}
+              onRequestEmailChange={requestEmailChange}
+              firebaseAccountAvailable={firebaseAccountAvailable}
             />
           )}
           {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
@@ -1221,7 +1273,7 @@ function WeCookedAdminApp() {
   );
 }
 
-function ModeratorWorkspace({
+export function ModeratorWorkspace({
   tab,
   setTab,
   identity,
@@ -1230,42 +1282,46 @@ function ModeratorWorkspace({
   onAuthorityLost,
 }) {
   const areas = [
-    { id: 'recipes', label: 'Recipes', icon: ChefHat },
-    { id: 'ingredients', label: 'Ingredients', icon: Carrot },
-    { id: 'substitutions', label: 'Substitutions', icon: Replace },
+    { id: 'recipes', label: 'Recipes', description: 'Author, review, and publish recipes for the shared catalog.', icon: ChefHat },
+    { id: 'ingredients', label: 'Ingredients', description: 'Maintain ingredient records and catalog consistency.', icon: Carrot },
+    { id: 'substitutions', label: 'Substitutions', description: 'Maintain approved ingredient substitutions.', icon: Replace },
   ];
 
   return (
     <>
-      <style>{`
-        .wc-moderator-card { max-width:760px; background:var(--field-bg); border:1px solid var(--stone-light); border-radius:16px; padding:28px; box-shadow:0 8px 24px rgba(42,47,40,.07); }
-        .wc-moderator-kicker { display:inline-flex; align-items:center; gap:7px; color:var(--sage-deep); background:rgba(192,213,194,.35); border-radius:999px; padding:7px 11px; font-size:12px; font-weight:700; margin-bottom:14px; }
-        .wc-moderator-card h1 { margin:0 0 9px; font-size:27px; }
-        .wc-moderator-card p { color:var(--stone); line-height:1.6; margin:0; }
-        .wc-moderator-areas { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; margin-top:24px; }
-        .wc-moderator-area { border:1px solid var(--stone-light); border-radius:11px; padding:16px; display:flex; flex-direction:column; gap:8px; color:var(--ink); background:var(--parchment); }
-        .wc-moderator-area svg { color:var(--sage-deep); }
-        .wc-moderator-area span { font-size:11.5px; color:var(--stone); }
-        .wc-moderator-identity { padding:8px; color:var(--sage-light); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; }
-        @media (max-width:760px) { .wc-moderator-areas { grid-template-columns:1fr; } }
-      `}</style>
-      <aside className="wc-sidebar">
+      <aside className="wc-sidebar wc-staff-sidebar">
         <div className="wc-brand">
           <div className="wc-brand-badge"><Leaf size={18} color="#4A5D4E" /></div>
-          <div><div className="wc-brand-name">WeCooked</div><div className="wc-brand-sub">Staff Portal · Moderator</div></div>
+          <div>
+            <div className="wc-brand-name">WeCooked</div>
+            <div className="wc-brand-sub">Staff Portal</div>
+            <div className="wc-role-label">Moderator</div>
+          </div>
         </div>
-        <nav className="wc-nav">
-          <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')}><LayoutDashboard size={17} /> Overview</button>
-          {areas.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}><Icon size={17} /> {label}</button>
-          ))}
+        <nav className="wc-nav" aria-label="Moderator workspace">
+          <div className="wc-nav-group">
+            <p className="wc-nav-section-label">Main</p>
+            <button className={`wc-nav-item ${tab === 'moderator-home' ? 'active' : ''}`} onClick={() => setTab('moderator-home')} aria-current={tab === 'moderator-home' ? 'page' : undefined}><LayoutDashboard size={17} /> Overview</button>
+          </div>
+          <div className="wc-nav-group">
+            <p className="wc-nav-section-label">Catalog</p>
+            {areas.map(({ id, label, icon: Icon }) => (
+              <button key={id} className={`wc-nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}><Icon size={17} /> {label}</button>
+            ))}
+          </div>
         </nav>
         <div className="wc-sidebar-footer">
-          <div className="wc-moderator-identity">{identity?.name || identity?.email}<br />{identity?.email}</div>
-          <button className="wc-nav-item" onClick={onSignOut}><LogOut size={17} /> Sign Out</button>
+          <div className="wc-staff-identity">
+            <span className="wc-profile-avatar" aria-hidden="true">{initials(identity?.name, identity?.email)}</span>
+            <span className="wc-profile-info">
+              <span className="wc-profile-name">{identity?.name || 'Moderator'}</span>
+              <span className="wc-profile-email">{identity?.email}</span>
+            </span>
+          </div>
+          <button className="wc-nav-item wc-signout-item" onClick={onSignOut}><LogOut size={17} /> Sign Out</button>
         </div>
       </aside>
-      <main className="wc-main">
+      <main className="wc-main wc-staff-main">
         {tab === 'recipes' && (
           <RecipesTab
             canWrite={catalogPolicy.canWriteCatalog}
@@ -1286,22 +1342,37 @@ function ModeratorWorkspace({
           />
         )}
         {tab === 'moderator-home' && (
-          <div className="wc-moderator-card">
-            <div className="wc-moderator-kicker"><ShieldCheck size={16} /> Moderator access approved</div>
-            <h1>Welcome to the Staff Portal</h1>
-            <p>Your Moderator account can manage the shared recipe, ingredient, and substitution catalog.</p>
-            <div className="wc-moderator-areas">
-              {areas.map(({ id, label, icon: Icon }) => (
-                <button
-                  type="button"
-                  className="wc-moderator-area"
-                  key={id}
-                  onClick={() => setTab(id)}
-                >
-                  <Icon size={20} /><strong>{label}</strong><span>Open catalog management</span>
-                </button>
-              ))}
-            </div>
+          <div className="wc-dashboard wc-moderator-dashboard">
+            <header className="wc-dashboard-header">
+              <div>
+                <div className="wc-dashboard-eyebrow"><ShieldCheck size={15} /> Catalog operations</div>
+                <h1>Moderator Workspace</h1>
+                <p>Manage the recipe, ingredient, and substitution records that power the shared catalog.</p>
+              </div>
+            </header>
+            <section className="wc-dashboard-section" aria-labelledby="moderator-work-areas">
+              <div className="wc-dashboard-section-heading">
+                <div>
+                  <p className="wc-dashboard-section-label">Work areas</p>
+                  <h2 id="moderator-work-areas">Catalog management</h2>
+                </div>
+                <p>Choose an area to continue.</p>
+              </div>
+              <div className="wc-moderator-areas">
+                {areas.map(({ id, label, description, icon: Icon }) => (
+                  <button
+                    type="button"
+                    className="wc-moderator-area"
+                    key={id}
+                    onClick={() => setTab(id)}
+                  >
+                    <span className="wc-moderator-area-icon"><Icon size={20} /></span>
+                    <span className="wc-moderator-area-copy"><strong>{label}</strong><span>{description}</span></span>
+                    <ArrowRight size={18} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            </section>
           </div>
         )}
       </main>
@@ -1319,7 +1390,7 @@ function initials(name, email) {
   return (email || '?').trim().slice(0, 2).toUpperCase();
 }
 
-function ProfileMenu({
+export function ProfileMenu({
   account, open, onToggle, onClose, onSignOut,
   onOpenSettings, onOpenHelp, onOpenDisplay,
 }) {
@@ -1327,7 +1398,13 @@ function ProfileMenu({
 
   return (
     <div className="wc-profile">
-      <button className="wc-profile-btn" onClick={onToggle} aria-expanded={open}>
+      <button
+        className="wc-profile-btn"
+        onClick={onToggle}
+        aria-label={open ? 'Close account menu' : 'Open account menu'}
+        aria-expanded={open}
+        aria-controls={open ? 'wc-account-menu' : undefined}
+      >
         <span className="wc-profile-avatar">{initials(account.name, account.email)}</span>
         <span className="wc-profile-info">
           <span className="wc-profile-name">{account.name || 'Admin'}</span>
@@ -1339,7 +1416,7 @@ function ProfileMenu({
       {open && (
         <>
           <div className="wc-profile-backdrop" onClick={onClose} />
-          <div className="wc-profile-dropdown">
+          <div className="wc-profile-dropdown" id="wc-account-menu">
             <button className="wc-dropdown-item" onClick={onOpenSettings}>
               <Settings size={15} /> Settings &amp; privacy
             </button>
@@ -1360,68 +1437,96 @@ function ProfileMenu({
   );
 }
 
-function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) {
+function SettingsModal({
+  account,
+  onClose,
+  onUpdateProfile,
+  onChangePassword,
+  onRequestEmailChange,
+  firebaseAccountAvailable,
+}) {
   const [name, setName] = useState(account.name || '');
   const [email, setEmail] = useState(account.email || '');
+  const [profileFieldErrors, setProfileFieldErrors] = useState({});
   const [profileError, setProfileError] = useState('');
   const [profileSaved, setProfileSaved] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [emailRequested, setEmailRequested] = useState(false);
+  const [requestingEmail, setRequestingEmail] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [passwordFieldErrors, setPasswordFieldErrors] = useState({});
   const [passwordError, setPasswordError] = useState('');
-  const [passwordSaved, setPasswordSaved] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
-
-  const passwordRules = checkPasswordRules(newPassword, name, email);
-  const passwordValid = Object.values(passwordRules).every(Boolean);
 
   async function submitProfile(e) {
     e.preventDefault();
+    const fieldErrors = { name: validateStaffName(name) };
+    setProfileFieldErrors(fieldErrors);
     setProfileError('');
     setProfileSaved(false);
-    if (!name.trim() || !email.trim()) {
-      setProfileError('Name and email can’t be empty.');
-      return;
-    }
-    const emailChanged = email.trim().toLowerCase() !== (account.email || '').toLowerCase();
+    if (hasStaffAuthErrors(fieldErrors)) return;
     setSavingProfile(true);
     try {
-      await onUpdateProfile({ name, email });
-      setProfileSaved(emailChanged ? 'email-pending' : true);
+      await onUpdateProfile({ name });
+      setName(name.trim());
+      setProfileSaved(true);
     } catch (err) {
-      setProfileError(err && err.message ? err.message : String(err));
+      const apiFieldErrors = staffFieldErrors(err, ['name']);
+      setProfileFieldErrors(apiFieldErrors);
+      if (!hasStaffAuthErrors(apiFieldErrors)) {
+        setProfileError(staffErrorMessage(err, 'Unable to update your name.'));
+      }
     } finally {
       setSavingProfile(false);
     }
   }
 
+  async function submitEmailChange(e) {
+    e.preventDefault();
+    setEmailError('');
+    setEmailRequested(false);
+    if (!email.trim()) {
+      setEmailError('Email is required.');
+      return;
+    }
+    if (email.trim().toLowerCase() === (account.email || '').toLowerCase()) {
+      setEmailError('Enter a different email address.');
+      return;
+    }
+    setRequestingEmail(true);
+    try {
+      await onRequestEmailChange(email);
+      setEmailRequested(true);
+    } catch (err) {
+      setEmailError(err && err.message ? err.message : String(err));
+    } finally {
+      setRequestingEmail(false);
+    }
+  }
+
   async function submitPassword(e) {
     e.preventDefault();
+    const fieldErrors = {
+      currentPassword: validateCurrentPassword(currentPassword),
+      newPassword: passwordRequirementState(newPassword).errors,
+      confirmNewPassword: newPassword === confirmNewPassword ? [] : ['New passwords don’t match.'],
+    };
+    setPasswordFieldErrors(fieldErrors);
     setPasswordError('');
-    setPasswordSaved(false);
-    if (!currentPassword || !newPassword) {
-      setPasswordError('Fill in both password fields.');
-      return;
-    }
-    if (!passwordValid) {
-      setPasswordError('New password doesn’t meet all the requirements below.');
-      return;
-    }
-    if (newPassword !== confirmNewPassword) {
-      setPasswordError('New passwords don’t match.');
-      return;
-    }
+    if (hasStaffAuthErrors(fieldErrors)) return;
     setSavingPassword(true);
     try {
       await onChangePassword({ currentPassword, newPassword });
-      setPasswordSaved(true);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmNewPassword('');
     } catch (err) {
-      setPasswordError(err && err.message ? err.message : String(err));
+      const apiFieldErrors = staffFieldErrors(err, ['currentPassword', 'newPassword']);
+      setPasswordFieldErrors(apiFieldErrors);
+      if (!hasStaffAuthErrors(apiFieldErrors)) {
+        setPasswordError(staffErrorMessage(err, 'Unable to update your password.'));
+      }
     } finally {
       setSavingPassword(false);
     }
@@ -1438,26 +1543,58 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
         <form onSubmit={submitProfile}>
           <div className="wc-field">
             <label>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
+            <input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setProfileFieldErrors({});
+              }}
+              required
+              aria-invalid={Boolean(profileFieldErrors.name?.length)}
+              aria-describedby={profileFieldErrors.name?.length ? 'settings-name-error' : undefined}
+            />
           </div>
-          <div className="wc-field">
-            <label>Email</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          </div>
+          <FieldErrors id="settings-name-error" messages={profileFieldErrors.name} />
           {profileError && (
             <div className="wc-auth-error"><AlertCircle size={14} /> {profileError}</div>
           )}
-          {profileSaved === 'email-pending' && (
-            <div className="wc-settings-success">
-              <Check size={14} /> Name updated. Check your new email inbox to confirm the email change.
-            </div>
-          )}
-          {profileSaved === true && (
-            <div className="wc-settings-success"><Check size={14} /> Profile updated.</div>
+          {profileSaved && (
+            <div className="wc-settings-success"><Check size={14} /> Name updated.</div>
           )}
           <div className="wc-modal-actions">
             <button type="submit" className="wc-btn-primary" disabled={savingProfile}>
               {savingProfile ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+
+        <div className="wc-settings-divider" />
+
+        <h3 className="wc-settings-subhead">Change email</h3>
+        <p className="wc-auth-note" style={{ textAlign: 'left' }}>
+          Email changes remain on the legacy account service until SP2B. Your displayed and sign-in email remains the WeCooked backend email.
+        </p>
+        <form onSubmit={submitEmailChange}>
+          <div className="wc-field">
+            <label>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setEmailError(''); setEmailRequested(false); }}
+              required
+              disabled={!firebaseAccountAvailable}
+            />
+          </div>
+          {!firebaseAccountAvailable && (
+            <div className="wc-auth-note">Legacy email change is unavailable for this backend-only account.</div>
+          )}
+          {emailError && <div className="wc-auth-error"><AlertCircle size={14} /> {emailError}</div>}
+          {emailRequested && (
+            <div className="wc-settings-success"><Check size={14} /> Check the new inbox to confirm the legacy email change.</div>
+          )}
+          <div className="wc-modal-actions">
+            <button type="submit" className="wc-btn-secondary" disabled={requestingEmail || !firebaseAccountAvailable}>
+              {requestingEmail ? 'Sending…' : 'Request email change'}
             </button>
           </div>
         </form>
@@ -1471,60 +1608,43 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
             <input
               type="password"
               value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
+              onChange={(e) => { setCurrentPassword(e.target.value); setPasswordFieldErrors({}); }}
               autoComplete="current-password"
               required
+              aria-invalid={Boolean(passwordFieldErrors.currentPassword?.length)}
+              aria-describedby={passwordFieldErrors.currentPassword?.length ? 'settings-current-password-error' : undefined}
             />
           </div>
+          <FieldErrors id="settings-current-password-error" messages={passwordFieldErrors.currentPassword} />
           <div className="wc-field">
             <label>New password</label>
             <input
               type="password"
               value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
+              onChange={(e) => { setNewPassword(e.target.value); setPasswordFieldErrors({}); }}
               autoComplete="new-password"
               required
+              aria-invalid={Boolean(passwordFieldErrors.newPassword?.length)}
+              aria-describedby="staff-password-requirements settings-new-password-error"
             />
           </div>
-          {newPassword && (
-            <ul className="wc-pw-checklist">
-              <li className={passwordRules.length ? 'ok' : ''}>
-                {passwordRules.length ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains at least 8 characters
-              </li>
-              <li className={passwordRules.mixedCase ? 'ok' : ''}>
-                {passwordRules.mixedCase ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains both lower and upper case letters
-              </li>
-              <li className={passwordRules.number ? 'ok' : ''}>
-                {passwordRules.number ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains at least one number (0-9)
-              </li>
-              <li className={passwordRules.symbol ? 'ok' : ''}>
-                {passwordRules.symbol ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Contains at least one special symbol
-              </li>
-              <li className={passwordRules.noNameOrEmail ? 'ok' : ''}>
-                {passwordRules.noNameOrEmail ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                Does not contain your name or email
-              </li>
-            </ul>
-          )}
+          <FieldErrors id="settings-new-password-error" messages={passwordFieldErrors.newPassword} />
+          <PasswordRequirements password={newPassword} />
           <div className="wc-field">
             <label>Confirm new password</label>
             <input
               type="password"
               value={confirmNewPassword}
-              onChange={(e) => setConfirmNewPassword(e.target.value)}
+              onChange={(e) => { setConfirmNewPassword(e.target.value); setPasswordFieldErrors({}); }}
               autoComplete="new-password"
               required
+              aria-invalid={Boolean(passwordFieldErrors.confirmNewPassword?.length)}
+              aria-describedby={passwordFieldErrors.confirmNewPassword?.length ? 'settings-confirm-password-error' : undefined}
             />
           </div>
+          <FieldErrors id="settings-confirm-password-error" messages={passwordFieldErrors.confirmNewPassword} />
           {passwordError && (
             <div className="wc-auth-error"><AlertCircle size={14} /> {passwordError}</div>
-          )}
-          {passwordSaved && (
-            <div className="wc-settings-success"><Check size={14} /> Password updated.</div>
           )}
           <div className="wc-modal-actions">
             <button type="submit" className="wc-btn-primary" disabled={savingPassword}>
@@ -1540,7 +1660,7 @@ function SettingsModal({ account, onClose, onUpdateProfile, onChangePassword }) 
 const HELP_FAQS = [
   {
     q: 'Where is my data stored?',
-    a: 'Ingredients, substitutions, recipes, users, and staff applications live in the WeCooked backend (REST API + MongoDB). Firebase remains only for legacy account utilities and a best-effort sign-in mirror; it does not determine Staff Portal access.',
+    a: 'Ingredients, substitutions, recipes, users, and staff applications live in the WeCooked backend (REST API + MongoDB). Firebase remains only for the legacy email-change/account-delete surfaces and their best-effort sign-in mirror; it does not determine Staff Portal access or displayed identity.',
   },
   {
     q: 'How do I add another admin?',
@@ -1691,103 +1811,86 @@ function LogoutConfirmModal({ onCancel, onConfirm }) {
   );
 }
 
-function OverviewTab({ metrics, dark, latestRecipes }) {
-  const gridStroke = dark ? '#3A392F' : '#DAD3C4';
-  const tickFill = dark ? '#A39C8C' : '#8C8577';
+export function OverviewTab({ metrics, latestRecipes, recipeStatus, userStatus, onNavigate }) {
+  const recipeValue = recipeStatus === 'ready' ? metrics.totalRecipes : '—';
+  const userValue = (value) => (userStatus === 'ready' ? value : '—');
+  const hasLoadError = recipeStatus === 'error' || userStatus === 'error';
+
   return (
-    <div>
-      <div className="wc-topbar">
-        <h1>Overview</h1>
-      </div>
+    <div className="wc-dashboard wc-admin-dashboard">
+      <header className="wc-dashboard-header">
+        <div>
+          <p className="wc-dashboard-eyebrow">Staff operations</p>
+          <h1>Admin Overview</h1>
+          <p>Review current catalog and account totals, then move into the available administration areas.</p>
+        </div>
+      </header>
 
-      <div className="wc-metric-grid">
-        <div className="wc-metric-card">
-          <div className="wc-metric-label">Total Recipes</div>
-          <div className="wc-metric-value wc-serif">{metrics.totalRecipes}</div>
-          <div className="wc-metric-delta"><TrendingUp size={13} /> +12 this month</div>
+      {hasLoadError && (
+        <div className="wc-dashboard-notice" role="status">
+          Some overview data could not be loaded. Open the related workspace to try again.
         </div>
-        <div className="wc-metric-card">
-          <div className="wc-metric-label">Total Users</div>
-          <div className="wc-metric-value wc-serif">{metrics.totalUsers}</div>
-          <div className="wc-metric-delta"><TrendingUp size={13} /> +8% this month</div>
-        </div>
-        <div className="wc-metric-card">
-          <div className="wc-metric-label">Active Users</div>
-          <div className="wc-metric-value wc-serif">{metrics.activeUsers}</div>
-          <div className="wc-metric-delta"><TrendingUp size={13} /> steady</div>
-        </div>
-        <div className="wc-metric-card">
-          <div className="wc-metric-label">Suspended Users</div>
-          <div className="wc-metric-value wc-serif">{metrics.suspendedUsers}</div>
-          <div className="wc-metric-delta"><Clock size={13} /> as of last check</div>
-        </div>
-      </div>
+      )}
 
-      <div className="wc-panels">
-        <div className="wc-card">
-          <h2>Growth, last 6 months</h2>
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={growthData} margin={{ left: -18, right: 10, top: 5, bottom: 0 }}>
-              <defs>
-                <linearGradient id="wcUsers" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#4A5D4E" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#4A5D4E" stopOpacity={0.02} />
-                </linearGradient>
-                <linearGradient id="wcRecipes" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#C9962E" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#C9962E" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke={gridStroke} vertical={false} />
-              <XAxis dataKey="month" tick={{ fontSize: 12, fill: tickFill }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 12, fill: tickFill }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${gridStroke}`, fontSize: 13, background: dark ? '#262B24' : '#fff', color: dark ? '#EDEAE0' : '#2A2F28' }} />
-              <Area type="monotone" dataKey="users" stroke="#4A5D4E" fill="url(#wcUsers)" strokeWidth={2} name="Users" />
-              <Area type="monotone" dataKey="recipes" stroke="#C9962E" fill="url(#wcRecipes)" strokeWidth={2} name="Recipes" />
-            </AreaChart>
-          </ResponsiveContainer>
+      <section
+        className="wc-dashboard-summary"
+        aria-label="Current totals"
+        aria-busy={recipeStatus === 'loading' || userStatus === 'loading'}
+      >
+        {(recipeStatus === 'loading' || userStatus === 'loading') && (
+          <span className="wc-dashboard-sr-only" role="status">Loading current totals…</span>
+        )}
+        <div className="wc-dashboard-stat">
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><ChefHat size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Recipes</span><strong>{recipeValue}</strong><span className="wc-dashboard-stat-detail">Current catalog total</span></span>
         </div>
-
-        <div className="wc-card">
-          <h2>Recent activity</h2>
-          <ul className="wc-activity-list">
-            {activityFeed.map((item, i) => (
-              <li key={i}>
-                <Leaf size={13} className="wc-leaf-dot" />
-                <span>{item.text}</span>
-                <span className="wc-activity-time">{item.time}</span>
-              </li>
-            ))}
-          </ul>
+        <div className="wc-dashboard-stat">
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><Users size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Users</span><strong>{userValue(metrics.totalUsers)}</strong><span className="wc-dashboard-stat-detail">All user accounts</span></span>
         </div>
-      </div>
+        <div className="wc-dashboard-stat">
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><CheckCircle2 size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Active users</span><strong>{userValue(metrics.activeUsers)}</strong><span className="wc-dashboard-stat-detail">Accounts with active status</span></span>
+        </div>
+        <div className="wc-dashboard-stat">
+          <span className="wc-dashboard-stat-icon" aria-hidden="true"><ShieldAlert size={17} /></span>
+          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Suspended users</span><strong>{userValue(metrics.suspendedUsers)}</strong><span className="wc-dashboard-stat-detail">Accounts with suspended status</span></span>
+        </div>
+      </section>
 
-      <div className="wc-panels wc-panels-secondary">
-        <div className="wc-card">
-          <h2>Latest recipes</h2>
-          {latestRecipes.length === 0 ? (
-            <div className="wc-empty-inline">No recipes yet.</div>
+      <div className="wc-dashboard-columns">
+        <section className="wc-dashboard-section wc-dashboard-recipes" aria-labelledby="latest-recipes-heading">
+          <div className="wc-dashboard-section-heading">
+            <div><p className="wc-dashboard-section-label">Catalog</p><h2 id="latest-recipes-heading">Latest recipes</h2></div>
+            <button type="button" className="wc-dashboard-text-action" onClick={() => onNavigate('recipes')}>View catalog <ArrowRight size={15} /></button>
+          </div>
+          {recipeStatus === 'loading' || recipeStatus === 'idle' ? (
+            <div className="wc-dashboard-state" role="status">Loading recipe data…</div>
+          ) : recipeStatus === 'error' ? (
+            <div className="wc-dashboard-state">Recipe data is unavailable.</div>
+          ) : latestRecipes.length === 0 ? (
+            <div className="wc-dashboard-state">No recipes are currently in the catalog.</div>
           ) : (
-            <ul className="wc-toprecipe-list">
-              {latestRecipes.map((r) => (
-                <li key={r.id}>
-                  <span className="wc-toprecipe-title">{r.title}</span>
-                  <span className="wc-toprecipe-saves">
-                    {slugLabel(r.category) || slugLabel(r.region) || ''}
-                  </span>
+            <ul className="wc-dashboard-recipe-list">
+              {latestRecipes.map((recipe) => (
+                <li key={recipe.id}>
+                  <span><strong>{recipe.title}</strong><small>{slugLabel(recipe.category) || slugLabel(recipe.region) || 'Recipe'}</small></span>
                 </li>
               ))}
             </ul>
           )}
-        </div>
+        </section>
 
-        <div className="wc-card">
-          <h2>Catalog</h2>
-          <div className="wc-empty-inline">
-            {metrics.totalRecipes === 1 ? '1 recipe' : `${metrics.totalRecipes} recipes`} in the
-            catalog. A region / category breakdown returns once recipe content is classified.
+        <section className="wc-dashboard-section" aria-labelledby="quick-access-heading">
+          <div className="wc-dashboard-section-heading">
+            <div><p className="wc-dashboard-section-label">Navigation</p><h2 id="quick-access-heading">Quick access</h2></div>
           </div>
-        </div>
+          <div className="wc-dashboard-shortcuts">
+            <button type="button" onClick={() => onNavigate('users')}><Users size={18} /><span><strong>Users</strong><small>Manage account status</small></span><ArrowRight size={16} /></button>
+            <button type="button" onClick={() => onNavigate('staff')}><UserCog size={18} /><span><strong>Staff Management</strong><small>Review staff access</small></span><ArrowRight size={16} /></button>
+            <button type="button" onClick={() => onNavigate('recipes')}><ChefHat size={18} /><span><strong>Recipe catalog</strong><small>Open read-only catalog access</small></span><ArrowRight size={16} /></button>
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -2137,156 +2240,142 @@ function VerifyEmailScreen({ account, onResend, onCheckAgain, onSignOut }) {
   );
 }
 
-function ResetPasswordScreen({ oobCode, onDone }) {
-  const [status, setStatus] = useState('verifying'); // verifying | ready | invalid | done
-  const [email, setEmail] = useState('');
+export function ResetPasswordScreen({ token, onClearToken, onDone, initialStatus = 'ready' }) {
+  const [status, setStatus] = useState(initialStatus); // ready | invalid | done
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    verifyResetCode(oobCode)
-      .then((resolvedEmail) => {
-        if (!cancelled) { setEmail(resolvedEmail); setStatus('ready'); }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err && err.message ? err.message : String(err));
-          setStatus('invalid');
-        }
-      });
-    return () => { cancelled = true; };
-  }, [oobCode]);
-
-  const passwordRules = checkPasswordRules(newPassword, '', email);
-  const passwordValid = Object.values(passwordRules).every(Boolean);
-
   async function handleSubmit(e) {
     e.preventDefault();
+    const validationErrors = {
+      newPassword: passwordRequirementState(newPassword).errors,
+      confirmPassword: newPassword === confirmPassword ? [] : ['Passwords don’t match.'],
+    };
+    setFieldErrors(validationErrors);
     setError('');
-    if (!passwordValid) {
-      setError('Your password doesn’t meet all the requirements below.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('Passwords don’t match.');
-      return;
-    }
+    if (hasStaffAuthErrors(validationErrors)) return;
     setSubmitting(true);
     try {
-      await confirmReset(oobCode, newPassword);
+      await resetBackendPassword(token, newPassword);
+      onClearToken();
       setStatus('done');
     } catch (err) {
-      setError(err && err.message ? err.message : String(err));
+      const apiFieldErrors = staffFieldErrors(err, ['token', 'newPassword']);
+      if (err?.code === 'AUTH_PASSWORD_RESET_TOKEN_INVALID' || apiFieldErrors.token?.length) {
+        onClearToken();
+        setError('This reset link is invalid, expired, or has already been used.');
+        setStatus('invalid');
+      } else {
+        setFieldErrors(apiFieldErrors);
+        if (!hasStaffAuthErrors(apiFieldErrors)) {
+          setError(staffErrorMessage(err, 'Unable to reset your password.'));
+        }
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
-  return (
-    <div className="wc-auth-wrap">
-      <div className="wc-auth-bg" />
-      <div className="wc-auth-tagline">
-        <div className="wc-auth-visual-title wc-serif">Good food, well organized.</div>
-        <div className="wc-auth-visual-sub">Manage WeCooked&rsquo;s recipes and members from one place.</div>
-      </div>
-      <div className="wc-auth-panel">
-        <div className="wc-auth-badge">
-          <Lock size={20} color="#4A5D4E" />
-        </div>
-        <div className="wc-auth-title wc-serif">Reset your password</div>
+  const presentation = status === 'invalid'
+    ? {
+        icon: <AlertCircle size={20} />,
+        title: 'Reset link unavailable',
+        subtitle: error || 'This reset link is invalid, expired, or has already been used.',
+      }
+    : status === 'done'
+      ? {
+          icon: <CheckCircle2 size={20} />,
+          title: 'Password updated',
+          subtitle: 'Your password has been updated. You can now sign in with your new password.',
+        }
+      : {
+          icon: <Lock size={20} />,
+          title: 'Reset your password',
+          subtitle: 'Choose a new password for your WeCooked account.',
+        };
 
-        {status === 'verifying' && (
-          <div className="wc-auth-sub">Checking your reset link…</div>
-        )}
+  return (
+    <SupportingAuthFrame
+      icon={presentation.icon}
+      eyebrow="Account recovery"
+      title={presentation.title}
+      subtitle={presentation.subtitle}
+    >
 
         {status === 'invalid' && (
           <>
-            <div className="wc-auth-error"><AlertCircle size={14} /> {error || 'This reset link is invalid or has expired.'}</div>
+            <span className="wc-visually-hidden" role="alert">{presentation.subtitle}</span>
             <button type="button" className="wc-btn-primary wc-auth-submit" onClick={onDone}>
-              Back to sign in
+              Back to Sign In
             </button>
           </>
         )}
 
         {status === 'done' && (
           <>
-            <div className="wc-auth-sub">Your password has been updated.</div>
+            <span className="wc-visually-hidden" role="status">Password updated successfully.</span>
             <button type="button" className="wc-btn-primary wc-auth-submit" onClick={onDone}>
-              Continue to sign in
+              Continue to Sign In
             </button>
           </>
         )}
 
         {status === 'ready' && (
           <>
-            <div className="wc-auth-sub">Choose a new password for <strong>{email}</strong>.</div>
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={handleSubmit} aria-busy={submitting}>
               <div className="wc-auth-field">
-                <label>New password</label>
+                <label htmlFor="reset-new-password">New Password <span aria-hidden="true">*</span></label>
                 <div className="wc-auth-input-wrap">
                   <Lock size={15} />
                   <input
+                    id="reset-new-password"
                     type={showPassword ? 'text' : 'password'}
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
+                    onChange={(e) => { setNewPassword(e.target.value); setFieldErrors({}); }}
                     placeholder="Create a password"
                     autoComplete="new-password"
                     required
+                    aria-invalid={Boolean(fieldErrors.newPassword?.length)}
+                    aria-describedby="staff-password-requirements reset-new-password-error"
                   />
                   <button
                     type="button"
                     className="wc-auth-eye"
                     onClick={() => setShowPassword((s) => !s)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
                   >
                     {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
               </div>
-
-              <ul className="wc-pw-checklist">
-                <li className={passwordRules.length ? 'ok' : ''}>
-                  {passwordRules.length ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains at least 8 characters
-                </li>
-                <li className={passwordRules.mixedCase ? 'ok' : ''}>
-                  {passwordRules.mixedCase ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains both lower (a-z) and upper case letters (A-Z)
-                </li>
-                <li className={passwordRules.number ? 'ok' : ''}>
-                  {passwordRules.number ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains at least one number (0-9)
-                </li>
-                <li className={passwordRules.symbol ? 'ok' : ''}>
-                  {passwordRules.symbol ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Contains at least one special symbol (!@#$%^&*…)
-                </li>
-                <li className={passwordRules.noNameOrEmail ? 'ok' : ''}>
-                  {passwordRules.noNameOrEmail ? <Check size={13} /> : <span className="wc-pw-dot" />}
-                  Does not contain your name or email address
-                </li>
-              </ul>
+              <FieldErrors id="reset-new-password-error" messages={fieldErrors.newPassword} />
+              <PasswordRequirements password={newPassword} />
 
               <div className="wc-auth-field">
-                <label>Confirm password</label>
+                <label htmlFor="reset-confirm-password">Confirm Password <span aria-hidden="true">*</span></label>
                 <div className="wc-auth-input-wrap">
                   <Lock size={15} />
                   <input
+                    id="reset-confirm-password"
                     type={showPassword ? 'text' : 'password'}
                     value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    onChange={(e) => { setConfirmPassword(e.target.value); setFieldErrors({}); }}
                     placeholder="Repeat password"
                     autoComplete="new-password"
                     required
+                    aria-invalid={Boolean(fieldErrors.confirmPassword?.length)}
+                    aria-describedby={fieldErrors.confirmPassword?.length ? 'reset-confirm-password-error' : undefined}
                   />
                 </div>
               </div>
+              <FieldErrors id="reset-confirm-password-error" messages={fieldErrors.confirmPassword} />
 
-              {error && <div className="wc-auth-error"><AlertCircle size={14} /> {error}</div>}
+              {error && <div className="wc-auth-error" role="alert"><AlertCircle size={14} /> {error}</div>}
 
               <button type="submit" className="wc-btn-primary wc-auth-submit" disabled={submitting}>
                 {submitting ? 'Saving…' : 'Save new password'}
@@ -2294,8 +2383,7 @@ function ResetPasswordScreen({ oobCode, onDone }) {
             </form>
           </>
         )}
-      </div>
-    </div>
+    </SupportingAuthFrame>
   );
 }
 

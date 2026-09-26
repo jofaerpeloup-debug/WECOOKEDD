@@ -71,10 +71,10 @@ describe('ResetPasswordScreen — wired to the existing backend flow, no new one
     expect(code.ResetPassword).toMatch(/if \(inFlightRef\.current \|\| tokenMissing\) return;/);
   });
 
-  it('enforces the shared 8-character minimum client-side before calling the API', () => {
+  it('enforces the shared new-password contract client-side before calling the API', () => {
     const submitFn = code.ResetPassword.match(/const submit = async \(\) => \{[\s\S]*?\n  \};/)[0];
-    expect(submitFn).toMatch(/newPassword\.length < 8/);
-    const guardIdx = submitFn.indexOf('newPassword.length < 8');
+    expect(submitFn).toMatch(/getNewPasswordValidationError\(newPassword\)/);
+    const guardIdx = submitFn.indexOf('getNewPasswordValidationError(newPassword)');
     const callIdx = submitFn.indexOf('authService.resetPassword');
     expect(guardIdx).toBeGreaterThan(-1);
     expect(callIdx).toBeGreaterThan(guardIdx);

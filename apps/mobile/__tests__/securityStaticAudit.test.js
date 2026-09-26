@@ -61,13 +61,15 @@ describe('Change Password calls the real backend and handles its real outcome', 
     expect(code).toMatch(/await authService\.changePassword\(\{ currentPassword, newPassword \}\)/);
   });
 
-  it('validates length and confirmation client-side before ever calling the backend', () => {
-    expect(code).toMatch(/newPassword\.length < 8/);
-    expect(code).toMatch(/newPassword !== confirmPassword/);
+  it('validates current/new/confirmation fields client-side before ever calling the backend', () => {
+    expect(code).toMatch(/getLegacyPasswordValidationError\(currentPassword/);
+    expect(code).toMatch(/getNewPasswordValidationError\(newPassword\)/);
+    expect(code).toMatch(/newPassword === confirmPassword/);
   });
 
   it('maps real backend failures through the shared error-message mapper, never a fabricated message', () => {
-    expect(raw).toMatch(/import \{ getAuthErrorMessage \} from '\.\.\/api\/errorMessages'/);
+    expect(raw).toMatch(/getAuthErrorMessage,/);
+    expect(raw).toMatch(/from '\.\.\/api\/errorMessages'/);
     expect(code).toMatch(/setPwError\(getAuthErrorMessage\(err\)\)/);
   });
 

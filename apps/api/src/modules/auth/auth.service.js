@@ -143,13 +143,27 @@ async function register({ name, email, password }) {
   return { user, ...tokens };
 }
 
+function invalidCredentialsError() {
+  return new AppError('Invalid email or password.', {
+    statusCode: 401,
+    code: 'AUTH_INVALID_CREDENTIALS',
+  });
+}
+
+async function revokeProvisionalSession(sessionId) {
+  try {
+    await sessionService.revokeSession(sessionId);
+  } catch {
+    // No credential is signed or returned on this path. Even if cleanup is
+    // temporarily unavailable, the one-time raw refresh secret never leaves
+    // this process, so the orphaned row is not usable by the caller.
+  }
+}
+
 async function login({ email, password }) {
   const user = await userService.verifyCredentials(email, password);
   if (!user) {
-    throw new AppError('Invalid email or password.', {
-      statusCode: 401,
-      code: 'AUTH_INVALID_CREDENTIALS',
-    });
+    throw invalidCredentialsError();
   }
 
   if (user.status === 'suspended') {
@@ -159,8 +173,48 @@ async function login({ email, password }) {
     });
   }
 
-  const tokens = await issueTokensForUser(user);
-  return { user, ...tokens };
+  // The bcrypt comparison above used a snapshot of passwordHash. Create the
+  // session provisionally, then atomically query for that exact digest. This
+  // closes the change/reset race in both directions:
+  //
+  //  - credential replacement before this post-create check makes the query
+  //    miss, so the provisional session is revoked and no token is signed;
+  //  - credential replacement after this check necessarily sees the already-
+  //    created session in its existing revoke-all sweep.
+  //
+  // A pre-create re-read alone is insufficient because replacement could win
+  // after that read but before session persistence.
+  const expectedPasswordHash = user.passwordHash;
+  const { session, refreshToken } = await sessionService.createSession(user._id);
+  let currentUser;
+  try {
+    currentUser = await userService.getUserIfPasswordHashMatches(
+      user._id,
+      expectedPasswordHash
+    );
+  } catch (error) {
+    await revokeProvisionalSession(session._id);
+    throw error;
+  }
+
+  if (!currentUser) {
+    await revokeProvisionalSession(session._id);
+    throw invalidCredentialsError();
+  }
+  if (currentUser.status === 'suspended') {
+    await revokeProvisionalSession(session._id);
+    throw new AppError('This account has been suspended.', {
+      statusCode: 403,
+      code: 'AUTH_ACCOUNT_SUSPENDED',
+    });
+  }
+
+  const accessToken = signAccessToken({
+    userId: currentUser._id,
+    role: currentUser.role,
+    sessionId: session._id,
+  });
+  return { user: currentUser, accessToken, refreshToken };
 }
 
 function socialLoginUnavailableError() {
@@ -454,7 +508,9 @@ async function refresh(rawRefreshToken) {
  * kills the old password before the sweep, so a concurrent login racing with
  * the old credentials cannot mint a session that outlives the change. If the
  * revoke throws afterwards, the new password and reset-token invalidation still
- * stand (no rollback) and the failure surfaces as a 500.
+ * stand (no rollback) and the failure surfaces as a 500. The login path's
+ * post-session credential fence handles an old-password comparison that began
+ * before this persistence step but resumes after this sweep.
  *
  * No replacement session is created and no tokens are issued: the caller must
  * sign in again.

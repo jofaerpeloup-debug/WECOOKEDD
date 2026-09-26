@@ -14,11 +14,44 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { BowlMark, GoogleGlyph } from '../theme/brandKit';
-import Input from '../components/Input';
+import Input, { PasswordRequirements } from '../components/Input';
 import Button from '../components/Button';
 import useGoogleSignIn from '../hooks/useGoogleSignIn';
 import { useAuth } from '../context/AuthContext';
-import { getAuthErrorMessage } from '../api/errorMessages';
+import {
+  getAuthErrorMessage,
+  getAuthFieldErrors,
+  getEmailValidationError,
+  getNewPasswordValidationError,
+} from '../api/errorMessages';
+
+export function getRegistrationPasswordAutofillProps(platform) {
+  // On iOS, cancelling a generated Strong Password can visually clear the
+  // native field without reporting an empty value to React. Without a native
+  // cancellation event to reconcile that divergence, do not opt this one
+  // registration field into the generated-password flow. Other platforms keep
+  // the standard new-password hint.
+  return platform === 'ios'
+    ? { textContentType: 'none' }
+    : { autoComplete: 'new-password' };
+}
+
+export function prepareRegistrationSubmission({ name, email, password }) {
+  const trimmedName = name.trim();
+  const trimmedEmail = email.trim();
+  const fieldErrors = {
+    name: trimmedName ? null : 'Name is required.',
+    email: getEmailValidationError(email),
+    password: getNewPasswordValidationError(password),
+  };
+
+  return {
+    fieldErrors,
+    payload: Object.values(fieldErrors).some(Boolean)
+      ? null
+      : { name: trimmedName, email: trimmedEmail, password },
+  };
+}
 
 export default function RegisterScreen({ navigation }) {
   const { colors, isDark } = useTheme();
@@ -30,6 +63,7 @@ export default function RegisterScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [activeAction, setActiveAction] = useState(null);
   const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
   const inFlightRef = useRef(false);
 
   // The SAME hook, and therefore the same real flow, that Login uses: there is
@@ -65,16 +99,14 @@ export default function RegisterScreen({ navigation }) {
     if (inFlightRef.current) return; // guard against rapid duplicate submissions
     google.cancel();
     setError(null);
-    const trimmedName = name.trim();
-    const trimmedEmail = email.trim();
-    if (!trimmedName || !trimmedEmail || !password) {
-      setError('Fill in your name, email, and a password to continue.');
+    // Validate and submit one immutable snapshot so no fallback/default value
+    // can differ from the password state represented by the checklist.
+    const submission = prepareRegistrationSubmission({ name, email, password });
+    if (!submission.payload) {
+      setFieldErrors(submission.fieldErrors);
       return;
     }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters long.');
-      return;
-    }
+    setFieldErrors({});
     inFlightRef.current = true;
     setActiveAction('register');
     try {
@@ -82,9 +114,11 @@ export default function RegisterScreen({ navigation }) {
       // other server-owned fields are never supplied. The backend always
       // creates a normal user and returns a full session, so this also signs
       // the new account in; RootNavigator then swaps to the authed stack.
-      await signUp({ name: trimmedName, email: trimmedEmail, password });
+      await signUp(submission.payload);
     } catch (err) {
-      setError(getAuthErrorMessage(err));
+      const apiFieldErrors = getAuthFieldErrors(err, ['name', 'email', 'password']);
+      setFieldErrors(apiFieldErrors);
+      if (Object.keys(apiFieldErrors).length === 0) setError(getAuthErrorMessage(err));
     } finally {
       inFlightRef.current = false;
       setActiveAction(null);
@@ -134,46 +168,58 @@ export default function RegisterScreen({ navigation }) {
 
           <Input
             label="Name"
+            required
             icon="person-outline"
             value={name}
-            onChangeText={setName}
+            onChangeText={(value) => {
+              setName(value);
+              setFieldErrors((current) => ({ ...current, name: null }));
+            }}
             placeholder="Your name"
             autoCapitalize="words"
+            autoComplete="name"
+            textContentType="name"
             editable={!busy}
+            error={fieldErrors.name}
           />
-          {/* Password-manager integration is deferred out of M1 to its own
-              slice, so these fields carry no autofill hints — same as before
-              the migration. What stays is IME hardening: an email address must
-              not be capitalised, autocorrected or spell-checked on its way in. */}
           <Input
             label="Email"
+            required
             icon="mail-outline"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(value) => {
+              setEmail(value);
+              setFieldErrors((current) => ({ ...current, email: null }));
+            }}
             placeholder="youremail@gmail.com"
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
+            autoComplete="email"
+            textContentType="emailAddress"
             editable={!busy}
+            error={fieldErrors.email}
           />
-          {/* The IME transforms are pinned off for their own sake, not for
-              autofill: the eye toggle unmasks this field, and a plain text
-              field would otherwise apply sentence capitalisation, autocorrect
-              and spell-check suggestions to a typed password. */}
           <Input
             label="Password"
+            required
             icon="lock-closed-outline"
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(value) => {
+              setPassword(value);
+              setFieldErrors((current) => ({ ...current, password: null }));
+            }}
             placeholder="At least 8 characters"
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
+            {...getRegistrationPasswordAutofillProps(Platform.OS)}
             editable={!busy}
-            style={{ marginBottom: spacing.sm }}
+            error={fieldErrors.password}
           />
+          <PasswordRequirements value={password} />
 
           {status && (
             <Text style={[styles.status, status.tone]} accessibilityLiveRegion="polite">

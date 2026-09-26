@@ -14,6 +14,7 @@
     "migrate:auth-identities": "node scripts/migrate-auth-identities.js"
   },
   "dependencies": {
+    "@wecooked/contracts": "0.0.0",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.11.0",
     "cors": "^2.8.6",

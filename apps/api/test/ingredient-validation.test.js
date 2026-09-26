@@ -18,6 +18,16 @@ test('createIngredientSchema accepts a valid body', () => {
   assert.deepEqual(result.data.body.allergenTags, ['milk']);
 });
 
+test('createIngredientSchema accepts Protein, Pantry, and Soy without inferring allergens', () => {
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const result = createIngredientSchema.safeParse({
+      body: { name: `${category} ingredient`, category },
+    });
+    assert.equal(result.success, true, `expected ${category} to be accepted`);
+    assert.deepEqual(result.data.body.allergenTags, []);
+  }
+});
+
 test('createIngredientSchema defaults aliases/allergenTags to [] when omitted', () => {
   const result = createIngredientSchema.safeParse({ body: { name: 'Butter', category: 'dairy' } });
   assert.equal(result.success, true);
@@ -27,6 +37,11 @@ test('createIngredientSchema defaults aliases/allergenTags to [] when omitted', 
 
 test('createIngredientSchema rejects an invalid category', () => {
   const result = createIngredientSchema.safeParse({ body: { name: 'Butter', category: 'not-real' } });
+  assert.equal(result.success, false);
+});
+
+test('createIngredientSchema rejects the retired Other category', () => {
+  const result = createIngredientSchema.safeParse({ body: { name: 'Legacy item', category: 'other' } });
   assert.equal(result.success, false);
 });
 
@@ -66,6 +81,22 @@ test('updateIngredientSchema accepts a single-field partial update', () => {
     body: { name: 'Salted Butter' },
   });
   assert.equal(result.success, true);
+});
+
+test('updateIngredientSchema accepts Protein, Pantry, and Soy but rejects Other', () => {
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const result = updateIngredientSchema.safeParse({
+      params: { ingredientId: VALID_ID },
+      body: { category },
+    });
+    assert.equal(result.success, true, `expected ${category} to be accepted`);
+  }
+
+  const legacy = updateIngredientSchema.safeParse({
+    params: { ingredientId: VALID_ID },
+    body: { category: 'other' },
+  });
+  assert.equal(legacy.success, false);
 });
 
 test('updateIngredientSchema rejects an empty body', () => {
@@ -117,6 +148,14 @@ test('listIngredientsSchema coerces page/limit from query strings', () => {
   assert.equal(result.success, true);
   assert.equal(result.data.query.page, 2);
   assert.equal(result.data.query.limit, 50);
+});
+
+test('listIngredientsSchema accepts new category filters and rejects retired Other', () => {
+  for (const category of ['protein', 'pantry', 'soy']) {
+    const result = listIngredientsSchema.safeParse({ query: { category } });
+    assert.equal(result.success, true, `expected ${category} filter to be accepted`);
+  }
+  assert.equal(listIngredientsSchema.safeParse({ query: { category: 'other' } }).success, false);
 });
 
 test('listIngredientsSchema rejects a limit above 100', () => {

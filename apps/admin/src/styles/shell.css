@@ -1,0 +1,384 @@
+/* Authenticated Staff Portal shell only. Keep page-body controls and auth screens isolated. */
+.wc-admin .wc-staff-sidebar {
+  --wc-shell-foreground: #fff4e6;
+  position: sticky;
+  top: 0;
+  width: 228px;
+  height: 100vh;
+  min-height: 100vh;
+  padding: 20px 14px 14px;
+  overflow-y: auto;
+  background: var(--primary);
+  color: var(--wc-shell-foreground);
+  border-right: var(--border-width-strong) solid var(--border-strong);
+}
+
+.wc-admin .wc-staff-sidebar .wc-brand {
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: 0 6px 18px;
+  border-bottom: var(--border-width) solid rgba(255, 244, 230, 0.24);
+}
+
+.wc-admin .wc-staff-sidebar .wc-brand-badge {
+  width: 36px;
+  height: 36px;
+  border: var(--border-width-strong) solid rgba(2, 56, 32, 0.38);
+  border-radius: var(--radius-sm);
+  background: var(--wc-shell-foreground);
+}
+
+.wc-admin .wc-staff-sidebar .wc-brand-name {
+  color: var(--wc-shell-foreground);
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.wc-admin .wc-staff-sidebar .wc-brand-sub {
+  margin-top: 3px;
+  color: var(--wc-shell-foreground);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  opacity: 0.76;
+}
+
+.wc-admin .wc-role-label {
+  display: inline-flex;
+  margin-top: var(--space-2);
+  padding: 2px 7px;
+  color: var(--wc-shell-foreground);
+  border: var(--border-width) solid rgba(255, 244, 230, 0.52);
+  border-radius: 2px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav {
+  gap: 18px;
+  margin-top: 14px;
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav-section-label {
+  margin: 0 10px 5px;
+  color: var(--wc-shell-foreground);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.3;
+  opacity: 0.56;
+  text-transform: uppercase;
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav-item {
+  position: relative;
+  min-height: 38px;
+  padding: 7px 9px 7px 12px;
+  color: rgba(255, 244, 230, 0.78);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-standard),
+    border-color var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav-item:hover {
+  color: var(--wc-shell-foreground);
+  border-color: rgba(255, 244, 230, 0.3);
+  background: rgba(255, 244, 230, 0.08);
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav-item.active,
+.wc-admin.wc-dark .wc-staff-sidebar .wc-nav-item.active {
+  padding-left: 10px;
+  color: #023820;
+  border-color: var(--background);
+  border-left-width: 4px;
+  background: var(--background);
+  font-weight: 700;
+}
+
+.wc-admin .wc-staff-sidebar .wc-nav-item.active svg {
+  stroke-width: 2.4;
+}
+
+.wc-admin .wc-staff-sidebar .wc-sidebar-footer {
+  gap: var(--space-2);
+  padding-top: 12px;
+  border-top-color: rgba(255, 244, 230, 0.24);
+}
+
+.wc-admin .wc-profile,
+.wc-admin .wc-staff-identity {
+  width: 100%;
+}
+
+.wc-admin .wc-profile-btn,
+.wc-admin .wc-staff-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 5px 7px;
+  border: var(--border-width) solid rgba(255, 244, 230, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 244, 230, 0.06);
+}
+
+.wc-admin .wc-profile-btn:hover {
+  border-color: rgba(255, 244, 230, 0.46);
+  background: rgba(255, 244, 230, 0.1);
+}
+
+.wc-admin .wc-staff-sidebar .wc-profile-avatar {
+  width: 32px;
+  height: 32px;
+  color: var(--primary);
+  border: var(--border-width) solid rgba(255, 244, 230, 0.58);
+  border-radius: var(--radius-sm);
+  background: var(--highlight);
+}
+
+.wc-admin .wc-staff-sidebar .wc-profile-name {
+  color: var(--wc-shell-foreground);
+}
+
+.wc-admin .wc-staff-sidebar .wc-profile-email,
+.wc-admin .wc-staff-sidebar .wc-profile-chevron {
+  color: var(--wc-shell-foreground);
+  opacity: 0.7;
+}
+
+.wc-admin .wc-staff-sidebar .wc-signout-item {
+  width: 100%;
+}
+
+.wc-admin .wc-profile-dropdown {
+  border: var(--border-width-strong) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-dialog);
+}
+
+.wc-admin .wc-dropdown-item {
+  min-height: 40px;
+  border-radius: 3px;
+  color: var(--text-primary);
+}
+
+.wc-admin .wc-dropdown-item:hover {
+  background: var(--surface-strong);
+}
+
+.wc-admin .wc-staff-main {
+  max-width: calc(100vw - 228px);
+  padding: 26px clamp(24px, 3vw, 44px) 48px;
+  background: var(--background);
+}
+
+.wc-admin .wc-staff-main .wc-topbar {
+  align-items: flex-end;
+  margin-bottom: var(--space-6);
+  padding: 0 0 var(--space-4);
+  border-bottom: var(--border-width-strong) solid var(--border-strong);
+}
+
+.wc-admin .wc-staff-main .wc-topbar h1 {
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 2.25vw, 2rem);
+  line-height: 1.08;
+}
+
+.wc-admin .wc-staff-main .wc-topbar-sub {
+  max-width: 62ch;
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.wc-admin .wc-staff-main .wc-topbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wc-admin.wc-dark .wc-staff-sidebar {
+  background: #102219;
+  border-right-color: var(--border-strong);
+}
+
+.wc-admin.wc-dark .wc-staff-sidebar .wc-nav-item.active {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--surface-strong);
+}
+
+.wc-admin.wc-dark .wc-staff-sidebar .wc-brand-badge {
+  background: var(--wc-shell-foreground);
+}
+
+@media (max-width: 900px) {
+  .wc-admin:has(.wc-staff-sidebar) {
+    flex-direction: column;
+  }
+
+  .wc-admin .wc-staff-sidebar {
+    position: relative;
+    top: auto;
+    width: 100%;
+    min-width: 0;
+    max-width: 100vw;
+    min-height: 0;
+    padding: var(--space-3) var(--space-4);
+    display: grid;
+    grid-template-columns: minmax(180px, auto) 1fr auto;
+    align-items: center;
+    gap: var(--space-3);
+    height: auto;
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: var(--border-width-strong) solid var(--border-strong);
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-brand {
+    align-items: center;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-role-label {
+    margin-top: 3px;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-nav {
+    min-width: 0;
+    margin-top: 0;
+    flex-direction: row;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-nav-group {
+    display: contents;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-nav-section-label {
+    display: none;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-sidebar-footer {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-profile-info {
+    display: none;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-profile-btn,
+  .wc-admin .wc-staff-sidebar .wc-staff-identity {
+    width: auto;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-staff-identity {
+    padding: 7px;
+  }
+
+  .wc-admin .wc-staff-main {
+    width: 100%;
+    max-width: 100%;
+    padding: var(--space-6) clamp(18px, 4vw, 32px) 48px;
+  }
+}
+
+@media (max-width: 620px) {
+  .wc-admin .wc-staff-sidebar {
+    position: relative;
+    grid-template-columns: 1fr auto;
+    padding-right: 76px;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-brand-badge {
+    width: 32px;
+    height: 32px;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin: 0 calc(var(--space-4) * -1) calc(var(--space-3) * -1);
+    padding: 0 var(--space-4) var(--space-3);
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-sidebar-footer {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-4);
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-staff-identity {
+    display: none;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-signout-item {
+    width: 42px;
+    padding: 9px 11px;
+    gap: 0;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  .wc-admin .wc-staff-sidebar .wc-signout-item svg {
+    flex: 0 0 auto;
+    color: var(--wc-shell-foreground);
+  }
+
+  .wc-admin .wc-profile-dropdown {
+    top: calc(100% + 6px);
+    right: 0;
+    bottom: auto;
+    left: auto;
+    width: min(236px, calc(100vw - 32px));
+  }
+
+  .wc-admin .wc-staff-main {
+    padding: 20px 16px 40px;
+    overflow-x: hidden;
+  }
+
+  .wc-admin .wc-staff-main .wc-topbar {
+    align-items: stretch;
+  }
+
+  .wc-admin .wc-staff-main .wc-topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .wc-admin .wc-staff-main .wc-search,
+  .wc-admin .wc-staff-main .wc-search input {
+    width: 100%;
+  }
+}

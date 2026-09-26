@@ -3,17 +3,32 @@ const assert = require('node:assert/strict');
 
 const User = require('../src/modules/users/user.model');
 const { toPublicUser, toAdminUserSummary } = require('../src/modules/users/user.serializer');
+const { EMAIL_MAX_CHARS } = require('@wecooked/contracts');
 
 test('email is required, trimmed, lowercased, and uniquely indexed', () => {
   const emailPath = User.schema.path('email');
   assert.equal(emailPath.options.required, true);
   assert.equal(emailPath.options.trim, true);
   assert.equal(emailPath.options.lowercase, true);
+  assert.equal(emailPath.options.maxlength, EMAIL_MAX_CHARS);
   assert.equal(emailPath.options.unique, true);
 
   const emailIndex = User.schema.indexes().find(([spec]) => spec.email === 1);
   assert.ok(emailIndex, 'expected a unique index on email');
   assert.equal(emailIndex[1].unique, true);
+});
+
+test('email rejects values longer than 254 characters at the model boundary', async () => {
+  const user = new User({
+    name: 'Ada',
+    email: `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(58)}.com`,
+    passwordHash: 'hash',
+  });
+  assert.equal(user.email.length, EMAIL_MAX_CHARS + 1);
+  await assert.rejects(() => user.validate(), (error) => {
+    assert.ok(error.errors.email);
+    return true;
+  });
 });
 
 test('passwordHash is excluded from the default query projection', () => {

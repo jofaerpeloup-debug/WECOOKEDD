@@ -27,7 +27,8 @@ export function recipeAuthoringReducer(state, action) {
     }
     case 'CHANGE': {
       const form = { ...state.form, [action.field]: action.value };
-      return { ...state, form, notice: '', fieldErrors: { ...state.fieldErrors, [action.field]: undefined },
+      const clearedField = /^cookTime(?:Hours|MinutePart)$/.test(action.field) ? 'cookTimeMinutes' : action.field;
+      return { ...state, form, notice: '', fieldErrors: { ...state.fieldErrors, [clearedField]: undefined },
         publishAcknowledged: state.currentStep === 'review' ? false : state.publishAcknowledged,
         publishAcknowledgementError: state.currentStep === 'review' ? '' : state.publishAcknowledgementError };
     }
@@ -67,7 +68,7 @@ export function recipeAuthoringReducer(state, action) {
 function copySection(target, source, step) {
   const fields = {
     basics: ['title', 'description', 'imageUrl'], ingredients: ['ingredients'], instructions: ['instructions'],
-    details: ['difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings', 'region', 'category', 'dietaryTags'],
+    details: ['difficulty', 'prepTimeMinutes', 'cookTimeHours', 'cookTimeMinutePart', 'servings', 'region', 'category', 'dietaryTags'],
   }[step] || [];
   fields.forEach((field) => { target[field] = source[field]; });
 }

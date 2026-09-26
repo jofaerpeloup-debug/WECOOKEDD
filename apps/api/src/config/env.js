@@ -55,6 +55,26 @@ const googleOAuthClientIdsSchema = z
     'Each GOOGLE_OAUTH_CLIENT_IDS entry must be 255 characters or fewer'
   );
 
+function hasExplicitMongoDatabase(uri) {
+  const schemeEnd = uri.indexOf('://');
+  const pathStart = uri.indexOf('/', schemeEnd + 3);
+  if (schemeEnd < 0 || pathStart < 0) {
+    return false;
+  }
+
+  const encodedName = uri.slice(pathStart + 1).split(/[?#]/, 1)[0];
+  if (!encodedName) {
+    return false;
+  }
+
+  try {
+    const name = decodeURIComponent(encodedName);
+    return name.trim().length > 0 && !name.includes('/');
+  } catch {
+    return false;
+  }
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -73,8 +93,19 @@ const envSchema = z
     JWT_ACCESS_TTL: z.string().min(1).default('15m'),
     REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     BCRYPT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
-    RESEND_API_KEY: z.string().trim().min(1, 'RESEND_API_KEY is required'),
-    EMAIL_FROM: z.string().trim().min(1, 'EMAIL_FROM is required').max(500),
+    BREVO_API_KEY: z.string().trim().min(1, 'BREVO_API_KEY is required'),
+    EMAIL_FROM_ADDRESS: z
+      .string()
+      .trim()
+      .max(254, 'EMAIL_FROM_ADDRESS must be 254 characters or fewer')
+      .email('EMAIL_FROM_ADDRESS must be a valid email address'),
+    EMAIL_FROM_NAME: z
+      .string()
+      .trim()
+      .min(1, 'EMAIL_FROM_NAME must not be blank')
+      .max(70, 'EMAIL_FROM_NAME must be 70 characters or fewer')
+      .optional()
+      .default('WeCooked'),
     PASSWORD_RESET_URL: passwordResetUrlSchema,
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(30),
     EMAIL_VERIFICATION_URL: emailVerificationUrlSchema,
@@ -90,6 +121,13 @@ const envSchema = z
     CLOUDINARY_RECIPE_FOLDER: z.string().trim().max(255).optional().default('wecooked/recipes'),
   })
   .superRefine((value, ctx) => {
+    if (value.NODE_ENV === 'production' && !hasExplicitMongoDatabase(value.MONGODB_URI)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MONGODB_URI'],
+        message: 'MONGODB_URI must explicitly select a database in production',
+      });
+    }
     if (value.NODE_ENV === 'production' && requiresHttpsUpgrade(value.PASSWORD_RESET_URL)) {
       ctx.addIssue({
         code: 'custom',
@@ -108,8 +146,9 @@ const envSchema = z
   });
 
 const TEST_EMAIL_DEFAULTS = {
-  RESEND_API_KEY: 'test-resend-api-key',
-  EMAIL_FROM: 'WeCooked <no-reply@example.com>',
+  BREVO_API_KEY: 'test-brevo-api-key',
+  EMAIL_FROM_ADDRESS: 'no-reply@example.com',
+  EMAIL_FROM_NAME: 'WeCooked',
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
   EMAIL_VERIFICATION_URL: 'http://localhost:5173/verify-email',
 };
@@ -124,7 +163,7 @@ const TEST_GOOGLE_DEFAULTS = {
  * so it can be unit tested without touching process.env or process.exit.
  */
 function parseEnv(source) {
-  // Automated tests never contact Resend. Supplying safe test-only defaults
+  // Automated tests never contact Brevo. Supplying safe test-only defaults
   // keeps every isolated test file from needing to duplicate provider config,
   // while development/production still fail closed when configuration is absent.
   const normalizedSource =
@@ -156,8 +195,9 @@ function parseEnv(source) {
     jwtAccessTtl: parsed.JWT_ACCESS_TTL,
     refreshTokenTtlDays: parsed.REFRESH_TOKEN_TTL_DAYS,
     bcryptRounds: parsed.BCRYPT_ROUNDS,
-    resendApiKey: parsed.RESEND_API_KEY,
-    emailFrom: parsed.EMAIL_FROM,
+    brevoApiKey: parsed.BREVO_API_KEY,
+    emailFromAddress: parsed.EMAIL_FROM_ADDRESS,
+    emailFromName: parsed.EMAIL_FROM_NAME,
     passwordResetUrl: parsed.PASSWORD_RESET_URL,
     passwordResetTtlMinutes: parsed.PASSWORD_RESET_TTL_MINUTES,
     emailVerificationUrl: parsed.EMAIL_VERIFICATION_URL,

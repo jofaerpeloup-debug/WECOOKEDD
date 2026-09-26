@@ -32,9 +32,16 @@ function fakeUser(overrides = {}) {
     email: 'ada@example.com',
     role: 'user',
     status: 'active',
+    passwordHash: 'captured-password-hash',
     authIdentities: [],
     ...overrides,
   };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
 
 function fakeGoogleIdentity(overrides = {}) {
@@ -204,6 +211,9 @@ test('login rejects a suspended account with AUTH_ACCOUNT_SUSPENDED without crea
 
 test('login succeeds for valid credentials on an active account and creates a session', async (t) => {
   t.mock.method(userService, 'verifyCredentials', async () => fakeUser());
+  t.mock.method(userService, 'getUserIfPasswordHashMatches', async () =>
+    fakeUser({ passwordHash: undefined })
+  );
   let sessionCreated = false;
   t.mock.method(sessionService, 'createSession', async () => {
     sessionCreated = true;
@@ -215,6 +225,125 @@ test('login succeeds for valid credentials on an active account and creates a se
   assert.equal(sessionCreated, true);
   assert.equal(result.refreshToken, 'raw-refresh-token');
   assert.ok(result.accessToken);
+});
+
+test('login racing behind password change revokes its provisional session and old credentials stay invalid', async (t) => {
+  const createEntered = deferred();
+  const allowFirstCreate = deferred();
+  let credentialHash = 'old-password-hash';
+  let firstVerification = true;
+  let createCount = 0;
+  const revokedSessions = [];
+
+  t.mock.method(userService, 'verifyCredentials', async (_email, password) => {
+    if (firstVerification) {
+      firstVerification = false;
+      return fakeUser({ passwordHash: 'old-password-hash' });
+    }
+    return password === 'new-password' && credentialHash === 'new-password-hash'
+      ? fakeUser({ passwordHash: credentialHash })
+      : null;
+  });
+  t.mock.method(sessionService, 'createSession', async () => {
+    createCount += 1;
+    if (createCount === 1) {
+      createEntered.resolve();
+      await allowFirstCreate.promise;
+    }
+    return {
+      session: fakeSession({ _id: `session-${createCount}` }),
+      refreshToken: `refresh-${createCount}`,
+    };
+  });
+  t.mock.method(userService, 'getUserIfPasswordHashMatches', async (_userId, expectedHash) =>
+    expectedHash === credentialHash ? fakeUser({ passwordHash: undefined }) : null
+  );
+  t.mock.method(sessionService, 'revokeSession', async (sessionId) => {
+    revokedSessions.push(sessionId);
+  });
+  t.mock.method(userService, 'changePassword', async () => {
+    credentialHash = 'new-password-hash';
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+
+  const staleLogin = authService.login({ email: 'ada@example.com', password: 'old-password' });
+  await createEntered.promise;
+  await authService.changePassword({
+    userId: 'user-1',
+    currentPassword: 'old-password',
+    newPassword: 'new-password',
+  });
+  allowFirstCreate.resolve();
+
+  await assert.rejects(staleLogin, { code: 'AUTH_INVALID_CREDENTIALS', statusCode: 401 });
+  assert.deepEqual(revokedSessions, ['session-1']);
+  await assert.rejects(
+    authService.login({ email: 'ada@example.com', password: 'old-password' }),
+    { code: 'AUTH_INVALID_CREDENTIALS' }
+  );
+  const freshLogin = await authService.login({
+    email: 'ada@example.com',
+    password: 'new-password',
+  });
+  assert.equal(freshLogin.refreshToken, 'refresh-2');
+});
+
+test('login racing behind password reset revokes its provisional session and old credentials stay invalid', async (t) => {
+  const createEntered = deferred();
+  const allowFirstCreate = deferred();
+  let credentialHash = 'old-password-hash';
+  let firstVerification = true;
+  let createCount = 0;
+  const revokedSessions = [];
+
+  t.mock.method(userService, 'verifyCredentials', async (_email, password) => {
+    if (firstVerification) {
+      firstVerification = false;
+      return fakeUser({ passwordHash: 'old-password-hash' });
+    }
+    return password === 'reset-password' && credentialHash === 'reset-password-hash'
+      ? fakeUser({ passwordHash: credentialHash })
+      : null;
+  });
+  t.mock.method(sessionService, 'createSession', async () => {
+    createCount += 1;
+    if (createCount === 1) {
+      createEntered.resolve();
+      await allowFirstCreate.promise;
+    }
+    return {
+      session: fakeSession({ _id: `reset-session-${createCount}` }),
+      refreshToken: `reset-refresh-${createCount}`,
+    };
+  });
+  t.mock.method(userService, 'getUserIfPasswordHashMatches', async (_userId, expectedHash) =>
+    expectedHash === credentialHash ? fakeUser({ passwordHash: undefined }) : null
+  );
+  t.mock.method(sessionService, 'revokeSession', async (sessionId) => {
+    revokedSessions.push(sessionId);
+  });
+  t.mock.method(userService, 'resetPasswordWithToken', async () => {
+    credentialHash = 'reset-password-hash';
+    return { userId: 'user-1' };
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+
+  const staleLogin = authService.login({ email: 'ada@example.com', password: 'old-password' });
+  await createEntered.promise;
+  await authService.resetPassword({ rawToken: 'A'.repeat(43), newPassword: 'reset-password' });
+  allowFirstCreate.resolve();
+
+  await assert.rejects(staleLogin, { code: 'AUTH_INVALID_CREDENTIALS', statusCode: 401 });
+  assert.deepEqual(revokedSessions, ['reset-session-1']);
+  await assert.rejects(
+    authService.login({ email: 'ada@example.com', password: 'old-password' }),
+    { code: 'AUTH_INVALID_CREDENTIALS' }
+  );
+  const freshLogin = await authService.login({
+    email: 'ada@example.com',
+    password: 'reset-password',
+  });
+  assert.equal(freshLogin.refreshToken, 'reset-refresh-2');
 });
 
 test('googleLogin verifies the credential before consuming the exact challenge nonce', async (t) => {

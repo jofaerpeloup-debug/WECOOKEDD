@@ -34,12 +34,19 @@ test('a Draft requires only a title at the persistence layer', async () => {
   await assert.doesNotReject(() => new Recipe({ title: 'Draft Adobo' }).validate());
 });
 
-test('title is trimmed and length-limited, and does not require uniqueness', () => {
+test('title is normalized, Unicode-aware, length-limited, and does not require uniqueness', async () => {
   const path = Recipe.schema.path('title');
   assert.equal(path.options.required, true);
   assert.equal(path.options.trim, true);
   assert.equal(path.options.maxlength, Recipe.MAX_TITLE_LENGTH);
   assert.notEqual(path.options.unique, true);
+  const normalized = baseRecipe({ title: '  Crème   brûlée  ' });
+  await normalized.validate();
+  assert.equal(normalized.title, 'Crème brûlée');
+  await assert.doesNotReject(() => baseRecipe({ title: 'Ab' }).validate());
+  for (const title of ['A', '12', '@@@']) {
+    await assert.rejects(() => baseRecipe({ title }).validate(), title);
+  }
 });
 
 test('cuisine is no longer part of the Recipe schema (retired in M3)', () => {
@@ -99,12 +106,25 @@ test('difficulty is constrained to easy/medium/hard', async () => {
   await assert.rejects(() => invalid.validate());
 });
 
-test('prepTimeMinutes and cookTimeMinutes must be non-negative integers within a reasonable bound', async () => {
-  await assert.doesNotReject(() => baseRecipe({ prepTimeMinutes: 0, cookTimeMinutes: 0 }).validate());
+test('new persistence requires optional prep >= 1 and cook >= 3 while hydrated legacy zeros remain readable', async () => {
+  await assert.doesNotReject(() => baseRecipe({ prepTimeMinutes: undefined }).validate());
+  await assert.rejects(() => baseRecipe({ publicationStatus: 'published', cookTimeMinutes: undefined }).validate());
+  await assert.doesNotReject(() => baseRecipe({ prepTimeMinutes: undefined, cookTimeMinutes: 3 }).validate());
+  await assert.doesNotReject(() => baseRecipe({ prepTimeMinutes: 1, cookTimeMinutes: 1440 }).validate());
+  await assert.rejects(() => baseRecipe({ prepTimeMinutes: 0 }).validate());
   await assert.rejects(() => baseRecipe({ prepTimeMinutes: -1 }).validate());
   await assert.rejects(() => baseRecipe({ prepTimeMinutes: 1.5 }).validate());
   await assert.rejects(() => baseRecipe({ prepTimeMinutes: Recipe.MAX_PREP_TIME_MINUTES + 1 }).validate());
+  await assert.rejects(() => baseRecipe({ cookTimeMinutes: 0 }).validate());
+  await assert.rejects(() => baseRecipe({ cookTimeMinutes: 1 }).validate());
+  await assert.rejects(() => baseRecipe({ cookTimeMinutes: 2 }).validate());
   await assert.rejects(() => baseRecipe({ cookTimeMinutes: -1 }).validate());
+  await assert.rejects(() => baseRecipe({ cookTimeMinutes: 3.5 }).validate());
+  await assert.rejects(() => baseRecipe({ cookTimeMinutes: Recipe.MAX_COOK_TIME_MINUTES + 1 }).validate());
+
+  const legacy = Recipe.hydrate(baseRecipe({ prepTimeMinutes: 0, cookTimeMinutes: 0 }).toObject({ depopulate: true }));
+  assert.equal(legacy.prepTimeMinutes, 0);
+  assert.equal(legacy.cookTimeMinutes, 0);
 });
 
 test('servings must be a positive integer within a reasonable bound', async () => {
@@ -187,9 +207,13 @@ test('ingredient optional flag defaults to false', () => {
   assert.equal(recipe.ingredients[0].optional, false);
 });
 
-test('instructions allows an empty Draft list, rejects blank persisted steps, preserves order, and enforces the maximum', async () => {
+test('instructions allows an empty Draft list, rejects non-meaningful persisted steps, preserves order, and enforces the maximum', async () => {
   await assert.doesNotReject(() => baseRecipe({ instructions: [] }).validate());
-  await assert.rejects(() => baseRecipe({ instructions: [''] }).validate());
+  for (const instruction of ['', 'A', '12', '@@@']) {
+    await assert.rejects(() => baseRecipe({ instructions: [instruction] }).validate(), instruction);
+  }
+  await assert.doesNotReject(() => baseRecipe({ instructions: ['Mix'] }).validate());
+  await assert.doesNotReject(() => baseRecipe({ instructions: ['Añade 2 tazas.'] }).validate());
 
   const ordered = baseRecipe({ instructions: ['Step one.', 'Step two.', 'Step three.'] });
   await ordered.validate();

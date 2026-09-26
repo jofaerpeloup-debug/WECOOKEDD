@@ -40,6 +40,10 @@ const {
 } = authRoutes;
 
 const app = createApp();
+const REGISTRATION_PASSWORD = 'GoodPassword1!';
+const CP_CURRENT = 'CurrentAdmin1!';
+const CP_NEW = 'BrandNewSecret2!';
+const RESET_NEW_PASSWORD = 'ResetPassword3!';
 
 // The change-password suite below exercises many authenticated attempts through
 // the shared authRateLimiter (limit 20 / 15min / IP). Reset its per-IP counter
@@ -484,7 +488,7 @@ test('POST /api/v1/auth/register creates a user, issues tokens, and never return
   const response = await request(app).post('/api/v1/auth/register').send({
     name: 'Ada',
     email: 'ada@example.com',
-    password: 'a-good-password',
+    password: REGISTRATION_PASSWORD,
   });
 
   assert.equal(response.status, 201);
@@ -508,7 +512,7 @@ test('POST /api/v1/auth/register rejects a duplicate email with 409 USER_EMAIL_A
   const response = await request(app).post('/api/v1/auth/register').send({
     name: 'Ada',
     email: 'ada@example.com',
-    password: 'a-good-password',
+    password: REGISTRATION_PASSWORD,
   });
 
   assert.equal(response.status, 409);
@@ -529,7 +533,7 @@ test('POST /api/v1/auth/register rejects client-supplied staff roles and status'
       .send({
         name: 'Ada',
         email: 'ada@example.com',
-        password: 'a-good-password',
+        password: REGISTRATION_PASSWORD,
         ...extra,
       });
 
@@ -554,7 +558,7 @@ test('POST /api/v1/auth/register still succeeds when verification email delivery
   const response = await request(app).post('/api/v1/auth/register').send({
     name: 'Ada',
     email: 'reliable@example.com',
-    password: 'a-good-password',
+    password: REGISTRATION_PASSWORD,
   });
 
   assert.equal(response.status, 201);
@@ -564,6 +568,9 @@ test('POST /api/v1/auth/register still succeeds when verification email delivery
 test('POST /api/v1/auth/login succeeds with valid credentials and creates a session', async (t) => {
   const passwordHash = await hashPassword('correct-password');
   t.mock.method(userRepository, 'findByEmailWithPassword', async () => fakeUserDoc({ passwordHash }));
+  t.mock.method(userRepository, 'findByIdWithPasswordHash', async () =>
+    fakeUserDoc({ passwordHash: undefined })
+  );
   let sessionCreated = false;
   t.mock.method(sessionRepository, 'createSession', async ({ userId }) => {
     sessionCreated = true;
@@ -693,6 +700,9 @@ test('POST /api/v1/auth/login: admin credentials return role "admin" in the resp
   const passwordHash = await hashPassword('correct-password');
   t.mock.method(userRepository, 'findByEmailWithPassword', async () =>
     fakeUserDoc({ passwordHash, role: 'admin' })
+  );
+  t.mock.method(userRepository, 'findByIdWithPasswordHash', async () =>
+    fakeUserDoc({ passwordHash: undefined, role: 'admin' })
   );
   t.mock.method(sessionRepository, 'createSession', async ({ userId }) => fakeSessionDoc(userId));
 
@@ -873,8 +883,6 @@ test("POST /api/v1/auth/logout-all revokes all of the user's sessions", async (t
 // POST /api/v1/auth/change-password
 // ---------------------------------------------------------------------------
 
-const CP_CURRENT = 'current-admin-secret';
-
 // Wires the authenticate middleware (session + user lookup) and the
 // service-layer repository calls for a happy change-password. Returns handles
 // to assert on. `onRevokeAll` lets a caller flip stateful mocks.
@@ -913,7 +921,7 @@ async function mockChangePassword(t, { userStatus = 'active', onRevokeAll } = {}
 test('POST /api/v1/auth/change-password without a token is rejected 401 AUTH_TOKEN_MISSING', async () => {
   const response = await request(app)
     .post('/api/v1/auth/change-password')
-    .send({ currentPassword: 'x', newPassword: 'a-new-password' });
+    .send({ currentPassword: 'x', newPassword: CP_NEW });
 
   assert.equal(response.status, 401);
   assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
@@ -926,7 +934,7 @@ test('POST /api/v1/auth/change-password succeeds and returns exactly { passwordC
   const response = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
-    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_NEW });
 
   assert.equal(response.status, 200);
   assert.deepEqual(response.body, { success: true, data: { passwordChanged: true } });
@@ -939,7 +947,7 @@ test('POST /api/v1/auth/change-password succeeds and returns exactly { passwordC
   // persisted a bcrypt hash, not the plaintext
   assert.equal(persisted.length, 1);
   assert.match(persisted[0].passwordHash, /^\$2[aby]\$/);
-  assert.notEqual(persisted[0].passwordHash, 'a-brand-new-secret');
+  assert.notEqual(persisted[0].passwordHash, CP_NEW);
   // every session revoked, for the authenticated user
   assert.deepEqual(revokedFor, [AUTH_USER_ID]);
 });
@@ -951,7 +959,7 @@ test('POST /api/v1/auth/change-password with a wrong current password → 400 AU
   const response = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
-    .send({ currentPassword: 'wrong-current', newPassword: 'a-brand-new-secret' });
+    .send({ currentPassword: 'wrong-current', newPassword: CP_NEW });
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'AUTH_CURRENT_PASSWORD_INVALID');
@@ -980,7 +988,7 @@ test('POST /api/v1/auth/change-password with an extra field → 400 VALIDATION_E
   const response = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
-    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret', confirmPassword: 'a-brand-new-secret' });
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_NEW, confirmPassword: CP_NEW });
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
@@ -1008,7 +1016,7 @@ test('POST /api/v1/auth/change-password for a suspended user is rejected by auth
   const response = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
-    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_NEW });
 
   assert.equal(response.status, 401);
   assert.equal(response.body.error.code, 'AUTH_SESSION_INVALID');
@@ -1038,7 +1046,7 @@ test('after a successful change-password, the same access token fails the next a
   const changed = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
-    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_NEW });
   assert.equal(changed.status, 200);
 
   const after = await request(app).get('/api/v1/users/me').set('Authorization', `Bearer ${token}`);
@@ -1071,7 +1079,7 @@ test('after a successful change-password, the pre-change refresh token can no lo
   const changed = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
-    .send({ currentPassword: CP_CURRENT, newPassword: 'a-brand-new-secret' });
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_NEW });
   assert.equal(changed.status, 200);
 
   const refreshed = await request(app)
@@ -1164,12 +1172,12 @@ test('POST /api/v1/auth/reset-password atomically resets and revokes all session
 
   const response = await request(app)
     .post('/api/v1/auth/reset-password')
-    .send({ token: 'A'.repeat(43), newPassword: 'brand-new-secret' });
+    .send({ token: 'A'.repeat(43), newPassword: RESET_NEW_PASSWORD });
 
   assert.equal(response.status, 200);
   assert.deepEqual(response.body, { success: true, data: { passwordReset: true } });
   assert.match(resetArgs.tokenHash, /^[a-f0-9]{64}$/);
-  assert.notEqual(resetArgs.passwordHash, 'brand-new-secret');
+  assert.notEqual(resetArgs.passwordHash, RESET_NEW_PASSWORD);
   assert.deepEqual(revokedFor, [AUTH_USER_ID]);
   assert.equal('accessToken' in response.body.data, false);
   assert.equal('refreshToken' in response.body.data, false);
@@ -1183,7 +1191,7 @@ test('POST /api/v1/auth/reset-password rejects invalid, expired, or replayed tok
   for (const token of ['B'.repeat(43), 'C'.repeat(43)]) {
     const response = await request(app)
       .post('/api/v1/auth/reset-password')
-      .send({ token, newPassword: 'brand-new-secret' });
+      .send({ token, newPassword: RESET_NEW_PASSWORD });
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'AUTH_PASSWORD_RESET_TOKEN_INVALID');
     assert.equal(response.body.error.message, 'Password reset token is invalid or expired.');
@@ -1225,13 +1233,16 @@ test('an outstanding reset token cannot overwrite a password changed through aut
   const changed = await request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${accessToken}`)
-    .send({ currentPassword: CP_CURRENT, newPassword: 'legitimate-new-secret' });
+    .send({ currentPassword: CP_CURRENT, newPassword: CP_NEW });
   assert.equal(changed.status, 200);
-  assert.equal(await require('../src/shared/security/password').comparePassword('legitimate-new-secret', replacementHash), true);
+  assert.equal(
+    await require('../src/shared/security/password').comparePassword(CP_NEW, replacementHash),
+    true
+  );
 
   const reset = await request(app)
     .post('/api/v1/auth/reset-password')
-    .send({ token: 'D'.repeat(43), newPassword: 'attacker-password' });
+    .send({ token: 'D'.repeat(43), newPassword: 'AttackerPassword4!' });
   assert.equal(reset.status, 400);
   assert.equal(reset.body.error.code, 'AUTH_PASSWORD_RESET_TOKEN_INVALID');
 });

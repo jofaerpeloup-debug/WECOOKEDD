@@ -137,6 +137,20 @@ test('linkAuthIdentity does not swallow a duplicate-key ownership race', async (
   );
 });
 
+test('findByIdWithPasswordHash matches the exact credential snapshot without selecting the hash', (t) => {
+  let captured;
+  const query = { query: true };
+  t.mock.method(User, 'findOne', (filter) => {
+    captured = filter;
+    return query;
+  });
+
+  const result = userRepository.findByIdWithPasswordHash('user-1', 'bcrypt-hash');
+
+  assert.equal(result, query);
+  assert.deepEqual(captured, { _id: 'user-1', passwordHash: 'bcrypt-hash' });
+});
+
 test('replacePasswordById atomically sets the hash and invalidates reset credentials', async (t) => {
   let captured;
   t.mock.method(User, 'updateOne', (filter, update) => {

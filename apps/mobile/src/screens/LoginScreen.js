@@ -19,7 +19,12 @@ import Button from '../components/Button';
 import useGoogleSignIn from '../hooks/useGoogleSignIn';
 import { useAuth } from '../context/AuthContext';
 import * as authService from '../api/authService';
-import { getAuthErrorMessage } from '../api/errorMessages';
+import {
+  getAuthErrorMessage,
+  getAuthFieldErrors,
+  getEmailValidationError,
+  getLegacyPasswordValidationError,
+} from '../api/errorMessages';
 
 // Identical wording whether or not the address has an account — the screen must
 // never become an account-existence oracle.
@@ -36,6 +41,7 @@ export default function LoginScreen({ navigation }) {
   const [activeAction, setActiveAction] = useState(null);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
   const inFlightRef = useRef(false);
 
   const google = useGoogleSignIn();
@@ -72,10 +78,15 @@ export default function LoginScreen({ navigation }) {
     setNotice(null);
     setError(null);
     const trimmedEmail = email.trim();
-    if (!trimmedEmail || !password) {
-      setError('Enter your email and password to continue.');
+    const nextFieldErrors = {
+      email: getEmailValidationError(email),
+      password: getLegacyPasswordValidationError(password),
+    };
+    if (Object.values(nextFieldErrors).some(Boolean)) {
+      setFieldErrors(nextFieldErrors);
       return;
     }
+    setFieldErrors({});
     inFlightRef.current = true;
     setActiveAction('login');
     try {
@@ -83,7 +94,9 @@ export default function LoginScreen({ navigation }) {
       // On success the auth state flips and RootNavigator swaps to the
       // authenticated stack — no manual navigation needed here.
     } catch (err) {
-      setError(getAuthErrorMessage(err));
+      const apiFieldErrors = getAuthFieldErrors(err, ['email', 'password']);
+      setFieldErrors(apiFieldErrors);
+      if (Object.keys(apiFieldErrors).length === 0) setError(getAuthErrorMessage(err));
     } finally {
       inFlightRef.current = false;
       setActiveAction(null);
@@ -100,17 +113,21 @@ export default function LoginScreen({ navigation }) {
     setNotice(null);
     setError(null);
     const trimmedEmail = email.trim();
-    if (!trimmedEmail) {
-      setError('Enter your email address first, then tap Forgot password.');
+    const emailError = getEmailValidationError(email);
+    if (emailError) {
+      setFieldErrors((current) => ({ ...current, email: emailError }));
       return;
     }
+    setFieldErrors((current) => ({ ...current, email: null }));
     inFlightRef.current = true;
     setActiveAction('reset');
     try {
       await authService.forgotPassword(trimmedEmail);
       setNotice(RESET_REQUESTED);
     } catch (err) {
-      setError(getAuthErrorMessage(err));
+      const apiFieldErrors = getAuthFieldErrors(err, ['email']);
+      setFieldErrors((current) => ({ ...current, ...apiFieldErrors }));
+      if (Object.keys(apiFieldErrors).length === 0) setError(getAuthErrorMessage(err));
     } finally {
       inFlightRef.current = false;
       setActiveAction(null);
@@ -163,37 +180,43 @@ export default function LoginScreen({ navigation }) {
           </Text>
           <Text style={styles.subtitle}>Log in to continue your cooking journey.</Text>
 
-          {/* Password-manager integration is deferred out of M1 to its own
-              slice, so these fields carry no autofill hints — same as before
-              the migration. What stays is IME hardening: an email address must
-              not be capitalised, autocorrected or spell-checked on its way in. */}
           <Input
             label="Email"
+            required
             icon="mail-outline"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(value) => {
+              setEmail(value);
+              setFieldErrors((current) => ({ ...current, email: null }));
+            }}
             placeholder="youremail@gmail.com"
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
+            autoComplete="email"
+            textContentType="emailAddress"
             editable={!busy}
+            error={fieldErrors.email}
           />
-          {/* The IME transforms are pinned off for their own sake, not for
-              autofill: the eye toggle unmasks this field, and a plain text
-              field would otherwise apply sentence capitalisation, autocorrect
-              and spell-check suggestions to a typed password. */}
           <Input
             label="Password"
+            required
             icon="lock-closed-outline"
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(value) => {
+              setPassword(value);
+              setFieldErrors((current) => ({ ...current, password: null }));
+            }}
             placeholder="Enter your password"
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
+            autoComplete="current-password"
+            textContentType="password"
             editable={!busy}
+            error={fieldErrors.password}
             style={{ marginBottom: spacing.sm }}
           />
 

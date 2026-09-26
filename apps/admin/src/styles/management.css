@@ -1,0 +1,300 @@
+.wc-admin .wc-management-page {
+  width: 100%;
+  min-width: 0;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.wc-admin .wc-management-page > .wc-topbar {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.wc-admin .wc-management-page > .wc-topbar h1,
+.wc-admin .wc-audit-header h1 {
+  font-size: 1.625rem;
+  line-height: 1;
+}
+
+.wc-admin .wc-management-page .wc-topbar-actions {
+  width: 100%;
+  justify-content: flex-start;
+  column-gap: 6px;
+  row-gap: 6px;
+}
+
+.wc-admin .wc-management-page .wc-search {
+  width: 300px;
+  max-width: 300px;
+  flex: 0 1 300px;
+}
+
+.wc-admin .wc-management-page .wc-search input {
+  width: 100%;
+}
+
+.wc-admin .wc-management-page .wc-search input,
+.wc-admin .wc-management-page .wc-topbar-actions > input,
+.wc-admin .wc-management-page .wc-topbar-actions > select,
+.wc-admin .wc-management-page .wc-ipick-input,
+.wc-admin .wc-management-page .wc-ipick-selected,
+.wc-admin .wc-audit-filter-grid input,
+.wc-admin .wc-audit-filter-grid select {
+  height: 40px;
+  min-height: 40px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-color: var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-background);
+}
+
+.wc-admin .wc-management-page .wc-rcp-num {
+  width: 126px;
+}
+
+.wc-admin .wc-management-page .wc-rcp-num[type="number"] {
+  width: 112px;
+}
+
+.wc-admin .wc-management-page .wc-rcp-select,
+.wc-admin .wc-management-page .wc-ing-select,
+.wc-admin .wc-management-page .wc-sub-select,
+.wc-admin .wc-management-page .wc-usr-select {
+  width: auto;
+  max-width: 158px;
+}
+
+.wc-admin .wc-management-page .wc-ipick.compact {
+  width: 160px;
+}
+
+.wc-admin .wc-management-page > .wc-topbar:has(> .wc-staff-button) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.wc-admin .wc-management-page .wc-staff-toolbar {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wc-admin .wc-management-page .wc-staff-tabs {
+  gap: 3px;
+  padding: 3px;
+}
+
+.wc-admin .wc-management-page .wc-staff-filter {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.wc-admin .wc-management-page :is(input, select, button):focus-visible,
+.wc-admin .wc-audit :is(input, select, button):focus-visible {
+  border-color: var(--input-border-focus);
+  outline: 2px solid var(--input-border-focus);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.wc-admin .wc-management-page .wc-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: var(--border-width-strong) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.wc-admin .wc-management-page .wc-table {
+  min-width: 760px;
+  background: var(--surface);
+}
+
+.wc-admin .wc-management-page .wc-table th,
+.wc-admin .wc-management-page .wc-table td {
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+
+.wc-admin .wc-management-page .wc-table th {
+  color: var(--text-secondary);
+  background: var(--background-subtle);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.wc-admin .wc-management-page .wc-table td {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.wc-admin .wc-management-page .wc-table th:last-child,
+.wc-admin .wc-management-page .wc-table td:last-child {
+  text-align: right;
+}
+
+.wc-admin .wc-management-page .wc-row-actions,
+.wc-admin .wc-management-page .wc-rcp-actions,
+.wc-admin .wc-management-page .wc-staff-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.wc-admin .wc-management-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  margin-top: 6px;
+  padding: 5px 0;
+  border-top: var(--border-width) solid var(--border);
+}
+
+.wc-admin .wc-management-pagination p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.wc-admin .wc-management-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.wc-admin .wc-management-pagination button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 8px;
+  color: var(--text-primary);
+  border: var(--border-width) solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-elevated);
+  font: inherit;
+  font-weight: 700;
+}
+
+.wc-admin .wc-management-pagination button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.wc-admin .wc-rcp-count-note {
+  margin: 0;
+  padding: 4px 0 7px;
+  color: var(--text-muted);
+  border-top: var(--border-width) solid var(--border);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.wc-admin .wc-audit-header {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.wc-admin .wc-audit-header p:last-child {
+  margin-top: 3px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.wc-admin .wc-audit-filters {
+  margin-bottom: 8px;
+  padding: 10px;
+  box-shadow: none;
+}
+
+.wc-admin .wc-audit-filter-grid {
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  gap: 7px;
+}
+
+.wc-admin .wc-audit-filter-grid label {
+  gap: 3px;
+}
+
+.wc-admin .wc-audit-filter-actions {
+  margin-top: 8px;
+}
+
+.wc-admin .wc-audit-results {
+  border-width: var(--border-width-strong);
+  border-color: var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.wc-admin .wc-audit-results > .wc-management-pagination {
+  margin: 0;
+  padding: 5px 10px;
+  border-top: 0;
+  border-bottom: var(--border-width) solid var(--border);
+  background: var(--background-subtle);
+}
+
+@media (max-width: 980px) {
+  .wc-admin .wc-audit-filter-grid {
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .wc-admin .wc-management-page > .wc-topbar h1,
+  .wc-admin .wc-audit-header h1 {
+    font-size: 1.5rem;
+  }
+
+  .wc-admin .wc-management-page > .wc-topbar:has(> .wc-staff-button) {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .wc-admin .wc-management-page .wc-search,
+  .wc-admin .wc-management-page .wc-topbar-actions > input,
+  .wc-admin .wc-management-page .wc-topbar-actions > select,
+  .wc-admin .wc-management-page .wc-ipick.compact {
+    width: 100%;
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .wc-admin .wc-management-page .wc-rcp-num,
+  .wc-admin .wc-management-page .wc-rcp-num[type="number"],
+  .wc-admin .wc-management-page .wc-rcp-select,
+  .wc-admin .wc-management-page .wc-ing-select,
+  .wc-admin .wc-management-page .wc-sub-select,
+  .wc-admin .wc-management-page .wc-usr-select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .wc-admin .wc-audit-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wc-admin .wc-management-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .wc-admin .wc-management-pagination > div {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+  }
+
+  .wc-admin .wc-management-pagination button {
+    width: 100%;
+  }
+}

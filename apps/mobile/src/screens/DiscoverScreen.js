@@ -20,6 +20,8 @@ import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { DISCOVER_FILTERS, difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
+import { recipeCollectionPhaseAfterFailure } from '../utils/recipeFreshnessState';
+import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 
 // M2.2 — teammate Discover ("Search") visual port on top of our real data + routes.
 //
@@ -131,6 +133,7 @@ export default function DiscoverScreen({ navigation, route }) {
   const firstPageGenRef = useRef(null);
   const loadingMoreRef = useRef(false);
   const mountedRef = useRef(true);
+  const recipesRef = useRef([]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -183,22 +186,25 @@ export default function DiscoverScreen({ navigation, route }) {
         setRefreshing(true);
       } else {
         setPhase('loading');
+        recipesRef.current = [];
         setRecipes([]);
         setPagination(null);
         setPageLoaded(0);
       }
-      setError(null);
       try {
         const data = await listRecipes(queryFor(1));
         if (!mountedRef.current || gen !== genRef.current) return;
-        setRecipes(dedupeById(data.recipes));
+        const nextRecipes = dedupeById(data.recipes);
+        recipesRef.current = nextRecipes;
+        setRecipes(nextRecipes);
         setPagination(data.pagination);
         setPageLoaded(1);
+        setError(null);
         setPhase('ready');
       } catch (err) {
         if (!mountedRef.current || gen !== genRef.current) return;
         setError(getRecipeErrorMessage(err));
-        setPhase('error');
+        setPhase(recipeCollectionPhaseAfterFailure(recipesRef.current, { background: refresh }));
       } finally {
         // A newer first-page request owns the guard once it replaces this
         // generation. Obsolete completion must never release that newer guard.
@@ -212,6 +218,8 @@ export default function DiscoverScreen({ navigation, route }) {
   useEffect(() => {
     loadFirstPage();
   }, [loadFirstPage]);
+
+  useRecipeScreenRefresh(() => loadFirstPage({ refresh: true }));
 
   const loadMore = useCallback(async () => {
     if (firstPageGenRef.current === genRef.current) return;

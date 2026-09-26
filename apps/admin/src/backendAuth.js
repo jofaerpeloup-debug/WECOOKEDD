@@ -23,6 +23,7 @@ const REFRESH_STORAGE_KEY = 'wecooked.admin.refreshToken';
 let accessToken = null;
 let refreshToken = null;
 let refreshInFlight = null;
+let sessionGeneration = 0;
 // Set by the active useBackendAuth() hook so a hard session failure (refresh
 // rejected) can flip the UI back to the sign-in screen.
 let onSessionExpired = null;
@@ -52,6 +53,7 @@ function setTokens(tokens) {
 }
 
 function clearTokens() {
+  sessionGeneration += 1;
   accessToken = null;
   refreshToken = null;
   writeStoredRefreshToken(null);
@@ -69,6 +71,7 @@ async function performRefresh() {
   if (!refreshInFlight) {
     const current = refreshToken || readStoredRefreshToken();
     if (!current) return false;
+    const generationAtStart = sessionGeneration;
 
     refreshInFlight = (async () => {
       try {
@@ -76,6 +79,9 @@ async function performRefresh() {
           auth: false,
           body: { refreshToken: current },
         });
+        // A password change/logout may have discarded the session while this
+        // refresh was in flight. Never resurrect its now-revoked credentials.
+        if (generationAtStart !== sessionGeneration) return false;
         setTokens(data);
         return true;
       } catch {
@@ -143,7 +149,7 @@ async function restoreSession() {
  * The one backend-auth entry point for React. Exposes:
  *   status: "checking" | "anonymous" | "authenticated"
  *   user:   backend user object (id, name, email, role, status, ...) | null
- *   login / logout / refreshUser
+ *   login / logout / clearSession / refreshUser
  */
 export function useBackendAuth() {
   const [status, setStatus] = useState('checking');
@@ -204,11 +210,21 @@ export function useBackendAuth() {
     setStatus('anonymous');
   }, []);
 
+  // Used after a successful credential change. The backend has already
+  // revoked every session, so making a logout or refresh request here would
+  // only replay a dead credential. Discard both in-memory tokens and the
+  // sessionStorage refresh token synchronously, then return to sign-in.
+  const clearSession = useCallback(() => {
+    clearTokens();
+    setUser(null);
+    setStatus('anonymous');
+  }, []);
+
   const refreshUser = useCallback(async () => {
     const fresh = await fetchCurrentUser();
     setUser(fresh);
     return fresh;
   }, []);
 
-  return { status, user, login, register, logout, refreshUser };
+  return { status, user, login, register, logout, clearSession, refreshUser };
 }

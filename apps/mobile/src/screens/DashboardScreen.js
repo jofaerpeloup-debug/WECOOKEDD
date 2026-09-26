@@ -19,7 +19,9 @@ import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
+import { shouldBlockRecipeFailure } from '../utils/recipeFreshnessState';
 import { loadJSON, saveJSON } from '../utils/storage';
+import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 
 // M2.1 — teammate Dashboard/Home visual port on top of our real data + routes.
 //
@@ -194,11 +196,11 @@ export default function DashboardScreen({ navigation }) {
   const loadLatest = useCallback(async () => {
     const gen = ++latestGenRef.current;
     setLatestLoading(true);
-    setLatestError(null);
     try {
       const { recipes } = await listRecipes({ sort: 'newest', limit: LATEST_LIMIT });
       if (!mountedRef.current || gen !== latestGenRef.current) return;
       setLatest(recipes);
+      setLatestError(null);
     } catch (err) {
       if (!mountedRef.current || gen !== latestGenRef.current) return;
       setLatestError(getRecipeErrorMessage(err));
@@ -210,6 +212,16 @@ export default function DashboardScreen({ navigation }) {
   useEffect(() => {
     loadLatest();
   }, [loadLatest]);
+
+  useRecipeScreenRefresh(() => {
+    loadLatest();
+    if (searching) {
+      // Invalidate immediately, before the debounced replacement request starts,
+      // so an older search response cannot win during the debounce window.
+      searchGenRef.current += 1;
+      setSearchNonce((value) => value + 1);
+    }
+  });
 
   // Debounced search. Backend `search` matches TITLE or DESCRIPTION only. The
   // generation guard makes a late response harmless.
@@ -223,7 +235,6 @@ export default function DashboardScreen({ navigation }) {
     }
 
     setSearchLoading(true);
-    setSearchError(null);
 
     const timer = setTimeout(async () => {
       const gen = ++searchGenRef.current;
@@ -231,6 +242,7 @@ export default function DashboardScreen({ navigation }) {
         const { recipes } = await listRecipes({ search: trimmed, page: 1, limit: SEARCH_LIMIT });
         if (!mountedRef.current || gen !== searchGenRef.current) return;
         setResults(recipes);
+        setSearchError(null);
       } catch (err) {
         if (!mountedRef.current || gen !== searchGenRef.current) return;
         setSearchError(getRecipeErrorMessage(err));
@@ -415,7 +427,7 @@ export default function DashboardScreen({ navigation }) {
             </View>
             {searchLoading && results.length === 0 ? (
               renderLoadingBlock('Searching recipes…')
-            ) : searchError ? (
+            ) : shouldBlockRecipeFailure(searchError, results, { background: true }) ? (
               renderErrorBlock(searchError, () => setSearchNonce((n) => n + 1))
             ) : results.length === 0 ? (
               renderEmptyBlock(`No recipes match “${trimmed}”.`, 'search-outline')
@@ -428,7 +440,7 @@ export default function DashboardScreen({ navigation }) {
             {/* Today's Pick — a daily rotation from the real latest recipes. */}
             {latestLoading && latest.length === 0 ? (
               renderLoadingBlock()
-            ) : latestError ? (
+            ) : shouldBlockRecipeFailure(latestError, latest, { background: true }) ? (
               renderErrorBlock(latestError, loadLatest)
             ) : feature ? (
               <>

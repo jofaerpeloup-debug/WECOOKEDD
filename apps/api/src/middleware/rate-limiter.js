@@ -7,6 +7,9 @@ const { AppError } = require('../shared/errors/app-error');
  * of the library's default 429 response.
  */
 function createRateLimiter(options) {
+  // The default in-memory store is intentional for the single Render instance
+  // used by this checkpoint. Scaling beyond one instance requires a shared
+  // limiter store so every process observes the same counters.
   return rateLimit({
     standardHeaders: true,
     legacyHeaders: false,

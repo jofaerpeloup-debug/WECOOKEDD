@@ -189,7 +189,8 @@ describe('ResetPasswordScreen — goContinue replaces history instead of pushing
     expect(reset).toMatch(/const mountedRef = useRef\(true\)/);
     expect(reset).toMatch(/mountedRef\.current = false/);
     expect(reset).toMatch(/if \(mountedRef\.current\) setSucceeded\(true\)/);
-    expect(reset).toMatch(/if \(mountedRef\.current\) setError\(/);
+    expect(reset).toMatch(/if \(mountedRef\.current\) \{/);
+    expect(reset).toMatch(/setError\(getAuthErrorMessage\(err\)\)/);
   });
 
   it('failed reset still leaves session-clearing untouched (no endLocalSession call in the catch branch)', () => {

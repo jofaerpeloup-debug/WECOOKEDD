@@ -3,7 +3,7 @@ const { loadEnv } = require('../src/config/env');
 const { disconnectDatabase } = require('../src/config/database');
 const Recipe = require('../src/modules/recipes/recipe.model');
 const Ingredient = require('../src/modules/ingredients/ingredient.model');
-const { publishedRecipeBodySchema } = require('../src/modules/recipes/recipe.validation');
+const { legacyPublishedRecipeBodySchema } = require('../src/modules/recipes/recipe.validation');
 
 const LEGACY_FILTER = Object.freeze({ publicationStatus: { $exists: false } });
 const MIGRATION_CONNECTION_OPTIONS = Object.freeze({ autoIndex: false, autoCreate: false });
@@ -126,7 +126,7 @@ function assessLegacyRecipe(doc) {
   const warnings = [];
   let result;
   try {
-    result = publishedRecipeBodySchema.safeParse(validationInput(doc));
+    result = legacyPublishedRecipeBodySchema.safeParse(validationInput(doc));
   } catch (error) {
     blockers.push(finding('STRUCTURE_INVALID', ['(root)'], `Assessment failed safely: ${error.message}`));
   }
