@@ -5,8 +5,9 @@ const { parseEnv } = require('../src/config/env');
 
 const VALID_JWT_ACCESS_SECRET = 'a'.repeat(32);
 const REQUIRED_EMAIL_ENV = {
-  RESEND_API_KEY: 'test-resend-key',
-  EMAIL_FROM: 'WeCooked <no-reply@example.com>',
+  BREVO_API_KEY: 'test-brevo-key',
+  EMAIL_FROM_ADDRESS: 'no-reply@example.com',
+  EMAIL_FROM_NAME: 'WeCooked Test',
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
   EMAIL_VERIFICATION_URL: 'http://localhost:5173/verify-email',
   GOOGLE_OAUTH_CLIENT_IDS: 'test-web-client-1.apps.googleusercontent.com',
@@ -231,7 +232,7 @@ test('parseEnv rejects a BCRYPT_ROUNDS outside the allowed range', () => {
   );
 });
 
-test('parseEnv requires email provider configuration outside test mode', () => {
+test('parseEnv requires Brevo and sender configuration outside test mode', () => {
   assert.throws(
     () =>
       parseEnv({
@@ -239,7 +240,69 @@ test('parseEnv requires email provider configuration outside test mode', () => {
         MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
         JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
       }),
-    /RESEND_API_KEY|EMAIL_FROM|PASSWORD_RESET_URL/
+    /BREVO_API_KEY|EMAIL_FROM_ADDRESS|PASSWORD_RESET_URL/
+  );
+});
+
+test('parseEnv maps Brevo configuration and trims sender values', () => {
+  const result = parseEnv({
+    ...REQUIRED_EMAIL_ENV,
+    BREVO_API_KEY: '  test-brevo-key  ',
+    EMAIL_FROM_ADDRESS: '  no-reply@example.com  ',
+    EMAIL_FROM_NAME: '  WeCooked Mail  ',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  });
+
+  assert.equal(result.brevoApiKey, 'test-brevo-key');
+  assert.equal(result.emailFromAddress, 'no-reply@example.com');
+  assert.equal(result.emailFromName, 'WeCooked Mail');
+  assert.equal('resendApiKey' in result, false);
+  assert.equal('emailFrom' in result, false);
+});
+
+test('parseEnv defaults EMAIL_FROM_NAME to WeCooked', () => {
+  const source = { ...REQUIRED_EMAIL_ENV };
+  delete source.EMAIL_FROM_NAME;
+  const result = parseEnv({
+    ...source,
+    NODE_ENV: 'development',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  });
+
+  assert.equal(result.emailFromName, 'WeCooked');
+});
+
+test('parseEnv validates the Brevo key and sender address/name contract', () => {
+  const base = {
+    ...REQUIRED_EMAIL_ENV,
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  };
+
+  for (const invalid of [
+    { BREVO_API_KEY: '   ' },
+    { EMAIL_FROM_ADDRESS: 'not-an-email' },
+    { EMAIL_FROM_NAME: '   ' },
+  ]) {
+    assert.throws(() => parseEnv({ ...base, ...invalid }));
+  }
+});
+
+test('parseEnv enforces Brevo sender name maximum length', () => {
+  const base = {
+    ...REQUIRED_EMAIL_ENV,
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  };
+
+  const result = parseEnv({ ...base, EMAIL_FROM_NAME: 'N'.repeat(70) });
+  assert.equal(result.emailFromName, 'N'.repeat(70));
+
+  assert.throws(
+    () => parseEnv({ ...base, EMAIL_FROM_NAME: 'N'.repeat(71) }),
+    /EMAIL_FROM_NAME must be 70 characters or fewer/
   );
 });
 
