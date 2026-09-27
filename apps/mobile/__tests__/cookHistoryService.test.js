@@ -13,10 +13,88 @@ jest.mock('../src/api/client', () => {
 });
 
 const { api } = require('../src/api/client');
-const { recordCompletion, getStats, getRecipeStatus } = require('../src/api/cookHistoryService');
+const { getHistory, recordCompletion, getStats, getRecipeStatus } = require('../src/api/cookHistoryService');
 
 beforeEach(() => {
   jest.clearAllMocks();
+});
+
+const historyEntry = {
+  id: 'event-1',
+  recipe: {
+    id: 'recipe-1',
+    title: 'Chicken Adobo',
+    region: 'central-luzon',
+    category: 'main-dish',
+    difficulty: 'easy',
+    prepTimeMinutes: 15,
+    cookTimeMinutes: 40,
+    imageUrl: 'https://images.example/adobo.jpg',
+  },
+  servings: 4,
+  completedAt: '2026-09-27T04:00:00.000Z',
+};
+
+describe('cookHistoryService.getHistory', () => {
+  it('GETs the exact list endpoint with page, limit, and newest sort', async () => {
+    const payload = {
+      cookHistory: [historyEntry],
+      pagination: { page: 2, limit: 20, total: 41, totalPages: 3 },
+    };
+    api.get.mockResolvedValue(payload);
+
+    const result = await getHistory({ page: 2, limit: 20, sort: 'newest' });
+
+    expect(api.get).toHaveBeenCalledWith('/cook-history', {
+      query: { page: 2, limit: 20, sort: 'newest' },
+    });
+    expect(result).toEqual(payload);
+  });
+
+  it('preserves empty intermediate pages and raw pagination authority', async () => {
+    const payload = {
+      cookHistory: [],
+      pagination: { page: 1, limit: 20, total: 27, totalPages: 2 },
+    };
+    api.get.mockResolvedValue(payload);
+
+    await expect(getHistory({ page: 1, limit: 20, sort: 'newest' })).resolves.toEqual(payload);
+  });
+
+  it('does not add client timestamps, event ids, recipes, or other query authority', async () => {
+    api.get.mockResolvedValue({
+      cookHistory: [historyEntry],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
+
+    const result = await getHistory({
+      page: 1,
+      limit: 20,
+      sort: 'newest',
+      userId: 'not-allowed',
+      completedAt: 'client-time',
+    });
+
+    expect(api.get.mock.calls[0][1].query).toEqual({ page: 1, limit: 20, sort: 'newest' });
+    expect(result.cookHistory[0]).toBe(historyEntry);
+  });
+
+  it.each([
+    undefined,
+    {},
+    { cookHistory: [], pagination: null },
+    { cookHistory: 'not-an-array', pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } },
+    { cookHistory: [{ ...historyEntry, id: '' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+    { cookHistory: [{ ...historyEntry, completedAt: 'not-a-date' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+    { cookHistory: [historyEntry], pagination: { page: 1, limit: 20, total: -1, totalPages: 0 } },
+    { cookHistory: [historyEntry], pagination: { page: 2, limit: 20, total: 1, totalPages: 1 } },
+  ])('fails closed for malformed successful response %#', async (payload) => {
+    api.get.mockResolvedValue(payload);
+
+    await expect(getHistory({ page: 1, limit: 20, sort: 'newest' })).rejects.toMatchObject({
+      code: 'INVALID_COOK_HISTORY_PAYLOAD',
+    });
+  });
 });
 
 describe('cookHistoryService.recordCompletion', () => {

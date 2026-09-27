@@ -24,7 +24,7 @@ import MealPlanSheet from '../components/MealPlanSheet';
 import { useShoppingList } from '../context/ShoppingListContext';
 import { getRecipe } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
-import { getRecipeReviews, createReview, updateReview } from '../api/reviewService';
+import { getRecipeReviews, createRecipeReview, updateReview } from '../api/reviewService';
 import { getReviewErrorMessage } from '../api/reviewErrors';
 import { getRecipeStatus } from '../api/cookHistoryService';
 import { difficultyLabel, unitLabel } from '../api/recipeOptions';
@@ -234,37 +234,44 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   // provider would be unjustified complexity here.
   const [reviewState, setReviewState] = useState({ status: 'loading', summary: null, myReview: null });
   const [ratingPending, setRatingPending] = useState(false);
+  const ratingMutationBusyRef = useRef(false);
   const reviewMountedRef = useRef(true);
+  const reviewGenerationRef = useRef(0);
 
   useEffect(() => {
     reviewMountedRef.current = true;
     return () => {
       reviewMountedRef.current = false;
+      reviewGenerationRef.current += 1;
     };
   }, []);
 
   // limit: 1 — this screen only ever needs the aggregate summary + the
   // caller's own review, never the review list itself (teammate has no
   // review-list UI), so there is no reason to download many review rows.
-  useEffect(() => {
-    let cancelled = false;
+  const loadReviewState = useCallback(async () => {
+    const generation = ++reviewGenerationRef.current;
     setReviewState({ status: 'loading', summary: null, myReview: null });
-    (async () => {
-      try {
-        const { summary, currentUserReview } = await getRecipeReviews(recipe.id, { limit: 1 });
-        if (cancelled) return;
-        setReviewState({ status: 'ready', summary, myReview: currentUserReview });
-      } catch {
-        if (cancelled) return;
-        // Honest fallback, never a fabricated summary: reserved for a genuine
-        // request failure now, rather than "the backend doesn't exist yet".
-        setReviewState({ status: 'error', summary: null, myReview: null });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const { summary, currentUserReview } = await getRecipeReviews(recipe.id, { limit: 1 });
+      if (!reviewMountedRef.current || generation !== reviewGenerationRef.current) return false;
+      setReviewState({ status: 'ready', summary, myReview: currentUserReview });
+      return true;
+    } catch {
+      if (!reviewMountedRef.current || generation !== reviewGenerationRef.current) return false;
+      setReviewState({ status: 'error', summary: null, myReview: null });
+      return false;
+    }
   }, [recipe.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadReviewState();
+      return () => {
+        reviewGenerationRef.current += 1;
+      };
+    }, [loadReviewState])
+  );
 
   const myRating = reviewState.myReview ? reviewState.myReview.rating : 0;
 
@@ -282,22 +289,26 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   // right back here and refires this effect.
   const [cookedState, setCookedState] = useState({ status: 'loading', hasCooked: false });
   const cookedMountedRef = useRef(true);
+  const cookedGenerationRef = useRef(0);
 
   useEffect(() => {
     cookedMountedRef.current = true;
     return () => {
       cookedMountedRef.current = false;
+      cookedGenerationRef.current += 1;
     };
   }, []);
 
   const loadCookedStatus = useCallback(async () => {
+    const generation = ++cookedGenerationRef.current;
     setCookedState((s) => ({ ...s, status: 'loading' }));
     try {
       const { hasCooked } = await getRecipeStatus(recipe.id);
-      if (!cookedMountedRef.current) return;
+      if (!cookedMountedRef.current || generation !== cookedGenerationRef.current) return false;
       setCookedState({ status: 'ready', hasCooked });
+      return true;
     } catch {
-      if (!cookedMountedRef.current) return;
+      if (!cookedMountedRef.current || generation !== cookedGenerationRef.current) return false;
       // A failed refresh means UNKNOWN, not "not cooked" — never overwrite a
       // previously confirmed hasCooked with a fabricated false. Preserving
       // `s.hasCooked` can't fabricate true either: it only ever became true
@@ -306,12 +317,16 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
       // `key={params.recipeId}` and RootNavigator's auth-gated stack swap —
       // so there is no stale value to leak from a different recipe or user).
       setCookedState((s) => ({ status: 'error', hasCooked: s.hasCooked }));
+      return false;
     }
   }, [recipe.id]);
 
   useFocusEffect(
     useCallback(() => {
       loadCookedStatus();
+      return () => {
+        cookedGenerationRef.current += 1;
+      };
     }, [loadCookedStatus])
   );
 
@@ -322,35 +337,42 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   // Tap-to-rate, matching teammate's direct tap-to-submit interaction (no
   // confirm step, no comment UI — teammate exposes star rating only). POST
   // creates the caller's first review; PATCH updates the existing one, so a
-  // user can never end up with two reviews for the same recipe. Optimistic
-  // star fill is rolled back on failure — never a faked success.
+  // user can never end up with two reviews for the same recipe. The visible
+  // state is reloaded from the server after success rather than fabricated.
   const submitRating = async (n) => {
-    if (ratingPending || reviewState.status === 'loading') return;
+    if (ratingMutationBusyRef.current) return;
+    if (ratingPending || reviewState.status !== 'ready') return;
     const previousReview = reviewState.myReview;
+    if (!previousReview && !(cookedState.status === 'ready' && cookedState.hasCooked)) return;
+    ratingMutationBusyRef.current = true;
     setRatingPending(true);
-    setReviewState((s) => ({
-      ...s,
-      myReview: previousReview ? { ...previousReview, rating: n } : { id: null, rating: n, comment: null },
-    }));
-
     try {
       if (previousReview && previousReview.id) {
         await updateReview(previousReview.id, { rating: n });
       } else {
-        await createReview(recipe.id, { rating: n });
+        await createRecipeReview(recipe.id, { rating: n });
       }
       // Refresh from the server rather than computing the new average
       // locally — the aggregate is always authoritative/server-computed.
-      const refreshed = await getRecipeReviews(recipe.id, { limit: 1 });
-      if (reviewMountedRef.current) {
-        setReviewState({ status: 'ready', summary: refreshed.summary, myReview: refreshed.currentUserReview });
-      }
+      await loadReviewState();
     } catch (err) {
       if (reviewMountedRef.current) {
-        setReviewState((s) => ({ ...s, myReview: previousReview }));
-        Alert.alert('Couldn’t save your rating', getReviewErrorMessage(err));
+        if (err?.code === 'REVIEW_ALREADY_EXISTS') {
+          const refreshed = await loadReviewState();
+          if (reviewMountedRef.current && refreshed) {
+            Alert.alert('Rating refreshed', 'Your existing review was reloaded. Check it before rating again.');
+          }
+          return;
+        }
+        if (err?.code === 'REVIEW_COOK_REQUIRED') {
+          await Promise.all([loadReviewState(), loadCookedStatus()]);
+        }
+        if (reviewMountedRef.current) {
+          Alert.alert('Couldn’t save your rating', getReviewErrorMessage(err));
+        }
       }
     } finally {
+      ratingMutationBusyRef.current = false;
       if (reviewMountedRef.current) setRatingPending(false);
     }
   };
@@ -363,6 +385,17 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
     return `${averageRating} (${ratingCount} reviews)`;
   })();
   const hasRatings = reviewState.status === 'ready' && reviewState.summary.ratingCount > 0;
+  const canCreateFirstReview = reviewState.status === 'ready'
+    && !reviewState.myReview
+    && cookedState.status === 'ready'
+    && cookedState.hasCooked;
+  const canUpdateExistingReview = reviewState.status === 'ready' && !!reviewState.myReview;
+  const ratingMutationDisabled = ratingPending || !(canCreateFirstReview || canUpdateExistingReview);
+  const firstReviewEligibilityText = cookedState.status === 'ready'
+    ? 'Complete this recipe in WeCooked before rating or reviewing it.'
+    : cookedState.status === 'loading'
+      ? 'Checking your WeCooked cooking status…'
+      : 'We couldn’t confirm your WeCooked cooking status. Try again from this recipe.';
 
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
@@ -523,6 +556,19 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
               a first-time rating, PATCH once the caller already has one
               (myRating > 0) — matching teammate's direct tap-to-rate
               interaction exactly (no confirm step, no comment UI). */}
+          <Pressable
+            style={styles.ddReviewsLink}
+            onPress={() => navigation.navigate('RecipeReviews', {
+              recipeId: recipe.id,
+              recipeTitle: recipe.title,
+            })}
+            accessibilityRole="button"
+            accessibilityLabel={`Read and write reviews for ${recipe.title}`}
+          >
+            <Text style={styles.ddReviewsLinkText}>Read &amp; write reviews</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.sageDeep} />
+          </Pressable>
+
           <View style={styles.ddRateRow}>
             <Text style={styles.ddRateLabel}>{myRating ? 'Your rating' : 'Rate this recipe'}</Text>
             <View style={styles.ddStarRow}>
@@ -531,10 +577,10 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
                   key={n}
                   hitSlop={4}
                   onPress={() => submitRating(n)}
-                  disabled={ratingPending || reviewState.status === 'loading'}
+                  disabled={ratingMutationDisabled}
                   accessibilityRole="button"
                   accessibilityLabel={`Rate ${n} star${n === 1 ? '' : 's'}`}
-                  accessibilityState={{ selected: n <= myRating, disabled: ratingPending || reviewState.status === 'loading' }}
+                  accessibilityState={{ selected: n <= myRating, disabled: ratingMutationDisabled, busy: ratingPending }}
                 >
                   <Ionicons
                     name={n <= myRating ? 'star' : 'star-outline'}
@@ -545,6 +591,11 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
               ))}
             </View>
           </View>
+          {reviewState.status === 'ready' && !reviewState.myReview && !canCreateFirstReview ? (
+            <Text style={styles.ddReviewEligibilityText}>
+              {firstReviewEligibilityText}
+            </Text>
+          ) : null}
 
           <View style={styles.ddMetaRow}>
             {meta.map((m) => (
@@ -825,6 +876,25 @@ function makeStyles(colors) {
       fontFamily: typography.body.fontFamily,
       fontSize: 12.5,
       color: colors.inkFaint,
+    },
+    ddReviewsLink: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: spacing.xs,
+      marginTop: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    ddReviewsLinkText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
+    ddReviewEligibilityText: {
+      marginTop: spacing.xs,
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.xs,
+      color: colors.inkSoft,
     },
     // Teammate's exact filled/affirmative "Cooked" treatment (c1c86ed's
     // cookedPill/cookedPillText) — now backed by the real M5C Cook History

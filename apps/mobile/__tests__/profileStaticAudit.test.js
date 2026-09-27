@@ -51,7 +51,7 @@ function auditProfileRenderBindings(source) {
   expect(statNodes).toEqual([
     '<Stat n={savedCount} label="Recipes saved" styles={styles} />',
     '<Stat n={collectionsCount} label="Collections" styles={styles} />',
-    '<Stat n={cookedCount} label="Cooked" styles={styles} />',
+    "<Stat n={cookedCount} label=\"Cooked\" styles={styles} onPress={() => navigation.navigate('CookingHistory')} accessibilityLabel={`Cooked: ${cookedCount}. Open cooking history`} />",
   ]);
 
   const preferences = extractUniqueRegion(
@@ -142,9 +142,8 @@ describe('Profile uses authoritative account and domain sources', () => {
 describe('Profile actions are real and accessible', () => {
   it('routes only to existing supported destinations registered by RootNavigator', () => {
     const targets = [...code.matchAll(/navigation\.navigate\('([^']+)'\)/g)].map((match) => match[1]);
-    expect(new Set(targets)).toEqual(new Set(['Settings', 'Notifications', 'AccountDetails', 'MealPlan']));
-    expect(targets).not.toContain('CookingHistory');
-    for (const route of ['Settings', 'Notifications', 'AccountDetails', 'MealPlan']) {
+    expect(new Set(targets)).toEqual(new Set(['Settings', 'Notifications', 'AccountDetails', 'MealPlan', 'CookingHistory']));
+    for (const route of ['Settings', 'Notifications', 'AccountDetails', 'MealPlan', 'CookingHistory']) {
       expect(code).toMatch(new RegExp(`navigation\\.navigate\\('${route}'\\)`));
       expect(navigator).toMatch(new RegExp(`<Stack\\.Screen name="${route}" component=\\{[A-Za-z]+Screen\\} \\/>`));
     }
@@ -178,6 +177,16 @@ describe('Profile actions are real and accessible', () => {
     ]) {
       expect(code).toContain(`accessibilityLabel="${label}"`);
     }
+  });
+
+  it('turns only the authoritative Cooked stat into an accessible Cooking History affordance', () => {
+    const { stats } = auditProfileRenderBindings(code);
+    const statNodes = [...stats.matchAll(/<Stat\b[\s\S]*?\/>/g)].map((match) => match[0]);
+    expect(statNodes[2]).toMatch(/n=\{cookedCount\}[\s\S]*?navigate\('CookingHistory'\)/);
+    expect(statNodes[2]).toMatch(/accessibilityLabel=\{`Cooked: \$\{cookedCount\}\. Open cooking history`\}/);
+    expect(statNodes[0]).not.toMatch(/navigate\('CookingHistory'\)/);
+    expect(statNodes[1]).not.toMatch(/navigate\('CookingHistory'\)/);
+    expect(code).not.toMatch(/history\.length|cookHistory\.length|fakeCooked|mockCooked/);
   });
 });
 

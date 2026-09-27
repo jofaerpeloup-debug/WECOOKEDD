@@ -76,6 +76,13 @@ async function getStats(userId) {
   return { totalCooks: row.totalCooks, uniqueRecipesCooked: row.uniqueRecipesCooked };
 }
 
+// Reusable server-authoritative eligibility predicate. Both the status route
+// and review creation use the same repository query, always scoped to the
+// authenticated user and the canonical recipe _id resolved by their caller.
+async function hasCompletedRecipe(userId, recipeId) {
+  return Boolean(await cookHistoryRepository.existsForUserAndRecipe(userId, recipeId));
+}
+
 // Backs the RecipeDetail "Cooked" pill: has THIS user ever completed THIS
 // recipe, at least once? Pure existence/boolean — never a count, never
 // another user's state (userId is always the authenticated caller, passed
@@ -85,7 +92,7 @@ async function getStats(userId) {
 // recipeId that was never valid to begin with.
 async function getRecipeStatus(userId, recipeId) {
   const recipe = await ensureUsableRecipe(recipeId);
-  const hasCooked = await cookHistoryRepository.existsForUserAndRecipe(userId, recipe._id);
+  const hasCooked = await hasCompletedRecipe(userId, recipe._id);
   return { hasCooked };
 }
 
@@ -93,5 +100,6 @@ module.exports = {
   recordCompletion,
   listHistory,
   getStats,
+  hasCompletedRecipe,
   getRecipeStatus,
 };

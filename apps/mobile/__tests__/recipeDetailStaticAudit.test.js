@@ -128,7 +128,7 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).not.toMatch(/shown\.rating|shown\.reviews|useReviews/);
     expect(apiCode).not.toMatch(/AsyncStorage/);
     expect(raw).toMatch(
-      /import \{ getRecipeReviews, createReview, updateReview \} from '\.\.\/api\/reviewService'/
+      /import \{ getRecipeReviews, createRecipeReview, updateReview \} from '\.\.\/api\/reviewService'/
     );
     expect(apiCode).toMatch(/await getRecipeReviews\(recipe\.id, \{ limit: 1 \}\)/);
     // Real, confirmed states only — "No ratings yet" is a real zero the
@@ -175,7 +175,8 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     // Cold load default is still `hasCooked: false` — an error with nothing
     // ever confirmed still renders no pill (see the initial useState below).
     expect(apiCode).toMatch(/useState\(\{ status: 'loading', hasCooked: false \}\)/);
-    expect(apiCode).not.toMatch(/cookedState\.status === 'ready' && cookedState\.hasCooked/);
+    expect(apiCode).toMatch(/const cooked = cookedState\.hasCooked/);
+    expect(apiCode).not.toMatch(/const cooked = cookedState\.status === 'ready'/);
   });
 
   it('a legitimate successful hasCooked:false response still clears a stale pill (only failure is preserved, not every non-true response)', () => {
@@ -215,13 +216,96 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).toMatch(/Your rating/);
     expect(apiCode).toMatch(/\[1, 2, 3, 4, 5\]\.map/);
     expect(apiCode).toMatch(/onPress=\{\(\) => submitRating\(n\)\}/);
-    expect(apiCode).toMatch(/await createReview\(recipe\.id, \{ rating: n \}\)/);
+    expect(apiCode).toMatch(/await createRecipeReview\(recipe\.id, \{ rating: n \}\)/);
     expect(apiCode).toMatch(/await updateReview\(previousReview\.id, \{ rating: n \}\)/);
-    // Rollback on failure — an optimistic star fill is never left standing
-    // as a fake success once the request actually failed.
-    expect(apiCode).toMatch(/myReview: previousReview/);
+    // No synthetic review/id is installed while the mutation is in flight.
+    expect(apiCode).not.toMatch(/id:\s*null,\s*rating:\s*n/);
     expect(apiCode).toMatch(/getReviewErrorMessage\(err\)/);
     expect(apiCode).not.toMatch(/setRating\(|AsyncStorage/);
+  });
+
+  it('serializes the actual direct-rating handler with a synchronous ref while retaining visible pending state', () => {
+    expect(apiCode).toMatch(/const ratingMutationBusyRef = useRef\(false\)/);
+    const handler = apiCode.slice(
+      apiCode.indexOf('const submitRating = async (n) => {'),
+      apiCode.indexOf('const ratingSummaryText = (() => {')
+    );
+    const guard = 'if (ratingMutationBusyRef.current) return;';
+    const acquire = 'ratingMutationBusyRef.current = true;';
+    const visiblePending = 'setRatingPending(true);';
+    const hasSynchronousGuard = (source) => {
+      const firstServiceCall = Math.min(
+        source.indexOf('await updateReview('),
+        source.indexOf('await createRecipeReview(')
+      );
+      return source.indexOf(guard) >= 0
+        && source.indexOf(guard) < source.indexOf(acquire)
+        && source.indexOf(acquire) < source.indexOf(visiblePending)
+        && source.indexOf(acquire) < firstServiceCall;
+    };
+
+    expect(hasSynchronousGuard(handler)).toBe(true);
+    expect(handler).toMatch(/finally \{\s*ratingMutationBusyRef\.current = false;\s*if \(reviewMountedRef\.current\) setRatingPending\(false\)/);
+    expect(apiCode).toMatch(/const ratingMutationDisabled = ratingPending \|\|/);
+    expect(apiCode).toMatch(/accessibilityState=\{\{ selected: n <= myRating, disabled: ratingMutationDisabled, busy: ratingPending \}\}/);
+
+    const stateOnlyMutant = handler.replace(guard, '');
+    expect(stateOnlyMutant).toMatch(/if \(ratingPending \|\| reviewState\.status !== 'ready'\) return/);
+    expect(hasSynchronousGuard(stateOnlyMutant)).toBe(false);
+  });
+
+  it('opens written reviews with exact recipe identity and refreshes review authority on focus', () => {
+    expect(apiCode).toMatch(/navigation\.navigate\('RecipeReviews', \{\s*recipeId: recipe\.id,\s*recipeTitle: recipe\.title/);
+    expect(apiCode).toMatch(/accessibilityLabel=\{`Read and write reviews for \$\{recipe\.title\}`\}/);
+    expect(apiCode).toMatch(/const loadReviewState = useCallback\(async \(\) =>/);
+    expect(apiCode).toMatch(/useFocusEffect\(\s*useCallback\(\(\) => \{\s*loadReviewState\(\)/);
+    expect(apiCode).toMatch(/setReviewState\(\{ status: 'ready', summary, myReview: currentUserReview \}\)/);
+  });
+
+  it('never guesses POST versus PATCH while current-review ownership is unknown', () => {
+    expect(apiCode).toMatch(/if \(ratingPending \|\| reviewState\.status !== 'ready'\) return/);
+    expect(apiCode).toMatch(/const ratingMutationDisabled = ratingPending \|\| !\(canCreateFirstReview \|\| canUpdateExistingReview\)/);
+    expect(apiCode).toMatch(/disabled=\{ratingMutationDisabled\}/);
+    expect(apiCode).toMatch(/if \(previousReview && previousReview\.id\)[\s\S]*updateReview\(previousReview\.id[\s\S]*else \{\s*await createRecipeReview/);
+    const mutant = apiCode.replace("reviewState.status !== 'ready'", "reviewState.status === 'loading'");
+    expect(mutant).not.toMatch(/if \(ratingPending \|\| reviewState\.status !== 'ready'\) return/);
+  });
+
+  it('fails first-review creation closed until authoritative cook completion is known true', () => {
+    expect(apiCode).toMatch(/const canCreateFirstReview = reviewState\.status === 'ready'[\s\S]*!reviewState\.myReview[\s\S]*cookedState\.status === 'ready'[\s\S]*cookedState\.hasCooked/);
+    expect(apiCode).toMatch(/if \(!previousReview && !\(cookedState\.status === 'ready' && cookedState\.hasCooked\)\) return/);
+    expect(apiCode).toMatch(/ratingMutationDisabled = ratingPending \|\| !\(canCreateFirstReview \|\| canUpdateExistingReview\)/);
+    expect(apiCode).toMatch(/Complete this recipe in WeCooked before rating or reviewing it\./);
+    const eligibility = apiCode.match(/const canCreateFirstReview = ([\s\S]*?);/)[0];
+    const mutant = eligibility.replace("cookedState.status === 'ready'", "cookedState.status !== 'loading'");
+    expect(mutant).not.toMatch(/cookedState\.status === 'ready'[\s\S]*cookedState\.hasCooked/);
+  });
+
+  it('allows a known existing review to PATCH regardless of cook status', () => {
+    expect(apiCode).toMatch(/const canUpdateExistingReview = reviewState\.status === 'ready' && !!reviewState\.myReview/);
+    expect(apiCode).toMatch(/if \(previousReview && previousReview\.id\) \{\s*await updateReview/);
+    const existingBranch = apiCode.slice(apiCode.indexOf('if (previousReview && previousReview.id)'), apiCode.indexOf('} else {', apiCode.indexOf('if (previousReview && previousReview.id)')));
+    expect(existingBranch).not.toMatch(/cookedState|hasCooked/);
+  });
+
+  it('refreshes both review ownership and cook eligibility after backend REVIEW_COOK_REQUIRED', () => {
+    expect(apiCode).toMatch(/err\?\.code === 'REVIEW_COOK_REQUIRED'/);
+    expect(apiCode).toMatch(/Promise\.all\(\[loadReviewState\(\), loadCookedStatus\(\)\]\)/);
+    const conflict = apiCode.slice(apiCode.indexOf("REVIEW_COOK_REQUIRED"));
+    expect(conflict).not.toMatch(/createRecipeReview/);
+  });
+
+  it('refreshes cook eligibility on focus and uses no verification or proof claim', () => {
+    expect(apiCode).toMatch(/useFocusEffect\(\s*useCallback\(\(\) => \{\s*loadCookedStatus\(\)/);
+    expect(apiCode).toMatch(/const generation = \+\+cookedGenerationRef\.current/);
+    expect(apiCode).toMatch(/generation !== cookedGenerationRef\.current/);
+    expect(apiCode).not.toMatch(/Verified cook|Verified reviewer|Proof of cooking|Confirmed real cook/i);
+  });
+
+  it('distinguishes confirmed ineligibility from loading or failed cook-status checks', () => {
+    expect(apiCode).toMatch(/cookedState\.status === 'ready'[\s\S]*Complete this recipe in WeCooked/);
+    expect(apiCode).toMatch(/Checking your WeCooked cooking status/);
+    expect(apiCode).toMatch(/couldn’t confirm your WeCooked cooking status/);
   });
 
   it('never sends a client-computed rating aggregate — averageRating/ratingCount are read-only from the server', () => {

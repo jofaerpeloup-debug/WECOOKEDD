@@ -16,6 +16,8 @@ import MealPlanScreen from '../screens/MealPlanScreen';
 import IngredientStudioScreen from '../screens/IngredientStudioScreen';
 import SwapDetailScreen from '../screens/SwapDetailScreen';
 import RecipeDetailScreen from '../screens/RecipeDetailScreen';
+import RecipeReviewsScreen from '../screens/RecipeReviewsScreen';
+import CookingHistoryScreen from '../screens/CookingHistoryScreen';
 import CookModeScreen from '../screens/CookModeScreen';
 import ShoppingListScreen from '../screens/ShoppingListScreen';
 import AccountDetailsScreen from '../screens/AccountDetailScreen';
@@ -132,6 +134,8 @@ export default function RootNavigator() {
               options={{ animation: 'slide_from_bottom' }}
             />
             <Stack.Screen name="RecipeDetail" component={RecipeDetailScreen} />
+            <Stack.Screen name="RecipeReviews" component={RecipeReviewsScreen} />
+            <Stack.Screen name="CookingHistory" component={CookingHistoryScreen} />
             <Stack.Screen
               name="CookMode"
               component={CookModeScreen}

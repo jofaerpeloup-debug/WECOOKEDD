@@ -143,6 +143,8 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
       'IngredientStudio',
       'SwapDetail',
       'RecipeDetail',
+      'RecipeReviews',
+      'CookingHistory',
       'CookMode',
       'List',
       'AccountDetails',
@@ -165,7 +167,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     ]);
   });
 
-  it.each(['MainTabs', 'Discover', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'CookMode', 'AccountDetails', 'Settings'])(
+  it.each(['MainTabs', 'Discover', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'RecipeReviews', 'CookingHistory', 'CookMode', 'AccountDetails', 'Settings'])(
     'registers the "%s" stack route',
     (name) => {
       expect(stack).toContain(name);
@@ -180,6 +182,17 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(rootNav).toMatch(/name="List"\s+component=\{ShoppingListScreen\}/);
     expect(rootNav).toMatch(/name="IngredientStudio"\s+component=\{IngredientStudioScreen\}/);
     expect(rootNav).toMatch(/name="SwapDetail"\s+component=\{SwapDetailScreen\}/);
+    expect(rootNav).toMatch(/name="RecipeReviews"\s+component=\{RecipeReviewsScreen\}/);
+    expect(rootNav).toMatch(/name="CookingHistory"\s+component=\{CookingHistoryScreen\}/);
+  });
+
+  it('registers RecipeReviews and CookingHistory exactly once in the authenticated root stack, never as tabs', () => {
+    expect(stack.filter((name) => name === 'RecipeReviews')).toHaveLength(1);
+    expect(stack.filter((name) => name === 'CookingHistory')).toHaveLength(1);
+    expect(tabScreenNames(mainTabs)).not.toContain('RecipeReviews');
+    expect(tabScreenNames(mainTabs)).not.toContain('CookingHistory');
+    expect(rootNav).toMatch(/import RecipeReviewsScreen from '\.\.\/screens\/RecipeReviewsScreen'/);
+    expect(rootNav).toMatch(/import CookingHistoryScreen from '\.\.\/screens\/CookingHistoryScreen'/);
   });
 });
 

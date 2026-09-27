@@ -298,6 +298,24 @@ test('getStats scopes to the userId passed in — never a global/other-user aggr
 // getRecipeStatus (RecipeDetail "Cooked" pill)
 // ---------------------------------------------------------------------------
 
+test('hasCompletedRecipe delegates to the existing user-and-recipe repository predicate and returns boolean', async (t) => {
+  let captured;
+  t.mock.method(cookHistoryRepository, 'existsForUserAndRecipe', async (userId, recipeId) => {
+    captured = { userId, recipeId };
+    return { _id: 'event-1' };
+  });
+
+  const result = await cookHistoryService.hasCompletedRecipe(OTHER_USER_ID, 'canonical-recipe');
+
+  assert.equal(result, true);
+  assert.deepEqual(captured, { userId: OTHER_USER_ID, recipeId: 'canonical-recipe' });
+});
+
+test('hasCompletedRecipe returns false without inventing another model query', async (t) => {
+  t.mock.method(cookHistoryRepository, 'existsForUserAndRecipe', async () => false);
+  assert.equal(await cookHistoryService.hasCompletedRecipe(USER_ID, RECIPE_ID), false);
+});
+
 test('getRecipeStatus requires an existing/usable recipe before touching the repository', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
   let existsCalled = false;

@@ -103,7 +103,13 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.statsRow}>
           <Stat n={savedCount} label="Recipes saved" styles={styles} />
           <Stat n={collectionsCount} label="Collections" styles={styles} />
-          <Stat n={cookedCount} label="Cooked" styles={styles} />
+          <Stat
+            n={cookedCount}
+            label="Cooked"
+            styles={styles}
+            onPress={() => navigation.navigate('CookingHistory')}
+            accessibilityLabel={`Cooked: ${cookedCount}. Open cooking history`}
+          />
         </View>
 
         <Text style={styles.eyebrow}>Preferences</Text>
@@ -151,12 +157,19 @@ export default function ProfileScreen({ navigation }) {
   );
 }
 
-function Stat({ n, label, styles }) {
+function Stat({ n, label, styles, onPress, accessibilityLabel }) {
+  const Container = onPress ? Pressable : View;
   return (
-    <View style={styles.stat} accessible accessibilityLabel={`${label}: ${n}`}>
+    <Container
+      style={styles.stat}
+      onPress={onPress}
+      accessible
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={accessibilityLabel || `${label}: ${n}`}
+    >
       <Text style={styles.statN}>{n}</Text>
       <Text style={styles.statLabel}>{label}</Text>
-    </View>
+    </Container>
   );
 }
 
