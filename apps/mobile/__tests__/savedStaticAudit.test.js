@@ -1,6 +1,6 @@
 // Saved final-frontend port — static source validation.
 //
-// Saved is the teammate "My Collections" grid/header shell (commit c1c86ed) —
+// Saved is the pinned teammate "My Collections" grid/header shell (bae924b) —
 // a collections BROWSER. It shows the real system collection "Favorites"
 // (backed exclusively by FavoritesContext/the real API) first, followed by
 // the user's real, backend-persisted Collections (M5A — CollectionsContext/
@@ -27,6 +27,24 @@ function stripComments(src) {
 
 const raw = read('screens/SavedScreen.js');
 const code = stripComments(raw);
+const screenStart = code.indexOf('export default function SavedScreen');
+const screenEnd = code.indexOf('function makeStyles');
+if (screenStart === -1 || screenEnd === -1 || screenEnd <= screenStart) {
+  throw new Error('savedStaticAudit: could not locate the SavedScreen source slice');
+}
+const savedCode = code.slice(screenStart, screenEnd);
+const createStart = savedCode.indexOf('const create = async () => {');
+const createEnd = savedCode.indexOf('\n  const favoritesCover', createStart);
+if (createStart === -1 || createEnd === -1 || createEnd <= createStart) {
+  throw new Error('savedStaticAudit: could not locate the collection create handler');
+}
+const createCode = savedCode.slice(createStart, createEnd);
+const createControlStart = savedCode.indexOf('<Pressable\n                  style={styles.createBtn}');
+const createControlEnd = savedCode.indexOf('</Pressable>', createControlStart);
+if (createControlStart === -1 || createControlEnd === -1 || createControlEnd <= createControlStart) {
+  throw new Error('savedStaticAudit: could not locate the collection create control');
+}
+const createControlCode = savedCode.slice(createControlStart, createControlEnd);
 
 describe('Saved keeps real Favorites + real Collections as the only data sources', () => {
   it('imports no mock-data layer or teammate mock/local providers', () => {
@@ -59,6 +77,22 @@ describe('Saved keeps real Favorites + real Collections as the only data sources
     expect(code).toMatch(/reloadCollections\(\)/);
   });
 
+  it('uses the pinned two-column FlatList and refreshes both real sources on pull', () => {
+    expect(raw).toMatch(/import \{[^}]*FlatList[^}]*\} from 'react-native'/);
+    expect(savedCode).toMatch(/<FlatList/);
+    expect(savedCode).toMatch(/numColumns=\{2\}/);
+    expect(savedCode).toMatch(/onRefresh=\{refreshAll\}/);
+    expect(savedCode).toMatch(/await Promise\.all\(\[reloadFavorites\(\), reloadCollections\(\)\]\)/);
+  });
+
+  it('keeps both real load failures visible and retries only their failed source', () => {
+    expect(savedCode).toMatch(/error: favoritesError/);
+    expect(savedCode).toMatch(/error: collectionsError/);
+    expect(savedCode).not.toMatch(/favoritesError \|\| collectionsError/);
+    expect(savedCode).toMatch(/\{favoritesError \? \([\s\S]*?onPress=\{reloadFavorites\}[\s\S]*?Favorites: \{favoritesError\}/);
+    expect(savedCode).toMatch(/\{collectionsError \? \([\s\S]*?onPress=\{reloadCollections\}[\s\S]*?Collections: \{collectionsError\}/);
+  });
+
   it('never fabricates hardcoded smart collections or a recipe list of its own', () => {
     expect(code).not.toMatch(/Quick Meals|Healthy Meals|Weekend Cooking|Dinner Ideas|\bBreakfast\b/);
     expect(code).not.toMatch(/const\s+(recipes|RECIPES|COLLECTIONS)\s*=\s*\[/);
@@ -75,7 +109,8 @@ describe('Saved keeps real Favorites + real Collections as the only data sources
   });
 
   it('renders real collection counts from recipeCount, never a fabricated count', () => {
-    expect(code).toMatch(/c\.recipeCount/);
+    expect(savedCode).toMatch(/\.\.\.collection, type: 'user'/);
+    expect(savedCode).toMatch(/item\.recipeCount/);
   });
 
   it('does not render cuisine or vibe', () => {
@@ -155,18 +190,31 @@ describe('collection creation is real, not a fake/pending placeholder', () => {
   });
 
   it('submitting calls the real CollectionsContext createCollection, never local/optimistic-only state', () => {
-    expect(code).toMatch(/const create = async \(\) => \{/);
-    expect(code).toMatch(/await createCollection\(\{ name: trimmed \}\)/);
+    expect(createCode).toMatch(/const trimmed = name\.trim\(\)/);
+    expect(createCode).toMatch(/if \(!trimmed \|\| creating \|\| createPendingRef\.current\) return/);
+    expect(createCode).toMatch(/createPendingRef\.current = true/);
+    expect(createCode).toMatch(/await createCollection\(\{ name: trimmed \}\)/);
+    expect(createCode).toMatch(/finally \{\s*createPendingRef\.current = false;\s*setCreating\(false\)/);
+    expect(createCode).not.toMatch(/createCollection\(\{ name \}\)/);
+    expect(createCode).not.toMatch(/setCollections|setCards|setFavorites/);
   });
 
   it('a backend create failure is shown honestly, not silently swallowed', () => {
-    expect(code).toMatch(/setCreateError/);
-    expect(code).toMatch(/result\.error/);
+    expect(createCode).toMatch(/setCreateError/);
+    expect(createCode).toMatch(/result\.error/);
   });
 
   it('a successful create clears the form instead of leaving fake local rows behind', () => {
-    expect(code).toMatch(/if \(result\.ok\) \{/);
-    expect(code).toMatch(/setName\(''\)/);
-    expect(code).toMatch(/setAdding\(false\)/);
+    expect(createCode).toMatch(/if \(result\.ok\) \{/);
+    expect(createCode).toMatch(/setName\(''\)/);
+    expect(createCode).toMatch(/setAdding\(false\)/);
+  });
+
+  it('disables duplicate or blank submissions with matching accessibility state', () => {
+    expect(createControlCode).toMatch(/onPress=\{create\}/);
+    expect(createControlCode).toMatch(/disabled=\{creating \|\| !name\.trim\(\)\}/);
+    expect(createControlCode).toMatch(
+      /accessibilityState=\{\{ disabled: creating \|\| !name\.trim\(\) \}\}/
+    );
   });
 });

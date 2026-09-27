@@ -66,6 +66,12 @@ const ONBOARDING_ASSETS = [
 const authServiceRaw = read('api/authService.js');
 const authServiceCode = stripComments(authServiceRaw);
 
+function pressablesContaining(source, marker) {
+  return [...source.matchAll(/<Pressable\b[\s\S]*?<\/Pressable>/g)]
+    .map((match) => match[0])
+    .filter((block) => block.includes(marker));
+}
+
 describe('no navigation around the auth boundary', () => {
   // RootNavigator swaps stacks off AuthContext state. A screen that pushes
   // itself into MainTabs would put the app "inside" without a real session.
@@ -184,6 +190,248 @@ describe('the real auth wiring is still in place', () => {
       // The button calls the hook's callback; it does not re-implement a flow.
       expect(code[name]).toMatch(/onPress=\{signInWithGoogle\}/);
       expect(code[name]).not.toMatch(/googleAuthFlow|nativeGoogleSignIn|GoogleSignin\./);
+    }
+  });
+});
+
+describe('MOBILE-M27 Login presentation adoption', () => {
+  const googleControls = pressablesContaining(code.Login, '<GoogleGlyph');
+
+  it('isolates one compact Google control instead of matching unrelated controls', () => {
+    expect(googleControls).toHaveLength(1);
+    const googleControl = googleControls[0];
+    expect(googleControl).toMatch(/styles\.authBtn/);
+    expect(googleControl).toMatch(/<GoogleGlyph\b/);
+  });
+
+  it('keeps real Google semantics and accessibility inside that control', () => {
+    const googleControl = googleControls[0];
+    expect(googleControl).toMatch(/onPress=\{signInWithGoogle\}/);
+    expect(googleControl).toMatch(/disabled=\{busy\}/);
+    expect(googleControl).toMatch(/accessibilityRole="button"/);
+    expect(googleControl).toMatch(
+      /accessibilityLabel=\{\s*googleSubmitting\s*\?\s*'Signing in with Google'\s*:\s*'Continue with Google'\s*\}/
+    );
+
+    const accessibilityState = googleControl.match(
+      /accessibilityState=\{\{([\s\S]*?)\}\}/
+    );
+    expect(accessibilityState).not.toBeNull();
+    expect(accessibilityState[1]).toMatch(/disabled:\s*busy/);
+    expect(accessibilityState[1]).toMatch(/busy:\s*googleSubmitting/);
+  });
+
+  it('keeps pressed, unavailable, and loading feedback inside that control', () => {
+    const googleControl = googleControls[0];
+    expect(googleControl).toMatch(/pressed\s*&&\s*styles\.dim/);
+    expect(googleControl).toMatch(/!google\.ready\s*&&\s*styles\.authBtnUnavailable/);
+    expect(code.Login).toMatch(/authBtnUnavailable:\s*\{[^}]*opacity:/);
+    expect(googleControl).toMatch(/googleSubmitting\s*\?/);
+    expect(googleControl).toMatch(/<ActivityIndicator\b/);
+  });
+
+  it('adds no guest, demo, Facebook, or other unsupported provider path', () => {
+    expect(code.Login).not.toMatch(/\b(?:guest|demo)\b/i);
+    expect(code.Login).not.toMatch(
+      /continueAsGuest|browseAsGuest|loginAsGuest|guestLogin|guestMode|guestSession|demoLogin|demoMode|demoSession|markLoggedIn|fakeLogin/i
+    );
+    expect(code.Login).not.toMatch(
+      /Facebook|signInWith(?:Apple|Facebook|GitHub|Microsoft|Twitter)|continueWith(?:Apple|Facebook|GitHub|Microsoft|Twitter)/i
+    );
+
+    const actions = [...code.Login.matchAll(/\bonPress=\{([^}]+)\}/g)]
+      .map((match) => match[1].trim())
+      .sort();
+    expect(actions).toEqual(
+      ['goRegister', 'login', 'requestPasswordReset', 'signInWithGoogle'].sort()
+    );
+  });
+});
+
+describe('MOBILE-M27 Register auth visual consistency', () => {
+  const googleControls = pressablesContaining(code.Register, '<GoogleGlyph');
+  const registerInputs = [...raw.Register.matchAll(/<Input\b[\s\S]*?\/>/g)].map(
+    (match) => match[0]
+  );
+  const actionableControls = [
+    ...[...code.Register.matchAll(/<Pressable\b[\s\S]*?<\/Pressable>/g)].map(
+      (match) => match[0]
+    ),
+    ...[...code.Register.matchAll(/<Button\b[\s\S]*?\/>/g)].map((match) => match[0]),
+  ];
+
+  function inputWithLabel(label) {
+    const matches = registerInputs.filter((block) =>
+      new RegExp(`\\blabel\\s*=\\s*["']${label}["']`).test(block)
+    );
+    expect(matches).toHaveLength(1);
+    return matches[0];
+  }
+
+  it('uses the same compact provider-control structure as Login', () => {
+    expect(googleControls).toHaveLength(1);
+    const googleControl = googleControls[0];
+    expect(code.Register).toMatch(/<View style=\{styles\.authRow\}>/);
+    expect(googleControl).toMatch(/styles\.authBtn/);
+    expect(googleControl).toMatch(/<GoogleGlyph\s+size=\{20\}\s*\/>/);
+    expect(code.Register).toMatch(/authRow:\s*\{[^}]*justifyContent:\s*'center'/);
+    expect(code.Register).toMatch(
+      /authBtn:\s*\{[^}]*width:\s*46[^}]*height:\s*46[^}]*borderRadius:\s*radius\.pill/
+    );
+    expect(code.Register).not.toMatch(/googleText|googleBtn/);
+  });
+
+  it('preserves real Google action, accessibility, and feedback states', () => {
+    const googleControl = googleControls[0];
+    expect(googleControl).toMatch(/onPress=\{signInWithGoogle\}/);
+    expect(googleControl).toMatch(/disabled=\{busy\}/);
+    expect(googleControl).toMatch(/accessibilityRole="button"/);
+    expect(googleControl).toMatch(
+      /accessibilityLabel=\{\s*googleSubmitting\s*\?\s*'Signing in with Google'\s*:\s*'Continue with Google'\s*\}/
+    );
+
+    const accessibilityState = googleControl.match(
+      /accessibilityState=\{\{([\s\S]*?)\}\}/
+    );
+    expect(accessibilityState).not.toBeNull();
+    expect(accessibilityState[1]).toMatch(/disabled:\s*busy/);
+    expect(accessibilityState[1]).toMatch(/busy:\s*googleSubmitting/);
+    expect(googleControl).toMatch(/pressed\s*&&\s*styles\.dim/);
+    expect(googleControl).toMatch(/busy\s*&&\s*styles\.dim/);
+    expect(googleControl).toMatch(/!google\.ready\s*&&\s*styles\.authBtnUnavailable/);
+    expect(code.Register).toMatch(/authBtnUnavailable:\s*\{[^}]*opacity:/);
+    expect(googleControl).toMatch(/googleSubmitting\s*\?/);
+    expect(googleControl).toMatch(/<ActivityIndicator\b/);
+  });
+
+  it.each([
+    ['Name', 'name'],
+    ['Email', 'email'],
+    ['Password', 'password'],
+  ])('keeps the required %s Input bound to %s', (label, value) => {
+    const input = inputWithLabel(label);
+    expect(input).toMatch(new RegExp(`\\blabel\\s*=\\s*["']${label}["']`));
+    expect(input).toMatch(new RegExp(`\\bvalue\\s*=\\s*\\{\\s*${value}\\s*\\}`));
+    expect(input).toMatch(/\brequired(?:\s|=|\/>)/);
+  });
+
+  it('retains the password requirements and only supported actions', () => {
+    expect(raw.Register).toMatch(/<PasswordRequirements value=\{password\}\s*\/>/);
+    expect(raw.Register).toMatch(/title="Create account"/);
+    expect(raw.Register).toMatch(/Already have an account\?/);
+
+    const actions = [...code.Register.matchAll(/\bonPress=\{([^}]+)\}/g)]
+      .map((match) => match[1].trim())
+      .sort();
+    expect(actions).toEqual(['goLogin', 'register', 'signInWithGoogle'].sort());
+  });
+
+  it('adds no actionable guest or demo registration path', () => {
+    expect(code.Register).not.toMatch(
+      /\b(?:continueAs|browseAs|loginAs|signInAs|signUpAs|registerAs|use|set|enable|start)(?:Guest|Demo)\w*\b/i
+    );
+    expect(code.Register).not.toMatch(
+      /\b(?:guest|demo)(?:Login|Mode|Session|Auth|State|User|Account|Handler|Callback|Navigation)\w*\b/i
+    );
+    expect(code.Register).not.toMatch(
+      /navigation\.(?:navigate|replace|reset)\([^)]*["'`](?:Guest|Demo)\b/i
+    );
+    for (const control of actionableControls) {
+      expect(control).not.toMatch(/\b(?:guest|demo)\w*\b/i);
+    }
+  });
+
+  it('adds no unsupported identity-provider handler or control', () => {
+    const unsupportedProviders = '(?:Apple|Facebook|GitHub|Microsoft|Twitter)';
+    expect(code.Register).not.toMatch(
+      new RegExp(
+        `\\b(?:signInWith|signUpWith|continueWith|registerWith|loginWith|use)${unsupportedProviders}\\w*\\b`,
+        'i'
+      )
+    );
+    expect(code.Register).not.toMatch(
+      new RegExp(
+        `\\b${unsupportedProviders}(?:Auth|Login|SignIn|SignUp|Provider|Button|Glyph|Icon)\\w*\\b`,
+        'i'
+      )
+    );
+    for (const control of actionableControls) {
+      expect(control).not.toMatch(new RegExp(`\\b${unsupportedProviders}\\b`, 'i'));
+    }
+  });
+
+  it('adds no agreement or acceptance state and no setter/callback for it', () => {
+    const agreementMechanic =
+      /(?:agreed|agreeTo(?:Terms|Privacy|Consent|Agreement)|accept(?:ed|ance)?(?:Terms|Privacy|Consent|Agreement)|(?:terms|privacy)(?:Accepted|Acceptance|Agreed|Consent|Required|Checked)|consent(?:Given|Granted|Accepted|Acceptance|Required|Checked)|agreement(?:Accepted|Required|Checked))/i;
+    const stateDeclarations = [
+      ...code.Register.matchAll(
+        /const\s*\[\s*([A-Za-z_$][\w$]*)\s*,\s*([A-Za-z_$][\w$]*)\s*\]\s*=\s*useState\s*\(\s*([^)]*)\)/g
+      ),
+    ].map((match) => ({ value: match[1], setter: match[2], initial: match[3].trim() }));
+
+    const agreementStates = stateDeclarations.filter(({ value, setter, initial }) => {
+      const names = `${value} ${setter}`;
+      const booleanAgreementState =
+        /^(?:true|false)$/.test(initial) &&
+        /(?:agree|accept|agreement|consent|terms|privacy)/i.test(names);
+      return agreementMechanic.test(names) || booleanAgreementState;
+    });
+    expect(agreementStates).toEqual([]);
+
+    const callbackNames = [
+      ...[...code.Register.matchAll(
+        /const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/g
+      )].map((match) => match[1]),
+      ...[...code.Register.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map(
+        (match) => match[1]
+      ),
+    ];
+    expect(callbackNames.filter((name) => agreementMechanic.test(name))).toEqual([]);
+  });
+
+  it('adds no terms/privacy/consent acceptance checkbox or Switch', () => {
+    const acceptanceControls = [
+      ...[...code.Register.matchAll(/<(?:Checkbox|Switch)\b[\s\S]*?\/>/g)].map(
+        (match) => match[0]
+      ),
+      ...[...code.Register.matchAll(/<Pressable\b[\s\S]*?<\/Pressable>/g)]
+        .map((match) => match[0])
+        .filter((block) => /accessibilityRole\s*=\s*["'](?:checkbox|switch)["']/i.test(block)),
+    ].filter((block) =>
+      /(?:agreed|accept(?:ed|ance)?|consent|terms|privacy|agreement)/i.test(block)
+    );
+
+    expect(acceptanceControls).toEqual([]);
+  });
+
+  it('does not gate the registration CTA or submission on legal agreement', () => {
+    const agreementGate =
+      /(?:agreed|accept(?:ed|ance)?|consent|terms|privacy|agreement)/i;
+    const registerButtons = [
+      ...code.Register.matchAll(/<Button\b[\s\S]*?\/>/g),
+    ]
+      .map((match) => match[0])
+      .filter((block) => /\btitle\s*=\s*["']Create account["']/.test(block));
+    expect(registerButtons).toHaveLength(1);
+
+    const disabledExpression = registerButtons[0].match(
+      /\bdisabled\s*=\s*\{([\s\S]*?)\}/
+    );
+    expect(disabledExpression).not.toBeNull();
+    expect(disabledExpression[1]).not.toMatch(agreementGate);
+
+    const registerFunction = code.Register.match(
+      /const\s+register\s*=\s*async\s*\(\s*\)\s*=>\s*\{([\s\S]*?)\n\s*\};/
+    );
+    expect(registerFunction).not.toBeNull();
+    const signUpIndex = registerFunction[0].indexOf('await signUp(submission.payload)');
+    expect(signUpIndex).toBeGreaterThan(-1);
+    const preSubmission = registerFunction[0].slice(0, signUpIndex);
+    const conditions = [...preSubmission.matchAll(/\bif\s*\(([^)]*)\)/g)].map(
+      (match) => match[1]
+    );
+    for (const condition of conditions) {
+      expect(condition).not.toMatch(agreementGate);
     }
   });
 });

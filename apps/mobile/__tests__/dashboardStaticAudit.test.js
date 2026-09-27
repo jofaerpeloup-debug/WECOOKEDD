@@ -355,11 +355,98 @@ describe('unsupported teammate Dashboard concepts stay out of production', () =>
     expect(staticTextNodes('<Text>{getTitle()}</Text>')).toEqual([]);
     expect(staticTextNodes("<Text>{condition ? 'Trending' : 'Latest'}</Text>")).toEqual([]);
   });
+
+  it('adds no local ranking, recommendation, nutrition, or popularity semantics', () => {
+    expect(code).not.toMatch(
+      /\b(?:const|let|var)\s+(?:trending|ranked|rankings|recommendations|recentlyViewed|nutritionMetrics)\b/i
+    );
+    expect(code).not.toMatch(
+      /\b(?:setTrending|setRanked|setRecommendations|setRecentlyViewed|recommendationScore|recommendationConfidence)\b/
+    );
+    expect(code).not.toMatch(
+      /\.(?:sort)\([^)]*(?:rating|reviews|popularity|rank|score|confidence)/i
+    );
+    expect(code).not.toMatch(
+      /\b(?:recipe|item|feature|r)\.(?:rating|reviews|popularity|rank|recommendationScore|confidence|nutrition|calories|protein|carbs|fat)\b/i
+    );
+  });
 });
 
 describe('greeting is derived from the authenticated user', () => {
   it('uses the real user name, not a hard-coded chef name', () => {
     expect(code).toMatch(/firstNameOf\(user\)/);
     expect(code).not.toMatch(/Chef Ninong Ry|Chef Kirby|Hello, Chef! /);
+  });
+});
+
+describe('approved pinned Dashboard presentation remains attached to real recipes', () => {
+  const renderRailCard = extractBalancedAfter(
+    code,
+    'const renderRailCard = (recipe) =>',
+    '(',
+    ')'
+  );
+  const openRecipe = extractBalancedAfter(code, 'const openRecipe = (recipe) =>', '{', '}');
+
+  it('uniquely isolates the real latest-recipe tile and its navigation action', () => {
+    expect(renderRailCard).not.toBeNull();
+    expect(openRecipe).not.toBeNull();
+    expect(code.match(/rail\.map\(renderRailCard\)/g) || []).toHaveLength(1);
+
+    expect(renderRailCard).toMatch(/onPress=\{\(\) => openRecipe\(recipe\)\}/);
+    expect(openRecipe).toMatch(/navigation\.navigate\('RecipeDetail',\s*\{/);
+    expect(openRecipe).toMatch(/recipeSource:\s*'api'/);
+    expect(openRecipe).toMatch(/recipeId:\s*recipe\.id/);
+    expect(openRecipe).toMatch(/initialRecipe:\s*recipe/);
+  });
+
+  it('keeps backend imagery, favorite control, and navigation structurally independent', () => {
+    expect(renderRailCard).not.toBeNull();
+    expect(renderRailCard.match(/<Pressable\b/g) || []).toHaveLength(1);
+    expect(renderRailCard.match(/<FavoriteHeart\b/g) || []).toHaveLength(1);
+    expect(renderRailCard).toMatch(/<RecipeImage source=\{recipe\.imageUrl\}/);
+
+    const pressableEnd = renderRailCard.indexOf('</Pressable>');
+    const favoriteStart = renderRailCard.indexOf('<FavoriteHeart');
+    expect(pressableEnd).toBeGreaterThanOrEqual(0);
+    expect(favoriteStart).toBeGreaterThan(pressableEnd);
+    expect(renderRailCard.slice(0, pressableEnd)).not.toMatch(/<FavoriteHeart\b/);
+    expect(renderRailCard).toMatch(/<FavoriteHeart recipe=\{recipe\}/);
+  });
+
+  it('ties one-line accessible tile presentation to the real recipe object', () => {
+    expect(renderRailCard).not.toBeNull();
+    expect(renderRailCard).toMatch(/accessibilityLabel=\{`Open \$\{recipe\.title\}`\}/);
+    expect(renderRailCard).toMatch(
+      /<Text style=\{styles\.railTitle\} numberOfLines=\{1\}>\s*\{recipe\.title\}\s*<\/Text>/
+    );
+    expect(renderRailCard).toMatch(/\{metaLine\(recipe\)\}/);
+    expect(renderRailCard).not.toMatch(/mock|fixture|localRecipe|hardCoded/i);
+  });
+
+  it('renders the API-backed latest rail as compact circular recipe tiles', () => {
+    const railCard = code.match(/railCard:\s*(\{[\s\S]*?\}),\s*railMain:/)?.[1] || null;
+    const railMain = code.match(/railMain:\s*(\{[\s\S]*?\}),\s*railImage:/)?.[1] || null;
+    const railImage = code.match(/railImage:\s*(\{[\s\S]*?\}),\s*railHeart:/)?.[1] || null;
+
+    expect(railCard).not.toBeNull();
+    expect(railCard).toMatch(/alignItems\s*:\s*['"]center['"]/);
+    expect(railMain).not.toBeNull();
+    expect(railMain).toMatch(/alignItems\s*:\s*['"]center['"]/);
+    expect(railImage).not.toBeNull();
+    expect(railImage).toMatch(/width\s*:\s*76/);
+    expect(railImage).toMatch(/height\s*:\s*76/);
+    expect(railImage).toMatch(/borderRadius\s*:\s*38/);
+    expect(code.match(/rail\.map\(renderRailCard\)/g) || []).toHaveLength(1);
+  });
+
+  it('keeps the single Dashboard search input and clear control explicitly accessible', () => {
+    const searchInputs = code.match(/<TextInput\b[\s\S]*?\/>/g) || [];
+    const clearControl = extractBalancedAfter(code, 'searching &&', '(', ')');
+
+    expect(searchInputs).toHaveLength(1);
+    expect(searchInputs[0]).toMatch(/accessibilityLabel="Search recipes"/);
+    expect(clearControl).not.toBeNull();
+    expect(clearControl).toMatch(/accessibilityLabel="Clear search"/);
   });
 });

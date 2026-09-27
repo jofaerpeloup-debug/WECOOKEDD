@@ -50,6 +50,41 @@ function extractBalancedAfter(src, anchor, open = '{', close = '}') {
   return null;
 }
 
+function extractUniqueSelfClosingJsxTag(src, tagName) {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = [...src.matchAll(new RegExp(`<${escapedTagName}\\b`, 'g'))];
+  if (matches.length !== 1) return null;
+
+  const start = matches[0].index;
+  let braceDepth = 0;
+  let quote = null;
+  let escaped = false;
+
+  for (let i = start + matches[0][0].length; i < src.length; i += 1) {
+    const char = src[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') braceDepth += 1;
+    else if (char === '}') {
+      if (braceDepth === 0) return null;
+      braceDepth -= 1;
+    } else if (braceDepth === 0 && char === '>' && src[i - 1] !== '/') {
+      return null;
+    } else if (braceDepth === 0 && char === '/' && src[i + 1] === '>') {
+      return src.slice(start, i + 2);
+    }
+  }
+  return null;
+}
+
 function staticTextNodes(src) {
   return [...src.matchAll(/<Text\b[^>]*>([\s\S]*?)<\/Text>/g)]
     .map((match) =>
@@ -73,6 +108,17 @@ function hasCategoryQueryKey(src) {
   return /\bcategory\s*:/.test(src);
 }
 
+function hasUnsupportedSortSemantics(src) {
+  const executable = stripComments(src);
+  return [
+    /\bsort\s*:\s*(['"])(?:rating|popularity)\1/i,
+    /\bsort\s*=\s*(['"])(?:rating|popularity)\1/i,
+    /\bsetSort\s*\(\s*(['"])(?:rating|popularity)\1\s*\)/i,
+    /\b(?:query|params|filters)\.sort\s*=\s*(['"])(?:rating|popularity)\1/i,
+    /\.set\s*\(\s*(['"])sort\1\s*,\s*(['"])(?:rating|popularity)\2\s*\)/i,
+  ].some((pattern) => pattern.test(executable));
+}
+
 const raw = read('screens/DiscoverScreen.js');
 const code = stripComments(raw);
 
@@ -89,6 +135,28 @@ describe('static audit source helpers', () => {
       'anchor'
     );
     expect(block).toBe("{ single: '}', double: \"}\", template: `}`, nested: { ok: true } }");
+  });
+
+  it('extracts exactly one structurally complete self-closing JSX tag', () => {
+    const block = extractUniqueSelfClosingJsxTag(
+      '<FlatList data={items} refreshControl={<RefreshControl onRefresh={refresh} />} />',
+      'FlatList'
+    );
+    expect(block).toBe(
+      '<FlatList data={items} refreshControl={<RefreshControl onRefresh={refresh} />} />'
+    );
+    expect(extractUniqueSelfClosingJsxTag('<View />', 'FlatList')).toBeNull();
+    expect(extractUniqueSelfClosingJsxTag('<FlatList /><FlatList />', 'FlatList')).toBeNull();
+    expect(extractUniqueSelfClosingJsxTag('<FlatList data={items}', 'FlatList')).toBeNull();
+  });
+
+  it('distinguishes executable unsupported sort values from harmless copy', () => {
+    expect(hasUnsupportedSortSemantics("const query = { sort: 'rating' };")).toBe(true);
+    expect(hasUnsupportedSortSemantics('const query = { sort: "popularity" };')).toBe(true);
+    expect(hasUnsupportedSortSemantics("filters.sort = 'rating';")).toBe(true);
+    expect(hasUnsupportedSortSemantics("params.set('sort', 'popularity');")).toBe(true);
+    expect(hasUnsupportedSortSemantics('<Text>Popular recipes</Text>')).toBe(false);
+    expect(hasUnsupportedSortSemantics('// sort: rating is unsupported')).toBe(false);
   });
 });
 
@@ -283,6 +351,97 @@ describe('Discover search-row layout', () => {
   });
 });
 
+describe('approved pinned Discover presentation remains attached to real results', () => {
+  const renderItem = extractBalancedAfter(code, 'const renderItem = ({ item }) =>', '(', ')');
+  const openRecipe = extractBalancedAfter(code, 'const openRecipe = (recipe) =>');
+  const countLabelCalculation = extractBalancedAfter(code, 'const countLabel = useMemo(() =>');
+  const renderedCount = extractBalancedAfter(code, 'countLabel &&', '(', ')');
+  const discoverList = extractUniqueSelfClosingJsxTag(code, 'FlatList');
+
+  it('uniquely isolates a real result row and its RecipeDetail action', () => {
+    expect(renderItem).not.toBeNull();
+    expect(openRecipe).not.toBeNull();
+    expect(renderItem).toMatch(/onPress=\{\(\) => openRecipe\(item\)\}/);
+    expect(openRecipe).toMatch(/navigation\.navigate\('RecipeDetail',\s*\{/);
+    expect(openRecipe).toMatch(/recipeSource:\s*'api'/);
+    expect(openRecipe).toMatch(/recipeId:\s*recipe\.id/);
+    expect(openRecipe).toMatch(/initialRecipe:\s*recipe/);
+  });
+
+  it('keeps backend imagery, favorite control, and result navigation structurally independent', () => {
+    expect(renderItem).not.toBeNull();
+    expect(renderItem.match(/<Pressable\b/g) || []).toHaveLength(1);
+    expect(renderItem.match(/<FavoriteHeart\b/g) || []).toHaveLength(1);
+    expect(renderItem).toMatch(/<RecipeImage source=\{item\.imageUrl\}/);
+
+    const pressableEnd = renderItem.indexOf('</Pressable>');
+    const favoriteStart = renderItem.indexOf('<FavoriteHeart');
+    expect(pressableEnd).toBeGreaterThanOrEqual(0);
+    expect(favoriteStart).toBeGreaterThan(pressableEnd);
+    expect(renderItem.slice(0, pressableEnd)).not.toMatch(/<FavoriteHeart\b/);
+    expect(renderItem).toMatch(/<FavoriteHeart recipe=\{item\}/);
+  });
+
+  it('keeps the accessible compact row attached to the real result item', () => {
+    expect(renderItem).not.toBeNull();
+    expect(renderItem).toMatch(/accessibilityLabel=\{`Open \$\{item\.title\}`\}/);
+    expect(renderItem).toMatch(/\{item\.title\}/);
+    expect(renderItem).toMatch(/\{metaLine\(item\)\}/);
+    expect(renderItem).not.toMatch(/mock|fixture|localRecipe|hardCoded/i);
+  });
+
+  it('binds the unique Discover FlatList to real recipes and the isolated row renderer', () => {
+    expect(discoverList).not.toBeNull();
+    expect(discoverList).toMatch(/\bdata\s*=\s*\{recipes\}/);
+    expect(discoverList).toMatch(/\brenderItem\s*=\s*\{renderItem\}/);
+    expect(discoverList).toMatch(/\bonEndReached\s*=\s*\{loadMore\}/);
+    expect(discoverList).toMatch(
+      /\brefreshControl\s*=\s*\{\s*<RefreshControl[\s\S]*?\bonRefresh\s*=\s*\{\(\) => loadFirstPage\(\{ refresh: true \}\)\}/
+    );
+  });
+
+  it('uses the compact image-led teammate result treatment without a duplicate shadow source', () => {
+    const rowStyle = extractBalancedAfter(code, '    row:');
+    const thumbStyle = extractBalancedAfter(code, '    thumb:');
+
+    expect(rowStyle).not.toBeNull();
+    expect(rowStyle).toMatch(/backgroundColor\s*:\s*colors\.creamDeep/);
+    expect(rowStyle).not.toMatch(/shadow\./);
+    expect(thumbStyle).not.toBeNull();
+    expect(thumbStyle).toMatch(/width\s*:\s*60/);
+    expect(thumbStyle).toMatch(/height\s*:\s*60/);
+    expect(renderItem).not.toBeNull();
+    expect(renderItem).toMatch(/<RecipeImage source=\{item\.imageUrl\}/);
+  });
+
+  it('renders recipes.length with a plus only while additional pages remain', () => {
+    expect(countLabelCalculation).not.toBeNull();
+    expect(countLabelCalculation).toMatch(/const n = recipes\.length/);
+    expect(countLabelCalculation).toMatch(
+      /const more = pagination && pageLoaded < \(pagination\.totalPages \|\| 0\)/
+    );
+    expect(countLabelCalculation).toMatch(/\$\{n\}\$\{more \? ['"]\+['"] : ['"]{2}\}/);
+
+    expect(renderedCount).not.toBeNull();
+    expect(renderedCount).toMatch(/<View style=\{styles\.countRow\}>/);
+    expect(renderedCount).toMatch(/<Text style=\{styles\.countLabel\}>\{countLabel\} found<\/Text>/);
+  });
+
+  it('keeps the rendered result summary uppercase', () => {
+    expect(code).toMatch(/textTransform\s*:\s*['"]uppercase['"]/);
+  });
+
+  it('labels the single search input and supported filter controls for assistive technology', () => {
+    const searchInputs = code.match(/<TextInput\b[\s\S]*?\/>/g) || [];
+    const filterMap = extractBalancedAfter(code, '{M2_FILTERS.map', '(', ')');
+
+    expect(searchInputs).toHaveLength(1);
+    expect(searchInputs[0]).toMatch(/accessibilityLabel="Search recipes"/);
+    expect(filterMap).not.toBeNull();
+    expect(filterMap).toMatch(/accessibilityLabel=\{`Filter recipes by \$\{f\.label\}`\}/);
+  });
+});
+
 describe('the Dashboard -> Discover handoff contract holds (M2.1 locked)', () => {
   it('the four filter keys stay exactly all | easy | vegetarian | vegan', () => {
     const { DISCOVER_FILTERS } = require('../src/api/recipeOptions');
@@ -349,5 +508,27 @@ describe('no new cuisine / category / region UX (locked M2 decision)', () => {
     ).toBe(false);
     expect(code).not.toMatch(/\buseRecentlyViewed\s*\(|\buseSearchHistory\s*\(/);
     expect(code).not.toMatch(/\bSORT_OPTIONS\b|\bTIME_BUCKETS\b|\bVIBES\b/);
+  });
+
+  it('adds no ranking, recommendation, nutrition, or fake popularity query semantics', () => {
+    expect(code).not.toMatch(
+      /\b(?:const|let|var)\s+(?:trending|ranked|rankings|recommendations|recentlyViewed|nutritionFilters)\b/i
+    );
+    expect(code).not.toMatch(
+      /\b(?:setTrending|setRanked|setRecommendations|setRecentlyViewed|recommendationScore|recommendationConfidence)\b/
+    );
+    expect(code).not.toMatch(
+      /\.(?:sort)\([^)]*(?:rating|reviews|popularity|rank|score|confidence)/i
+    );
+    expect(code).not.toMatch(
+      /\b(?:recipe|item|r)\.(?:rating|reviews|popularity|rank|recommendationScore|confidence|nutrition|calories|protein|carbs|fat)\b/i
+    );
+
+    const queryFor = extractBalancedAfter(code, 'const queryFor = useCallback(');
+    expect(queryFor).not.toBeNull();
+    expect(queryFor).not.toMatch(
+      /\b(?:rating|popularity|rank|score|confidence|nutrition|calories|protein|carbs|fat)\s*:/i
+    );
+    expect(hasUnsupportedSortSemantics(code)).toBe(false);
   });
 });

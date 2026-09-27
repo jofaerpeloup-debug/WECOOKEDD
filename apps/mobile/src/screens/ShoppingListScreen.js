@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   Pressable,
-  TextInput,
   RefreshControl,
   ActivityIndicator,
   Alert,
@@ -16,100 +15,52 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useShoppingList } from '../context/ShoppingListContext';
+import IngredientPickerModal from '../components/IngredientPickerModal';
 import { formatQuantity } from '../utils/recipe';
 import { unitLabel } from '../api/recipeOptions';
 
-// The Shopping List is backed entirely by the Express Shopping List REST API
-// (via ShoppingListProvider) — see ShoppingListContext.js — for every
-// currently-supported interaction (check/uncheck, remove, reload). The
-// TEAMMATE screen (commit c1c86ed) is this screen's final visible product:
-// its header is back-circle + title + Edit/Done ONLY (no clear-all control),
-// its footer is an inline free-text name+qty "Add Item" form, and its rows
-// are grouped into named sections. Where the real backend cannot honestly
-// support a teammate-visible capability, this screen still renders the
-// teammate control and reports the gap honestly in place — it never falls
-// back to old WeCooked chrome and never fabricates data:
-//
-// - Clear-all: our REST API supports it (ShoppingListContext.clear /
-//   DELETE /shopping-list/items) but the teammate final screen has no such
-//   control, so no clear affordance is surfaced here. `clear()` remains
-//   exported from ShoppingListContext for any future surface.
-// - Manual add: the teammate inline name/qty fields are ported verbatim as
-//   transient form state (never persisted, never AsyncStorage-backed, no
-//   guessed ingredientId) — submitting shows an honest "not available yet"
-//   message instead of creating a fake item. The real canonical
-//   IngredientPickerModal + ShoppingListContext.addItem are NOT used by this
-//   screen (free-text names can't be resolved to a real ingredientId
-//   honestly) but remain intact/exported for any future real surface.
-// - Section grouping: the teammate's Produce/Meat/Pantry sections are
-//   guessed from the item NAME by its own local mock context — that keyword
-//   guessing is never ported. The real API's shopping-list item shape has no
-//   category field at all (see apps/api/.../shopping-list.serializer.js
-//   toItemSummary — ingredient is `{ id, name }` only), so every real item is
-//   grouped into one honest fallback section ("Other") via `itemCategory()`
-//   below — a single swap point for a real backend category field later.
-// - Unavailable badge: the teammate source has no such badge/state at all
-//   (verified against c1c86ed — no Badge/warning concept anywhere in its
-//   ShoppingListScreen.js), so none is rendered here. An archived/deleted
-//   ingredient still needs a name to display (the field is genuinely null),
-//   so the row falls back to a plain generic label — never a decorative
-//   badge, never a fabricated name.
-
-// The row's left-column name: the real ingredient name, or a safe generic
-// label for an archived/deleted ingredient (no real name to show). The raw
-// ingredientId is NEVER shown, and no unavailable badge/decoration is
-// rendered — the teammate screen has none.
 function itemPrimaryText(item) {
-  if (item.ingredient && item.ingredient.name) return item.ingredient.name;
-  return 'Unavailable ingredient';
+  return item.ingredient?.name || 'Unavailable ingredient';
 }
 
-// The row's right-column amount — real quantity/unit only, no conversion.
 function itemAmountText(item) {
   if (item.unit === 'toTaste') return 'to taste';
-  const qty = formatQuantity(item.quantity);
+  const quantity = formatQuantity(item.quantity);
   const unit = item.unit ? unitLabel(item.unit) : '';
-  const text = [qty, unit].filter(Boolean).join(' ');
-  return text || null;
+  return [quantity, unit].filter(Boolean).join(' ') || null;
 }
 
-// No real category field exists yet on a shopping-list item (see file-header
-// note). This is a single stable fallback bucket, never name-based
-// classification — replace the return value with a real field (e.g.
-// `item.ingredient.category`) once the backend serializes one.
-function itemCategory() {
-  return 'Other';
-}
-
+// The API does not expose a shopping-item category. Keep one honest group
+// instead of guessing a grocery aisle from the ingredient name.
 function groupItems(items) {
-  const order = [];
-  const byCategory = new Map();
-  for (const item of items) {
-    const category = itemCategory(item);
-    if (!byCategory.has(category)) {
-      byCategory.set(category, []);
-      order.push(category);
-    }
-    byCategory.get(category).push(item);
-  }
-  return order.map((category) => ({ category, rows: byCategory.get(category) }));
+  return items.length > 0 ? [{ category: 'Items', rows: items }] : [];
 }
 
 function ItemRow({ item, editing, disabled, pending, onToggle, onRemove }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const available = !!(item.ingredient && item.ingredient.name);
+  const available = item.isAvailable !== false && !!item.ingredient?.name;
   const primary = itemPrimaryText(item);
   const amount = itemAmountText(item);
+  const actionLabel = editing
+    ? `Remove ${primary}`
+    : `${item.isChecked ? 'Uncheck' : 'Check'} ${primary}`;
 
   return (
-    <Pressable
-      style={styles.row}
-      onPress={editing ? onRemove : onToggle}
-      disabled={disabled}
-      hitSlop={4}
-    >
-      <View style={styles.rowLeft}>
+    <View style={styles.row}>
+      <Pressable
+        style={styles.rowAction}
+        onPress={editing ? onRemove : onToggle}
+        disabled={disabled}
+        hitSlop={6}
+        accessibilityRole={editing ? 'button' : 'checkbox'}
+        accessibilityLabel={actionLabel}
+        accessibilityState={{
+          disabled,
+          ...(editing ? {} : { checked: !!item.isChecked }),
+          busy: pending,
+        }}
+      >
         {pending ? (
           <ActivityIndicator size="small" color={colors.sageDeep} style={styles.rowIcon} />
         ) : editing ? (
@@ -118,9 +69,12 @@ function ItemRow({ item, editing, disabled, pending, onToggle, onRemove }) {
           </View>
         ) : (
           <View style={[styles.check, item.isChecked && styles.checkOn]}>
-            {item.isChecked && <Ionicons name="checkmark" size={12} color={colors.onAccent} />}
+            {item.isChecked ? <Ionicons name="checkmark" size={12} color={colors.onAccent} /> : null}
           </View>
         )}
+      </Pressable>
+
+      <View style={styles.itemText}>
         <Text
           style={[
             styles.name,
@@ -130,9 +84,10 @@ function ItemRow({ item, editing, disabled, pending, onToggle, onRemove }) {
         >
           {primary}
         </Text>
+        {!available ? <Text style={styles.unavailable}>No longer in the ingredient catalog</Text> : null}
       </View>
       {amount ? <Text style={styles.qty}>{amount}</Text> : null}
-    </Pressable>
+    </View>
   );
 }
 
@@ -140,25 +95,30 @@ export default function ShoppingListScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
-  const { items, status, error, isInitializing, isMutating, isItemPending, reload, setChecked, removeItem } =
-    useShoppingList();
+  const {
+    items,
+    status,
+    error,
+    isInitializing,
+    isMutating,
+    isItemPending,
+    reload,
+    addItem,
+    setChecked,
+    removeItem,
+    clear,
+  } = useShoppingList();
 
   const [refreshing, setRefreshing] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [qty, setQty] = useState('');
+  const [pickerVisible, setPickerVisible] = useState(false);
 
-  // Reconcile with server truth on focus. `reload` is generation-guarded and
-  // is a no-op while a mutation or another GET is already in flight.
   useFocusEffect(
     useCallback(() => {
       reload();
     }, [reload])
   );
 
-  // Nothing left to edit once the list empties out (e.g. every item removed
-  // while editing) — fall back to the normal check/uncheck presentation.
   useEffect(() => {
     if (editing && items.length === 0) setEditing(false);
   }, [editing, items.length]);
@@ -172,73 +132,100 @@ export default function ShoppingListScreen({ navigation }) {
     }
   }, [reload]);
 
-  const onToggle = useCallback(
-    async (item) => {
-      const result = await setChecked(item.id, !item.isChecked);
-      if (!result.ok && result.error) {
-        Alert.alert('Couldn’t update item', result.error);
-      }
-    },
-    [setChecked]
-  );
+  const onToggle = useCallback(async (item) => {
+    const result = await setChecked(item.id, !item.isChecked);
+    if (!result.ok && result.error) Alert.alert('Could not update item', result.error);
+  }, [setChecked]);
 
-  const onRemove = useCallback(
-    async (item) => {
-      const result = await removeItem(item.id);
-      if (!result.ok && result.error) {
-        Alert.alert('Couldn’t remove item', result.error);
-      }
-    },
-    [removeItem]
-  );
+  const onRemove = useCallback(async (item) => {
+    const result = await removeItem(item.id);
+    if (!result.ok && result.error) Alert.alert('Could not remove item', result.error);
+  }, [removeItem]);
 
-  // The teammate inline "Add Item" form, kept as transient form state only.
-  // There is no honest way to turn a free-text name into a real canonical
-  // ingredientId, so nothing is added to the list, nowhere local or remote —
-  // just an honest capability notice, matching the teammate control's final
-  // visible presence without faking persistence.
-  const submitAdd = useCallback(() => {
-    if (!name.trim()) return;
-    Alert.alert('Custom shopping items are not available yet.');
-  }, [name]);
+  const confirmClear = useCallback(() => {
+    Alert.alert('Clear shopping list?', 'This removes every item from your shopping list.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear List',
+        style: 'destructive',
+        onPress: async () => {
+          const result = await clear();
+          if (!result.ok && result.error) Alert.alert('Could not clear list', result.error);
+        },
+      },
+    ]);
+  }, [clear]);
 
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
       <View style={styles.headerLeft}>
-        <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}>
+        <Pressable
+          style={styles.backBtn}
+          hitSlop={8}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="chevron-back" size={18} color={colors.ink} />
         </Pressable>
-        <Text style={styles.title}>Shopping List</Text>
+        <Text style={styles.title} accessibilityRole="header">Shopping List</Text>
       </View>
-      <Pressable hitSlop={8} onPress={() => setEditing((v) => !v)} disabled={isMutating}>
-        <Text style={[styles.edit, isMutating && styles.actionDisabled]}>
-          {editing ? 'Done' : 'Edit'}
-        </Text>
-      </Pressable>
+      {items.length > 0 ? (
+        <View style={styles.headerActions}>
+          {editing ? (
+            <Pressable
+              hitSlop={8}
+              onPress={confirmClear}
+              disabled={isMutating}
+              accessibilityRole="button"
+              accessibilityLabel="Clear shopping list"
+              accessibilityState={{ disabled: isMutating }}
+            >
+              <Text style={[styles.clear, isMutating && styles.actionDisabled]}>Clear</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            hitSlop={8}
+            onPress={() => setEditing((value) => !value)}
+            disabled={isMutating}
+            accessibilityRole="button"
+            accessibilityLabel={editing ? 'Finish editing shopping list' : 'Edit shopping list'}
+            accessibilityState={{ disabled: isMutating }}
+          >
+            <Text style={[styles.edit, isMutating && styles.actionDisabled]}>
+              {editing ? 'Done' : 'Edit'}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 
-  // Initial load — nothing to show yet.
   if (isInitializing && items.length === 0) {
     return (
-      <View style={styles.root}>
+      <View style={styles.root} accessibilityState={{ busy: true }}>
         {header}
         <View style={styles.centerWrap}>
-          <ActivityIndicator color={colors.sageDeep} />
+          <ActivityIndicator color={colors.sageDeep} accessibilityLabel="Loading shopping list" />
         </View>
       </View>
     );
   }
 
-  // Initial load failed with nothing to show.
   if (status === 'error' && items.length === 0) {
     return (
       <View style={styles.root}>
         {header}
         <View style={styles.centerWrap}>
           <Ionicons name="cloud-offline-outline" size={28} color={colors.inkFaint} />
-          <Text style={styles.centerText}>{error || 'Couldn’t load your shopping list.'}</Text>
-          <Pressable style={styles.retryBtn} onPress={() => reload()} hitSlop={8}>
+          <Text style={styles.centerText}>{error || 'Could not load your shopping list.'}</Text>
+          <Pressable
+            style={styles.retryBtn}
+            onPress={() => reload()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading shopping list"
+          >
             <Ionicons name="refresh" size={14} color={colors.sageDeep} />
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
@@ -265,17 +252,25 @@ export default function ShoppingListScreen({ navigation }) {
         }
       >
         {error && items.length > 0 ? (
-          <Pressable style={styles.inlineBanner} onPress={() => reload()}>
+          <Pressable
+            style={styles.inlineBanner}
+            onPress={() => reload()}
+            accessibilityRole="button"
+            accessibilityLabel={`${error}. Retry loading shopping list`}
+          >
             <Ionicons name="refresh" size={14} color={colors.error} />
             <Text style={styles.inlineBannerText}>{error} Tap to retry.</Text>
           </Pressable>
         ) : null}
 
         {items.length === 0 ? (
-          <Text style={styles.emptyText}>
-            Your shopping list is empty. Add ingredients from a recipe; custom items aren&apos;t
-            available yet.
-          </Text>
+          <View style={styles.emptyState}>
+            <Ionicons name="cart-outline" size={28} color={colors.inkFaint} />
+            <Text style={styles.emptyTitle}>Your shopping list is empty</Text>
+            <Text style={styles.emptyText}>
+              Add a catalog ingredient below, or add ingredients from a recipe.
+            </Text>
+          </View>
         ) : (
           sections.map(({ category, rows }) => (
             <View key={category} style={styles.group}>
@@ -297,37 +292,24 @@ export default function ShoppingListScreen({ navigation }) {
       </ScrollView>
 
       <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.lg }]}>
-        {adding && (
-          <View style={styles.addRow}>
-            <TextInput
-              style={[styles.addInput, { flex: 2 }]}
-              placeholder="Item"
-              placeholderTextColor={colors.inkFaint}
-              value={name}
-              onChangeText={setName}
-              autoFocus
-              onSubmitEditing={submitAdd}
-              returnKeyType="done"
-            />
-            <TextInput
-              style={[styles.addInput, { flex: 1 }]}
-              placeholder="Qty"
-              placeholderTextColor={colors.inkFaint}
-              value={qty}
-              onChangeText={setQty}
-              onSubmitEditing={submitAdd}
-              returnKeyType="done"
-            />
-            <Pressable style={styles.addConfirm} onPress={submitAdd}>
-              <Ionicons name="checkmark" size={18} color={colors.onAccent} />
-            </Pressable>
-          </View>
-        )}
-        <Pressable style={styles.cta} onPress={() => setAdding((v) => !v)}>
-          <Ionicons name={adding ? 'checkmark' : 'add'} size={16} color={colors.onAccent} />
-          <Text style={styles.ctaText}>{adding ? 'Done' : 'Custom Item'}</Text>
+        <Pressable
+          style={[styles.cta, isMutating && styles.ctaDisabled]}
+          onPress={() => setPickerVisible(true)}
+          disabled={isMutating}
+          accessibilityRole="button"
+          accessibilityLabel="Add catalog ingredient"
+          accessibilityState={{ disabled: isMutating }}
+        >
+          <Ionicons name="add" size={16} color={colors.onAccent} />
+          <Text style={styles.ctaText}>Add Item</Text>
         </Pressable>
       </View>
+
+      <IngredientPickerModal
+        visible={pickerVisible}
+        onClose={() => setPickerVisible(false)}
+        onAdd={addItem}
+      />
     </View>
   );
 }
@@ -336,157 +318,70 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: spacing.xl,
-      paddingBottom: spacing.md,
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: spacing.xl, paddingBottom: spacing.md,
     },
     headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
     backBtn: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: colors.creamDeep,
-      alignItems: 'center',
-      justifyContent: 'center',
+      width: 36, height: 36, borderRadius: 18, backgroundColor: colors.creamDeep,
+      alignItems: 'center', justifyContent: 'center',
     },
     title: { fontFamily: typography.display.fontFamily, fontSize: 22, color: colors.ink },
-    edit: { fontFamily: typography.body.medium, fontSize: 13, color: colors.inkFaint },
+    edit: { fontFamily: typography.body.medium, fontSize: 13, color: colors.inkSoft },
+    clear: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.error },
     actionDisabled: { opacity: 0.45 },
     scroll: { paddingHorizontal: spacing.xl, paddingBottom: 120, paddingTop: spacing.sm },
+    emptyState: { alignItems: 'center', paddingVertical: 44, gap: spacing.sm },
+    emptyTitle: { fontFamily: typography.body.semibold, fontSize: 15, color: colors.ink },
     emptyText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: 13,
-      color: colors.inkFaint,
-      textAlign: 'center',
-      lineHeight: 20,
-      paddingVertical: 40,
+      maxWidth: 280, fontFamily: typography.body.fontFamily, fontSize: 13,
+      color: colors.inkFaint, textAlign: 'center', lineHeight: 20,
     },
-    centerWrap: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: spacing.xxl,
-      gap: spacing.md,
-    },
-    centerText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkSoft,
-      textAlign: 'center',
-    },
+    centerWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, gap: spacing.md },
+    centerText: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.inkSoft, textAlign: 'center' },
     retryBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: radius.pill,
-      paddingHorizontal: spacing.lg,
-      paddingVertical: 8,
+      flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1,
+      borderColor: colors.hairline, borderRadius: radius.pill,
+      paddingHorizontal: spacing.lg, paddingVertical: 8,
     },
-    retryText: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.sm,
-      color: colors.sageDeep,
-    },
+    retryText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.sageDeep },
     inlineBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
-      backgroundColor: colors.errorBg,
-      borderRadius: radius.md,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
-      marginBottom: spacing.md,
+      flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+      backgroundColor: colors.errorBg, borderRadius: radius.md,
+      paddingHorizontal: spacing.md, paddingVertical: spacing.sm, marginBottom: spacing.md,
     },
-    inlineBannerText: {
-      flex: 1,
-      fontFamily: typography.body.medium,
-      fontSize: typography.sizes.xs,
-      color: colors.error,
-    },
+    inlineBannerText: { flex: 1, fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.error },
     group: { marginBottom: spacing.lg },
     groupLabel: {
-      fontFamily: typography.body.bold,
-      fontSize: 11.5,
-      letterSpacing: 1.1,
-      textTransform: 'uppercase',
-      color: colors.inkFaint,
-      marginBottom: spacing.xs,
+      fontFamily: typography.body.bold, fontSize: 11.5, letterSpacing: 1.1,
+      textTransform: 'uppercase', color: colors.inkFaint, marginBottom: spacing.xs,
     },
-    row: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 11,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairline,
-    },
-    rowLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
-    rowIcon: { width: 20, alignItems: 'center' },
+    row: { minHeight: 48, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.hairline },
+    rowAction: { width: 44, minHeight: 44, alignItems: 'flex-start', justifyContent: 'center' },
+    rowIcon: { width: 20 },
     check: {
-      width: 20,
-      height: 20,
-      borderRadius: 10,
-      borderWidth: 1.5,
-      borderColor: colors.inkFaint,
-      alignItems: 'center',
-      justifyContent: 'center',
+      width: 20, height: 20, borderRadius: 10, borderWidth: 1.5,
+      borderColor: colors.inkFaint, alignItems: 'center', justifyContent: 'center',
     },
     checkOn: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
-    trash: {
-      width: 20,
-      height: 20,
-      borderRadius: 10,
-      backgroundColor: colors.error,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    name: { flex: 1, fontFamily: typography.body.fontFamily, fontSize: 14, color: colors.ink },
+    trash: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.error, alignItems: 'center', justifyContent: 'center' },
+    itemText: { flex: 1, paddingVertical: 10 },
+    name: { fontFamily: typography.body.fontFamily, fontSize: 14, color: colors.ink },
     nameChecked: { color: colors.inkFaint, textDecorationLine: 'line-through' },
     nameUnavailable: { color: colors.inkFaint, fontStyle: 'italic' },
-    qty: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkFaint },
+    unavailable: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 2 },
+    qty: { marginLeft: spacing.sm, fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkFaint },
     ctaWrap: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      paddingHorizontal: spacing.xl,
-      paddingTop: spacing.md,
-      backgroundColor: colors.cream,
-      borderTopWidth: 1,
-      borderTopColor: colors.hairline,
-    },
-    addRow: { flexDirection: 'row', gap: 8, marginBottom: spacing.sm },
-    addInput: {
-      height: 44,
-      borderRadius: radius.md,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      paddingHorizontal: 12,
-      fontFamily: typography.body.fontFamily,
-      fontSize: 13,
-      color: colors.ink,
-    },
-    addConfirm: {
-      width: 44,
-      height: 44,
-      borderRadius: radius.md,
-      backgroundColor: colors.sageDeep,
-      alignItems: 'center',
-      justifyContent: 'center',
+      position: 'absolute', left: 0, right: 0, bottom: 0,
+      paddingHorizontal: spacing.xl, paddingTop: spacing.md,
+      backgroundColor: colors.cream, borderTopWidth: 1, borderTopColor: colors.hairline,
     },
     cta: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      height: 52,
-      borderRadius: radius.pill,
-      backgroundColor: colors.sageDeep,
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      minHeight: 52, borderRadius: radius.pill, backgroundColor: colors.sageDeep,
     },
+    ctaDisabled: { opacity: 0.55 },
     ctaText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.md, color: colors.onAccent },
   });
 }

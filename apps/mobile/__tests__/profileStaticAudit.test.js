@@ -1,181 +1,242 @@
-// Profile final-frontend port — static source validation.
-//
-// ProfileScreen.js follows the teammate screen's final visible structure
-// (commit c1c86ed): local gear/Profile/bell header, identity block
-// (avatar/name/email + "Edit profile"), a three-stat row, the complete
-// Preferences list, and a logout row. It stays backed
-// exclusively by real AuthContext user data and FavoritesContext — it never
-// hardcodes the teammate's mock `chef` identity, never fabricates a
-// Collections/Cooked count, and never persists anything locally. The mobile
-// workspace has no RN renderer (see jest.config.js), so these invariants are
-// encoded as source assertions.
-//
-// "Forbidden" checks run against a comment-stripped copy so a phrase that
-// only appears in an explanatory comment does not trip them; "must contain"
-// checks run against the raw source.
-
 const fs = require('fs');
 const path = require('path');
 
 const SRC = path.join(__dirname, '../src');
-const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
+const raw = fs.readFileSync(path.join(SRC, 'screens/ProfileScreen.js'), 'utf8');
+const code = raw
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
+const navigator = fs.readFileSync(path.join(SRC, 'navigation/RootNavigator.js'), 'utf8');
 
-function stripComments(src) {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+function occurrences(source, anchor) {
+  return source.split(anchor).length - 1;
 }
 
-const raw = read('screens/ProfileScreen.js');
-const code = stripComments(raw);
+function extractUniqueRegion(source, start, end) {
+  expect(occurrences(source, start)).toBe(1);
+  expect(occurrences(source, end)).toBe(1);
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  expect(to).toBeGreaterThan(from);
+  return source.slice(from, to + end.length);
+}
 
-describe('Profile stays on the real backend-only data path', () => {
-  it('reads identity from the real AuthContext user, not a mock profile', () => {
-    expect(raw).toMatch(/import \{ useAuth \} from '\.\.\/context\/AuthContext'/);
+function normalizeJsx(node) {
+  return node.replace(/\s+/g, ' ').trim();
+}
+
+function auditProfileRenderBindings(source) {
+  const identity = extractUniqueRegion(
+    source,
+    '<View style={styles.identity}>',
+    '<View style={styles.statsRow}>'
+  );
+  const identityTextNodes = [...identity.matchAll(/<Text\b[^>]*>[\s\S]*?<\/Text>/g)]
+    .map((match) => normalizeJsx(match[0]));
+  expect(identityTextNodes).toEqual([
+    '<Text style={styles.avatarInitial}>{initial}</Text>',
+    "<Text style={styles.name}>{user?.name || 'WeCooked account'}</Text>",
+    "<Text style={styles.email}>{user?.email || 'Email unavailable'}</Text>",
+    '<Text style={styles.editText}>Edit profile</Text>',
+  ]);
+  expect(identity).not.toMatch(/\srole\s*=|\b(role|status)\s*:\s*['"]/i);
+
+  const stats = extractUniqueRegion(
+    source,
+    '<View style={styles.statsRow}>',
+    '<Text style={styles.eyebrow}>Preferences</Text>'
+  );
+  const statNodes = [...stats.matchAll(/<Stat\b[\s\S]*?\/>/g)]
+    .map((match) => normalizeJsx(match[0]));
+  expect(statNodes).toEqual([
+    '<Stat n={savedCount} label="Recipes saved" styles={styles} />',
+    '<Stat n={collectionsCount} label="Collections" styles={styles} />',
+    '<Stat n={cookedCount} label="Cooked" styles={styles} />',
+  ]);
+
+  const preferences = extractUniqueRegion(
+    source,
+    '<View style={styles.prefList}>',
+    '<Pressable\n          style={styles.logout}'
+  );
+  const preferenceRows = [...preferences.matchAll(/<PreferenceRow\b[\s\S]*?\/>/g)]
+    .map((match) => normalizeJsx(match[0]));
+  expect(preferenceRows).toHaveLength(4);
+  const dietaryRows = preferenceRows.filter((row) => row.includes('label="Dietary Preferences"'));
+  const allergyRows = preferenceRows.filter((row) => row.includes('label="Allergies"'));
+  expect(dietaryRows).toHaveLength(1);
+  expect(allergyRows).toHaveLength(1);
+  expect(dietaryRows[0]).toContain("value={dietaryPreferences.join(', ') || 'None'}");
+  expect(allergyRows[0]).toContain("value={allergies.join(', ') || 'None'}");
+
+  return { identity, stats, preferences };
+}
+
+function assignment(name) {
+  const matches = [...code.matchAll(new RegExp(`const ${name} =([\\s\\S]*?);`, 'g'))];
+  expect(matches).toHaveLength(1);
+  return matches[0][1].trim();
+}
+
+describe('Profile uses authoritative account and domain sources', () => {
+  it('renders identity and preferences from AuthContext user', () => {
+    expect(raw).toMatch(/useAuth.*AuthContext/);
     expect(code).toMatch(/const \{ user, signOut \} = useAuth\(\)/);
     expect(code).toMatch(/user\?\.name/);
     expect(code).toMatch(/user\?\.email/);
+    expect(code).toMatch(/user\?\.preferences\?\.dietaryPreferences/);
+    expect(code).toMatch(/user\?\.preferences\?\.allergies/);
   });
 
-  it('never imports mockData, ProfileContext, or any teammate mock profile source', () => {
-    expect(code).not.toMatch(/data\/mockData/);
-    expect(code).not.toMatch(/ProfileContext/);
-    expect(code).not.toMatch(/useProfile\(/);
-    expect(code).not.toMatch(/\bchef\b/);
-  });
-
-  it('never hardcodes a teammate display name, email, or bio string', () => {
-    expect(code).not.toMatch(/Ninong/i);
-    expect(code).not.toMatch(/pravatar\.cc/);
-  });
-
-  it('never introduces AsyncStorage or any local-only persistence', () => {
-    expect(code).not.toMatch(/AsyncStorage/);
-    expect(code).not.toMatch(/loadJSON|saveJSON/);
-    expect(code).not.toMatch(/wecooked:profile|wecooked:profilePrefs/);
-  });
-
-  it('does not render cuisine or vibe metadata', () => {
-    expect(code).not.toMatch(/cuisine/i);
-    expect(code).not.toMatch(/\bvibe\b/i);
-  });
-
-  it('carries no client/provider secrets or token material', () => {
-    expect(code).not.toMatch(/clientId|CLIENT_ID|apiKey|API_KEY|secret|Bearer /i);
-  });
-});
-
-describe('Profile stats are honest, never fabricated', () => {
-  it('draws the saved count from the real FavoritesContext', () => {
-    expect(raw).toMatch(/import \{ useFavorites \} from '\.\.\/context\/FavoritesContext'/);
-    expect(code).toMatch(/const \{ favoriteIds, isInitializing \} = useFavorites\(\)/);
+  it('binds all three displayed counts to real identity-guarded contexts', () => {
+    expect(raw).toMatch(/useFavorites.*FavoritesContext/);
+    expect(raw).toMatch(/useCollections.*CollectionsContext/);
+    expect(raw).toMatch(/useCookHistory.*CookHistoryContext/);
     expect(code).toMatch(/favoriteIds\.size/);
-  });
-
-  it('draws the Cooked count from the real CookHistoryContext (M5C) — uniqueRecipesCooked, not totalCooks', () => {
-    expect(raw).toMatch(/import \{ useCookHistory \} from '\.\.\/context\/CookHistoryContext'/);
-    expect(code).toMatch(/const \{ stats: cookStats, isInitializing: cookStatsInitializing \} = useCookHistory\(\)/);
+    expect(code).toMatch(/collections\.length/);
     expect(code).toMatch(/cookStats\.uniqueRecipesCooked/);
-    expect(code).not.toMatch(/cookStats\.totalCooks/);
+    expect(code).not.toMatch(/cookStats\.totalCooks|COLLECTIONS\.length/);
   });
 
-  it('never fabricates a Collections count — it alone still renders the unavailable marker', () => {
-    expect(code).not.toMatch(/COLLECTIONS\.length/);
-    expect(code).not.toMatch(/collections\.length \+ /);
-    const unavailableUses = code.match(/UNAVAILABLE_STAT/g) || [];
-    // Definition + savedCount/cookedCount loading fallbacks + the Collections
-    // stat render site itself.
-    expect(unavailableUses.length).toBeGreaterThanOrEqual(3);
+  it('preserves unknown, loaded zero, and loaded positive semantics using the production expressions', () => {
+    const unavailable = '—';
+    const saved = new Function(
+      'favoritesInitializing', 'favoritesError', 'favoriteIds', 'UNAVAILABLE_STAT',
+      `return (${assignment('savedCount')});`
+    );
+    const collections = new Function(
+      'collectionsInitializing', 'collectionsError', 'collections', 'UNAVAILABLE_STAT',
+      `return (${assignment('collectionsCount')});`
+    );
+    const cooked = new Function(
+      'cookStatsInitializing', 'cookStatsError', 'cookStats', 'UNAVAILABLE_STAT',
+      `return (${assignment('cookedCount')});`
+    );
+
+    expect(saved(true, null, new Set(), unavailable)).toBe(unavailable);
+    expect(saved(false, new Error('failed'), new Set(), unavailable)).toBe(unavailable);
+    expect(String(saved(false, null, new Set(), unavailable))).toBe('0');
+    expect(String(saved(false, null, new Set(['a', 'b']), unavailable))).toBe('2');
+
+    expect(collections(true, null, [], unavailable)).toBe(unavailable);
+    expect(collections(false, new Error('failed'), [], unavailable)).toBe(unavailable);
+    expect(String(collections(false, null, [], unavailable))).toBe('0');
+    expect(String(collections(false, null, [{}, {}, {}], unavailable))).toBe('3');
+
+    expect(cooked(true, null, null, unavailable)).toBe(unavailable);
+    expect(cooked(false, new Error('failed'), null, unavailable)).toBe(unavailable);
+    expect(String(cooked(false, null, { uniqueRecipesCooked: 0 }, unavailable))).toBe('0');
+    expect(String(cooked(false, null, { uniqueRecipesCooked: 4 }, unavailable))).toBe('4');
+
+    for (const name of ['savedCount', 'collectionsCount', 'cookedCount']) {
+      expect(assignment(name)).not.toMatch(/\b(favoriteIds\.size|collections\.length|uniqueRecipesCooked)\s*\?/);
+    }
   });
 
-  it('never shows the previous stats while Cooked is still loading, and never a raw 0 before data arrives', () => {
-    expect(code).toMatch(/cookStatsInitializing \|\| !cookStats \? UNAVAILABLE_STAT/);
-  });
-
-  it('renders exactly three stats, matching the teammate stat row', () => {
-    const statMatches = [...code.matchAll(/<Stat\b/g)];
-    expect(statMatches.length).toBe(3);
+  it('contains no mock profile, local persistence, or client auth authority', () => {
+    expect(code).not.toMatch(/mockData|ProfileContext|useProfile\(|AsyncStorage|loadJSON|saveJSON/);
+    expect(code).not.toMatch(/setRole|roleSelector|SecureStore|accessToken|refreshToken/);
   });
 });
 
-describe('Profile preferences preserve unsupported teammate controls honestly', () => {
-  it('keeps Dietary Preference and Cooking Level visible', () => {
-    expect(code).toMatch(/>Dietary Preference<\/Text>/);
-    expect(code).toMatch(/>Cooking Level<\/Text>/);
+describe('Profile actions are real and accessible', () => {
+  it('routes only to existing supported destinations registered by RootNavigator', () => {
+    const targets = [...code.matchAll(/navigation\.navigate\('([^']+)'\)/g)].map((match) => match[1]);
+    expect(new Set(targets)).toEqual(new Set(['Settings', 'Notifications', 'AccountDetails', 'MealPlan']));
+    expect(targets).not.toContain('CookingHistory');
+    for (const route of ['Settings', 'Notifications', 'AccountDetails', 'MealPlan']) {
+      expect(code).toMatch(new RegExp(`navigation\\.navigate\\('${route}'\\)`));
+      expect(navigator).toMatch(new RegExp(`<Stack\\.Screen name="${route}" component=\\{[A-Za-z]+Screen\\} \\/>`));
+    }
   });
 
-  it('reports both unsupported controls unavailable without inventing values or picker state', () => {
-    expect(code).toMatch(/showUnavailable\('Dietary preference'\)/);
-    expect(code).toMatch(/showUnavailable\('Cooking level'\)/);
-    expect(code).toMatch(/\$\{feature\} is not available yet\./);
-    expect(code).not.toMatch(/DIETARY_PREF_OPTIONS/);
-    expect(code).not.toMatch(/COOKING_LEVELS/);
-    expect(code).not.toMatch(/cycleLevel/);
-    expect(code).not.toMatch(/setDietPref/);
-    expect(code).not.toMatch(/setLevel/);
+  it('routes both real preference summaries to AccountDetails', () => {
+    const { preferences } = auditProfileRenderBindings(code);
+    expect(preferences).toMatch(/label="Dietary Preferences"[\s\S]*?navigate\('AccountDetails'\)/);
+    expect(preferences).toMatch(/label="Allergies"[\s\S]*?navigate\('AccountDetails'\)/);
+    expect(preferences).not.toMatch(/Cooking Level|Coming soon|showUnavailable/);
   });
 
-  it('routes Allergies, Meal Plan, and Settings to existing real routes', () => {
-    expect(code).toMatch(/navigation\.navigate\('AccountDetails'\)/);
-    expect(code).toMatch(/navigation\.navigate\('MealPlan'\)/);
-    expect(code).toMatch(/navigation\.navigate\('Settings'\)/);
+  it('uses real confirmed sign-out without manual navigation or token mutation', () => {
+    const logout = extractUniqueRegion(code, 'const handleLogout', 'onPress: () => signOut()');
+    expect(logout).toMatch(/Alert\.alert\('Log Out'/);
+    expect(logout).toMatch(/onPress: \(\) => signOut\(\)/);
+    expect(code).not.toMatch(/navigation\.(reset|replace)\(|setUser\(|tokenStore/);
   });
 
-  it('summarizes real allergies from the authenticated user, not mock data', () => {
+  it('labels every changed action and the page heading', () => {
+    expect(code).toMatch(/accessibilityRole="header">Profile/);
+    for (const label of [
+      'Settings',
+      'Notifications',
+      'Edit profile and preferences',
+      'Edit dietary preferences',
+      'Edit allergies',
+      'Open meal plan',
+      'Open settings',
+      'Log out',
+    ]) {
+      expect(code).toContain(`accessibilityLabel="${label}"`);
+    }
+  });
+});
+
+describe('Profile render bindings use authoritative values at their actual render sites', () => {
+  it('binds identity, preferences, and exactly three stats through the shared structural audit', () => {
+    auditProfileRenderBindings(code);
+  });
+
+  it('rejects a hard-coded rendered dietary preference', () => {
+    const mutated = code.replace(
+      "value={dietaryPreferences.join(', ') || 'None'}",
+      'value="Vegan"'
+    );
+    expect(mutated).not.toBe(code);
+    expect(() => auditProfileRenderBindings(mutated)).toThrow();
+  });
+
+  it('rejects a fake rendered stat binding', () => {
+    const mutated = code.replace('n={savedCount}', 'n={fakeCount}');
+    expect(mutated).not.toBe(code);
+    expect(() => auditProfileRenderBindings(mutated)).toThrow();
+  });
+
+  it('rejects extra literal identity or role content in the identity region', () => {
+    const emailNode = "<Text style={styles.email}>{user?.email || 'Email unavailable'}</Text>";
+    const mutated = code.replace(
+      emailNode,
+      `${emailNode}\n          <Text style={styles.role}>Administrator</Text>`
+    );
+    expect(mutated).not.toBe(code);
+    expect(() => auditProfileRenderBindings(mutated)).toThrow();
+  });
+});
+
+describe('Profile omits unsupported teammate semantics', () => {
+  it('binds displayed identity and private preferences to AuthContext user without executable fake records', () => {
+    const { identity } = auditProfileRenderBindings(code);
+    expect(identity).toMatch(/\{user\?\.name \|\| 'WeCooked account'\}/);
+    expect(identity).toMatch(/\{user\?\.email \|\| 'Email unavailable'\}/);
+    expect(code).toMatch(/const dietaryPreferences = user\?\.preferences\?\.dietaryPreferences \|\| \[\]/);
     expect(code).toMatch(/const allergies = user\?\.preferences\?\.allergies \|\| \[\]/);
-    expect(code).toMatch(/allergies\.join\(', '\)/);
+    expect(code).not.toMatch(/const\s+(user|profile)\s*=\s*\{|\brole\s*:\s*['"]/);
+    expect(code).not.toMatch(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    expect(code).not.toMatch(/dietaryPreferences\s*=\s*\[[^\]]+\]|allergies\s*=\s*\[[^\]]+\]/);
+    expect(code).not.toMatch(/<Stat\s+n=\{?\d+/);
   });
 
-  it('does not add a duplicate Community/Terms/Privacy/HelpCenter row — those are reachable via the tab bar or Settings', () => {
-    expect(code).not.toMatch(/navigation\.navigate\('Community'\)/);
-    expect(code).not.toMatch(/navigation\.navigate\('Terms'\)/);
-    expect(code).not.toMatch(/navigation\.navigate\('Privacy'\)/);
-    expect(code).not.toMatch(/navigation\.navigate\('HelpCenter'\)/);
-  });
-});
-
-describe('Profile logout is the real AuthContext logout, never a fake local one', () => {
-  it('calls the real signOut(), never a manual token/state mutation', () => {
-    expect(code).toMatch(/onPress: \(\) => signOut\(\)/);
+  it('does not render avatar upload, bio, cooking level, followers, badges, or rankings', () => {
+    expect(code).not.toMatch(/avatarUri|uploadAvatar|\bbio\b|Cooking Level|followers?|following|badge|ranking|streak/i);
   });
 
-  it('never resets or replaces navigation into MainTabs/Onboarding — AuthContext auth-gating does that', () => {
-    expect(code).not.toMatch(/navigation\s*\.\s*reset\s*\(/);
-    expect(code).not.toMatch(/navigation\s*\.\s*replace\s*\(/);
-    expect(code).not.toMatch(/MainTabs/);
-    expect(code).not.toMatch(/Onboarding/);
+  it('does not fabricate social, engagement, nutrition, recommendation, or AI metrics', () => {
+    expect(code).not.toMatch(/popularity|reputation|engagement|nutrition|recommendation|AI-generated/i);
   });
 
-  it('confirms before logging out', () => {
-    expect(code).toMatch(/Alert\.alert\('Log Out'/);
-  });
-});
-
-describe('Profile uses the teammate-local tab header', () => {
-  it('does not import or render the shared brand TopBar', () => {
-    expect(code).not.toMatch(/import TopBar/);
-    expect(code).not.toMatch(/<TopBar\b/);
-    expect(code).not.toMatch(/mode="brand"/);
-  });
-
-  it('renders gear, centered Profile title, and bell controls', () => {
-    expect(code).toMatch(/name="settings-outline"/);
-    expect(code).toMatch(/style=\{styles\.headerTitle\}>Profile<\/Text>/);
-    expect(code).toMatch(/name="notifications-outline"/);
-  });
-
-  it('routes gear to Settings and bell to Notifications', () => {
-    expect(code).toMatch(/accessibilityLabel="Settings"[\s\S]*?navigation\.navigate\('Settings'\)/);
-    expect(code).toMatch(/accessibilityLabel="Notifications"[\s\S]*?navigation\.navigate\('Notifications'\)/);
-  });
-});
-
-describe('the Profile route registration is unchanged', () => {
-  const mainTabs = fs.readFileSync(path.join(SRC, 'navigation/MainTabs.js'), 'utf8');
-
-  it('Profile stays a MainTabs tab, not a root-stack route', () => {
-    expect(mainTabs).toMatch(/ProfileScreen/);
-    const rootNav = fs.readFileSync(path.join(SRC, 'navigation/RootNavigator.js'), 'utf8');
-    expect(rootNav).not.toMatch(/<Stack\.Screen name="Profile"/);
+  it('keeps Profile in the existing MainTabs shell', () => {
+    const tabs = fs.readFileSync(path.join(SRC, 'navigation/MainTabs.js'), 'utf8');
+    const nav = fs.readFileSync(path.join(SRC, 'navigation/RootNavigator.js'), 'utf8');
+    expect(tabs).toMatch(/ProfileScreen/);
+    expect(nav).not.toMatch(/<Stack\.Screen name="Profile"/);
   });
 });

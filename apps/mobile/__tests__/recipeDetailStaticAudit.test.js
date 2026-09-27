@@ -1,7 +1,7 @@
 // RecipeDetail final-frontend port — static source validation.
 //
 // This slice ports the teammate RecipeDetail *visual shell* (hero, rating/
-// review summary, rate-this-recipe, metadata, ingredients, nutrition,
+// review summary, rate-this-recipe, metadata, ingredients, instructions, nutrition,
 // actions, CTA) onto our real Recipe API + Favorites + Shopping List +
 // CookMode + IngredientStudio wiring, with ONE approved product extension
 // (the M3 category/region + dietary badge row). The mobile workspace has no
@@ -13,8 +13,7 @@
 // only appears in an explanatory comment does not trip them; "must contain"
 // checks run against the raw source. Checks scoped to the real API path
 // (`ApiRecipeDetailContainer` / `ApiRecipeDetail`) are sliced out of the
-// full file so the isolated, still-mock `LegacyRecipeDetail` branch never
-// pollutes them.
+// full file so an unrelated helper cannot satisfy a component assertion.
 
 const fs = require('fs');
 const path = require('path');
@@ -32,7 +31,7 @@ const raw = read('screens/RecipeDetailScreen.js');
 const code = stripComments(raw);
 
 // The real-API render path only: from the container through the end of
-// ApiRecipeDetail, stopping before RecipeDetailNotice / LegacyRecipeDetail.
+// ApiRecipeDetail, stopping before RecipeDetailNotice.
 const apiStart = code.indexOf('function ApiRecipeDetailContainer');
 const apiEnd = code.indexOf('function RecipeDetailNotice');
 if (apiStart === -1 || apiEnd === -1 || apiEnd <= apiStart) {
@@ -47,6 +46,7 @@ describe('RecipeDetail (API mode) keeps our real recipe data architecture', () =
     expect(apiCode).not.toMatch(/data\/mockData/);
     expect(apiCode).not.toMatch(/\bmockData\b/);
     expect(apiCode).not.toMatch(/\bingredientSwaps\b/);
+    expect(code).not.toMatch(/data\/mockData|LegacyRecipeDetail|useSavedRecipes|SavedRecipesContext/);
   });
 
   it('treats recipeId as authoritative and remounts on change', () => {
@@ -95,6 +95,7 @@ describe('RecipeDetail (API mode) final visible structure matches teammate order
       'ddDescription',
       'ddSectionHeader', // Ingredients eyebrow + stepper
       'ddIngredientRow',
+      'ddInstructionsSection',
       'ddNutritionCard',
       'ddActionRow', // meal plan
       'ddCtaWrap',
@@ -256,11 +257,15 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
   });
 });
 
-describe('RecipeDetail (API mode) keeps current visible detail boundaries', () => {
-  it('no visible Steps/Instructions section remains', () => {
-    expect(apiCode).not.toMatch(/>Steps</);
-    expect(apiCode).not.toMatch(/No instructions listed/);
-    expect(apiCode).not.toMatch(/recipeSteps\(/);
+describe('RecipeDetail (API mode) keeps real ingredients and instructions visible', () => {
+  it('renders authoritative ordered instruction steps with an honest empty state', () => {
+    expect(raw).toMatch(/import \{[\s\S]*?cookModeSteps[\s\S]*?\} from '\.\.\/utils\/recipe'/);
+    expect(apiCode).toMatch(/const instructionSteps = useMemo\(\(\) => cookModeSteps\(recipe\), \[recipe\]\)/);
+    expect(apiCode).toMatch(/<Text style=\{styles\.ddEyebrow\}>Instructions<\/Text>/);
+    expect(apiCode).toMatch(/instructionSteps\.map\(\(step\) =>/);
+    expect(apiCode).toMatch(/\{step\.order\}/);
+    expect(apiCode).toMatch(/\{step\.text\}/);
+    expect(apiCode).toMatch(/No instructions listed\./);
   });
 
   it('restores the real per-ingredient substitution sheet without a mock data path', () => {
@@ -348,16 +353,19 @@ describe('RecipeDetail (API mode) does not cross security / navigation boundarie
   });
 });
 
-describe('the legacy mock recipe path stays isolated', () => {
-  it("LegacyRecipeDetail exists but is only reached from the dispatcher's non-api fallback", () => {
-    expect(code).toMatch(/function LegacyRecipeDetail\(/);
-    expect(code).toMatch(/return <LegacyRecipeDetail navigation=\{navigation\} recipe=\{params\.recipe\} \/>;/);
+describe('RecipeDetail rejects legacy/mock route payloads', () => {
+  it('renders an honest unavailable notice unless recipeSource and recipeId identify API data', () => {
+    expect(code).toMatch(/params\.recipeSource === 'api' && params\.recipeId/);
+    expect(code).toMatch(/return <InvalidRecipeDetail navigation=\{navigation\} \/>/);
+    expect(code).toMatch(/message="This recipe isn't available\."/);
+    expect(code).not.toMatch(/params\.recipe\b|function LegacyRecipeDetail\(/);
   });
 
   it("no current screen caller of RecipeDetail omits recipeSource: 'api'", () => {
     const callers = [
       'screens/DashboardScreen.js',
       'screens/DiscoverScreen.js',
+      'screens/MealPlanScreen.js',
       // Saved itself no longer opens RecipeDetail directly — it only
       // navigates into CollectionDetail, which owns the real recipe rows.
       'screens/CollectionDetailScreen.js',
