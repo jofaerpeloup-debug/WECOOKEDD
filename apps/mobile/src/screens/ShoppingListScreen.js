@@ -18,6 +18,7 @@ import { useShoppingList } from '../context/ShoppingListContext';
 import IngredientPickerModal from '../components/IngredientPickerModal';
 import { formatQuantity } from '../utils/recipe';
 import { unitLabel } from '../api/recipeOptions';
+import { groupShoppingListItems } from '../utils/shoppingListGrouping';
 
 function itemPrimaryText(item) {
   return item.ingredient?.name || 'Unavailable ingredient';
@@ -28,12 +29,6 @@ function itemAmountText(item) {
   const quantity = formatQuantity(item.quantity);
   const unit = item.unit ? unitLabel(item.unit) : '';
   return [quantity, unit].filter(Boolean).join(' ') || null;
-}
-
-// The API does not expose a shopping-item category. Keep one honest group
-// instead of guessing a grocery aisle from the ingredient name.
-function groupItems(items) {
-  return items.length > 0 ? [{ category: 'Items', rows: items }] : [];
 }
 
 function ItemRow({ item, editing, disabled, pending, onToggle, onRemove }) {
@@ -234,7 +229,7 @@ export default function ShoppingListScreen({ navigation }) {
     );
   }
 
-  const sections = groupItems(items);
+  const sections = groupShoppingListItems(items);
 
   return (
     <View style={styles.root}>
@@ -272,9 +267,9 @@ export default function ShoppingListScreen({ navigation }) {
             </Text>
           </View>
         ) : (
-          sections.map(({ category, rows }) => (
-            <View key={category} style={styles.group}>
-              <Text style={styles.groupLabel}>{category}</Text>
+          sections.map(({ category, label, rows }) => (
+            <View key={category ?? 'category-unavailable'} style={styles.group}>
+              <Text style={styles.groupLabel} accessibilityRole="header">{label}</Text>
               {rows.map((item) => (
                 <ItemRow
                   key={item.id}

@@ -12,6 +12,8 @@ const code = stripComments(raw);
 const pickerRaw = read('components/IngredientPickerModal.js');
 const pickerCode = stripComments(pickerRaw);
 const contextCode = stripComments(read('context/ShoppingListContext.js'));
+const groupingRaw = read('utils/shoppingListGrouping.js');
+const groupingCode = stripComments(groupingRaw);
 
 function occurrences(source, anchor) {
   return source.split(anchor).length - 1;
@@ -43,6 +45,7 @@ describe('Shopping List authoritative bindings', () => {
   it('does not create free-text, mock, local, or duplicate list authority', () => {
     expect(code).not.toMatch(/TextInput|addCustom|setItems|AsyncStorage|mockData|ShoppingListProvider/);
     expect(code).not.toMatch(/ingredientId:\s*(name|genId)|\bgenId\(/);
+    expect(groupingCode).not.toMatch(/ingredient\?*\.name|ingredientId|mockData|CAT_HINTS|\bother\b/);
   });
 });
 
@@ -187,9 +190,15 @@ describe('Shopping List identity, states, and navigation', () => {
     expect(code).toMatch(/status === 'error' && items\.length === 0/);
     expect(code).toMatch(/error && items\.length > 0/);
     expect(code).toMatch(/Your shopping list is empty/);
-    const grouping = region('function groupItems', 'function ItemRow');
-    expect(grouping).toMatch(/category: 'Items'/);
-    expect(grouping).not.toMatch(/Produce|Meat|Pantry|catFor|CAT_HINTS/);
+    expect(code).toMatch(/import \{ groupShoppingListItems \} from '\.\.\/utils\/shoppingListGrouping'/);
+    expect(code).toMatch(/const sections = groupShoppingListItems\(items\)/);
+    const groups = region('sections.map(({ category, label, rows }) => (', '          ))');
+    expect(groups).toMatch(/key=\{category \?\? 'category-unavailable'\}/);
+    expect(groups).toMatch(/<Text style=\{styles\.groupLabel\} accessibilityRole="header">\{label\}<\/Text>/);
+    expect(groups).toMatch(/rows\.map\(\(item\)/);
+    expect(groupingCode).toMatch(/INGREDIENT_CATEGORIES[\s\S]*INGREDIENT_CATEGORY_LABELS/);
+    expect(groupingCode).toMatch(/rowsByCategory\.get\(item\?\.category\)/);
+    expect(groupingCode).not.toMatch(/sort\(|ingredient\?*\.name|ingredientId|CAT_HINTS/);
   });
 
   it('keeps the existing List route and recipe-add integration', () => {
