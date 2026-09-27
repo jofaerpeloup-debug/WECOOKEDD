@@ -17,6 +17,7 @@ const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const shoppingListRepository = require('../src/modules/shopping-lists/shopping-list.repository');
 const ShoppingList = require('../src/modules/shopping-lists/shopping-list.model');
 const { signAccessToken } = require('../src/shared/security/access-token');
+const { INGREDIENT_CATEGORIES } = require('@wecooked/contracts');
 
 const app = createApp();
 
@@ -32,8 +33,8 @@ function buildList(items = [], userId = USER_ID) {
   return new ShoppingList({ userId, items });
 }
 
-function activeIngredientDoc(id, name = 'Ingredient') {
-  return { _id: id, name, isActive: true };
+function activeIngredientDoc(id, name = 'Ingredient', category = 'meat') {
+  return { _id: id, name, category, isActive: true };
 }
 
 function mockAuth(t) {
@@ -156,6 +157,61 @@ test('POST /api/v1/shopping-list/items adds a manual item for an active ingredie
   assert.equal(response.body.data.shoppingList.items.length, 1);
   assert.equal(response.body.data.shoppingList.items[0].ingredient.name, 'Chicken');
   assert.equal(response.body.data.shoppingList.items[0].isAvailable, true);
+  assert.equal(response.body.data.shoppingList.items[0].category, 'meat');
+});
+
+test('GET /api/v1/shopping-list projects only current active canonical Ingredient categories', async (t) => {
+  mockAuth(t);
+  const itemIds = INGREDIENT_CATEGORIES.map((_, index) =>
+    `507f1f77bcf86cd79943${String(index + 100).padStart(4, '0')}`
+  );
+  const missingId = '507f1f77bcf86cd799439201';
+  const inactiveId = '507f1f77bcf86cd799439202';
+  const retiredId = '507f1f77bcf86cd799439203';
+  const unknownId = '507f1f77bcf86cd799439204';
+  const ids = [...itemIds, missingId, inactiveId, retiredId, unknownId];
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    buildList(ids.map((ingredientId) => ({ ingredientId, quantity: 1, unit: 'piece' })))
+  );
+  t.mock.method(ingredientRepository, 'findById', async (id) => {
+    const key = String(id);
+    const canonicalIndex = itemIds.indexOf(key);
+    if (canonicalIndex !== -1) {
+      return activeIngredientDoc(key, `Ingredient ${canonicalIndex}`, INGREDIENT_CATEGORIES[canonicalIndex]);
+    }
+    if (key === missingId) return null;
+    if (key === inactiveId) return { _id: key, name: 'Inactive', category: 'produce', isActive: false };
+    if (key === retiredId) return activeIngredientDoc(key, 'Retired', 'other');
+    return activeIngredientDoc(key, 'Unknown', 'not-a-category');
+  });
+
+  const response = await request(app).get('/api/v1/shopping-list').set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(response.status, 200);
+  const items = response.body.data.shoppingList.items;
+  assert.deepEqual(items.slice(0, INGREDIENT_CATEGORIES.length).map((item) => item.category), INGREDIENT_CATEGORIES);
+  assert.deepEqual(items.slice(INGREDIENT_CATEGORIES.length).map((item) => item.category), [null, null, null, null]);
+  assert.deepEqual(Object.keys(items[0]).sort(), [
+    'category', 'id', 'ingredient', 'ingredientId', 'isAvailable', 'isChecked', 'quantity', 'unit',
+  ]);
+  assert.equal(items[INGREDIENT_CATEGORIES.length].ingredient, null);
+  assert.equal(items[INGREDIENT_CATEGORIES.length].isAvailable, false);
+});
+
+test('GET /api/v1/shopping-list projects recategorization on the next response without a stored snapshot', async (t) => {
+  mockAuth(t);
+  const list = buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]);
+  let category = 'meat';
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredientDoc(id, 'Chicken', category));
+
+  const first = await request(app).get('/api/v1/shopping-list').set('Authorization', `Bearer ${token()}`);
+  category = 'protein';
+  const second = await request(app).get('/api/v1/shopping-list').set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(first.body.data.shoppingList.items[0].category, 'meat');
+  assert.equal(second.body.data.shoppingList.items[0].category, 'protein');
+  assert.equal(list.items[0].category, undefined);
 });
 
 test('POST /api/v1/shopping-list/items merges into an existing same-ingredient+same-unit item', async (t) => {
@@ -484,6 +540,7 @@ test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable 
   assert.equal(response.status, 200);
   assert.equal(response.body.data.shoppingList.items.length, 1);
   assert.equal(response.body.data.shoppingList.items[0].quantity, 1);
+  assert.equal(response.body.data.shoppingList.items[0].category, 'meat');
 });
 
 test('POST /api/v1/shopping-list/recipes/:recipeId returns 404 RECIPE_NOT_FOUND for an archived recipe', async (t) => {

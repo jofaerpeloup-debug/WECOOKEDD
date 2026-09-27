@@ -1,3 +1,7 @@
+const { INGREDIENT_CATEGORIES } = require('@wecooked/contracts');
+
+const canonicalCategories = new Set(INGREDIENT_CATEGORIES);
+
 // Maps one embedded item plus its resolved Ingredient (or null, when the
 // Ingredient has been archived or deleted outright) to the public shape.
 // ingredientId is always the raw historical id stored on the item itself —
@@ -10,6 +14,9 @@ function toItemSummary(item, ingredientsById) {
     ingredient: ingredient ? { id: String(ingredient._id), name: ingredient.name } : null,
     ingredientId: String(item.ingredientId),
     isAvailable: Boolean(ingredient && ingredient.isActive),
+    category: ingredient && ingredient.isActive && canonicalCategories.has(ingredient.category)
+      ? ingredient.category
+      : null,
     quantity: item.quantity ?? null,
     unit: item.unit,
     isChecked: item.isChecked,

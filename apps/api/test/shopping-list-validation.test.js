@@ -79,6 +79,13 @@ test('createItemSchema rejects unknown body fields', () => {
   assert.equal(result.success, false);
 });
 
+test('createItemSchema rejects client-supplied category', () => {
+  const result = createItemSchema.safeParse({
+    body: { ingredientId: VALID_ID, quantity: 1, unit: 'kg', category: 'produce' },
+  });
+  assert.equal(result.success, false);
+});
+
 test('patchItemSchema rejects an empty body', () => {
   const result = patchItemSchema.safeParse({ params: { itemId: VALID_ID }, body: {} });
   assert.equal(result.success, false);
@@ -124,6 +131,14 @@ test('patchItemSchema rejects unknown body fields', () => {
   const result = patchItemSchema.safeParse({
     params: { itemId: VALID_ID },
     body: { isChecked: true, extra: 'nope' },
+  });
+  assert.equal(result.success, false);
+});
+
+test('patchItemSchema rejects client-supplied category', () => {
+  const result = patchItemSchema.safeParse({
+    params: { itemId: VALID_ID },
+    body: { category: 'produce' },
   });
   assert.equal(result.success, false);
 });
