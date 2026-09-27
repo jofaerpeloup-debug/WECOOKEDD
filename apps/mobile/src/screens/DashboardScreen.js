@@ -25,7 +25,7 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 
 // M2.1 — teammate Dashboard/Home visual port on top of our real data + routes.
 //
-// PRESENTATION comes from the audited teammate Dashboard (commit 081a94b): time-of-day
+// PRESENTATION comes from the audited teammate Dashboard (commit bae924b): time-of-day
 // greeting, search + filter affordance, recent-search chips, a rotating
 // daily-pick hero, a browse row, and a horizontal recipe rail.
 //
@@ -315,9 +315,14 @@ export default function DashboardScreen({ navigation }) {
   // (not a child) so a tap on it never also opens the recipe.
   const renderRailCard = (recipe) => (
     <View key={recipe.id} style={styles.railCard}>
-      <Pressable onPress={() => openRecipe(recipe)}>
+      <Pressable
+        style={styles.railMain}
+        onPress={() => openRecipe(recipe)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${recipe.title}`}
+      >
         <RecipeImage source={recipe.imageUrl} style={styles.railImage} />
-        <Text style={styles.railTitle} numberOfLines={2}>
+        <Text style={styles.railTitle} numberOfLines={1}>
           {recipe.title}
         </Text>
         <Text style={styles.railMeta} numberOfLines={1}>
@@ -330,7 +335,12 @@ export default function DashboardScreen({ navigation }) {
 
   const renderSearchRow = (recipe) => (
     <View key={recipe.id} style={styles.resultRow}>
-      <Pressable style={styles.resultMain} onPress={() => openRecipe(recipe)}>
+      <Pressable
+        style={styles.resultMain}
+        onPress={() => openRecipe(recipe)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${recipe.title}`}
+      >
         <RecipeImage source={recipe.imageUrl} style={styles.resultThumb} />
         <View style={styles.resultTextWrap}>
           <Text style={styles.resultTitle} numberOfLines={1}>
@@ -368,13 +378,19 @@ export default function DashboardScreen({ navigation }) {
               value={query}
               onChangeText={setQuery}
               onSubmitEditing={() => rememberSearch(trimmed)}
+              accessibilityLabel="Search recipes"
               autoCapitalize="none"
               autoComplete="off"
               autoCorrect={false}
               returnKeyType="search"
             />
             {searching && (
-              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <Pressable
+                onPress={() => setQuery('')}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+              >
                 <Ionicons name="close-circle" size={17} color={colors.inkFaint} />
               </Pressable>
             )}
@@ -692,23 +708,23 @@ function makeStyles(colors) {
 
     railRow: { gap: spacing.md, paddingBottom: spacing.xl, paddingRight: spacing.md },
     railCard: {
-      width: 168,
-      padding: spacing.sm,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      backgroundColor: colors.paper,
+      width: 88,
+      alignItems: 'center',
+    },
+    railMain: {
+      width: '100%',
+      alignItems: 'center',
     },
     railImage: {
-      width: '100%',
-      height: 112,
-      borderRadius: radius.md,
+      width: 76,
+      height: 76,
+      borderRadius: 38,
       backgroundColor: colors.creamDeep,
     },
     railHeart: {
       position: 'absolute',
-      top: spacing.md,
-      right: spacing.md,
+      top: -2,
+      right: 2,
       width: 26,
       height: 26,
       borderRadius: 13,
@@ -720,12 +736,14 @@ function makeStyles(colors) {
       color: colors.ink,
       marginTop: spacing.sm,
       lineHeight: 16,
+      textAlign: 'center',
     },
     railMeta: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
       color: colors.inkFaint,
       marginTop: 3,
+      textAlign: 'center',
     },
 
     searchSection: { marginTop: spacing.xs },

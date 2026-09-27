@@ -11,12 +11,14 @@ const assert = require('node:assert/strict');
 const reviewRepository = require('../src/modules/reviews/review.repository');
 const recipeService = require('../src/modules/recipes/recipe.service');
 const userService = require('../src/modules/users/user.service');
+const cookHistoryService = require('../src/modules/cook-history/cook-history.service');
 const reviewService = require('../src/modules/reviews/review.service');
 const { AppError } = require('../src/shared/errors/app-error');
 
 const USER_ID = '507f1f77bcf86cd799439001';
 const OTHER_USER_ID = '507f1f77bcf86cd799439002';
 const RECIPE_ID = '507f1f77bcf86cd799439099';
+const OTHER_RECIPE_ID = '507f1f77bcf86cd799439098';
 const REVIEW_ID = '507f1f77bcf86cd799439033';
 
 function usableRecipe(overrides = {}) {
@@ -40,6 +42,11 @@ function fakeReview(overrides = {}) {
   };
 }
 
+function mockFirstReviewEligibility(t, { existing = null, completed = true } = {}) {
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => existing);
+  t.mock.method(cookHistoryService, 'hasCompletedRecipe', async () => completed);
+}
+
 // ---------------------------------------------------------------------------
 // CREATE
 // ---------------------------------------------------------------------------
@@ -47,6 +54,15 @@ function fakeReview(overrides = {}) {
 test('createReview requires an existing/usable recipe before touching the repository', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
   let createCalled = false;
+  let eligibilityCalled = false;
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => {
+    eligibilityCalled = true;
+    return null;
+  });
+  t.mock.method(cookHistoryService, 'hasCompletedRecipe', async () => {
+    eligibilityCalled = true;
+    return true;
+  });
   t.mock.method(reviewRepository, 'create', async () => {
     createCalled = true;
     return fakeReview();
@@ -62,11 +78,13 @@ test('createReview requires an existing/usable recipe before touching the reposi
     }
   );
   assert.equal(createCalled, false);
+  assert.equal(eligibilityCalled, false);
 });
 
 test('createReview persists with the caller\'s userId, never a client-supplied one', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
   t.mock.method(userService, 'getUserById', async () => fakeUser());
+  mockFirstReviewEligibility(t);
   let capturedDoc;
   t.mock.method(reviewRepository, 'create', async (doc) => {
     capturedDoc = doc;
@@ -84,6 +102,7 @@ test('createReview persists with the caller\'s userId, never a client-supplied o
 test('createReview persists an optional comment', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
   t.mock.method(userService, 'getUserById', async () => fakeUser());
+  mockFirstReviewEligibility(t);
   let capturedDoc;
   t.mock.method(reviewRepository, 'create', async (doc) => {
     capturedDoc = doc;
@@ -98,6 +117,7 @@ test('createReview persists an optional comment', async (t) => {
 test('createReview attaches the safe public author summary (id + name only)', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
   t.mock.method(userService, 'getUserById', async () => fakeUser());
+  mockFirstReviewEligibility(t);
   t.mock.method(reviewRepository, 'create', async (doc) => fakeReview({ ...doc }));
 
   const result = await reviewService.createReview(USER_ID, RECIPE_ID, { rating: 5 });
@@ -108,6 +128,7 @@ test('createReview attaches the safe public author summary (id + name only)', as
 
 test('createReview translates a duplicate-key error into REVIEW_ALREADY_EXISTS (409), not a 500', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
+  mockFirstReviewEligibility(t);
   t.mock.method(reviewRepository, 'create', async () => {
     const err = new Error('duplicate key');
     err.code = 11000;
@@ -126,6 +147,7 @@ test('createReview translates a duplicate-key error into REVIEW_ALREADY_EXISTS (
 
 test('createReview lets a genuine repository failure propagate as-is (not misreported as a conflict)', async (t) => {
   t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
+  mockFirstReviewEligibility(t);
   t.mock.method(reviewRepository, 'create', async () => {
     throw new Error('connection reset');
   });
@@ -133,11 +155,87 @@ test('createReview lets a genuine repository failure propagate as-is (not misrep
   await assert.rejects(() => reviewService.createReview(USER_ID, RECIPE_ID, { rating: 4 }), /connection reset/);
 });
 
+test('createReview rejects a first rating-only review without a matching cook completion', async (t) => {
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
+  mockFirstReviewEligibility(t, { completed: false });
+  let createCalled = false;
+  t.mock.method(reviewRepository, 'create', async () => {
+    createCalled = true;
+    return fakeReview();
+  });
+
+  await assert.rejects(
+    () => reviewService.createReview(USER_ID, RECIPE_ID, { rating: 4 }),
+    (err) => {
+      assert.equal(err.statusCode, 409);
+      assert.equal(err.code, 'REVIEW_COOK_REQUIRED');
+      assert.equal(err.message, 'Complete this recipe in WeCooked before rating or reviewing it.');
+      return true;
+    }
+  );
+  assert.equal(createCalled, false);
+});
+
+test('createReview gates rating plus comment with the same cook-history rule', async (t) => {
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
+  mockFirstReviewEligibility(t, { completed: false });
+
+  await assert.rejects(
+    () => reviewService.createReview(USER_ID, RECIPE_ID, { rating: 5, comment: 'Excellent.' }),
+    (err) => err.code === 'REVIEW_COOK_REQUIRED'
+  );
+});
+
+test('createReview scopes cook eligibility to authenticated user and canonical recipe', async (t) => {
+  t.mock.method(recipeService, 'findUsableRecipeById', async (recipeId) => usableRecipe({
+    _id: recipeId === OTHER_RECIPE_ID ? 'canonical-other-recipe' : 'canonical-recipe',
+  }));
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => null);
+  let captured;
+  t.mock.method(cookHistoryService, 'hasCompletedRecipe', async (userId, recipeId) => {
+    captured = { userId, recipeId };
+    return userId === USER_ID && recipeId === 'canonical-recipe';
+  });
+  t.mock.method(userService, 'getUserById', async () => fakeUser());
+  t.mock.method(reviewRepository, 'create', async (doc) => fakeReview(doc));
+
+  await reviewService.createReview(USER_ID, RECIPE_ID, { rating: 5 });
+  assert.deepEqual(captured, { userId: USER_ID, recipeId: 'canonical-recipe' });
+
+  await assert.rejects(
+    () => reviewService.createReview(OTHER_USER_ID, RECIPE_ID, { rating: 5 }),
+    (err) => err.code === 'REVIEW_COOK_REQUIRED'
+  );
+  await assert.rejects(
+    () => reviewService.createReview(USER_ID, OTHER_RECIPE_ID, { rating: 5 }),
+    (err) => err.code === 'REVIEW_COOK_REQUIRED'
+  );
+});
+
+test('createReview preserves REVIEW_ALREADY_EXISTS before checking cook history', async (t) => {
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe());
+  let cookChecked = false;
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => fakeReview());
+  t.mock.method(cookHistoryService, 'hasCompletedRecipe', async () => {
+    cookChecked = true;
+    return false;
+  });
+
+  await assert.rejects(
+    () => reviewService.createReview(USER_ID, RECIPE_ID, { rating: 4 }),
+    (err) => err.code === 'REVIEW_ALREADY_EXISTS'
+  );
+  assert.equal(cookChecked, false);
+});
+
 // ---------------------------------------------------------------------------
 // UPDATE
 // ---------------------------------------------------------------------------
 
 test('updateReview only ever writes allowlisted rating/comment fields', async (t) => {
+  t.mock.method(cookHistoryService, 'hasCompletedRecipe', async () => {
+    throw new Error('PATCH must not check cook history');
+  });
   t.mock.method(userService, 'getUserById', async () => fakeUser());
   let capturedUpdate;
   t.mock.method(reviewRepository, 'updateOwnedById', async (id, userId, update) => {
@@ -173,6 +271,9 @@ test('updateReview scopes the write by { _id, userId } — User B cannot update 
 // ---------------------------------------------------------------------------
 
 test('deleteReview succeeds for the owner', async (t) => {
+  t.mock.method(cookHistoryService, 'hasCompletedRecipe', async () => {
+    throw new Error('DELETE must not check cook history');
+  });
   let capturedArgs;
   t.mock.method(reviewRepository, 'deleteOwnedById', async (id, userId) => {
     capturedArgs = { id, userId };

@@ -24,6 +24,8 @@ export function getReviewErrorMessage(err, fallback = FALLBACK) {
       // Should be rare: RecipeDetail submits via PATCH once it knows the
       // caller already has a review. Only reachable from stale client state.
       return 'You’ve already rated this recipe. Pull to refresh and try again.';
+    case 'REVIEW_COOK_REQUIRED':
+      return 'Complete this recipe in WeCooked before rating or reviewing it.';
     case 'VALIDATION_ERROR':
       return err.details?.[0]?.message || 'That request wasn’t valid. Please try again.';
     case 'RATE_LIMIT_EXCEEDED':

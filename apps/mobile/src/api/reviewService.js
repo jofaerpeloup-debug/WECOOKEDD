@@ -32,6 +32,73 @@ function buildQuery(params) {
   return query;
 }
 
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function isPublicReview(review) {
+  return !!review
+    && typeof review === 'object'
+    && typeof review.id === 'string'
+    && review.id.length > 0
+    && Number.isInteger(review.rating)
+    && review.rating >= 1
+    && review.rating <= 5
+    && (review.comment === null || typeof review.comment === 'string')
+    && (review.author === null || (
+      typeof review.author === 'object'
+      && typeof review.author.id === 'string'
+      && typeof review.author.name === 'string'
+    ))
+    && typeof review.createdAt === 'string'
+    && !Number.isNaN(Date.parse(review.createdAt))
+    && typeof review.updatedAt === 'string'
+    && !Number.isNaN(Date.parse(review.updatedAt));
+}
+
+function requireReviewListPayload(data) {
+  const summary = data && data.summary;
+  const pagination = data && data.pagination;
+  const currentUserReview = data && data.currentUserReview;
+  const validAverageRating = typeof summary?.averageRating === 'number'
+    && Number.isFinite(summary.averageRating)
+    && summary.averageRating >= 1
+    && summary.averageRating <= 5;
+  const validSummary = !!summary
+    && typeof summary === 'object'
+    && isNonNegativeInteger(summary.ratingCount)
+    && (
+      (summary.ratingCount === 0 && summary.averageRating === null)
+      || (summary.ratingCount > 0 && validAverageRating)
+    );
+  const validPagination = !!pagination
+    && typeof pagination === 'object'
+    && Number.isInteger(pagination.page)
+    && pagination.page >= 1
+    && Number.isInteger(pagination.limit)
+    && pagination.limit >= 1
+    && isNonNegativeInteger(pagination.total)
+    && isNonNegativeInteger(pagination.totalPages);
+
+  if (!validSummary
+    || !Array.isArray(data && data.reviews)
+    || !data.reviews.every(isPublicReview)
+    || !validPagination
+    || !Object.prototype.hasOwnProperty.call(data, 'currentUserReview')
+    || (currentUserReview !== null && !isPublicReview(currentUserReview))) {
+    const error = new Error('The review response did not match the expected contract.');
+    error.code = 'INVALID_REVIEW_PAYLOAD';
+    throw error;
+  }
+
+  return {
+    summary,
+    reviews: data.reviews,
+    pagination,
+    currentUserReview,
+  };
+}
+
 /**
  * GET /api/v1/recipes/:recipeId/reviews
  * @param {string} recipeId  backend Recipe id (Mongo ObjectId string).
@@ -50,12 +117,9 @@ function buildQuery(params) {
  *   archived, or unusable.
  */
 export function getRecipeReviews(recipeId, params = {}) {
-  return api.get(`/recipes/${encodeURIComponent(recipeId)}/reviews`, { query: buildQuery(params) }).then((data) => ({
-    summary: (data && data.summary) || { averageRating: null, ratingCount: 0 },
-    reviews: Array.isArray(data && data.reviews) ? data.reviews : [],
-    pagination: (data && data.pagination) || null,
-    currentUserReview: (data && data.currentUserReview) || null,
-  }));
+  return api
+    .get(`/recipes/${encodeURIComponent(recipeId)}/reviews`, { query: buildQuery(params) })
+    .then(requireReviewListPayload);
 }
 
 /**
@@ -68,7 +132,7 @@ export function getRecipeReviews(recipeId, params = {}) {
  *     - RECIPE_NOT_FOUND      (404) — recipe unknown / archived / unusable
  *     - VALIDATION_ERROR      (400) — invalid rating/comment
  */
-export function createReview(recipeId, { rating, comment }) {
+export function createRecipeReview(recipeId, { rating, comment }) {
   const body = { rating };
   if (comment !== undefined) body.comment = comment;
   return api.post(`/recipes/${encodeURIComponent(recipeId)}/reviews`, { body }).then((data) => data.review);

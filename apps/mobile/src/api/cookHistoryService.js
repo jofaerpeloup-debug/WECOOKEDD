@@ -20,6 +20,93 @@
 
 import { api } from './client';
 
+const LIST_PARAM_KEYS = ['page', 'limit', 'sort'];
+
+function buildQuery(params) {
+  const query = {};
+  for (const key of LIST_PARAM_KEYS) {
+    const value = params[key];
+    if (value === undefined || value === null || value === '') continue;
+    query[key] = value;
+  }
+  return query;
+}
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function isNullableString(value) {
+  return value === null || typeof value === 'string';
+}
+
+function isNullableNonNegativeNumber(value) {
+  return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
+function isHistoryEntry(entry) {
+  const recipe = entry && entry.recipe;
+  return !!entry
+    && typeof entry === 'object'
+    && typeof entry.id === 'string'
+    && entry.id.length > 0
+    && !!recipe
+    && typeof recipe === 'object'
+    && typeof recipe.id === 'string'
+    && recipe.id.length > 0
+    && typeof recipe.title === 'string'
+    && recipe.title.length > 0
+    && isNullableString(recipe.region)
+    && isNullableString(recipe.category)
+    && typeof recipe.difficulty === 'string'
+    && recipe.difficulty.length > 0
+    && isNullableNonNegativeNumber(recipe.prepTimeMinutes)
+    && isNullableNonNegativeNumber(recipe.cookTimeMinutes)
+    && isNullableString(recipe.imageUrl)
+    && (entry.servings === null || (Number.isInteger(entry.servings) && entry.servings > 0))
+    && typeof entry.completedAt === 'string'
+    && !Number.isNaN(Date.parse(entry.completedAt));
+}
+
+function requireHistoryListPayload(data, requested = {}) {
+  const pagination = data && data.pagination;
+  const validPagination = !!pagination
+    && typeof pagination === 'object'
+    && Number.isInteger(pagination.page)
+    && pagination.page >= 1
+    && Number.isInteger(pagination.limit)
+    && pagination.limit >= 1
+    && isNonNegativeInteger(pagination.total)
+    && isNonNegativeInteger(pagination.totalPages)
+    && (requested.page === undefined || pagination.page === requested.page)
+    && (requested.limit === undefined || pagination.limit === requested.limit);
+
+  if (!Array.isArray(data && data.cookHistory)
+    || !data.cookHistory.every(isHistoryEntry)
+    || !validPagination) {
+    const error = new Error('The cooking history response did not match the expected contract.');
+    error.code = 'INVALID_COOK_HISTORY_PAYLOAD';
+    throw error;
+  }
+
+  return { cookHistory: data.cookHistory, pagination };
+}
+
+/**
+ * GET /api/v1/cook-history
+ * @param {{ page?: number, limit?: number, sort?: 'newest'|'oldest' }} [params]
+ * @returns {Promise<{
+ *   cookHistory: object[],
+ *   pagination: { page: number, limit: number, total: number, totalPages: number }
+ * }>} Server-authored completion events and raw-event pagination metadata.
+ * Empty visible pages are valid even before totalPages is exhausted.
+ */
+export function getHistory(params = {}) {
+  return api
+    .get('/cook-history', { query: buildQuery(params) })
+    .then((data) => requireHistoryListPayload(data, params));
+}
+
 /**
  * POST /api/v1/cook-history
  * @param {{ recipeId: string, servings?: number }} params  recipeId is a

@@ -225,8 +225,14 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
         >
           <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
             <View style={styles.header}>
-              <Text style={styles.title}>Add Item</Text>
-              <Pressable onPress={onClose} hitSlop={10} style={styles.closeBtn}>
+              <Text style={styles.title} accessibilityRole="header">Add Item</Text>
+              <Pressable
+                onPress={onClose}
+                hitSlop={10}
+                style={styles.closeBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Close add item"
+              >
                 <Ionicons name="close" size={22} color={colors.inkSoft} />
               </Pressable>
             </View>
@@ -276,7 +282,12 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
                     </Text>
                   ) : searchLoading && results.length === 0 ? (
                     <View style={styles.centerBlock}>
-                      <ActivityIndicator color={colors.sageDeep} />
+                      <ActivityIndicator
+                        color={colors.sageDeep}
+                        accessible
+                        accessibilityLabel="Searching ingredients"
+                        accessibilityState={{ busy: searchLoading }}
+                      />
                     </View>
                   ) : searchError ? (
                     <Text style={styles.errorText}>{searchError}</Text>
@@ -292,6 +303,8 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
                             pressed && styles.resultRowPressed,
                           ]}
                           onPress={() => pickIngredient(ing)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Select ${ing.name}`}
                         >
                           <Text style={styles.resultName}>{ing.name}</Text>
                           <Ionicons name="add" size={18} color={colors.sageDeep} />
@@ -324,6 +337,9 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
                           key={u}
                           onPress={() => pickUnit(u)}
                           style={[styles.unitChip, active && styles.unitChipActive]}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${unitLabel(u)} unit`}
+                          accessibilityState={{ selected: active }}
                         >
                           <Text style={[styles.unitChipText, active && styles.unitChipTextActive]}>
                             {unitLabel(u)}
@@ -363,12 +379,20 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
             </ScrollView>
 
             <View style={styles.footer}>
-              <Button
-                title="Add to list"
-                onPress={submit}
-                disabled={!canSubmit}
-                loading={submitting}
-              />
+              <View
+                accessible
+                accessibilityRole="button"
+                accessibilityLabel="Add item to shopping list"
+                accessibilityState={{ disabled: !canSubmit, busy: submitting }}
+                onAccessibilityTap={submit}
+              >
+                <Button
+                  title="Add to list"
+                  onPress={submit}
+                  disabled={!canSubmit}
+                  loading={submitting}
+                />
+              </View>
             </View>
           </View>
         </KeyboardAvoidingView>

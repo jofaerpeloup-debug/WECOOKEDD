@@ -1,6 +1,7 @@
 const reviewRepository = require('./review.repository');
 const recipeService = require('../recipes/recipe.service');
 const userService = require('../users/user.service');
+const cookHistoryService = require('../cook-history/cook-history.service');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
@@ -22,6 +23,13 @@ function alreadyExistsError() {
   return new AppError('You have already reviewed this recipe.', {
     statusCode: 409,
     code: 'REVIEW_ALREADY_EXISTS',
+  });
+}
+
+function cookRequiredError() {
+  return new AppError('Complete this recipe in WeCooked before rating or reviewing it.', {
+    statusCode: 409,
+    code: 'REVIEW_COOK_REQUIRED',
   });
 }
 
@@ -67,6 +75,19 @@ function toSummary(aggregate) {
 // creates — updating an existing review is PATCH's job (updateReview below).
 async function createReview(userId, recipeId, { rating, comment }) {
   const recipe = await ensureUsableRecipe(recipeId);
+
+  // Preserve duplicate-review precedence before eligibility: an existing
+  // reviewer always receives the established conflict and should use PATCH,
+  // even if no historical cook event exists for that legacy review.
+  const existing = await reviewRepository.findOneByUserAndRecipe(userId, recipe._id);
+  if (existing) {
+    throw alreadyExistsError();
+  }
+
+  const hasCompleted = await cookHistoryService.hasCompletedRecipe(userId, recipe._id);
+  if (!hasCompleted) {
+    throw cookRequiredError();
+  }
 
   const doc = { userId, recipeId: recipe._id, rating };
   if (comment !== undefined) doc.comment = comment;

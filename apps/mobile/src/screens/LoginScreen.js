@@ -255,33 +255,32 @@ export default function LoginScreen({ navigation }) {
 
           {/* The real WeCooked Google flow: useGoogleSignIn -> AuthContext
               .signInWithGoogle -> googleAuthFlow. Presentation only here. */}
-          <Pressable
-            onPress={signInWithGoogle}
-            disabled={busy}
-            style={({ pressed }) => [
-              styles.googleBtn,
-              pressed && styles.dim,
-              busy && styles.dim,
-              !google.ready && styles.googleBtnUnavailable,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={
-              googleSubmitting ? 'Signing in with Google' : 'Continue with Google'
-            }
-            accessibilityState={{
-              disabled: busy,
-              busy: googleSubmitting,
-            }}
-          >
-            {googleSubmitting ? (
-              <ActivityIndicator size="small" color={colors.ink} />
-            ) : (
-              <>
-                <GoogleGlyph size={18} />
-                <Text style={styles.googleText}>Continue with Google</Text>
-              </>
-            )}
-          </Pressable>
+          <View style={styles.authRow}>
+            <Pressable
+              onPress={signInWithGoogle}
+              disabled={busy}
+              style={({ pressed }) => [
+                styles.authBtn,
+                pressed && styles.dim,
+                busy && styles.dim,
+                !google.ready && styles.authBtnUnavailable,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={
+                googleSubmitting ? 'Signing in with Google' : 'Continue with Google'
+              }
+              accessibilityState={{
+                disabled: busy,
+                busy: googleSubmitting,
+              }}
+            >
+              {googleSubmitting ? (
+                <ActivityIndicator size="small" color={colors.ink} />
+              ) : (
+                <GoogleGlyph size={20} />
+              )}
+            </Pressable>
+          </View>
 
           {google.error && (
             <Text style={styles.googleError} accessibilityLiveRegion="polite">
@@ -366,23 +365,18 @@ function makeStyles(colors, isDark) {
       color: colors.inkFaint,
     },
 
-    googleBtn: {
-      flexDirection: 'row',
+    authRow: { flexDirection: 'row', justifyContent: 'center' },
+    authBtn: {
+      width: 46,
+      height: 46,
       alignItems: 'center',
       justifyContent: 'center',
-      gap: spacing.md,
-      height: 50,
       borderRadius: radius.pill,
       borderWidth: 1,
       borderColor: colors.hairline,
       backgroundColor: colors.paper,
     },
-    googleBtnUnavailable: { opacity: 0.55 },
-    googleText: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.base,
-      color: colors.ink,
-    },
+    authBtnUnavailable: { opacity: 0.55 },
     googleError: {
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.sm,

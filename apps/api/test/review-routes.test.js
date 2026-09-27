@@ -14,6 +14,7 @@ const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const reviewRepository = require('../src/modules/reviews/review.repository');
+const cookHistoryRepository = require('../src/modules/cook-history/cook-history.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -118,6 +119,10 @@ test('DELETE /api/v1/reviews/:reviewId without a token is rejected', async () =>
 test('POST /api/v1/recipes/:recipeId/reviews creates a review for the authenticated user', async (t) => {
   const auth = authHeader(t, { id: USER_ID, sessionId: USER_SESSION_ID });
   mockRecipeUsable(t);
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => null);
+  t.mock.method(cookHistoryRepository, 'existsForUserAndRecipe', async (userId, recipeId) => (
+    userId === USER_ID && String(recipeId) === RECIPE_ID
+  ));
   let capturedDoc;
   t.mock.method(reviewRepository, 'create', async (doc) => {
     capturedDoc = doc;
@@ -205,6 +210,19 @@ test('POST /api/v1/recipes/:recipeId/reviews rejects an unknown sensitive field'
   assert.equal(response.status, 400);
 });
 
+test('POST rejects spoofed cook authority fields before review eligibility is evaluated', async (t) => {
+  const auth = authHeader(t, { id: USER_ID, sessionId: USER_SESSION_ID });
+
+  for (const field of ['hasCooked', 'cookStatus', 'completedAt', 'cookHistoryEventId']) {
+    const response = await request(app)
+      .post(`/api/v1/recipes/${RECIPE_ID}/reviews`)
+      .set('Authorization', auth)
+      .send({ rating: 5, [field]: true });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
+});
+
 test('POST /api/v1/recipes/:recipeId/reviews returns 404 RECIPE_NOT_FOUND for a nonexistent recipe', async (t) => {
   const auth = authHeader(t, { id: USER_ID, sessionId: USER_SESSION_ID });
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => null);
@@ -234,6 +252,8 @@ test('POST /api/v1/recipes/:recipeId/reviews returns 404 RECIPE_NOT_FOUND for an
 test('POST /api/v1/recipes/:recipeId/reviews returns 409 REVIEW_ALREADY_EXISTS for a duplicate review (also covers the unique-index race)', async (t) => {
   const auth = authHeader(t, { id: USER_ID, sessionId: USER_SESSION_ID });
   mockRecipeUsable(t);
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => null);
+  t.mock.method(cookHistoryRepository, 'existsForUserAndRecipe', async () => true);
   t.mock.method(reviewRepository, 'create', async () => {
     const err = new Error('duplicate key');
     err.code = 11000;
@@ -247,6 +267,42 @@ test('POST /api/v1/recipes/:recipeId/reviews returns 409 REVIEW_ALREADY_EXISTS f
 
   assert.equal(response.status, 409);
   assert.equal(response.body.error.code, 'REVIEW_ALREADY_EXISTS');
+});
+
+test('POST returns REVIEW_ALREADY_EXISTS before cook eligibility for an existing legacy review', async (t) => {
+  const auth = authHeader(t, { id: USER_ID, sessionId: USER_SESSION_ID });
+  mockRecipeUsable(t);
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => fakeReviewDoc());
+  let cookChecked = false;
+  t.mock.method(cookHistoryRepository, 'existsForUserAndRecipe', async () => {
+    cookChecked = true;
+    return false;
+  });
+
+  const response = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/reviews`)
+    .set('Authorization', auth)
+    .send({ rating: 4 });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'REVIEW_ALREADY_EXISTS');
+  assert.equal(cookChecked, false);
+});
+
+test('POST returns safe REVIEW_COOK_REQUIRED when no matching completion exists', async (t) => {
+  const auth = authHeader(t, { id: USER_ID, sessionId: USER_SESSION_ID });
+  mockRecipeUsable(t);
+  t.mock.method(reviewRepository, 'findOneByUserAndRecipe', async () => null);
+  t.mock.method(cookHistoryRepository, 'existsForUserAndRecipe', async () => false);
+
+  const response = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/reviews`)
+    .set('Authorization', auth)
+    .send({ rating: 4, comment: 'Tried it.' });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'REVIEW_COOK_REQUIRED');
+  assert.equal(response.body.error.message, 'Complete this recipe in WeCooked before rating or reviewing it.');
 });
 
 test('POST /api/v1/recipes/:recipeId/reviews rejects a malformed recipeId with a controlled 400, never a 500', async (t) => {

@@ -20,10 +20,25 @@ import { getSubstitutionErrorMessage } from '../api/substitutionErrors';
 
 const SEARCH_DELAY_MS = 300;
 const SEARCH_LIMIT = 20;
+const COMPACT_CONTEXT_MAX_LENGTH = 22;
 
-// The teammate-final Substitute Finder shell now reads only canonical catalog
+function sourceMatchesSelection(selectedIngredientId, resultSourceIngredientId) {
+  return Boolean(
+    selectedIngredientId && selectedIngredientId === resultSourceIngredientId
+  );
+}
+
+function compactContextLabel(value) {
+  const context = typeof value === 'string' && value.trim() ? value.trim() : 'Catalog';
+  return context.length > COMPACT_CONTEXT_MAX_LENGTH
+    ? `${context.slice(0, COMPACT_CONTEXT_MAX_LENGTH - 1)}…`
+    : context;
+}
+
+// The teammate-inspired Ingredient Swaps shell reads only canonical catalog
 // ingredients and real directed substitutions. The API does not define images,
-// ratios, confidence, or scientific metrics, so none are invented here.
+// confidence, or scientific metrics, and its ratio lacks unit semantics, so none
+// of those values are presented here.
 export default function IngredientStudioScreen({ navigation, route }) {
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
@@ -36,15 +51,18 @@ export default function IngredientStudioScreen({ navigation, route }) {
   const [searchError, setSearchError] = useState(null);
   const [searchNonce, setSearchNonce] = useState(0);
 
-  const [substitutes, setSubstitutes] = useState([]);
-  const [substitutesLoading, setSubstitutesLoading] = useState(false);
-  const [substitutesError, setSubstitutesError] = useState(null);
+  const [substitutionState, setSubstitutionState] = useState({
+    sourceIngredientId: null,
+    substitutes: [],
+    loading: false,
+    error: null,
+  });
   const [substitutesNonce, setSubstitutesNonce] = useState(0);
 
   const searchGeneration = useRef(0);
   const substitutesGeneration = useRef(0);
 
-  useEffect(() => {
+  useEffect(function loadIngredientCatalog() {
     const generation = ++searchGeneration.current;
     const trimmed = query.trim();
     setSearchLoading(true);
@@ -75,30 +93,45 @@ export default function IngredientStudioScreen({ navigation, route }) {
     };
   }, [query, searchNonce]);
 
-  useEffect(() => {
+  useEffect(function loadSubstitutions() {
     const generation = ++substitutesGeneration.current;
-    setSubstitutes([]);
-    setSubstitutesError(null);
 
     if (!selected?.id) {
-      setSubstitutesLoading(false);
+      setSubstitutionState({
+        sourceIngredientId: null,
+        substitutes: [],
+        loading: false,
+        error: null,
+      });
       return undefined;
     }
 
-    setSubstitutesLoading(true);
+    setSubstitutionState({
+      sourceIngredientId: selected.id,
+      substitutes: [],
+      loading: true,
+      error: null,
+    });
     getSubstitutesFor(selected.id)
       .then((result) => {
         if (generation === substitutesGeneration.current) {
-          setSubstitutes(result.substitutes);
+          setSubstitutionState({
+            sourceIngredientId: selected.id,
+            substitutes: result.substitutes,
+            loading: false,
+            error: null,
+          });
         }
       })
       .catch((err) => {
         if (generation === substitutesGeneration.current) {
-          setSubstitutesError(getSubstitutionErrorMessage(err));
+          setSubstitutionState({
+            sourceIngredientId: selected.id,
+            substitutes: [],
+            loading: false,
+            error: getSubstitutionErrorMessage(err),
+          });
         }
-      })
-      .finally(() => {
-        if (generation === substitutesGeneration.current) setSubstitutesLoading(false);
       });
 
     return () => {
@@ -106,11 +139,96 @@ export default function IngredientStudioScreen({ navigation, route }) {
     };
   }, [selected, substitutesNonce]);
 
+  const substitutionStateIsCurrent = sourceMatchesSelection(
+    selected?.id,
+    substitutionState.sourceIngredientId
+  );
+
+  const renderSubstitutions = () => {
+    if (!substitutionStateIsCurrent || substitutionState.loading) {
+      return (
+        <View style={styles.resultStatus} accessibilityLiveRegion="polite">
+          <ActivityIndicator color={colors.sageDeep} />
+          <Text style={styles.statusText}>Loading catalog substitutions…</Text>
+        </View>
+      );
+    }
+
+    if (substitutionState.error) {
+      return (
+        <Pressable
+          style={styles.resultStatus}
+          onPress={() => setSubstitutesNonce((n) => n + 1)}
+          accessibilityRole="button"
+          accessibilityLabel={`${substitutionState.error} Retry substitution lookup`}
+        >
+          <Ionicons name="refresh" size={20} color={colors.sageDeep} />
+          <Text style={styles.errorText}>{substitutionState.error} Tap to retry.</Text>
+        </Pressable>
+      );
+    }
+
+    if (substitutionState.substitutes.length === 0) {
+      return (
+        <View style={styles.resultStatus}>
+          <Ionicons name="information-circle-outline" size={22} color={colors.sageDeep} />
+          <Text style={styles.statusTitle}>No substitutions available</Text>
+          <Text style={styles.statusText}>
+            The catalog does not currently list a substitute for {selected.name}.
+          </Text>
+        </View>
+      );
+    }
+
+    return substitutionState.substitutes.map((substitution) => {
+      const primaryContext = substitution.contexts[0] || 'Catalog';
+      return (
+        <Pressable
+          key={substitution.id || substitution.substitute.id}
+          style={styles.swapCard}
+          onPress={() =>
+            navigation.navigate('SwapDetail', {
+              sourceIngredient: selected,
+              substitution,
+            })
+          }
+          accessibilityRole="button"
+          accessibilityLabel={`View ${substitution.substitute.name} substitution details. Context: ${primaryContext}`}
+          accessibilityHint={`Opens substitution guidance for ${selected.name}`}
+        >
+          <View style={styles.swapIconWrap}>
+            <Ionicons name="swap-horizontal" size={22} color={colors.sageDeep} />
+          </View>
+          <View style={styles.swapBody}>
+            <View style={styles.swapHeaderRow}>
+              <Text style={styles.swapName}>{substitution.substitute.name}</Text>
+              <View style={styles.contextBadgeWrap}>
+                <Badge label={compactContextLabel(primaryContext)} tone="sage" />
+              </View>
+            </View>
+            <Text style={styles.swapDesc}>
+              {substitution.notes || 'Catalog substitution guidance is available.'}
+            </Text>
+            <View style={styles.guidanceRow}>
+              <Ionicons
+                name="information-circle-outline"
+                size={12}
+                color={colors.inkFaint}
+              />
+              <Text style={styles.guidanceText}>No quantity ratio is assumed</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
+        </Pressable>
+      );
+    });
+  };
+
   return (
     <View style={styles.root}>
       <TopBar
         mode={asTab ? 'title' : 'back'}
-        title="Substitute Finder"
+        title="Ingredient Swaps"
         onBack={asTab ? undefined : () => navigation.goBack()}
       />
 
@@ -126,131 +244,97 @@ export default function IngredientStudioScreen({ navigation, route }) {
             autoCapitalize="none"
             autoCorrect={false}
             autoComplete="off"
+            returnKeyType="search"
+            accessibilityLabel="Search ingredient catalog"
           />
           {query.length > 0 && (
-            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+            <Pressable
+              onPress={() => setQuery('')}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Clear ingredient search"
+            >
               <Ionicons name="close-circle" size={17} color={colors.inkFaint} />
             </Pressable>
           )}
         </View>
 
         {searchLoading && ingredients.length === 0 ? (
-          <View style={styles.searchStatus}>
+          <View style={styles.searchStatus} accessibilityLiveRegion="polite">
             <ActivityIndicator size="small" color={colors.sageDeep} />
             <Text style={styles.searchStatusText}>Searching the ingredient catalog…</Text>
           </View>
         ) : searchError ? (
-          <Pressable style={styles.searchStatus} onPress={() => setSearchNonce((n) => n + 1)}>
+          <Pressable
+            style={styles.searchStatus}
+            onPress={() => setSearchNonce((n) => n + 1)}
+            accessibilityRole="button"
+            accessibilityLabel={`${searchError} Retry ingredient search`}
+          >
             <Text style={styles.searchErrorText}>{searchError} Tap to retry.</Text>
           </Pressable>
         ) : (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-          >
-            {ingredients.map((ingredient) => {
-              const active = ingredient.id === selected?.id;
-              return (
-                <Pressable
-                  key={ingredient.id}
-                  onPress={() => setSelected(ingredient)}
-                  style={[styles.chip, active && styles.chipActive]}
-                >
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                    {ingredient.name}
-                  </Text>
-                </Pressable>
-              );
-            })}
-            {ingredients.length === 0 && (
-              <Text style={styles.noMatches}>
-                {query.trim() ? `No ingredients match “${query.trim()}”.` : 'No ingredients available.'}
-              </Text>
-            )}
-          </ScrollView>
+          <>
+            <Text style={styles.pickerLabel}>INGREDIENT CATALOG</Text>
+            <ScrollView
+              horizontal
+              keyboardShouldPersistTaps="handled"
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipRow}
+            >
+              {ingredients.map((ingredient) => {
+                const active = ingredient.id === selected?.id;
+                return (
+                  <Pressable
+                    key={ingredient.id}
+                    onPress={() => setSelected(ingredient)}
+                    style={[styles.chip, active && styles.chipActive]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={ingredient.name}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                      {ingredient.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              {ingredients.length === 0 && (
+                <Text style={styles.noMatches} accessibilityLiveRegion="polite">
+                  {query.trim() ? `No ingredients match “${query.trim()}”.` : 'No ingredients available.'}
+                </Text>
+              )}
+            </ScrollView>
+          </>
         )}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         {selected ? (
           <>
-            <View style={styles.heroCircleWrap}>
-              <View style={styles.heroCircle}>
-                <Ionicons name="leaf-outline" size={38} color={colors.sageDeep} />
+            <View style={styles.selectedHeader}>
+              <View style={styles.heroCircleWrap}>
+                <View style={styles.heroCircle}>
+                  <Ionicons name="leaf-outline" size={24} color={colors.sageDeep} />
+                </View>
+              </View>
+              <View style={styles.selectedCopy}>
+                <Text style={styles.eyebrow}>SELECTED INGREDIENT</Text>
+                <Text style={styles.title}>Swaps for {selected.name}</Text>
+                <Text style={styles.subtitle}>
+                  {selected.category
+                    ? `Catalog category: ${selected.category}`
+                    : 'Canonical WeCooked ingredient'}
+                </Text>
               </View>
             </View>
 
-            <Text style={styles.eyebrow}>ORIGINAL INGREDIENT</Text>
-            <Text style={styles.title}>{selected.name}</Text>
-            <Text style={styles.subtitle}>
-              {selected.category
-                ? `Catalog category: ${selected.category}`
-                : 'Canonical WeCooked ingredient'}
-            </Text>
-
             <Text style={styles.sectionLabel}>Catalog Swaps</Text>
-
-            {substitutesLoading ? (
-              <View style={styles.resultStatus}>
-                <ActivityIndicator color={colors.sageDeep} />
-                <Text style={styles.statusText}>Loading catalog substitutions…</Text>
-              </View>
-            ) : substitutesError ? (
-              <Pressable
-                style={styles.resultStatus}
-                onPress={() => setSubstitutesNonce((n) => n + 1)}
-              >
-                <Ionicons name="refresh" size={20} color={colors.sageDeep} />
-                <Text style={styles.errorText}>{substitutesError} Tap to retry.</Text>
-              </Pressable>
-            ) : substitutes.length === 0 ? (
-              <View style={styles.resultStatus}>
-                <Ionicons name="information-circle-outline" size={22} color={colors.sageDeep} />
-                <Text style={styles.statusTitle}>No substitutions available</Text>
-                <Text style={styles.statusText}>
-                  The catalog does not currently list a substitute for {selected.name}.
-                </Text>
-              </View>
-            ) : (
-              substitutes.map((substitution) => (
-                <Pressable
-                  key={substitution.id || substitution.substitute.id}
-                  style={styles.swapCard}
-                  onPress={() =>
-                    navigation.navigate('SwapDetail', {
-                      sourceIngredient: selected,
-                      substitution,
-                    })
-                  }
-                >
-                  <View style={styles.swapIconWrap}>
-                    <Ionicons name="swap-horizontal" size={22} color={colors.sageDeep} />
-                  </View>
-                  <View style={styles.swapBody}>
-                    <View style={styles.swapHeaderRow}>
-                      <Text style={styles.swapName}>{substitution.substitute.name}</Text>
-                      <Badge
-                        label={substitution.contexts[0] || 'Catalog'}
-                        tone="sage"
-                      />
-                    </View>
-                    <Text style={styles.swapDesc}>
-                      {substitution.notes || 'Catalog substitution guidance is available.'}
-                    </Text>
-                    <View style={styles.guidanceRow}>
-                      <Ionicons
-                        name="information-circle-outline"
-                        size={12}
-                        color={colors.inkFaint}
-                      />
-                      <Text style={styles.guidanceText}>No quantity ratio is assumed</Text>
-                    </View>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
-                </Pressable>
-              ))
-            )}
+            {renderSubstitutions()}
           </>
         ) : (
           <View style={styles.resultStatus}>
@@ -286,7 +370,7 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline,
       paddingHorizontal: spacing.lg,
       height: 46,
-      marginBottom: spacing.md,
+      marginBottom: spacing.sm,
     },
     searchInput: {
       flex: 1,
@@ -296,7 +380,14 @@ function makeStyles(colors, shadow) {
       height: '100%',
       outlineStyle: 'none',
     },
-    chipRow: { gap: spacing.sm, paddingBottom: spacing.xs },
+    pickerLabel: {
+      fontFamily: typography.body.bold,
+      fontSize: 10.5,
+      letterSpacing: 1,
+      color: colors.inkFaint,
+      marginBottom: spacing.sm,
+    },
+    chipRow: { gap: spacing.sm, paddingRight: spacing.lg, paddingBottom: spacing.xs },
     chip: {
       paddingHorizontal: spacing.md,
       paddingVertical: 8,
@@ -340,25 +431,32 @@ function makeStyles(colors, shadow) {
     scroll: {
       padding: spacing.lg,
       paddingBottom: spacing.xxxl,
-      alignItems: 'center',
       flexGrow: 1,
     },
-    heroCircleWrap: {
-      marginTop: spacing.lg,
+    selectedHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingBottom: spacing.lg,
       marginBottom: spacing.lg,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.hairline,
+    },
+    heroCircleWrap: {
       ...shadow.card,
-      borderRadius: 60,
+      borderRadius: radius.md,
     },
     heroCircle: {
-      width: 96,
-      height: 96,
-      borderRadius: 48,
-      borderWidth: 3,
+      width: 56,
+      height: 56,
+      borderRadius: radius.md,
+      borderWidth: 2,
       borderColor: colors.paper,
       backgroundColor: colors.sagePale,
       alignItems: 'center',
       justifyContent: 'center',
     },
+    selectedCopy: { flex: 1 },
     eyebrow: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.xs,
@@ -368,19 +466,15 @@ function makeStyles(colors, shadow) {
     },
     title: {
       fontFamily: typography.display.fontFamily,
-      fontSize: 30,
+      fontSize: 22,
       color: colors.ink,
-      marginBottom: spacing.sm,
-      textAlign: 'center',
+      marginBottom: 3,
     },
     subtitle: {
       fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.base,
+      fontSize: typography.sizes.sm,
       color: colors.inkSoft,
-      textAlign: 'center',
-      lineHeight: 20,
-      marginBottom: spacing.xxl,
-      maxWidth: '90%',
+      lineHeight: 18,
     },
     sectionLabel: {
       alignSelf: 'flex-start',
@@ -416,6 +510,11 @@ function makeStyles(colors, shadow) {
       justifyContent: 'space-between',
       gap: spacing.sm,
       marginBottom: 4,
+    },
+    contextBadgeWrap: {
+      flexShrink: 1,
+      maxWidth: '42%',
+      overflow: 'hidden',
     },
     swapName: {
       flex: 1,

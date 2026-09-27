@@ -10,14 +10,14 @@ const SETTINGS_GROUPS = [
   {
     title: 'Account',
     items: [
-      { id: 'personal', icon: 'person-outline', label: 'Personal Info', sub: 'Name, email, contact' },
-      { id: 'security', icon: 'shield-checkmark-outline', label: 'Security', sub: 'Password, 2FA' },
+      { id: 'personal', icon: 'person-outline', label: 'Personal Info', sub: 'Name and preferences' },
+      { id: 'security', icon: 'shield-checkmark-outline', label: 'Security', sub: 'Password, verification, sessions' },
     ],
   },
   {
     title: 'Preferences',
     items: [
-      { id: 'notifications', icon: 'notifications-outline', label: 'Notifications', sub: 'Push, email alerts' },
+      { id: 'notifications', icon: 'notifications-outline', label: 'Notifications', sub: 'Account-wide on or off' },
     ],
   },
   {
@@ -77,9 +77,9 @@ export default function SettingsScreen({ navigation }) {
       <TopBar mode="back" title="" onBack={() => navigation.goBack()} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Settings</Text>
+        <Text style={styles.title} accessibilityRole="header">Settings</Text>
         <Text style={styles.subtitle}>
-          Manage your account preferences and culinary profile.
+          Manage appearance, account details, and supported preferences.
         </Text>
 
         <View style={styles.group}>
@@ -92,6 +92,9 @@ export default function SettingsScreen({ navigation }) {
                   key={opt.id}
                   style={[styles.segment, active && styles.segmentActive]}
                   onPress={() => setMode(opt.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${opt.label} appearance`}
+                  accessibilityState={{ selected: active }}
                 >
                   <Ionicons
                     name={opt.icon}
@@ -119,6 +122,8 @@ export default function SettingsScreen({ navigation }) {
                     i < group.items.length - 1 && styles.rowBorder,
                   ]}
                   onPress={() => navigation.navigate(ROUTES[item.id])}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
                 >
                   <View style={styles.iconWrap}>
                     <Ionicons name={item.icon} size={17} color={colors.sageDeep} />
@@ -134,7 +139,12 @@ export default function SettingsScreen({ navigation }) {
           </View>
         ))}
 
-        <Pressable style={styles.logoutBtn} onPress={handleLogout}>
+        <Pressable
+          style={styles.logoutBtn}
+          onPress={handleLogout}
+          accessibilityRole="button"
+          accessibilityLabel="Log out"
+        >
           <Text style={styles.logoutText}>Log Out</Text>
         </Pressable>
       </ScrollView>
@@ -225,7 +235,7 @@ function makeStyles(colors) {
       color: colors.inkFaint,
       marginTop: 1,
     },
-    logoutBtn: { alignItems: 'center', paddingVertical: spacing.lg },
+    logoutBtn: { minHeight: 52, alignItems: 'center', justifyContent: 'center' },
     logoutText: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.md,

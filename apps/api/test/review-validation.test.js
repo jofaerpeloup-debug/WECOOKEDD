@@ -96,7 +96,10 @@ test('createReviewSchema accepts a comment at exactly the max length', () => {
 });
 
 test('createReviewSchema rejects unknown/sensitive fields (mass assignment)', () => {
-  const fields = ['userId', 'ownerId', 'recipeId', 'averageRating', 'ratingCount', 'createdAt', 'updatedAt', 'role'];
+  const fields = [
+    'userId', 'ownerId', 'recipeId', 'averageRating', 'ratingCount', 'createdAt', 'updatedAt', 'role',
+    'hasCooked', 'cookStatus', 'completedAt', 'cookHistoryEventId', 'author',
+  ];
   for (const field of fields) {
     const result = createReviewSchema.safeParse({
       params: { recipeId: VALID_ID },
@@ -132,7 +135,10 @@ test('patchReviewSchema rejects rating 0, 6, and decimals', () => {
 });
 
 test('patchReviewSchema rejects userId/recipeId tampering (ownership/recipe cannot move via PATCH)', () => {
-  const fields = ['userId', 'ownerId', 'recipeId', 'averageRating', 'ratingCount'];
+  const fields = [
+    'userId', 'ownerId', 'recipeId', 'averageRating', 'ratingCount',
+    'hasCooked', 'cookStatus', 'completedAt', 'cookHistoryEventId', 'author',
+  ];
   for (const field of fields) {
     const result = patchReviewSchema.safeParse({
       params: { reviewId: VALID_ID },

@@ -25,7 +25,7 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 
 // M2.2 — teammate Discover ("Search") visual port on top of our real data + routes.
 //
-// PRESENTATION comes from the audited teammate Discover screen (commit 081a94b): the
+// PRESENTATION comes from the audited teammate Discover screen (commit bae924b): the
 // screen title, the filled search field, pill filter chips (active = deep sage),
 // an uppercase result-count label, and compact image + title + meta result rows.
 //
@@ -100,8 +100,8 @@ function mergeById(prev, next) {
 }
 
 export default function DiscoverScreen({ navigation, route }) {
-  const { colors, shadow } = useTheme();
-  const styles = makeStyles(colors, shadow);
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
 
   // Seed from a Home shortcut param on first mount so Discover fetches the
   // right filter once, instead of fetching "all" and then re-fetching.
@@ -283,7 +283,12 @@ export default function DiscoverScreen({ navigation, route }) {
   // fetch in the provider, never one per card.
   const renderItem = ({ item }) => (
     <View style={styles.row}>
-      <Pressable style={styles.rowMain} onPress={() => openRecipe(item)}>
+      <Pressable
+        style={styles.rowMain}
+        onPress={() => openRecipe(item)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${item.title}`}
+      >
         <RecipeImage source={item.imageUrl} style={styles.thumb} />
         <View style={styles.rowText}>
           <Text style={styles.rowTitle} numberOfLines={2}>
@@ -373,6 +378,7 @@ export default function DiscoverScreen({ navigation, route }) {
               placeholderTextColor={colors.inkFaint}
               value={search}
               onChangeText={setSearch}
+              accessibilityLabel="Search recipes"
               autoCapitalize="none"
               autoComplete="off"
               autoCorrect={false}
@@ -415,6 +421,7 @@ export default function DiscoverScreen({ navigation, route }) {
                 onPress={() => setActiveKey(f.key)}
                 style={[styles.chip, isActive && styles.chipActive]}
                 accessibilityRole="button"
+                accessibilityLabel={`Filter recipes by ${f.label}`}
                 accessibilityState={{ selected: isActive }}
               >
                 <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
@@ -426,7 +433,7 @@ export default function DiscoverScreen({ navigation, route }) {
         </ScrollView>
 
         {countLabel && (
-          <View style={styles.countPill}>
+          <View style={styles.countRow}>
             <Text style={styles.countLabel}>{countLabel} found</Text>
           </View>
         )}
@@ -456,7 +463,7 @@ export default function DiscoverScreen({ navigation, route }) {
   );
 }
 
-function makeStyles(colors, shadow) {
+function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     header: {
@@ -515,13 +522,10 @@ function makeStyles(colors, shadow) {
       color: colors.inkSoft,
     },
     chipTextActive: { color: colors.onAccent },
-    countPill: {
+    countRow: {
       alignSelf: 'flex-start',
-      marginTop: spacing.md,
-      paddingHorizontal: spacing.md,
-      paddingVertical: 6,
-      borderRadius: radius.pill,
-      backgroundColor: colors.sagePale,
+      marginTop: spacing.lg,
+      marginBottom: spacing.xs,
     },
     countLabel: {
       fontFamily: typography.body.bold,
@@ -537,17 +541,14 @@ function makeStyles(colors, shadow) {
       gap: spacing.sm,
       backgroundColor: colors.creamDeep,
       borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.hairline,
       padding: 10,
       marginBottom: spacing.md,
-      ...shadow.soft,
     },
     rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     thumb: {
-      width: 64,
-      height: 64,
-      borderRadius: radius.sm,
+      width: 60,
+      height: 60,
+      borderRadius: 10,
       backgroundColor: colors.creamDeep,
     },
     rowText: { flex: 1 },
