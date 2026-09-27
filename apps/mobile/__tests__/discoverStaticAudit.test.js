@@ -119,6 +119,49 @@ function hasUnsupportedSortSemantics(src) {
   ].some((pattern) => pattern.test(executable));
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasClientSideRecipeFiltering(src) {
+  const executable = stripComments(src);
+  const collections = new Set(['recipes', 'data.recipes']);
+  const aliasPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*(?:;|\n|$)/g;
+
+  let addedAlias = true;
+  while (addedAlias) {
+    addedAlias = false;
+    for (const match of executable.matchAll(aliasPattern)) {
+      if (collections.has(match[2]) && !collections.has(match[1])) {
+        collections.add(match[1]);
+        addedAlias = true;
+      }
+    }
+  }
+
+  return [...collections].some((collection) => {
+    const root = escapeRegExp(collection);
+    const directFilter = new RegExp(
+      `${root}\\s*(?:\\?\\.|\\.|\\[\\s*['"])(?:filter)(?:['"]\\s*\\])?\\s*\\(`
+    );
+    const borrowedFilter = new RegExp(
+      `Array\\.prototype\\.filter\\.(?:call|apply)\\(\\s*${root}\\b`
+    );
+    const wrappedFilter = new RegExp(
+      `(?:Array\\.from\\(\\s*${root}\\s*\\)|\\[\\s*\\.\\.\\.${root}\\s*\\])\\s*\\.\\s*filter\\s*\\(`
+    );
+    const subsetReduce = new RegExp(
+      `${root}\\s*\\.\\s*reduce\\s*\\([\\s\\S]{0,500},\\s*\\[\\]\\s*\\)`
+    );
+    const conditionalLoop = new RegExp(
+      `for\\s*\\([^)]*\\bof\\s+${root}\\s*\\)\\s*\\{[\\s\\S]{0,500}?\\bif\\s*\\([\\s\\S]{0,200}?\\)[\\s\\S]{0,300}?\\.push\\s*\\(`
+    );
+    return [directFilter, borrowedFilter, wrappedFilter, subsetReduce, conditionalLoop].some(
+      (pattern) => pattern.test(executable)
+    );
+  });
+}
+
 const raw = read('screens/DiscoverScreen.js');
 const code = stripComments(raw);
 
@@ -157,6 +200,35 @@ describe('static audit source helpers', () => {
     expect(hasUnsupportedSortSemantics("params.set('sort', 'popularity');")).toBe(true);
     expect(hasUnsupportedSortSemantics('<Text>Popular recipes</Text>')).toBe(false);
     expect(hasUnsupportedSortSemantics('// sort: rating is unsupported')).toBe(false);
+  });
+
+  it('detects targeted client-side filtering forms without rejecting unrelated array work', () => {
+    expect(hasClientSideRecipeFiltering('const visible = data.recipes.filter(isVisible);')).toBe(
+      true
+    );
+    expect(
+      hasClientSideRecipeFiltering(
+        'const pageRecipes = data.recipes; const visible = pageRecipes["filter"](isVisible);'
+      )
+    ).toBe(true);
+    expect(
+      hasClientSideRecipeFiltering('const visible = Array.from(data.recipes).filter(isVisible);')
+    ).toBe(true);
+    expect(
+      hasClientSideRecipeFiltering(
+        'const visible = data.recipes.reduce((out, recipe) => isVisible(recipe) ? [...out, recipe] : out, []);'
+      )
+    ).toBe(true);
+    expect(
+      hasClientSideRecipeFiltering(
+        'for (const recipe of data.recipes) { if (isVisible(recipe)) visible.push(recipe); }'
+      )
+    ).toBe(true);
+    expect(hasClientSideRecipeFiltering('const labels = options.filter(Boolean);')).toBe(false);
+    expect(hasClientSideRecipeFiltering('const rows = recipes.map(renderRecipe);')).toBe(false);
+    expect(hasClientSideRecipeFiltering('const count = recipes.reduce((n) => n + 1, 0);')).toBe(
+      false
+    );
   });
 });
 
@@ -280,8 +352,8 @@ describe('Clear-all owns only search and the supported filter selection', () => 
     expect(clearAll).not.toBeNull();
     expect(clearAll).toMatch(/setSearch\(\s*['"]{2}\s*\)/);
     expect(clearAll).toMatch(/setDebouncedSearch\(\s*['"]{2}\s*\)/);
-    expect(clearAll).toMatch(/setActiveKey\(\s*['"]all['"]\s*\)/);
-    expect(clearAll).not.toMatch(/setFilters|AsyncStorage|saveJSON|navigation\./);
+    expect(clearAll).toMatch(/setAppliedFilters\(presetFilters\(\s*['"]all['"]\s*\)\)/);
+    expect(clearAll).not.toMatch(/\bsetFilters\b|AsyncStorage|saveJSON|navigation\./);
   });
 
   it('a first-page supersession resets both load-more flags before its request', () => {
@@ -454,15 +526,75 @@ describe('the Dashboard -> Discover handoff contract holds (M2.1 locked)', () =>
     expect(code).toMatch(/DISCOVER_FILTERS\.find\(\(f\) => f\.key === key\)/);
   });
 
-  it('seeds activeKey from route.params.initialFilter on first mount', () => {
+  it('seeds applied filters from route.params.initialFilter on first mount', () => {
     expect(code).toMatch(/route\.params\?\.initialFilter/);
-    expect(code).toMatch(/FILTER_BY_KEY\[k\]\s*\?\s*k\s*:\s*'all'/);
+    expect(code).toMatch(/presetFilters\(k && FILTER_BY_KEY\[k\] \? k : 'all'\)/);
   });
 
   it('re-consumes initialFilter on the already-mounted tab, then clears the param', () => {
     expect(code).toMatch(
-      /useEffect\(\(\) => \{[\s\S]*?route\.params\?\.initialFilter[\s\S]*?setActiveKey\(key\)[\s\S]*?navigation\.setParams\(\{ initialFilter: undefined \}\)[\s\S]*?\}, \[route\.params\?\.initialFilter, navigation\]\)/
+      /useEffect\(\(\) => \{[\s\S]*?route\.params\?\.initialFilter[\s\S]*?setAppliedFilters\(\(current\) => presetFiltersState\(current, key\)\)[\s\S]*?navigation\.setParams\(\{ initialFilter: undefined \}\)[\s\S]*?\}, \[route\.params\?\.initialFilter, navigation\]\)/
     );
+  });
+
+  it('preserves the seeded preset identity so the first-page dependency does not transition twice', () => {
+    expect(raw).toMatch(/presetFiltersState/);
+    expect(code).toMatch(/setAppliedFilters\(\(current\) => presetFiltersState\(current, key\)\)/);
+    expect(code).toMatch(/\[appliedFilters, debouncedSearch\]/);
+    expect(code).toMatch(/\}, \[loadFirstPage\]\)/);
+  });
+});
+
+describe('P3 server-authoritative advanced filters', () => {
+  const sheetRaw = read('components/DiscoverFiltersSheet.js');
+  const sheetCode = stripComments(sheetRaw);
+
+  it('builds search, approved filters, and pagination into the same request', () => {
+    const queryFor = extractBalancedAfter(code, 'const queryFor = useCallback(');
+    expect(queryFor).not.toBeNull();
+    expect(queryFor).toMatch(/discoverFilterQuery\(appliedFilters\)/);
+    expect(queryFor).toMatch(/search: debouncedSearch/);
+    expect(queryFor).toMatch(/page,/);
+    expect(queryFor).toMatch(/limit: PAGE_LIMIT/);
+    expect(code).toMatch(/listRecipes\(queryFor\(1\)\)/);
+    expect(code).toMatch(/listRecipes\(queryFor\(nextPage\)\)/);
+  });
+
+  it('uses replacement presets and leaves non-preset combinations unselected', () => {
+    expect(code).toMatch(/const activePresetKey = selectedPresetKey\(appliedFilters\)/);
+    expect(code).toMatch(/const isActive = f\.key === activePresetKey/);
+    expect(code).toMatch(/setAppliedFilters\(presetFilters\(key\)\)/);
+    expect(code).toMatch(/filterCount > 0 \? `Filters, \$\{filterCount\} active`/);
+  });
+
+  it('resets pagination through the first-page dependency when applied filters change', () => {
+    expect(code).toMatch(/\[appliedFilters, debouncedSearch\]/);
+    expect(code).toMatch(/useEffect\(\(\) => \{\s*loadFirstPage\(\);\s*\}, \[loadFirstPage\]\)/);
+    expect(code).toMatch(/setPageLoaded\(0\)/);
+  });
+
+  it('keeps filter changes draft-only until Apply and supports Cancel, back, and Reset', () => {
+    expect(sheetCode).toMatch(/if \(!visible\) return;[\s\S]*setDraft\(draftFromFilters\(appliedFilters\)\)/);
+    expect(sheetCode).toMatch(/onRequestClose=\{cancel\}/);
+    expect(sheetCode).toMatch(/const reset = \(\) => \{[\s\S]*setDraft\(draftFromFilters\(\{\}\)\)/);
+    expect(sheetCode).toMatch(/if \(!result\.filters\) return;\s*onApply\(result\.filters\)/);
+    expect(sheetCode).not.toMatch(/listRecipes\(/);
+  });
+
+  it('provides accessible themed controls and maximum-prep validation', () => {
+    expect(sheetCode).toMatch(/accessibilityRole="radiogroup"/);
+    expect(sheetCode).toMatch(/accessibilityState=\{\{ selected \}\}/);
+    expect(sheetCode).toMatch(/accessibilityLabel="Maximum prep minutes, from 1 to 1440"/);
+    expect(sheetCode).toMatch(/keyboardType="number-pad"/);
+    expect(sheetCode).toMatch(/accessibilityLiveRegion="polite"/);
+    expect(sheetCode).toMatch(/useTheme\(\)/);
+    expect(sheetCode).toMatch(/minHeight: 44/);
+  });
+
+  it('does not locally filter returned recipe pages', () => {
+    expect(hasClientSideRecipeFiltering(code)).toBe(false);
+    expect(code).toMatch(/const nextRecipes = dedupeById\(data\.recipes\)/);
+    expect(code).toMatch(/setRecipes\(\(prev\) => mergeById\(prev, data\.recipes\)\)/);
   });
 });
 

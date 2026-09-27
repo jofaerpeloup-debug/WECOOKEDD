@@ -16,11 +16,19 @@ import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
+import DiscoverFiltersSheet from '../components/DiscoverFiltersSheet';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { DISCOVER_FILTERS, difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 import { recipeCollectionPhaseAfterFailure } from '../utils/recipeFreshnessState';
+import {
+  activeFilterCount,
+  discoverFilterQuery,
+  presetFilters,
+  presetFiltersState,
+  selectedPresetKey,
+} from '../utils/discoverFilters';
 import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 
 // M2.2 — teammate Discover ("Search") visual port on top of our real data + routes.
@@ -105,10 +113,13 @@ export default function DiscoverScreen({ navigation, route }) {
 
   // Seed from a Home shortcut param on first mount so Discover fetches the
   // right filter once, instead of fetching "all" and then re-fetching.
-  const [activeKey, setActiveKey] = useState(() => {
+  const [appliedFilters, setAppliedFilters] = useState(() => {
     const k = route.params?.initialFilter;
-    return k && FILTER_BY_KEY[k] ? k : 'all';
+    return presetFilters(k && FILTER_BY_KEY[k] ? k : 'all');
   });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activePresetKey = selectedPresetKey(appliedFilters);
+  const filterCount = activeFilterCount(appliedFilters);
 
   // Real backend search: `search` is the live field value, `debouncedSearch`
   // is what actually reaches the API (trimmed, settled).
@@ -149,7 +160,7 @@ export default function DiscoverScreen({ navigation, route }) {
   useEffect(() => {
     const key = route.params?.initialFilter;
     if (key && FILTER_BY_KEY[key]) {
-      setActiveKey(key);
+      setAppliedFilters((current) => presetFiltersState(current, key));
       setSearch('');
       setDebouncedSearch('');
       navigation.setParams({ initialFilter: undefined });
@@ -167,12 +178,12 @@ export default function DiscoverScreen({ navigation, route }) {
 
   const queryFor = useCallback(
     (page) => ({
-      ...(FILTER_BY_KEY[activeKey]?.query || {}),
+      ...discoverFilterQuery(appliedFilters),
       ...(debouncedSearch ? { search: debouncedSearch } : {}),
       page,
       limit: PAGE_LIMIT,
     }),
-    [activeKey, debouncedSearch]
+    [appliedFilters, debouncedSearch]
   );
 
   const loadFirstPage = useCallback(
@@ -268,7 +279,16 @@ export default function DiscoverScreen({ navigation, route }) {
   const clearAll = () => {
     setSearch('');
     setDebouncedSearch('');
-    setActiveKey('all');
+    setAppliedFilters(presetFilters('all'));
+  };
+
+  const applyPreset = (key) => {
+    setAppliedFilters(presetFilters(key));
+  };
+
+  const applyAdvancedFilters = (filters) => {
+    setFiltersOpen(false);
+    setAppliedFilters(filters);
   };
 
   const countLabel = useMemo(() => {
@@ -395,7 +415,7 @@ export default function DiscoverScreen({ navigation, route }) {
               </Pressable>
             )}
           </View>
-          {(search.length > 0 || activeKey !== 'all') && (
+          {(search.length > 0 || filterCount > 0) && (
             <Pressable
               onPress={clearAll}
               hitSlop={8}
@@ -414,11 +434,11 @@ export default function DiscoverScreen({ navigation, route }) {
           contentContainerStyle={styles.chipRow}
         >
           {M2_FILTERS.map((f) => {
-            const isActive = f.key === activeKey;
+            const isActive = f.key === activePresetKey;
             return (
               <Pressable
                 key={f.key}
-                onPress={() => setActiveKey(f.key)}
+                onPress={() => applyPreset(f.key)}
                 style={[styles.chip, isActive && styles.chipActive]}
                 accessibilityRole="button"
                 accessibilityLabel={`Filter recipes by ${f.label}`}
@@ -430,6 +450,31 @@ export default function DiscoverScreen({ navigation, route }) {
               </Pressable>
             );
           })}
+          <Pressable
+            onPress={() => setFiltersOpen(true)}
+            style={[styles.filterButton, filterCount > 0 && styles.filterButtonActive]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              filterCount > 0 ? `Filters, ${filterCount} active` : 'Filters, none active'
+            }
+            accessibilityHint="Opens advanced recipe filters"
+          >
+            <Ionicons
+              name="options-outline"
+              size={15}
+              color={filterCount > 0 ? colors.onAccent : colors.sageDeep}
+            />
+            <Text
+              style={[styles.filterButtonText, filterCount > 0 && styles.filterButtonTextActive]}
+            >
+              Filters
+            </Text>
+            {filterCount > 0 && (
+              <View style={styles.filterCount} accessibilityElementsHidden>
+                <Text style={styles.filterCountText}>{filterCount}</Text>
+              </View>
+            )}
+          </Pressable>
         </ScrollView>
 
         {countLabel && (
@@ -458,6 +503,13 @@ export default function DiscoverScreen({ navigation, route }) {
         }
         ListEmptyComponent={renderEmpty()}
         ListFooterComponent={renderFooter()}
+      />
+
+      <DiscoverFiltersSheet
+        visible={filtersOpen}
+        appliedFilters={appliedFilters}
+        onCancel={() => setFiltersOpen(false)}
+        onApply={applyAdvancedFilters}
       />
     </View>
   );
@@ -522,6 +574,38 @@ function makeStyles(colors) {
       color: colors.inkSoft,
     },
     chipTextActive: { color: colors.onAccent },
+    filterButton: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.sageDeep,
+      backgroundColor: colors.paper,
+    },
+    filterButtonActive: { backgroundColor: colors.sageDeep },
+    filterButtonText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 13,
+      color: colors.sageDeep,
+    },
+    filterButtonTextActive: { color: colors.onAccent },
+    filterCount: {
+      minWidth: 20,
+      height: 20,
+      paddingHorizontal: 5,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.cream,
+    },
+    filterCountText: {
+      fontFamily: typography.body.bold,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+    },
     countRow: {
       alignSelf: 'flex-start',
       marginTop: spacing.lg,
