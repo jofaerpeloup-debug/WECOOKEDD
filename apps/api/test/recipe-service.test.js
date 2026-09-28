@@ -95,6 +95,27 @@ test('createRecipe validates every ingredient through IngredientService and pers
   assert.deepEqual(capturedArgs.dietaryTags, []);
 });
 
+test('createRecipe preserves canonical lb/oz quantities without conversion', async (t) => {
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  let capturedArgs;
+  t.mock.method(recipeRepository, 'createRecipe', async (args) => {
+    capturedArgs = args;
+    return { _id: 'recipe1', ...args };
+  });
+
+  await recipeService.createRecipe(adoboPayload({
+    ingredients: [
+      { ingredientId: CHICKEN_ID, quantity: 0.75, unit: 'lb' },
+      { ingredientId: GARLIC_ID, quantity: 8, unit: 'oz' },
+    ],
+  }));
+
+  assert.deepEqual(capturedArgs.ingredients.map(({ quantity, unit }) => ({ quantity, unit })), [
+    { quantity: 0.75, unit: 'lb' },
+    { quantity: 8, unit: 'oz' },
+  ]);
+});
+
 test('createRecipe rejects when a referenced ingredient does not exist', async (t) => {
   t.mock.method(ingredientService, 'findIngredientById', async (id) => (id === GARLIC_ID ? null : activeIngredient(id)));
 
@@ -677,6 +698,31 @@ test('updateRecipe validates a replacement ingredients array through IngredientS
   });
 
   assert.deepEqual(checkedIds, [GARLIC_ID]);
+});
+
+test('updateRecipe preserves canonical lb/oz replacement entries without conversion', async (t) => {
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    _id: 'recipe1', isActive: true,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
+  }));
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  let capturedUpdate;
+  t.mock.method(recipeRepository, 'updateById', async (id, update) => {
+    capturedUpdate = update;
+    return { _id: id, ...update.$set };
+  });
+
+  await recipeService.updateRecipe('recipe1', {
+    ingredients: [
+      { ingredientId: CHICKEN_ID, quantity: 0.75, unit: 'lb' },
+      { ingredientId: GARLIC_ID, quantity: 8, unit: 'oz' },
+    ],
+  });
+
+  assert.deepEqual(capturedUpdate.$set.ingredients.map(({ quantity, unit }) => ({ quantity, unit })), [
+    { quantity: 0.75, unit: 'lb' },
+    { quantity: 8, unit: 'oz' },
+  ]);
 });
 
 test('updateRecipe rejects a replacement ingredients array referencing an inactive ingredient', async (t) => {

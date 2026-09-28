@@ -6,6 +6,15 @@ import {
   parseIngredientQuantity, publicationReadiness, publishBody, splitDuration, statusLabel,
   stepForField, validateStep,
 } from '../src/recipeAuthoring/recipeAuthoringModel.js';
+import { RECIPE_UNITS, UNIT_LABELS } from '../src/recipeOptions.js';
+
+test('Admin exposes the exact canonical 17-unit order and labels', () => {
+  const expected = ['g', 'kg', 'lb', 'oz', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'piece', 'clove', 'slice', 'can', 'pack', 'bunch', 'pinch', 'toTaste'];
+  assert.deepEqual(RECIPE_UNITS.map(({ value }) => value), expected);
+  assert.deepEqual(RECIPE_UNITS.map(({ label }) => label), ['g', 'kg', 'lb', 'oz', 'ml', 'L', 'tsp', 'tbsp', 'cup', 'piece', 'clove', 'slice', 'can', 'pack', 'bunch', 'pinch', 'to taste']);
+  assert.equal(UNIT_LABELS.lb, 'lb');
+  assert.equal(UNIT_LABELS.oz, 'oz');
+});
 
 test('normalization omits blank placeholders and preserves complete rows in order', () => {
   const form = emptyRecipeForm();
@@ -70,6 +79,20 @@ test('ingredient quantities parse positive integers, decimals, fractions, and mi
   form.ingredients = [{ ...validIngredient, quantity: '', unit: 'toTaste' }];
   assert.deepEqual(validateStep(form, 'ingredients'), {});
   assert.equal('quantity' in normalizeIngredients(form.ingredients)[0], false);
+});
+
+test('Admin validation and payload normalization preserve only canonical lb/oz values', () => {
+  for (const unit of ['lb', 'oz']) {
+    const form = emptyRecipeForm();
+    form.ingredients = [{ ingredient: { id: 'i1', name: 'Noodles' }, quantity: '3/4', unit, optional: false, note: '' }];
+    assert.deepEqual(validateStep(form, 'ingredients'), {}, unit);
+    assert.deepEqual(normalizeIngredients(form.ingredients), [{ ingredientId: 'i1', quantity: 0.75, unit, optional: false }]);
+  }
+  for (const unit of ['lbs', 'pound', 'oz.', 'ounce', 'LB', 'OZ']) {
+    const form = emptyRecipeForm();
+    form.ingredients = [{ ingredient: { id: 'i1', name: 'Noodles' }, quantity: '1', unit, optional: false, note: '' }];
+    assert.match(validateStep(form, 'ingredients')['ingredients.0.unit'], /valid unit/u, unit);
+  }
 });
 
 test('prep time is optional but supplied values must be whole minutes from 1 to 1440', () => {

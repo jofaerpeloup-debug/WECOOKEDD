@@ -4,6 +4,8 @@ const MAX_CANDIDATES = 10;
 const UNIT_TOKENS = new Map([
   ['g', 'g'], ['gram', 'g'], ['grams', 'g'],
   ['kg', 'kg'], ['kilogram', 'kg'], ['kilograms', 'kg'],
+  ['lb', 'lb'], ['lbs', 'lb'], ['pound', 'lb'], ['pounds', 'lb'],
+  ['oz', 'oz'], ['ounce', 'oz'], ['ounces', 'oz'],
   ['ml', 'ml'], ['milliliter', 'ml'], ['milliliters', 'ml'], ['millilitre', 'ml'], ['millilitres', 'ml'],
   ['l', 'l'], ['liter', 'l'], ['liters', 'l'], ['litre', 'l'], ['litres', 'l'],
   ['tsp', 'tsp'], ['teaspoon', 'tsp'], ['teaspoons', 'tsp'],
@@ -14,6 +16,12 @@ const UNIT_TOKENS = new Map([
   ['bunch', 'bunch'], ['bunches', 'bunch'], ['pinch', 'pinch'], ['pinches', 'pinch'],
 ]);
 
+function normalizeUnitToken(token) {
+  const normalized = token.toLowerCase();
+  const baseToken = normalized.endsWith('.') ? normalized.slice(0, -1) : normalized;
+  return UNIT_TOKENS.get(baseToken) || null;
+}
+
 function normalizeResolverName(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/gu, ' ');
 }
@@ -22,7 +30,7 @@ function hasMalformedNumericContinuation(rest) {
   const firstTokenMatch = rest.match(/^(\S+)(?:\s+|$)/u);
   if (!firstTokenMatch) return false;
   const firstToken = firstTokenMatch[1];
-  if (UNIT_TOKENS.has(firstToken.toLowerCase())) return false;
+  if (normalizeUnitToken(firstToken)) return false;
   if (/\p{Number}/u.test(firstToken)) return true;
   const afterFirstToken = rest.slice(firstTokenMatch[0].length).trimStart();
   return /^(?:\p{Number}|\.\p{Number})/u.test(afterFirstToken);
@@ -73,7 +81,7 @@ function parseIngredientLine(sourceText) {
   let unit = null;
   if (quantityMatch) {
     const tokenMatch = remaining.match(/^(\S+)(?:\s+|$)/u);
-    const mapped = tokenMatch && UNIT_TOKENS.get(tokenMatch[1].toLowerCase());
+    const mapped = tokenMatch && normalizeUnitToken(tokenMatch[1]);
     if (mapped) {
       unit = mapped;
       remaining = remaining.slice(tokenMatch[0].length).trim();

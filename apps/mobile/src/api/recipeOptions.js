@@ -27,6 +27,8 @@ export const RECIPE_DIETARY_TAGS = [
 export const RECIPE_UNITS = [
   'g',
   'kg',
+  'lb',
+  'oz',
   'ml',
   'l',
   'tsp',
@@ -59,6 +61,8 @@ const DIETARY_TAG_LABELS = {
 const UNIT_LABELS = {
   g: 'g',
   kg: 'kg',
+  lb: 'lb',
+  oz: 'oz',
   ml: 'ml',
   l: 'L',
   tsp: 'tsp',

@@ -264,9 +264,11 @@ coupling at the model layer, and exactly the kind of dependency
 and its cross-field validation were extracted in this phase to
 `src/shared/constants/measurement-units.js`:
 
-- `UNITS` — the same 15-value enum (`g`, `kg`, `ml`, `l`, `tsp`, `tbsp`,
-  `cup`, `piece`, `clove`, `slice`, `can`, `pack`, `bunch`, `pinch`,
-  `toTaste`) Phase 4 defined.
+- `UNITS` — Phase 4 defined the prior 15-value canonical contract. RECIPE-UNIT1
+  added canonical `lb` and `oz`, so the current shared contract contains exactly
+  17 values (`g`, `kg`, `lb`, `oz`, `ml`, `l`, `tsp`, `tbsp`, `cup`, `piece`,
+  `clove`, `slice`, `can`, `pack`, `bunch`, `pinch`, `toTaste`). This additive
+  expansion introduced no unit-conversion behavior.
 - `isPositiveFiniteNumber` / `validateQuantityForUnit` — the exact
   quantity/unit cross-field rule `recipe.model.js` already used in its
   embedded-ingredient `pre('validate')` hook.

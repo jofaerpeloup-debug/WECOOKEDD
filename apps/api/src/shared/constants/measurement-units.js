@@ -7,6 +7,8 @@
 const UNITS = [
   'g',
   'kg',
+  'lb',
+  'oz',
   'ml',
   'l',
   'tsp',

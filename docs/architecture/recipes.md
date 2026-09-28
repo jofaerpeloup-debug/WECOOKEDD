@@ -106,7 +106,7 @@ is used in that recipe:
   free-text ingredient name) so the same "Garlic" used across many recipes
   stays a single entity — this is what makes `?ingredientId=` filtering and
   future substitution/recommendation logic possible without text matching.
-- `quantity` / `unit` — `unit` is a controlled V1 enum (`g`, `kg`, `ml`, `l`,
+- `quantity` / `unit` — `unit` is a controlled 17-value enum (`g`, `kg`, `lb`, `oz`, `ml`, `l`,
   `tsp`, `tbsp`, `cup`, `piece`, `clove`, `slice`, `can`, `pack`, `bunch`,
   `pinch`, `toTaste`). For every unit except `toTaste`, `quantity` is
   **required** and must be a finite number greater than zero. For

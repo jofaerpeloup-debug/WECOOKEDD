@@ -25,6 +25,13 @@ function baseRecipe(overrides = {}) {
   });
 }
 
+test('Recipe exposes the exact 17-value canonical measurement-unit contract', () => {
+  assert.deepEqual(Recipe.UNITS, [
+    'g', 'kg', 'lb', 'oz', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'piece', 'clove', 'slice', 'can', 'pack',
+    'bunch', 'pinch', 'toTaste',
+  ]);
+});
+
 test('a Draft requires only a title at the persistence layer', async () => {
   const recipe = new Recipe({});
   await assert.rejects(() => recipe.validate(), (err) => {
@@ -168,6 +175,12 @@ test('the same ingredient may appear twice in one recipe (garlic for marinade an
 });
 
 test('quantity is required and must be a finite positive number for a measurable unit', async () => {
+  for (const unit of ['lb', 'oz']) {
+    const recipe = baseRecipe({ ingredients: [{ ingredientId: INGREDIENT_ID, quantity: 2.5, unit }] });
+    await assert.doesNotReject(() => recipe.validate(), unit);
+    assert.equal(recipe.ingredients[0].unit, unit);
+    assert.equal(recipe.ingredients[0].quantity, 2.5);
+  }
   await assert.rejects(() =>
     baseRecipe({ ingredients: [{ ingredientId: INGREDIENT_ID, unit: 'kg' }] }).validate()
   );

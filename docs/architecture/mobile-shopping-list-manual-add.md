@@ -93,7 +93,7 @@ No debounce dependency is added — plain `setTimeout`, like the rest of the app
 
 | unit | body sent | notes |
 | --- | --- | --- |
-| measurable (`g`, `kg`, `ml`, `l`, `tsp`, `tbsp`, `cup`, `piece`, `clove`, `slice`, `can`, `pack`, `bunch`, `pinch`) | `{ ingredientId, unit, quantity }` | `quantity` is a finite JS **number** `> 0` — the backend does **not** coerce strings, so the raw `TextInput` value is `Number()`-parsed and validated first |
+| measurable (`g`, `kg`, `lb`, `oz`, `ml`, `l`, `tsp`, `tbsp`, `cup`, `piece`, `clove`, `slice`, `can`, `pack`, `bunch`, `pinch`) | `{ ingredientId, unit, quantity }` | `quantity` is a finite JS **number** `> 0` — the backend does **not** coerce strings, so the raw `TextInput` value is `Number()`-parsed and validated first |
 | `toTaste` | `{ ingredientId, unit }` | `quantity` is **omitted** — sending any quantity (even a stale one) is a `400` |
 
 Ownership is always `req.auth.userId` (from the DB-verified session). The client

@@ -516,6 +516,34 @@ test('POST /api/v1/recipes accepts a "salt to taste" style entry with no quantit
   assert.equal(response.body.data.recipe.ingredients[0].unit, 'toTaste');
 });
 
+test('POST /api/v1/recipes preserves canonical lb/oz values through serialization', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  let capturedData;
+  t.mock.method(recipeRepository, 'createRecipe', async (data) => {
+    capturedData = data;
+    return fakeRecipeDoc({
+      ...data,
+      ingredients: data.ingredients.map((entry) => ({ ...entry, ingredientId: activeIngredient(entry.ingredientId) })),
+    });
+  });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const ingredients = [
+    { ingredientId: CHICKEN_ID, quantity: 0.75, unit: 'lb' },
+    { ingredientId: GARLIC_ID, quantity: 8, unit: 'oz' },
+  ];
+  const response = await request(app).post('/api/v1/recipes').set('Authorization', `Bearer ${token}`)
+    .send(validCreatePayload({ ingredients }));
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(capturedData.ingredients.map(({ quantity, unit }) => ({ quantity, unit })), [
+    { quantity: 0.75, unit: 'lb' }, { quantity: 8, unit: 'oz' },
+  ]);
+  assert.deepEqual(response.body.data.recipe.ingredients.map(({ quantity, unit }) => ({ quantity, unit })), [
+    { quantity: 0.75, unit: 'lb' }, { quantity: 8, unit: 'oz' },
+  ]);
+});
+
 test('POST /api/v1/recipes rejects unknown top-level fields', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
@@ -788,6 +816,15 @@ test('PATCH /api/v1/recipes/:id accepts a replacement ingredient with a measurab
   assert.equal(response.body.data.recipe.ingredients[0].unit, 'tbsp');
   assert.equal(response.body.data.recipe.ingredients[0].quantity, 1);
 });
+
+for (const unit of ['lb', 'oz']) {
+  test(`PATCH /api/v1/recipes/:id preserves canonical ${unit} without conversion`, async (t) => {
+    const response = await patchIngredientsWith(t, { ingredientId: CHICKEN_ID, quantity: 2.5, unit });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.recipe.ingredients[0].unit, unit);
+    assert.equal(response.body.data.recipe.ingredients[0].quantity, 2.5);
+  });
+}
 
 test('POST /api/v1/recipes/:id/restore rejects a Published recipe with an inactive stored ingredient', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });

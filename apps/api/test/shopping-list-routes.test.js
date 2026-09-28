@@ -160,6 +160,20 @@ test('POST /api/v1/shopping-list/items adds a manual item for an active ingredie
   assert.equal(response.body.data.shoppingList.items[0].category, 'meat');
 });
 
+for (const unit of ['lb', 'oz']) {
+  test(`POST /api/v1/shopping-list/items preserves canonical ${unit}`, async (t) => {
+    mockAuth(t);
+    mockIngredientActive(t);
+    t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
+    mockNoSave(t);
+    const response = await request(app).post('/api/v1/shopping-list/items')
+      .set('Authorization', `Bearer ${token()}`).send({ ingredientId: CHICKEN_ID, quantity: 2.5, unit });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.shoppingList.items[0].quantity, 2.5);
+    assert.equal(response.body.data.shoppingList.items[0].unit, unit);
+  });
+}
+
 test('GET /api/v1/shopping-list projects only current active canonical Ingredient categories', async (t) => {
   mockAuth(t);
   const itemIds = INGREDIENT_CATEGORIES.map((_, index) =>
@@ -524,7 +538,7 @@ test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable 
     servings: 4,
     isActive: true,
     ingredients: [
-      { ingredientId: activeIngredientDoc(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false },
+      { ingredientId: activeIngredientDoc(CHICKEN_ID, 'Chicken'), quantity: 0.75, unit: 'lb', optional: false },
     ],
     instructions: ['Combine and simmer.'],
     dietaryTags: [],
@@ -539,7 +553,8 @@ test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable 
 
   assert.equal(response.status, 200);
   assert.equal(response.body.data.shoppingList.items.length, 1);
-  assert.equal(response.body.data.shoppingList.items[0].quantity, 1);
+  assert.equal(response.body.data.shoppingList.items[0].quantity, 0.75);
+  assert.equal(response.body.data.shoppingList.items[0].unit, 'lb');
   assert.equal(response.body.data.shoppingList.items[0].category, 'meat');
 });
 

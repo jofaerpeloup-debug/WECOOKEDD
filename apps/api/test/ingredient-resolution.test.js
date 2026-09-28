@@ -52,6 +52,7 @@ test('rejects malformed numeric prefixes wholly while preserving valid boundary 
 test('maps every controlled source unit, optional of, quantity-only, and exact trailing to taste', () => {
   const cases = {
     g: 'g', gram: 'g', grams: 'g', kg: 'kg', kilogram: 'kg', kilograms: 'kg',
+    lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb', oz: 'oz', ounce: 'oz', ounces: 'oz',
     ml: 'ml', milliliter: 'ml', milliliters: 'ml', millilitre: 'ml', millilitres: 'ml',
     l: 'l', liter: 'l', liters: 'l', litre: 'l', litres: 'l', tsp: 'tsp', teaspoon: 'tsp', teaspoons: 'tsp',
     tbsp: 'tbsp', tablespoon: 'tbsp', tablespoons: 'tbsp', cup: 'cup', cups: 'cup', piece: 'piece', pieces: 'piece',
@@ -60,10 +61,34 @@ test('maps every controlled source unit, optional of, quantity-only, and exact t
   };
   for (const [token, unit] of Object.entries(cases)) {
     assert.deepEqual(parseIngredientLine(`2 ${token} of rice`), { quantity: 2, unit, name: 'rice' }, token);
+    assert.deepEqual(parseIngredientLine(`2 ${token.toUpperCase()}. rice`), { quantity: 2, unit, name: 'rice' }, `${token}.`);
   }
   assert.deepEqual(parseIngredientLine('2 large eggs'), { quantity: 2, unit: null, name: 'large eggs' });
   assert.deepEqual(parseIngredientLine('salt to taste'), { quantity: null, unit: 'toTaste', name: 'salt' });
   assert.deepEqual(parseIngredientLine('to taste'), { quantity: null, unit: 'toTaste', name: null });
+});
+
+test('normalizes frozen pound/ounce examples and retains unsupported punctuation in the name hint', () => {
+  assert.deepEqual(parseIngredientLine('3/4 lb. spaghetti'), { quantity: 0.75, unit: 'lb', name: 'spaghetti' });
+  assert.deepEqual(parseIngredientLine('8 OZ pancit canton noodles'), { quantity: 8, unit: 'oz', name: 'pancit canton noodles' });
+  assert.deepEqual(parseIngredientLine('1 TbSp. of soy sauce'), { quantity: 1, unit: 'tbsp', name: 'soy sauce' });
+  assert.deepEqual(parseIngredientLine('2 cups. rice'), { quantity: 2, unit: 'cup', name: 'rice' });
+  for (const [line, name] of [
+    ['1 fl oz milk', 'fl oz milk'],
+    ['1 lb.. spaghetti', 'lb.. spaghetti'],
+    ['1 lb, spaghetti', 'lb, spaghetti'],
+    ['1 stone beef', 'stone beef'],
+  ]) assert.deepEqual(parseIngredientLine(line), { quantity: 1, unit: null, name }, line);
+});
+
+test('passes canonical pound/ounce hints into resolver classification without changing name matching', () => {
+  const spaghetti = resolveIngredientLine('3/4 lb. spaghetti', [ingredient('1', 'Spaghetti')]);
+  assert.deepEqual(spaghetti.parsed, { quantity: 0.75, unit: 'lb', name: 'spaghetti' });
+  assert.equal(spaghetti.match.kind, 'exact');
+
+  const noodles = resolveIngredientLine('8 OZ pancit canton noodles', [ingredient('2', 'Pancit Canton Noodles')]);
+  assert.deepEqual(noodles.parsed, { quantity: 8, unit: 'oz', name: 'pancit canton noodles' });
+  assert.equal(noodles.match.kind, 'exact');
 });
 
 test('classifies exact, ambiguous, possible, none, and unparsed without deduplicating input lines', () => {

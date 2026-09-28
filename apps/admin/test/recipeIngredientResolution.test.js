@@ -52,6 +52,26 @@ test('confirmation requires explicit canonical selection and valid quantity/unit
   assert.equal(resolutionConfirmationError({ ...base, selectedIngredient: { id: 'i1', name: 'Salt' }, unit: 'toTaste', quantity: '' }), '');
 });
 
+test('pound/ounce parser hints confirm as ordinary canonical authoring rows', () => {
+  const cases = [
+    { sourceText: '3/4 lb. spaghetti', quantity: 0.75, unit: 'lb', name: 'Spaghetti' },
+    { sourceText: '8 OZ pancit canton noodles', quantity: 8, unit: 'oz', name: 'Pancit Canton Noodles' },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const queue = createUnresolvedIngredientQueue([item.sourceText], index + 1);
+    const request = prepareIngredientResolutionRequest(queue);
+    const merged = mergeIngredientResolutionResults(queue, request, [resolution(0, 'exact', {
+      quantity: item.quantity, unit: item.unit, name: item.name.toLowerCase(),
+    })]);
+    merged[0].selectedIngredient = { id: `i${index + 1}`, name: item.name };
+    const result = confirmIngredientResolution(emptyRecipeForm(), merged, 0);
+    assert.equal(result.error, '');
+    assert.equal(result.form.ingredients[0].quantity, String(item.quantity));
+    assert.equal(result.form.ingredients[0].unit, item.unit);
+    assert.deepEqual(result.form.ingredients[0].ingredient, { id: `i${index + 1}`, name: item.name });
+  }
+});
+
 test('confirmation reuses the first truly blank row, persists only the ordinary canonical row, and removes only one duplicate source', () => {
   const queue = createUnresolvedIngredientQueue(['2 eggs', '2 eggs'], 1).map((entry) => ({
     ...entry, selectedIngredient: { id: 'i1', name: 'Egg', category: 'protein', aliases: ['eggs'] }, quantity: '2', unit: 'piece',
