@@ -321,7 +321,8 @@ test('changing the source cannot replay A or overwrite edited and cleared fields
   assert.equal(authoring.state.form.title, 'Moderator title', 'Source A title must not replay');
   assert.equal(authoring.state.form.prepTimeMinutes, '', 'deliberately cleared Source A value must stay cleared');
   assert.deepEqual(authoring.state.form.instructions, ['Brown the chicken.', 'Simmer until tender.']);
-  assert.doesNotMatch(JSON.stringify(authoring.state.form), /Chicken Adobo|Source B|45/);
+  assert.equal(preview.values.title, 'Source B', 'Source B remains preview-only');
+  assert.equal(preview.values.prepTimeMinutes, 45, 'Source B preview remains available without applying it');
 
   authoring.dispatch({ type: 'CONFLICT' });
   authoring = renderHook();
@@ -330,7 +331,8 @@ test('changing the source cannot replay A or overwrite edited and cleared fields
   assert.equal(authoring.state.form.title, 'Server title');
   assert.equal(authoring.state.form.description, 'Server description');
   assert.equal(authoring.state.form.prepTimeMinutes, '12');
-  assert.doesNotMatch(JSON.stringify(authoring.state.form), /Chicken Adobo|Moderator title|Source B/);
+  assert.equal(authoring.state.form.servings, '');
+  assert.deepEqual(authoring.state.form.instructions, ['']);
   delete globalThis.__recipeAuthoringIntegrationApi;
 });
 

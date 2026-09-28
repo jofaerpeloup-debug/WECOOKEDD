@@ -6,6 +6,10 @@ const { requireCapability } = require('../../middleware/require-capability.middl
 const { requireCatalogReadAllForNonActive } = require('../../middleware/catalog-read.middleware');
 const { CAPABILITIES } = require('../../shared/security/capabilities');
 const {
+  recipeImportIpRateLimiter,
+  recipeImportUserRateLimiter,
+} = require('../../middleware/rate-limiter');
+const {
   recipeParamsSchema,
   listRecipesSchema,
   createRecipeSchema,
@@ -13,9 +17,20 @@ const {
   updateRecipeSchema,
   publishRecipeSchema,
   lifecycleRecipeSchema,
+  importRecipeUrlSchema,
 } = require('./recipe.validation');
 
 const router = Router();
+
+router.post(
+  '/import-url',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  recipeImportIpRateLimiter,
+  recipeImportUserRateLimiter,
+  validate(importRecipeUrlSchema),
+  recipeController.importRecipeUrl
+);
 
 router.get(
   '/',

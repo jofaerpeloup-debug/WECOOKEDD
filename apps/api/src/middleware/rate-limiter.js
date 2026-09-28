@@ -46,6 +46,11 @@ const SOCIAL_RATE_LIMITS = Object.freeze({
   linkChallengeUser: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 10 }),
 });
 
+const RECIPE_IMPORT_RATE_LIMITS = Object.freeze({
+  ip: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 20 }),
+  user: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 10 }),
+});
+
 const socialChallengeRateLimiter = createRateLimiter({
   ...SOCIAL_RATE_LIMITS.challenge,
 });
@@ -68,13 +73,32 @@ const socialLinkChallengeUserRateLimiter = createRateLimiter({
   keyGenerator: authenticatedUserKey,
 });
 
+function createRecipeImportRateLimiters() {
+  return {
+    ip: createRateLimiter({ ...RECIPE_IMPORT_RATE_LIMITS.ip }),
+    user: createRateLimiter({
+      ...RECIPE_IMPORT_RATE_LIMITS.user,
+      keyGenerator: authenticatedUserKey,
+    }),
+  };
+}
+
+const {
+  ip: recipeImportIpRateLimiter,
+  user: recipeImportUserRateLimiter,
+} = createRecipeImportRateLimiters();
+
 module.exports = {
   createRateLimiter,
   authenticatedUserKey,
   SOCIAL_RATE_LIMITS,
+  RECIPE_IMPORT_RATE_LIMITS,
+  createRecipeImportRateLimiters,
   socialChallengeRateLimiter,
   socialGoogleLoginRateLimiter,
   socialGoogleLinkIpRateLimiter,
   socialGoogleLinkUserRateLimiter,
   socialLinkChallengeUserRateLimiter,
+  recipeImportIpRateLimiter,
+  recipeImportUserRateLimiter,
 };
