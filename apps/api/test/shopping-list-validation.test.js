@@ -62,6 +62,23 @@ test('createItemSchema rejects a non-positive quantity', () => {
   );
 });
 
+test('Shopping List request schemas reject nonfinite measurable lb/oz quantities', () => {
+  for (const unit of ['lb', 'oz']) {
+    for (const quantity of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+      assert.equal(
+        createItemSchema.safeParse({ body: { ingredientId: VALID_ID, quantity, unit } }).success,
+        false,
+        `create ${unit} ${String(quantity)}`
+      );
+      assert.equal(
+        patchItemSchema.safeParse({ params: { itemId: VALID_ID }, body: { quantity, unit } }).success,
+        false,
+        `patch ${unit} ${String(quantity)}`
+      );
+    }
+  }
+});
+
 test('createItemSchema rejects an invalid ingredientId', () => {
   const result = createItemSchema.safeParse({ body: { ingredientId: 'not-an-id', quantity: 1, unit: 'kg' } });
   assert.equal(result.success, false);
@@ -70,6 +87,17 @@ test('createItemSchema rejects an invalid ingredientId', () => {
 test('createItemSchema rejects an invalid unit', () => {
   const result = createItemSchema.safeParse({ body: { ingredientId: VALID_ID, quantity: 1, unit: 'gallon' } });
   assert.equal(result.success, false);
+});
+
+test('Shopping List request schemas accept only exact canonical lb/oz values', () => {
+  for (const unit of ['lb', 'oz']) {
+    assert.equal(createItemSchema.safeParse({ body: { ingredientId: VALID_ID, quantity: 2.5, unit } }).success, true, unit);
+    assert.equal(patchItemSchema.safeParse({ params: { itemId: VALID_ID }, body: { quantity: 2.5, unit } }).success, true, unit);
+  }
+  for (const unit of ['lb.', 'lbs', 'pound', 'oz.', 'ounce', 'LB', 'OZ', 'fl oz', 'stone']) {
+    assert.equal(createItemSchema.safeParse({ body: { ingredientId: VALID_ID, quantity: 1, unit } }).success, false, unit);
+    assert.equal(patchItemSchema.safeParse({ params: { itemId: VALID_ID }, body: { quantity: 1, unit } }).success, false, unit);
+  }
 });
 
 test('createItemSchema rejects unknown body fields', () => {

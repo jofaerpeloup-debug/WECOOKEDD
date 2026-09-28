@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const ShoppingList = require('../src/modules/shopping-lists/shopping-list.model');
+const { UNITS } = require('../src/shared/constants/measurement-units');
 
 const USER_ID = '507f1f77bcf86cd799439001';
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
@@ -9,6 +10,14 @@ const INGREDIENT_ID = '507f1f77bcf86cd799439011';
 function baseList(overrides = {}) {
   return new ShoppingList({ userId: USER_ID, items: [], ...overrides });
 }
+
+test('Shopping List consumes the exact shared 17-value canonical unit contract', () => {
+  assert.deepEqual(UNITS, [
+    'g', 'kg', 'lb', 'oz', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'piece', 'clove', 'slice', 'can', 'pack',
+    'bunch', 'pinch', 'toTaste',
+  ]);
+  assert.deepEqual(ShoppingList.schema.path('items').schema.path('unit').options.enum, UNITS);
+});
 
 test('userId is required, references User, and is unique (one list per user)', () => {
   const path = ShoppingList.schema.path('userId');
@@ -66,6 +75,12 @@ test('item unit is constrained to the shared measurement-unit enum', () => {
 });
 
 test('item quantity is required and must be a finite positive number for a measurable unit', async () => {
+  for (const unit of ['lb', 'oz']) {
+    const list = baseList({ items: [{ ingredientId: INGREDIENT_ID, quantity: 2.5, unit }] });
+    await assert.doesNotReject(() => list.validate(), unit);
+    assert.equal(list.items[0].unit, unit);
+    assert.equal(list.items[0].quantity, 2.5);
+  }
   await assert.rejects(() => baseList({ items: [{ ingredientId: INGREDIENT_ID, unit: 'kg' }] }).validate());
   await assert.rejects(() =>
     baseList({ items: [{ ingredientId: INGREDIENT_ID, quantity: 0, unit: 'kg' }] }).validate()

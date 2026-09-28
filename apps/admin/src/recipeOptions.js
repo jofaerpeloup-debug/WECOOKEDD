@@ -79,6 +79,8 @@ export const TO_TASTE_UNIT = 'toTaste';
 export const RECIPE_UNITS = [
   { value: 'g', label: 'g' },
   { value: 'kg', label: 'kg' },
+  { value: 'lb', label: 'lb' },
+  { value: 'oz', label: 'oz' },
   { value: 'ml', label: 'ml' },
   { value: 'l', label: 'L' },
   { value: 'tsp', label: 'tsp' },

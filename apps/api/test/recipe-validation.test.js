@@ -136,6 +136,21 @@ test('createRecipeSchema rejects an unknown ingredient unit', () => {
   assert.equal(result.success, false);
 });
 
+test('Recipe request schemas accept only exact canonical lb/oz values', () => {
+  for (const unit of ['lb', 'oz']) {
+    const ingredients = [{ ingredientId: INGREDIENT_ID, quantity: 2.5, unit }];
+    const created = createRecipeSchema.safeParse({ body: validPayload({ ingredients }) });
+    assert.equal(created.success, true, unit);
+    assert.equal(created.data.body.ingredients[0].unit, unit);
+    assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { ingredients } }).success, true, unit);
+  }
+  for (const unit of ['lb.', 'lbs', 'pound', 'oz.', 'ounce', 'LB', 'OZ', 'fl oz', 'stone']) {
+    const ingredients = [{ ingredientId: INGREDIENT_ID, quantity: 1, unit }];
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({ ingredients }) }).success, false, unit);
+    assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { ingredients } }).success, false, unit);
+  }
+});
+
 test('createRecipeSchema rejects unknown top-level fields', () => {
   const result = createRecipeSchema.safeParse({ body: validPayload({ notARealField: true }) });
   assert.equal(result.success, false);

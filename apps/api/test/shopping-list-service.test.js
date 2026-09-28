@@ -98,6 +98,18 @@ test('addItem adds a new item to an empty list', async (t) => {
   assert.equal(result.shoppingList.items[0].unit, 'kg');
 });
 
+test('addItem preserves canonical lb/oz values without conversion', async (t) => {
+  mockAllIngredientsActive(t);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
+  mockNoSave(t);
+
+  for (const [unit, quantity] of [['lb', 0.75], ['oz', 8]]) {
+    const result = await shoppingListService.addItem(USER_ID, { ingredientId: CHICKEN_ID, quantity, unit });
+    assert.equal(result.shoppingList.items[0].unit, unit);
+    assert.equal(result.shoppingList.items[0].quantity, quantity);
+  }
+});
+
 test('addItem merges into an existing same-ingredient+same-unit item, summing quantity', async (t) => {
   mockAllIngredientsActive(t);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
@@ -430,6 +442,21 @@ test('addRecipeIngredients adds the recipe\'s usable ingredient usages to an emp
   const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID);
 
   assert.equal(result.shoppingList.items.length, 2);
+});
+
+test('addRecipeIngredients preserves canonical lb/oz values without conversion', async (t) => {
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe([
+    usage(CHICKEN_ID, 'Chicken', { quantity: 0.75, unit: 'lb', optional: false }),
+    usage(GARLIC_ID, 'Garlic', { quantity: 8, unit: 'oz', optional: false }),
+  ]));
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
+  mockNoSave(t);
+
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID);
+  assert.deepEqual(result.shoppingList.items.map(({ quantity, unit }) => ({ quantity, unit })), [
+    { quantity: 0.75, unit: 'lb' }, { quantity: 8, unit: 'oz' },
+  ]);
 });
 
 test('addRecipeIngredients merges a same-ingredient+same-unit recipe usage into an existing list item', async (t) => {

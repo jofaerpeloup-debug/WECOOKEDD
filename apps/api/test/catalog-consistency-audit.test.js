@@ -475,6 +475,7 @@ test('command disconnects on query and formatting failures', async () => {
   for (const failure of ['query', 'format']) {
     let disconnected = 0;
     const options = {
+      argv: [],
       loadEnvironment: () => ({ mongodbUri: 'mongodb://example.invalid/test' }),
       connect: async () => ({ connection: { name: 'unit-test-db' } }),
       disconnect: async () => { disconnected += 1; },
