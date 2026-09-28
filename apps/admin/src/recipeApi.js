@@ -16,6 +16,11 @@ export function getRecipe(id) {
   return api.get(`/recipes/${encodeURIComponent(id)}`).then((data) => data.recipe);
 }
 
+/** Retrieves one inert raw Recipe JSON-LD candidate. It never creates or saves a Recipe. */
+export function importRecipeUrl(url) {
+  return api.post('/recipes/import-url', { body: { url } });
+}
+
 /** The only Staff Portal creation path: create a title-only Draft. */
 export function createDraft(body) {
   return api.post('/recipes/drafts', { body }).then((data) => data.recipe);

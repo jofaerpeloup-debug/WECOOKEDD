@@ -317,6 +317,18 @@ const recipeParamsSchema = z.object({
   params: z.object({ recipeId: objectIdSchema }).strict(),
 });
 
+const importRecipeUrlSchema = z.object({
+  body: z
+    .object({
+      url: z
+        .string('URL must be a string.')
+        .trim()
+        .min(1, 'URL is required.')
+        .max(2048, 'URL must be 2,048 characters or fewer.'),
+    })
+    .strict(),
+});
+
 const listRecipesSchema = z.object({
   query: z
     .object({
@@ -489,6 +501,7 @@ module.exports = {
   updateRecipeSchema,
   publishRecipeSchema,
   lifecycleRecipeSchema,
+  importRecipeUrlSchema,
   publishedRecipeBodySchema,
   legacyPublishedRecipeBodySchema,
   prepTimeMinutesSchema,

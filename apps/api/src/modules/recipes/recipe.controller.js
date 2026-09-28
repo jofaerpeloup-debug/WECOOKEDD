@@ -1,4 +1,5 @@
 const recipeService = require('./recipe.service');
+const recipeUrlImportService = require('./recipe-url-import.service');
 const { toPublicRecipe, toStaffRecipe } = require('./recipe.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
@@ -87,6 +88,11 @@ const restoreRecipe = asyncHandler(async (req, res) => {
   sendSuccess(res, { recipe: toStaffRecipe(recipe) });
 });
 
+const importRecipeUrl = asyncHandler(async (req, res) => {
+  const result = await recipeUrlImportService.importRecipeUrl(req.body.url);
+  sendSuccess(res, result);
+});
+
 module.exports = {
   listRecipes,
   getRecipe,
@@ -96,4 +102,5 @@ module.exports = {
   publishRecipe,
   archiveRecipe,
   restoreRecipe,
+  importRecipeUrl,
 };

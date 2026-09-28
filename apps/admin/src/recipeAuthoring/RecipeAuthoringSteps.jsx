@@ -8,6 +8,7 @@ import {
 } from '../recipeOptions.js';
 import { blankIngredient } from './recipeAuthoringModel.js';
 import { createRecipeIntakeHandlers } from './recipeIntake.js';
+import { createRecipeUrlImportHandlers, RecipeUrlImportControls } from './recipeUrlImport.js';
 import RecipeReview from './RecipeReview.jsx';
 
 function FieldError({ message }) { return message ? <div className="wc-author-field-error" role="alert">{message}</div> : null; }
@@ -17,14 +18,26 @@ function RecipeIntake({ form, change, busy }) {
   const [input, setInput] = useState('');
   const [preview, setPreview] = useState(null);
   const [application, setApplication] = useState(null);
+  const [url, setUrl] = useState('');
+  const [urlImport, setUrlImport] = useState({ status: 'idle', sourceUrl: '', error: '' });
   const { previewInput, applyPreview } = createRecipeIntakeHandlers({
     input, form, preview, change, setPreview,
     setApplication,
   });
+  const { importFromUrl } = createRecipeUrlImportHandlers({
+    url, setInput, setPreview, setApplication, setUrlImport,
+  });
   return <section className="wc-recipe-intake" aria-labelledby="recipe-intake-title">
     <h2 id="recipe-intake-title">Prefill from Recipe JSON-LD</h2>
     <p>Paste one Recipe object to preview safe fields. Nothing is saved or published automatically.</p>
-    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); }} /></label>
+    <RecipeUrlImportControls
+      url={url}
+      urlImport={urlImport}
+      busy={busy}
+      onUrlChange={(value) => { setUrl(value); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }}
+      onImport={importFromUrl}
+    />
+    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }} /></label>
     <div className="wc-recipe-intake-actions"><button type="button" className="wc-btn-secondary" disabled={busy || !input.trim()} onClick={previewInput}>Preview</button>{preview?.ok && preview.mapped.length > 0 && <button type="button" className="wc-btn-secondary" disabled={busy} onClick={applyPreview}>Apply blank fields</button>}</div>
     {preview && !preview.ok && <div className="wc-author-field-error" role="alert">{preview.error.message}</div>}
     {preview?.ok && <div className="wc-recipe-intake-preview" role="status">
