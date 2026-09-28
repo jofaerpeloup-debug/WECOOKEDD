@@ -23,6 +23,8 @@ const MODERATOR_ID = '507f1f77bcf86cd799439001';
 const MODERATOR_SESSION_ID = '507f1f77bcf86cd799439002';
 const USER_ID = '507f1f77bcf86cd799439003';
 const USER_SESSION_ID = '507f1f77bcf86cd799439004';
+const ADMIN_ID = '507f1f77bcf86cd799439005';
+const ADMIN_SESSION_ID = '507f1f77bcf86cd799439006';
 const INGREDIENT_ID = '507f1f77bcf86cd799439099';
 
 function fakeIngredientDoc(overrides = {}) {
@@ -136,6 +138,72 @@ test('GET /api/v1/ingredients rejects an invalid query param with the standard V
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
+test('POST /api/v1/ingredients/resolve requires authentication', async () => {
+  const response = await request(app).post('/api/v1/ingredients/resolve').send({ lines: ['rice'] });
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
+});
+
+test('POST /api/v1/ingredients/resolve rejects User and Admin before catalog resolution', async (t) => {
+  let resolutionReads = 0;
+  t.mock.method(ingredientRepository, 'findActiveResolutionCatalog', async () => { resolutionReads += 1; return []; });
+  for (const actor of [
+    { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID },
+    { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID },
+  ]) {
+    mockAuth(t, actor);
+    const response = await request(app)
+      .post('/api/v1/ingredients/resolve')
+      .set('Authorization', `Bearer ${tokenFor(actor)}`)
+      .send({ lines: ['rice'] });
+    assert.equal(response.status, 403, actor.role);
+    t.mock.restoreAll();
+    if (actor.role === 'user') t.mock.method(ingredientRepository, 'findActiveResolutionCatalog', async () => { resolutionReads += 1; return []; });
+  }
+  assert.equal(resolutionReads, 0);
+});
+
+test('POST /api/v1/ingredients/resolve returns ordered bounded public results for a Moderator', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findActiveResolutionCatalog', async () => [
+    { _id: INGREDIENT_ID, name: 'Rice', aliases: ['white rice'], category: 'pantry' },
+  ]);
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .post('/api/v1/ingredients/resolve')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ lines: ['1 cup rice', 'unknown'] });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.deepEqual(response.body.data.resolutions.map(({ index }) => index), [0, 1]);
+  assert.equal(response.body.data.resolutions[0].match.kind, 'exact');
+  assert.deepEqual(response.body.data.resolutions[0].match.candidates[0].ingredient, {
+    id: INGREDIENT_ID, name: 'Rice', category: 'pantry',
+  });
+  assert.equal(JSON.stringify(response.body).includes('normalizedName'), false);
+});
+
+test('POST /api/v1/ingredients/resolve validates only after authority and uses safe failures', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const invalid = await request(app)
+    .post('/api/v1/ingredients/resolve')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ lines: [], unknown: true });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, 'VALIDATION_ERROR');
+
+  t.mock.method(ingredientRepository, 'findActiveResolutionCatalog', async () => {
+    throw new Error('private database details');
+  });
+  const failed = await request(app)
+    .post('/api/v1/ingredients/resolve')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ lines: ['rice'] });
+  assert.equal(failed.status, 500);
+  assert.equal(JSON.stringify(failed.body).includes('private database details'), false);
 });
 
 test('GET /api/v1/ingredients filters by Protein, Pantry, and Soy', async (t) => {

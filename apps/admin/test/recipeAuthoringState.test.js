@@ -143,3 +143,54 @@ test('recoverable PATCH failure retains an uploaded image and retry does not upl
   assert.equal(retry.uploadedNow, false);
   assert.equal(uploadCalls, 1);
 });
+
+test('unresolved source state survives navigation, Draft creation, no-PATCH, and unrelated PATCH but clears on authoritative load', () => {
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['1 cup rice', '2 eggs'] });
+  const generation = state.ingredientResolutionGeneration;
+  assert.equal(hasUnsavedChanges(state), true);
+  state = recipeAuthoringReducer(state, { type: 'SET_STEP', step: 'ingredients' });
+  state = recipeAuthoringReducer(state, { type: 'DRAFT_CREATED', recipe: { id: 'r1', title: '', publicationStatus: 'draft', isActive: true, updatedAt: 'one' } });
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', preserveWorking: true });
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', preserveWorking: true, step: 'details', recipe: { id: 'r1', title: '', publicationStatus: 'draft', isActive: true, updatedAt: 'two' } });
+  assert.deepEqual(state.unresolvedIngredients.map(({ sourceText }) => sourceText), ['1 cup rice', '2 eggs']);
+  assert.equal(state.ingredientResolutionGeneration, generation);
+  state = recipeAuthoringReducer(state, { type: 'LOAD_SUCCESS', recipe: { id: 'r1', title: 'Server', publicationStatus: 'draft', isActive: true, updatedAt: 'three' }, keepStep: true });
+  assert.deepEqual(state.unresolvedIngredients, []);
+  assert.equal(hasUnsavedChanges(state), false);
+});
+
+test('successful source replacement invalidates late resolver responses and may replace with an empty queue', () => {
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['source A'] });
+  const generationA = state.ingredientResolutionGeneration;
+  const requestA = { lines: ['source A'], submitted: [{ queueIndex: 0, sourceText: 'source A' }], excluded: [] };
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['source B'] });
+  state = recipeAuthoringReducer(state, { type: 'INGREDIENT_RESOLUTION_SUCCESS', generation: generationA, request: requestA, resolutions: [] });
+  assert.deepEqual(state.unresolvedIngredients.map(({ sourceText }) => sourceText), ['source B']);
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: [] });
+  assert.deepEqual(state.unresolvedIngredients, []);
+});
+
+test('resolver-entry selection, edits, and confirmation are ignored while a request is loading', () => {
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['1 cup rice'] });
+  const request = { lines: ['1 cup rice'], submitted: [{ queueIndex: 0, sourceText: '1 cup rice' }], excluded: [] };
+  state = recipeAuthoringReducer(state, {
+    type: 'UPDATE_INGREDIENT_RESOLUTION', index: 0,
+    patch: { selectedIngredient: { id: 'old', name: 'Old' }, quantity: '1', unit: 'cup' },
+  });
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_RESOLUTION_START', generation: state.ingredientResolutionGeneration, request,
+  });
+  const locked = state;
+  state = recipeAuthoringReducer(state, {
+    type: 'UPDATE_INGREDIENT_RESOLUTION', index: 0,
+    patch: { selectedIngredient: { id: 'new', name: 'Wrong line' }, quantity: '9', unit: 'kg' },
+  });
+  assert.equal(state, locked);
+  state = recipeAuthoringReducer(state, { type: 'CONFIRM_INGREDIENT_RESOLUTION', index: 0 });
+  assert.equal(state, locked);
+  assert.equal(state.form.ingredients[0].ingredient, null);
+  assert.deepEqual(state.unresolvedIngredients[0].selectedIngredient, { id: 'old', name: 'Old' });
+});

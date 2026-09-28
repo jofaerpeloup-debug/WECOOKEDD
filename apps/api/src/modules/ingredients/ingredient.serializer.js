@@ -15,4 +15,12 @@ function toPublicIngredient(ingredient) {
   };
 }
 
-module.exports = { toPublicIngredient };
+function toResolutionIngredient(ingredient) {
+  return {
+    id: String(ingredient._id),
+    name: ingredient.name,
+    category: ingredient.category,
+  };
+}
+
+module.exports = { toPublicIngredient, toResolutionIngredient };

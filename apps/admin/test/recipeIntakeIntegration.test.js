@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import React from 'react';
 import { applyRecipeIntake, createRecipeIntakeHandlers, parseRecipeIntake } from '../src/recipeAuthoring/recipeIntake.js';
-import { emptyRecipeForm } from '../src/recipeAuthoring/recipeAuthoringModel.js';
+import {
+  buildStepPatch, createDraftBody, emptyRecipeForm, mutationBody, publishBody,
+} from '../src/recipeAuthoring/recipeAuthoringModel.js';
 import { initialAuthoringState, recipeAuthoringReducer } from '../src/recipeAuthoring/recipeAuthoringState.js';
 
 const payload = JSON.stringify({
@@ -189,6 +191,8 @@ test('production save path preserves JSON-LD values through Draft creation and u
   createRecipeIntakeHandlers({ ...handlers, input: payload, form: authoring.state.form, preview, change: authoring.change,
     setPreview: (value) => { preview = value; }, setApplication: () => {} }).applyPreview();
   authoring = renderHook();
+  authoring.dispatch({ type: 'SET_UNRESOLVED_INGREDIENTS', lines: preview.unresolved[0].values });
+  authoring = renderHook();
 
   assert.deepEqual(calls, [], 'Preview and Apply must remain local-only');
   assert.equal(await authoring.saveCurrent(), true);
@@ -196,6 +200,8 @@ test('production save path preserves JSON-LD values through Draft creation and u
   assert.deepEqual(calls.map(([kind]) => kind), ['create', 'patch']);
   assert.deepEqual(calls[0][1], { title: 'Chicken Adobo' });
   assert.equal(calls[1][2].description, 'Braised chicken.');
+  assert.equal(JSON.stringify(calls).includes('1 kg chicken'), false);
+  assert.deepEqual(authoring.state.unresolvedIngredients.map(({ sourceText }) => sourceText), ['1 kg chicken']);
   assert.equal(authoring.state.form.title, 'Chicken Adobo');
   assert.equal(authoring.state.form.description, 'Braised chicken.');
   assert.equal(authoring.state.form.prepTimeMinutes, '20');
@@ -209,12 +215,14 @@ test('production save path preserves JSON-LD values through Draft creation and u
   assert.equal(await authoring.saveCurrent(), true);
   authoring = renderHook();
   assert.equal(calls.length, 2, 'unchanged Ingredients Save Draft must not PATCH');
+  assert.deepEqual(authoring.state.unresolvedIngredients.map(({ sourceText }) => sourceText), ['1 kg chicken']);
   assert.equal(authoring.state.form.prepTimeMinutes, '20');
   assert.deepEqual(authoring.state.form.instructions, ['Brown the chicken.', 'Simmer until tender.']);
 
   assert.equal(await authoring.next(), true);
   authoring = renderHook();
   assert.equal(calls.length, 2, 'unchanged Ingredients Next must not PATCH');
+  assert.deepEqual(authoring.state.unresolvedIngredients.map(({ sourceText }) => sourceText), ['1 kg chicken']);
   assert.equal(authoring.state.currentStep, 'instructions');
   assert.equal(authoring.state.form.title, 'Chicken Adobo');
   assert.equal(authoring.state.form.description, 'Braised chicken.');
@@ -336,22 +344,57 @@ test('changing the source cannot replay A or overwrite edited and cleared fields
   delete globalThis.__recipeAuthoringIntegrationApi;
 });
 
-test('production JSX attaches the tested local handlers while explicit Save Draft and Publish remain reachable', () => {
+test('production JSX keeps Preview local, queues unresolved source, and gates resolution behind the explicit action', () => {
   const intakeSource = readFileSync(new URL('../src/recipeAuthoring/recipeIntake.js', import.meta.url), 'utf8');
   const stepsSource = readFileSync(new URL('../src/recipeAuthoring/RecipeAuthoringSteps.jsx', import.meta.url), 'utf8');
   const wizardSource = readFileSync(new URL('../src/recipeAuthoring/RecipeAuthoringWizard.jsx', import.meta.url), 'utf8');
   assert.doesNotMatch(intakeSource, /fetch\s*\(|createDraft|updateRecipe|publishRecipe|recipeApi/);
-  assert.doesNotMatch(stepsSource, /fetch\s*\(|createDraft|updateRecipe|publishRecipe|uploadRecipeImage|ingredientApi|recipeApi/);
-  assert.ok(stepsSource.includes('!state.recipeId && <RecipeIntake form={form} change={change} busy={busy} />'));
+  assert.doesNotMatch(stepsSource, /fetch\s*\(|createDraft|updateRecipe|publishRecipe|uploadRecipeImage|recipeApi/);
+  assert.ok(stepsSource.includes('!state.recipeId && <RecipeIntake form={form} change={change} busy={busy} dispatch={dispatch} />'));
   assert.ok(stepsSource.includes('createRecipeIntakeHandlers({'));
   assert.ok(stepsSource.includes('input, form, preview, change, setPreview,'));
   assert.ok(stepsSource.includes('setApplication,'));
-  assert.doesNotMatch(stepsSource, /pendingIntake|awaitingDraftCreation|onApplied|applyRecipeIntake/);
-  assert.ok(stepsSource.includes('onClick={previewInput}>Preview</button>'));
+  assert.ok(stepsSource.includes("type: 'SET_UNRESOLVED_INGREDIENTS'"));
+  assert.ok(stepsSource.includes('const result = previewInput();'));
+  assert.ok(stepsSource.includes('onClick={handlePreview}>Preview</button>'));
   assert.ok(stepsSource.includes('onClick={applyPreview}>Apply blank fields</button>'));
+  assert.ok(stepsSource.includes('onClick={findMatches}'));
+  assert.ok(stepsSource.includes('await request(prepared.lines)'));
+  assert.ok(stepsSource.indexOf('const result = previewInput();') < stepsSource.indexOf('await request(prepared.lines)'));
   assert.ok(stepsSource.includes("item.location ? `${item.location} ${item.field}` : item.field"));
   assert.ok(wizardSource.includes('onClick={() => saveCurrent()}'));
   assert.ok(wizardSource.includes("state.publicationStatus === 'published' ? 'Save changes' : 'Save Draft'"));
   assert.ok(wizardSource.includes('onClick={publish}'));
   assert.ok(wizardSource.includes("state.publicationStatus === 'draft'"));
+});
+
+test('actual Draft, PATCH, and Publish payload builders exclude all transient resolver data', () => {
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['1 cup rice'] });
+  state = {
+    ...state,
+    unresolvedIngredients: state.unresolvedIngredients.map((entry) => ({
+      ...entry,
+      selectedIngredient: { id: 'i1', name: 'Rice', category: 'pantry', aliases: ['grain'] },
+      quantity: '1', unit: 'cup',
+      resolution: {
+        sourceText: '1 cup rice', parsed: { quantity: 1, unit: 'cup', name: 'rice' },
+        match: { kind: 'exact', totalCandidates: 1, truncated: false, candidates: [{ matchedOn: 'alias' }] },
+      },
+    })),
+  };
+  state = recipeAuthoringReducer(state, { type: 'CONFIRM_INGREDIENT_RESOLUTION', index: 0 });
+  const payloads = [
+    createDraftBody(state.form),
+    mutationBody(buildStepPatch(state.saved, state.form, 'ingredients'), 'update-token'),
+    publishBody('update-token'),
+  ];
+  assert.deepEqual(payloads[1].ingredients, [{ ingredientId: 'i1', quantity: 1, unit: 'cup', optional: false }]);
+  const serializedPayloads = JSON.stringify(payloads);
+  for (const forbidden of [
+    '1 cup rice', 'sourceText', 'unresolvedIngredients', 'resolution', 'parsed', 'match', 'candidate',
+    'totalCandidates', 'matchedOn', 'aliases', 'category',
+  ]) {
+    assert.equal(serializedPayloads.includes(forbidden), false, forbidden);
+  }
 });

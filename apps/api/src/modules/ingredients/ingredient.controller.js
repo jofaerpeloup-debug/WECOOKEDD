@@ -54,10 +54,16 @@ const archiveIngredient = asyncHandler(async (req, res) => {
   sendSuccess(res, { ingredient: toPublicIngredient(ingredient) });
 });
 
+const resolveIngredients = asyncHandler(async (req, res) => {
+  const resolutions = await ingredientService.resolveIngredients(req.validated.body.lines);
+  sendSuccess(res, { resolutions });
+});
+
 module.exports = {
   listIngredients,
   getIngredient,
   createIngredient,
   updateIngredient,
   archiveIngredient,
+  resolveIngredients,
 };

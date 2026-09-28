@@ -1,4 +1,7 @@
 import { dirtySteps, emptyRecipeForm, firstIncompleteStep, formFromRecipe } from './recipeAuthoringModel.js';
+import {
+  confirmIngredientResolution, createUnresolvedIngredientQueue, mergeIngredientResolutionResults,
+} from './recipeIngredientResolution.js';
 
 export const PUBLISH_ACKNOWLEDGEMENT_ERROR = 'Confirm that this recipe belongs to Filipino cuisine before publishing.';
 
@@ -11,6 +14,8 @@ export function initialAuthoringState({ recipe = null, readOnly = false } = {}) 
     updatedAt: recipe?.updatedAt || null, status: recipe ? 'loading' : 'idle',
     fieldErrors: {}, formError: '', notice: '', conflict: false, publishAcknowledged: false, publishAcknowledgementError: '',
     closeConfirmation: false, reloadConfirmation: false, retainedUpload: null,
+    unresolvedIngredients: [], ingredientResolutionGeneration: 0,
+    ingredientResolutionStatus: 'idle', ingredientResolutionError: '', ingredientResolutionRequest: null,
   };
 }
 
@@ -23,7 +28,8 @@ export function recipeAuthoringReducer(state, action) {
         saved: form, form, updatedAt: action.recipe.updatedAt, currentStep: action.keepStep ? state.currentStep : firstIncompleteStep(form),
         status: 'idle', fieldErrors: {}, formError: '', conflict: false, reloadConfirmation: false,
         publishAcknowledged: false, publishAcknowledgementError: '',
-        retainedUpload: null };
+        retainedUpload: null, unresolvedIngredients: [], ingredientResolutionStatus: 'idle',
+        ingredientResolutionError: '', ingredientResolutionRequest: null };
     }
     case 'CHANGE': {
       const form = { ...state.form, [action.field]: action.value };
@@ -31,6 +37,38 @@ export function recipeAuthoringReducer(state, action) {
       return { ...state, form, notice: '', fieldErrors: { ...state.fieldErrors, [clearedField]: undefined },
         publishAcknowledged: state.currentStep === 'review' ? false : state.publishAcknowledged,
         publishAcknowledgementError: state.currentStep === 'review' ? '' : state.publishAcknowledgementError };
+    }
+    case 'SET_UNRESOLVED_INGREDIENTS': {
+      const generation = state.ingredientResolutionGeneration + 1;
+      return { ...state,
+        unresolvedIngredients: createUnresolvedIngredientQueue(action.lines || [], generation),
+        ingredientResolutionGeneration: generation, ingredientResolutionStatus: 'idle',
+        ingredientResolutionError: '', ingredientResolutionRequest: null };
+    }
+    case 'INGREDIENT_RESOLUTION_START':
+      return { ...state, ingredientResolutionStatus: 'loading', ingredientResolutionError: '',
+        ingredientResolutionRequest: action.request };
+    case 'INGREDIENT_RESOLUTION_SUCCESS':
+      if (action.generation !== state.ingredientResolutionGeneration) return state;
+      return { ...state, unresolvedIngredients: mergeIngredientResolutionResults(
+        state.unresolvedIngredients, action.request, action.resolutions
+      ), ingredientResolutionStatus: 'idle', ingredientResolutionError: '', ingredientResolutionRequest: null };
+    case 'INGREDIENT_RESOLUTION_FAILURE':
+      if (action.generation !== state.ingredientResolutionGeneration) return state;
+      return { ...state, ingredientResolutionStatus: 'idle', ingredientResolutionError: action.message,
+        ingredientResolutionRequest: null };
+    case 'UPDATE_INGREDIENT_RESOLUTION':
+      if (state.ingredientResolutionStatus === 'loading') return state;
+      return { ...state, unresolvedIngredients: state.unresolvedIngredients.map((entry, index) => index === action.index
+        ? { ...entry, ...action.patch, confirmationError: '' }
+        : entry) };
+    case 'CONFIRM_INGREDIENT_RESOLUTION': {
+      if (state.ingredientResolutionStatus === 'loading') return state;
+      const result = confirmIngredientResolution(state.form, state.unresolvedIngredients, action.index);
+      if (result.error) return { ...state, unresolvedIngredients: state.unresolvedIngredients.map((entry, index) => index === action.index
+        ? { ...entry, confirmationError: result.error }
+        : entry) };
+      return { ...state, form: result.form, unresolvedIngredients: result.queue, notice: '' };
     }
     case 'DRAFT_CREATED': {
       const serverForm = formFromRecipe(action.recipe);
@@ -73,7 +111,10 @@ function copySection(target, source, step) {
   fields.forEach((field) => { target[field] = source[field]; });
 }
 
-export function hasUnsavedChanges(state) { return dirtySteps(state.saved || emptyRecipeForm(), state.form).length > 0; }
+export function hasUnsavedChanges(state) {
+  return state.unresolvedIngredients?.length > 0
+    || dirtySteps(state.saved || emptyRecipeForm(), state.form).length > 0;
+}
 export function isMutationBusy(state) { return ['loading', 'saving', 'uploading', 'publishing', 'recovering'].includes(state.status); }
 export function shouldShowPublishAcknowledgement(state) {
   return state.currentStep === 'review' && state.publicationStatus === 'draft';

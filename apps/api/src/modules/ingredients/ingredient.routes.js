@@ -10,7 +10,9 @@ const {
   listIngredientsSchema,
   createIngredientSchema,
   updateIngredientSchema,
+  ingredientResolutionSchema,
 } = require('./ingredient.validation');
+const { ingredientResolutionRateLimiter } = require('../../middleware/rate-limiter');
 
 const router = Router();
 
@@ -20,6 +22,14 @@ router.get(
   validate(listIngredientsSchema),
   requireCatalogReadAllForNonActive,
   ingredientController.listIngredients
+);
+router.post(
+  '/resolve',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  ingredientResolutionRateLimiter,
+  validate(ingredientResolutionSchema),
+  ingredientController.resolveIngredients
 );
 router.get(
   '/:ingredientId',
