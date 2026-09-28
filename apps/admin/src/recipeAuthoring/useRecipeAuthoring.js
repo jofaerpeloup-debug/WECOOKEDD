@@ -29,6 +29,11 @@ function errorsFromApi(error) {
   return errors;
 }
 
+function noPatchNotice(state) {
+  if (hasUnsavedChanges(state)) return 'No changes to save for this step. Other edits remain unsaved.';
+  return state.publicationStatus === 'published' ? 'All changes are saved.' : 'Draft is saved.';
+}
+
 export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, onPublished, onAuthorityLost }) {
   const [state, dispatch] = useReducer(recipeAuthoringReducer, { recipe, readOnly }, initialAuthoringState);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -70,7 +75,7 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
   const saveCurrent = useCallback(async ({ advance = false } = {}) => {
     if (flightRef.current || readOnly || state.conflict || state.status === 'uncertain') return false;
     const step = state.currentStep === 'review' ? null : state.currentStep;
-    if (!step) { dispatch({ type: 'SAVE_SUCCESS', notice: state.publicationStatus === 'published' ? 'All changes are saved.' : 'Draft is saved.' }); return true; }
+    if (!step) { dispatch({ type: 'SAVE_SUCCESS', preserveWorking: true, notice: noPatchNotice(state) }); return true; }
     const fieldErrors = validateStep(state.form, step, { published: state.publicationStatus === 'published' });
     if (Object.keys(fieldErrors).length) { dispatch({ type: 'SET_ERRORS', fieldErrors }); return false; }
     flightRef.current = true;
@@ -108,7 +113,7 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
         latest = await updateRecipeAndRefresh(recipeId, mutationBody(patch, token), onSaved, updateRecipe);
       }
       else if (!latest) {
-        dispatch({ type: 'SAVE_SUCCESS', notice: state.publicationStatus === 'published' ? 'All changes are saved.' : 'Draft is saved.' });
+        dispatch({ type: 'SAVE_SUCCESS', preserveWorking: true, notice: noPatchNotice(state) });
         if (advance) setStep(AUTHORING_STEPS[AUTHORING_STEPS.indexOf(step) + 1]);
         return true;
       }

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ArrowDown, ArrowUp, ImageOff, Plus, Trash2 } from 'lucide-react';
 import IngredientPicker from '../IngredientPicker.jsx';
 import {
@@ -6,10 +7,37 @@ import {
   RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_UNITS, TO_TASTE_UNIT,
 } from '../recipeOptions.js';
 import { blankIngredient } from './recipeAuthoringModel.js';
+import { createRecipeIntakeHandlers } from './recipeIntake.js';
 import RecipeReview from './RecipeReview.jsx';
 
 function FieldError({ message }) { return message ? <div className="wc-author-field-error" role="alert">{message}</div> : null; }
 function err(errors, prefix) { return errors[prefix] || Object.entries(errors).find(([key]) => key.startsWith(`${prefix}.`))?.[1]; }
+
+function RecipeIntake({ form, change, busy }) {
+  const [input, setInput] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [application, setApplication] = useState(null);
+  const { previewInput, applyPreview } = createRecipeIntakeHandlers({
+    input, form, preview, change, setPreview,
+    setApplication,
+  });
+  return <section className="wc-recipe-intake" aria-labelledby="recipe-intake-title">
+    <h2 id="recipe-intake-title">Prefill from Recipe JSON-LD</h2>
+    <p>Paste one Recipe object to preview safe fields. Nothing is saved or published automatically.</p>
+    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); }} /></label>
+    <div className="wc-recipe-intake-actions"><button type="button" className="wc-btn-secondary" disabled={busy || !input.trim()} onClick={previewInput}>Preview</button>{preview?.ok && preview.mapped.length > 0 && <button type="button" className="wc-btn-secondary" disabled={busy} onClick={applyPreview}>Apply blank fields</button>}</div>
+    {preview && !preview.ok && <div className="wc-author-field-error" role="alert">{preview.error.message}</div>}
+    {preview?.ok && <div className="wc-recipe-intake-preview" role="status">
+      <strong>{preview.mapped.length} mapped</strong>
+      {preview.mapped.length > 0 && <ul>{preview.mapped.map((item) => <li key={item.field}>{item.source} → {item.field}</li>)}</ul>}
+      {preview.unsupported.length > 0 && <><strong>Unsupported</strong><ul>{preview.unsupported.map((item, index) => <li key={`${item.location || 'recipe'}-${item.field}-${index}`}>{item.location ? `${item.location} ${item.field}` : item.field}: {item.message}</li>)}</ul></>}
+      {preview.invalid.length > 0 && <><strong>Invalid</strong><ul>{preview.invalid.map((item) => <li key={item.field}>{item.field}: {item.message}</li>)}</ul></>}
+      {preview.unresolved.length > 0 && <><strong>Unresolved ingredients</strong><p>{preview.unresolved[0].message}</p><ol>{preview.unresolved[0].values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ol></>}
+      {application && <p>{application.applied.length} applied; {application.skipped.length} existing value{application.skipped.length === 1 ? '' : 's'} preserved.</p>}
+      {application?.skipped.length > 0 && <ul>{application.skipped.map((item) => <li key={item.field}>{item.field}: {item.reason}</li>)}</ul>}
+    </div>}
+  </section>;
+}
 
 export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }) {
   const { state, change, selectedFile, setSelectedFile, previewUrl, readiness, setStep, busy, dispatch } = authoring;
@@ -17,6 +45,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }
   if (currentStep === 'review') return <RecipeReview form={form} readiness={readiness} onNavigate={setStep} recipeMeta={state} />;
 
   if (currentStep === 'basics') return <div className="wc-author-fields">
+    {!state.recipeId && <RecipeIntake form={form} change={change} busy={busy} />}
     <label>Title <span aria-hidden="true">*</span><input autoFocus value={form.title} aria-invalid={Boolean(fieldErrors.title)} onChange={(e) => change('title', e.target.value)} /></label><FieldError message={fieldErrors.title} />
     <label>Description<textarea rows="5" value={form.description} maxLength={MAX_DESCRIPTION_LENGTH} aria-invalid={Boolean(fieldErrors.description)} onChange={(e) => change('description', e.target.value)} /></label><div className="wc-author-hint">{form.description.length}/{MAX_DESCRIPTION_LENGTH}</div><FieldError message={fieldErrors.description} />
     <fieldset className="wc-author-image"><legend>Image (optional)</legend>
