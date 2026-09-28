@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   hasUnsavedChanges, initialAuthoringState, recipeAuthoringReducer, resolveBasicsImageUpload,
 } from '../src/recipeAuthoring/recipeAuthoringState.js';
+import { publicationReadiness } from '../src/recipeAuthoring/recipeAuthoringModel.js';
 
 test('reducer tracks dirty state, save token replacement, conflict, and close confirmation', () => {
   let state = initialAuthoringState();
@@ -32,6 +33,71 @@ test('saving one section preserves unrelated local edits', () => {
   state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', recipe: { id: 'r1', title: 'New', description: '', publicationStatus: 'draft', isActive: true, updatedAt: 'two' }, step: 'basics', preserveWorking: true });
   assert.equal(state.form.title, 'New');
   assert.equal(state.form.difficulty, 'hard');
+  assert.equal(hasUnsavedChanges(state), true);
+});
+
+test('no-PATCH SAVE_SUCCESS explicitly preserves the complete working form', () => {
+  const recipe = { id: 'r1', title: 'Saved title', description: '', publicationStatus: 'draft', isActive: true, updatedAt: 'one' };
+  let state = initialAuthoringState({ recipe });
+  const saved = state.saved;
+  state = { ...state, currentStep: 'ingredients', status: 'saving', form: {
+    ...state.form, title: 'Working title', description: 'Working description', prepTimeMinutes: '20',
+    cookTimeHours: '1', cookTimeMinutePart: '10', servings: '6', instructions: ['Working instruction.'],
+  } };
+
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', preserveWorking: true, notice: 'Draft is saved.' });
+
+  assert.equal(state.saved, saved);
+  assert.equal(state.updatedAt, 'one');
+  assert.equal(state.status, 'idle');
+  assert.equal(state.form.title, 'Working title');
+  assert.equal(state.form.description, 'Working description');
+  assert.equal(state.form.prepTimeMinutes, '20');
+  assert.equal(state.form.cookTimeHours, '1');
+  assert.equal(state.form.cookTimeMinutePart, '10');
+  assert.equal(state.form.servings, '6');
+  assert.deepEqual(state.form.instructions, ['Working instruction.']);
+  assert.equal(hasUnsavedChanges(state), true);
+  assert.equal(publicationReadiness(state.form).sections.details.complete, false, 'other incomplete fields still control completion');
+});
+
+test('resumed Draft and Published no-PATCH saves retain unrelated working edits', () => {
+  for (const publicationStatus of ['draft', 'published']) {
+    let state = initialAuthoringState({ recipe: {
+      id: `r-${publicationStatus}`, title: 'Saved title', description: 'Saved description',
+      publicationStatus, isActive: true, updatedAt: `${publicationStatus}-token`,
+    } });
+    state = { ...state, currentStep: 'ingredients', form: {
+      ...state.form, prepTimeMinutes: '15', cookTimeHours: '0', cookTimeMinutePart: '45',
+      servings: '4', instructions: ['Keep this local edit.'],
+    } };
+    state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', preserveWorking: true });
+
+    assert.equal(state.publicationStatus, publicationStatus);
+    assert.equal(state.updatedAt, `${publicationStatus}-token`);
+    assert.equal(state.form.prepTimeMinutes, '15');
+    assert.equal(state.form.cookTimeMinutePart, '45');
+    assert.equal(state.form.servings, '4');
+    assert.deepEqual(state.form.instructions, ['Keep this local edit.']);
+    assert.equal(hasUnsavedChanges(state), true);
+  }
+});
+
+test('real PATCH result remains authoritative for its section and refreshes the server token', () => {
+  let state = initialAuthoringState({ recipe: {
+    id: 'r1', title: 'Old title', description: '', publicationStatus: 'draft', isActive: true, updatedAt: 'old-token',
+  } });
+  state = { ...state, form: { ...state.form, title: 'Client title', description: 'Local description', servings: '8' } };
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', preserveWorking: true, step: 'basics', recipe: {
+    id: 'r1', title: 'Server-normalized title', description: 'Server description',
+    publicationStatus: 'draft', isActive: true, updatedAt: 'new-token',
+  } });
+
+  assert.equal(state.saved.title, 'Server-normalized title');
+  assert.equal(state.form.title, 'Server-normalized title');
+  assert.equal(state.form.description, 'Server description');
+  assert.equal(state.form.servings, '8');
+  assert.equal(state.updatedAt, 'new-token');
   assert.equal(hasUnsavedChanges(state), true);
 });
 
