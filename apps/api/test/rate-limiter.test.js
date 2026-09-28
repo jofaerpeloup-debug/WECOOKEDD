@@ -13,6 +13,8 @@ const {
   createRateLimiter,
   authenticatedUserKey,
   SOCIAL_RATE_LIMITS,
+  INGREDIENT_RESOLUTION_RATE_LIMIT,
+  createIngredientResolutionRateLimiter,
 } = require('../src/middleware/rate-limiter');
 const { errorMiddleware } = require('../src/middleware/error.middleware');
 const { configureProxyTrust } = require('../src/app');
@@ -100,4 +102,25 @@ test('authenticated social-link rate limiting keys by required user identity', (
     () => authenticatedUserKey({}),
     (error) => error.statusCode === 401 && error.code === 'AUTH_SESSION_INVALID'
   );
+});
+
+test('ingredient resolution has the frozen dedicated per-user budget', () => {
+  assert.deepEqual(INGREDIENT_RESOLUTION_RATE_LIMIT, { windowMs: 15 * 60 * 1000, limit: 30 });
+});
+
+test('ingredient resolution permits 30 requests per user and rejects request 31 independently', async () => {
+  const app = express();
+  app.use((req, res, next) => { req.auth = { userId: req.get('X-Test-User') }; next(); });
+  app.use(createIngredientResolutionRateLimiter());
+  app.post('/resolve', (req, res) => res.json({ success: true }));
+  app.use(errorMiddleware);
+  for (let count = 1; count <= 30; count += 1) {
+    const response = await request(app).post('/resolve').set('X-Test-User', 'moderator-a');
+    assert.equal(response.status, 200, `request ${count}`);
+  }
+  const limited = await request(app).post('/resolve').set('X-Test-User', 'moderator-a');
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
+  const independent = await request(app).post('/resolve').set('X-Test-User', 'moderator-b');
+  assert.equal(independent.status, 200);
 });

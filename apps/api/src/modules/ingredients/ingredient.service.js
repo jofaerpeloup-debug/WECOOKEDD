@@ -1,6 +1,7 @@
 const ingredientRepository = require('./ingredient.repository');
 const { assertIngredientCanDeactivate } = require('./ingredient-dependency.guard');
 const { AppError } = require('../../shared/errors/app-error');
+const { resolveIngredientLines } = require('./ingredient-resolution');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 const MAX_DEACTIVATION_WRITE_ATTEMPTS = 2;
@@ -135,6 +136,11 @@ async function listIngredients({ search, category, allergen, status, page, limit
   return { items, total, page, limit };
 }
 
+async function resolveIngredients(lines) {
+  const catalog = await ingredientRepository.findActiveResolutionCatalog();
+  return resolveIngredientLines(lines, catalog);
+}
+
 async function applyInactiveUpdate(id, update, { runValidators = true } = {}) {
   let existing = await ingredientRepository.findById(id);
   if (!existing) {
@@ -217,4 +223,5 @@ module.exports = {
   listIngredients,
   updateIngredient,
   archiveIngredient,
+  resolveIngredients,
 };

@@ -32,6 +32,13 @@ export function listIngredients(params = {}) {
     }));
 }
 
+/** POST /api/v1/ingredients/resolve (catalog.write, read-only resolver) */
+export function resolveIngredients(lines) {
+  return api
+    .post('/ingredients/resolve', { body: { lines } })
+    .then((data) => data.resolutions || []);
+}
+
 /** GET /api/v1/ingredients/:id */
 export function getIngredient(id) {
   return api.get(`/ingredients/${encodeURIComponent(id)}`).then((data) => data.ingredient);

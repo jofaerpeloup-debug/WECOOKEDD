@@ -43,6 +43,15 @@ const sortSchema = z
   .default('nameAsc');
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(20);
+const ingredientResolutionSchema = z.object({
+  body: z
+    .object({
+      lines: z.array(z.string().max(500).refine((line) => line.trim().length > 0, {
+        message: 'Ingredient line cannot be blank.',
+      })).min(1).max(50),
+    })
+    .strict(),
+});
 
 const ingredientParamsSchema = z.object({
   params: z.object({ ingredientId: objectIdSchema }).strict(),
@@ -94,4 +103,5 @@ module.exports = {
   listIngredientsSchema,
   createIngredientSchema,
   updateIngredientSchema,
+  ingredientResolutionSchema,
 };

@@ -28,6 +28,13 @@ function countByFilter(filter) {
   return Ingredient.countDocuments(filter);
 }
 
+function findActiveResolutionCatalog() {
+  return Ingredient.find({ isActive: true })
+    .select({ _id: 1, name: 1, aliases: 1, category: 1 })
+    .sort({ normalizedName: 1, _id: 1 })
+    .lean();
+}
+
 module.exports = {
   createIngredient,
   findById,
@@ -35,4 +42,5 @@ module.exports = {
   updateByIdIfActiveState,
   findMany,
   countByFilter,
+  findActiveResolutionCatalog,
 };

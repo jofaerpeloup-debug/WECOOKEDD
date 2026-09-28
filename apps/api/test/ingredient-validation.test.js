@@ -6,6 +6,7 @@ const {
   updateIngredientSchema,
   listIngredientsSchema,
   ingredientParamsSchema,
+  ingredientResolutionSchema,
 } = require('../src/modules/ingredients/ingredient.validation');
 
 const VALID_ID = '507f1f77bcf86cd799439011';
@@ -176,4 +177,16 @@ test('listIngredientsSchema rejects an invalid sort value', () => {
 test('listIngredientsSchema rejects unknown query params', () => {
   const result = listIngredientsSchema.safeParse({ query: { foo: 'bar' } });
   assert.equal(result.success, false);
+});
+
+test('ingredientResolutionSchema enforces a strict 1-50 line body and 500-character nonblank lines', () => {
+  assert.equal(ingredientResolutionSchema.safeParse({ body: { lines: ['rice'] } }).success, true);
+  for (const body of [
+    { lines: [] }, { lines: Array(51).fill('rice') }, { lines: [' '] }, { lines: ['x'.repeat(501)] },
+    { lines: ['rice'], extra: true }, { lines: 'rice' },
+  ]) assert.equal(ingredientResolutionSchema.safeParse({ body }).success, false, JSON.stringify(body).slice(0, 80));
+  const boundary = ingredientResolutionSchema.safeParse({ body: { lines: Array(50).fill('x'.repeat(500)) } });
+  assert.equal(boundary.success, true);
+  const preserved = ingredientResolutionSchema.safeParse({ body: { lines: ['  rice  '] } });
+  assert.deepEqual(preserved.data.body.lines, ['  rice  ']);
 });

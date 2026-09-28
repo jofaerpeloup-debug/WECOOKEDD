@@ -12,6 +12,7 @@ const ingredientRepository = require('../src/modules/ingredients/ingredient.repo
 const Ingredient = require('../src/modules/ingredients/ingredient.model');
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const substitutionRepository = require('../src/modules/substitutions/substitution.repository');
+const recipeImageService = require('../src/modules/uploads/recipe-image.service');
 const ingredientService = require('../src/modules/ingredients/ingredient.service');
 const { AppError } = require('../src/shared/errors/app-error');
 
@@ -714,4 +715,43 @@ test('updateIngredient returns a controlled conflict after bounded conditional-w
 
   assert.equal(conditionalWrites, 2);
   assert.equal(reads, 3);
+});
+
+test('resolveIngredients uses only the read-only active catalog projection and performs no mutation', async (t) => {
+  const catalog = [{ _id: '1', name: 'Rice', aliases: [], category: 'pantry' }];
+  t.mock.method(ingredientRepository, 'findActiveResolutionCatalog', async () => catalog);
+  for (const method of ['createIngredient', 'updateById', 'updateByIdIfActiveState']) {
+    t.mock.method(ingredientRepository, method, async () => assert.fail(`${method} must not be called`));
+  }
+  for (const method of ['createRecipe', 'updateById', 'publishById', 'archiveById', 'restoreById']) {
+    t.mock.method(recipeRepository, method, async () => assert.fail(`recipeRepository.${method} must not be called`));
+  }
+  for (const method of ['createSubstitution', 'updateById', 'archiveById']) {
+    t.mock.method(substitutionRepository, method, async () => assert.fail(`substitutionRepository.${method} must not be called`));
+  }
+  t.mock.method(recipeImageService, 'uploadRecipeImage', async () => assert.fail('uploadRecipeImage must not be called'));
+  const results = await ingredientService.resolveIngredients(['1 cup rice']);
+  assert.equal(results[0].match.kind, 'exact');
+  assert.equal(results[0].match.candidates[0].ingredient.id, '1');
+});
+
+test('active resolution catalog uses the required complete deterministic lean projection', async (t) => {
+  const catalog = [{ _id: '1', name: 'Rice', aliases: [], category: 'pantry' }];
+  const calls = [];
+  const query = {
+    select(value) { calls.push(['select', value]); return this; },
+    sort(value) { calls.push(['sort', value]); return this; },
+    lean() { calls.push(['lean']); return Promise.resolve(catalog); },
+    skip() { assert.fail('resolution query must not skip catalog rows'); },
+    limit() { assert.fail('resolution query must not truncate catalog rows'); },
+  };
+  t.mock.method(Ingredient, 'find', (filter) => { calls.push(['find', filter]); return query; });
+
+  assert.equal(await ingredientRepository.findActiveResolutionCatalog(), catalog);
+  assert.deepEqual(calls, [
+    ['find', { isActive: true }],
+    ['select', { _id: 1, name: 1, aliases: 1, category: 1 }],
+    ['sort', { normalizedName: 1, _id: 1 }],
+    ['lean'],
+  ]);
 });
