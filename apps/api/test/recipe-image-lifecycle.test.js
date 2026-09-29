@@ -117,6 +117,9 @@ test('managed create persists imageUrl and immutable imageAssetId', async (t) =>
     _id: INGREDIENT_ID,
     isActive: true,
   }));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [], candidateUniverseCount: 0, comparedCount: 0, truncated: false,
+  }));
   let saved;
   t.mock.method(recipeRepository, 'createRecipe', async (data) => { saved = data; return data; });
   await recipeService.createRecipe(createBody({ imageUrl: PUBLIC_URL, imageAssetId: 'new-asset' }));

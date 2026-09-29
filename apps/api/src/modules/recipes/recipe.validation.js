@@ -351,6 +351,13 @@ const filipinoCuisineConfirmationSchema = z.literal(true, {
   error: 'confirmFilipinoCuisine must be true to publish a recipe.',
 });
 
+const duplicateReviewAcknowledgementSchema = z
+  .object({
+    resultDigest: z.string().regex(/^[0-9a-f]{64}$/, 'resultDigest must be a lowercase SHA-256 digest.').optional(),
+    confirmDistinctRecipe: z.boolean().optional(),
+  })
+  .strict();
+
 const publishedRecipeFields = {
   title: titleSchema,
   description: descriptionSchema,
@@ -411,6 +418,7 @@ const createRecipeSchema = z.object({
     .object({
       ...publishedRecipeFields,
       confirmFilipinoCuisine: filipinoCuisineConfirmationSchema,
+      duplicateReview: duplicateReviewAcknowledgementSchema.optional(),
     })
     .strict()
     .superRefine(refinePublishedRecipe),
@@ -484,8 +492,19 @@ const publishRecipeSchema = z.object({
     .object({
       confirmFilipinoCuisine: filipinoCuisineConfirmationSchema,
       expectedUpdatedAt: expectedUpdatedAtSchema.optional(),
+      duplicateReview: duplicateReviewAcknowledgementSchema.optional(),
     })
     .strict(),
+});
+
+const duplicateCheckSchema = z.object({
+  body: z.union([
+    z.object({
+      recipeId: objectIdSchema,
+      expectedUpdatedAt: expectedUpdatedAtSchema,
+    }).strict(),
+    z.object({ candidate: publishedRecipeBodySchema }).strict(),
+  ]),
 });
 
 const lifecycleRecipeSchema = z.object({
@@ -501,6 +520,7 @@ module.exports = {
   updateRecipeSchema,
   publishRecipeSchema,
   lifecycleRecipeSchema,
+  duplicateCheckSchema,
   importRecipeUrlSchema,
   publishedRecipeBodySchema,
   legacyPublishedRecipeBodySchema,

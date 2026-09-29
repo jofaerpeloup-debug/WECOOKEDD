@@ -11,3 +11,10 @@ test('Staff Portal authoring uses Draft, PATCH, publish, and lifecycle command e
   assert.doesNotMatch(source, /export function createRecipe/);
   assert.doesNotMatch(source, /api\.post\('\/recipes',/);
 });
+
+test('duplicate review calls the strict saved-Draft endpoint without resolver or source metadata', () => {
+  const source = readFileSync(new URL('../src/recipeApi.js', import.meta.url), 'utf8');
+  assert.match(source, /api\.post\('\/recipes\/duplicate-check', \{ body: \{ recipeId, expectedUpdatedAt \} \}\)/);
+  const duplicateCall = source.match(/export function checkRecipeDuplicates[\s\S]*?\n\}/)?.[0] || '';
+  assert.doesNotMatch(duplicateCall, /sourceUrl|unresolved|resolver|candidate:/);
+});

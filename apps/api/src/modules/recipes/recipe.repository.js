@@ -5,6 +5,7 @@ const { consumerPublicationFilter } = require('./recipe.visibility');
 // recipe.serializer.js) plus isActive, which the service needs to decide
 // per-recipe usability but never forwards to the client.
 const INGREDIENT_SUMMARY_FIELDS = 'name isActive';
+const DUPLICATE_COMPARISON_FIELDS = '_id title ingredients instructions publicationStatus isActive updatedAt';
 
 function withIngredientSummaries(query) {
   return query.populate('ingredients.ingredientId', INGREDIENT_SUMMARY_FIELDS);
@@ -86,6 +87,44 @@ function countByFilter(filter) {
   return Recipe.countDocuments(filter);
 }
 
+function duplicateLifecycleFilters(excludeId) {
+  const withoutSelf = excludeId ? { _id: { $ne: excludeId } } : {};
+  return [
+    { ...withoutSelf, publicationStatus: 'published', isActive: true },
+    { ...withoutSelf, publicationStatus: 'published', isActive: false },
+    { ...withoutSelf, publicationStatus: null, isActive: true },
+    { ...withoutSelf, publicationStatus: null, isActive: false },
+    { ...withoutSelf, publicationStatus: 'draft', isActive: true },
+  ];
+}
+
+function compareDuplicateCandidateOrder(left, right) {
+  const updatedOrder = new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+  if (updatedOrder !== 0) return updatedOrder;
+  const leftId = String(left._id);
+  const rightId = String(right._id);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
+async function findDuplicateCandidates({ excludeId, limit }) {
+  const filters = duplicateLifecycleFilters(excludeId);
+  const [branches, counts] = await Promise.all([
+    Promise.all(filters.map((filter) => Recipe.find(filter, DUPLICATE_COMPARISON_FIELDS)
+      .sort({ updatedAt: -1, _id: 1 })
+      .limit(limit + 1)
+      .lean())),
+    Promise.all(filters.map((filter) => Recipe.countDocuments(filter))),
+  ]);
+  const candidateUniverseCount = counts.reduce((total, count) => total + count, 0);
+  const candidates = branches.flat().sort(compareDuplicateCandidateOrder).slice(0, limit);
+  return {
+    candidates,
+    candidateUniverseCount,
+    comparedCount: candidates.length,
+    truncated: candidateUniverseCount > candidates.length,
+  };
+}
+
 async function hasActiveConsumerRecipeUsingIngredient(ingredientId) {
   const match = await Recipe.exists({
     isActive: true,
@@ -105,5 +144,6 @@ module.exports = {
   restoreById,
   findMany,
   countByFilter,
+  findDuplicateCandidates,
   hasActiveConsumerRecipeUsingIngredient,
 };

@@ -22,6 +22,8 @@ const MODERATOR_ID = '507f1f77bcf86cd799439001';
 const MODERATOR_SESSION_ID = '507f1f77bcf86cd799439002';
 const USER_ID = '507f1f77bcf86cd799439003';
 const USER_SESSION_ID = '507f1f77bcf86cd799439004';
+const ADMIN_ID = '507f1f77bcf86cd799439005';
+const ADMIN_SESSION_ID = '507f1f77bcf86cd799439006';
 const CHICKEN_ID = '507f1f77bcf86cd799439011';
 const GARLIC_ID = '507f1f77bcf86cd799439012';
 const RECIPE_ID = '507f1f77bcf86cd799439099';
@@ -94,6 +96,9 @@ function validCreatePayload(overrides = {}) {
 }
 
 function mockAuth(t, { id, role, sessionId }) {
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [], candidateUniverseCount: 0, comparedCount: 0, truncated: false,
+  }));
   t.mock.method(sessionRepository, 'findActiveById', async () => ({
     _id: sessionId,
     userId: id,
@@ -108,6 +113,47 @@ function mockAuth(t, { id, role, sessionId }) {
 
 function tokenFor({ id, role, sessionId }) {
   return signAccessToken({ userId: id, role, sessionId });
+}
+
+test('POST /api/v1/recipes/duplicate-check is Moderator-only and validates the saved Draft form strictly', async (t) => {
+  const updatedAt = new Date('2026-09-29T00:00:00.000Z');
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...validCreatePayload(), _id: RECIPE_ID, publicationStatus: 'draft', isActive: true, updatedAt,
+  }));
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .post('/api/v1/recipes/duplicate-check')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ recipeId: RECIPE_ID, expectedUpdatedAt: updatedAt.toISOString() });
+  assert.equal(response.status, 200);
+  assert.match(response.body.data.duplicateReview.resultDigest, /^[0-9a-f]{64}$/);
+  assert.equal(response.body.data.duplicateReview.candidateLimit, 500);
+
+  const malformed = await request(app)
+    .post('/api/v1/recipes/duplicate-check')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ recipeId: RECIPE_ID, expectedUpdatedAt: updatedAt.toISOString(), sourceUrl: 'https://example.com' });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error.code, 'VALIDATION_ERROR');
+});
+
+for (const actor of [
+  { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID },
+  { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID },
+]) {
+  test(`POST /api/v1/recipes/duplicate-check denies ${actor.role}`, async (t) => {
+    mockAuth(t, actor);
+    const token = tokenFor(actor);
+    const response = await request(app)
+      .post('/api/v1/recipes/duplicate-check')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ recipeId: RECIPE_ID, expectedUpdatedAt: '2026-09-29T00:00:00.000Z' });
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'FORBIDDEN');
+  });
 }
 
 test('GET /api/v1/recipes without a token is rejected', async () => {
@@ -423,6 +469,89 @@ test('POST /api/v1/recipes creates a recipe for a moderator when every ingredien
   assert.ok(capturedData.publishedAt instanceof Date);
   assert.equal('confirmFilipinoCuisine' in capturedData, false);
   assert.equal('confirmFilipinoCuisine' in response.body.data.recipe, false);
+});
+
+test('legacy POST /api/v1/recipes returns pre-mutation duplicate evidence and succeeds only on explicit current retry', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const payload = validCreatePayload();
+  const candidate = {
+    _id: RECIPE_ID, title: payload.title, ingredients: payload.ingredients, instructions: payload.instructions,
+    publicationStatus: 'published', isActive: true, updatedAt: new Date('2026-09-29T00:00:00.000Z'),
+  };
+  recipeRepository.findDuplicateCandidates.mock.mockImplementation(async () => ({
+    candidates: [candidate], candidateUniverseCount: 1, comparedCount: 1, truncated: false,
+  }));
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  let creates = 0;
+  t.mock.method(recipeRepository, 'createRecipe', async (data) => {
+    creates += 1;
+    return fakeRecipeDoc({ ...data, ingredients: data.ingredients.map((entry) => ({
+      ...entry, ingredientId: activeIngredient(entry.ingredientId),
+    })) });
+  });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const required = await request(app).post('/api/v1/recipes').set('Authorization', `Bearer ${token}`).send(payload);
+  assert.equal(required.status, 409);
+  assert.equal(required.body.error.code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+  assert.equal(creates, 0);
+  const review = required.body.error.details[0].duplicateReview;
+
+  const created = await request(app).post('/api/v1/recipes').set('Authorization', `Bearer ${token}`).send({
+    ...payload,
+    duplicateReview: { resultDigest: review.resultDigest, confirmDistinctRecipe: true },
+  });
+  assert.equal(created.status, 201);
+  assert.equal(creates, 1);
+  assert.equal('duplicateReview' in created.body.data.recipe, false);
+});
+
+test('legacy POST /api/v1/recipes treats a truncated empty window as required review and performs no mutation', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  recipeRepository.findDuplicateCandidates.mock.mockImplementation(async () => ({
+    candidates: [], candidateUniverseCount: 501, comparedCount: 500, truncated: true,
+  }));
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  let creates = 0;
+  t.mock.method(recipeRepository, 'createRecipe', async () => { creates += 1; return null; });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .post('/api/v1/recipes')
+    .set('Authorization', `Bearer ${token}`)
+    .send(validCreatePayload());
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+  assert.equal(response.body.error.details[0].duplicateReview.truncated, true);
+  assert.equal(response.body.error.details[0].duplicateReview.candidates.length, 0);
+  assert.equal(creates, 0);
+});
+
+test('create and publish routes keep malformed duplicate acknowledgements at 400 before mutation', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const invalidReviews = [
+    { resultDigest: 'not-a-digest', confirmDistinctRecipe: true },
+    { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: 'true' },
+    { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: true, score: 100 },
+  ];
+
+  for (const duplicateReview of invalidReviews) {
+    const created = await request(app)
+      .post('/api/v1/recipes')
+      .set('Authorization', `Bearer ${token}`)
+      .send(validCreatePayload({ duplicateReview }));
+    assert.equal(created.status, 400);
+    assert.equal(created.body.error.code, 'VALIDATION_ERROR');
+
+    const published = await request(app)
+      .post(`/api/v1/recipes/${RECIPE_ID}/publish`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ confirmFilipinoCuisine: true, duplicateReview });
+    assert.equal(published.status, 400);
+    assert.equal(published.body.error.code, 'VALIDATION_ERROR');
+  }
 });
 
 test('POST /api/v1/recipes rejects missing, false, and non-boolean Filipino confirmation', async (t) => {

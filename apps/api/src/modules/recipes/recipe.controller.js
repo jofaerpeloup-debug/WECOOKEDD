@@ -64,6 +64,11 @@ const createDraft = asyncHandler(async (req, res) => {
   sendSuccess(res, { recipe: toStaffRecipe(recipe) }, 201);
 });
 
+const checkRecipeDuplicates = asyncHandler(async (req, res) => {
+  const duplicateReview = await recipeService.checkRecipeDuplicates(req.body);
+  sendSuccess(res, { duplicateReview });
+});
+
 const updateRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const recipe = await recipeService.updateRecipe(recipeId, req.body, { actorId: req.auth.userId });
@@ -98,6 +103,7 @@ module.exports = {
   getRecipe,
   createRecipe,
   createDraft,
+  checkRecipeDuplicates,
   updateRecipe,
   publishRecipe,
   archiveRecipe,

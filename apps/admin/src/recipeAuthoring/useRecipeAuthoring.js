@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiError } from '../apiClient.js';
+import * as recipeApi from '../recipeApi.js';
 import {
   createDraft, getRecipe, publishRecipe, updateRecipe, uploadRecipeImage,
 } from '../recipeApi.js';
@@ -7,11 +8,11 @@ import {
   createDraftAndRefresh, publishRecipeAndRefresh, updateRecipeAndRefresh,
 } from '../recipeCatalogMutations.js';
 import {
-  AUTHORING_STEPS, buildStepPatch, createDraftBody, formFromRecipe, mutationBody,
+  AUTHORING_STEPS, buildStepPatch, createDraftBody, dirtySteps, formFromRecipe, mutationBody,
   publicationReadiness, publishBody, stepForField, validateStep,
 } from './recipeAuthoringModel.js';
 import {
-  hasUnsavedChanges, initialAuthoringState, isMutationBusy, publishAcknowledgementGate,
+  duplicateReviewGate, hasUnsavedChanges, initialAuthoringState, isMutationBusy, publishAcknowledgementGate,
   recipeAuthoringReducer, resolveBasicsImageUpload,
 } from './recipeAuthoringState.js';
 
@@ -136,6 +137,30 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
     if (index > 0 && !isMutationBusy(state) && !state.conflict) setStep(AUTHORING_STEPS[index - 1]);
   }, [setStep, state]);
 
+  const duplicateCheckNeedsSave = dirtySteps(state.saved, state.form).length > 0 || Boolean(selectedFile);
+  const checkDuplicates = useCallback(async () => {
+    if (flightRef.current || readOnly || !state.recipeId || state.publicationStatus !== 'draft') return;
+    if (duplicateCheckNeedsSave) {
+      dispatch({ type: 'DUPLICATE_CHECK_FAILURE', message: 'Save changes before checking for duplicates and variants.' });
+      return;
+    }
+    const readiness = publicationReadiness(state.form);
+    if (!readiness.complete) {
+      dispatch({ type: 'DUPLICATE_CHECK_FAILURE', message: 'Complete and save the Recipe before checking for duplicates and variants.' });
+      return;
+    }
+    flightRef.current = true;
+    dispatch({ type: 'DUPLICATE_CHECK_START' });
+    try {
+      const review = await recipeApi.checkRecipeDuplicates(state.recipeId, state.updatedAt);
+      dispatch({ type: 'DUPLICATE_CHECK_SUCCESS', review });
+    } catch (error) {
+      if (error instanceof ApiError && error.isForbidden) onAuthorityLost?.();
+      if (error?.code === 'RECIPE_EDIT_CONFLICT') dispatch({ type: 'CONFLICT' });
+      else dispatch({ type: 'DUPLICATE_CHECK_FAILURE', message: errorMessage(error) });
+    } finally { flightRef.current = false; }
+  }, [duplicateCheckNeedsSave, onAuthorityLost, readOnly, state]);
+
   const publish = useCallback(async () => {
     if (flightRef.current || !state.recipeId || state.status === 'uncertain') return;
     const acknowledgement = publishAcknowledgementGate(state);
@@ -150,13 +175,22 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
       dispatch({ type: 'SET_ERRORS', fieldErrors: readiness.sections[step].errors, message: 'Complete the highlighted section before publishing.' });
       return;
     }
+    const duplicateGate = duplicateReviewGate(state);
+    if (!duplicateGate.allowed) {
+      dispatch({ type: 'DUPLICATE_GATE_FAILURE', message: duplicateGate.error });
+      return;
+    }
     flightRef.current = true;
     dispatch({ type: 'MUTATION_START', status: 'publishing' });
     try {
-      const latest = await publishRecipeAndRefresh(state.recipeId, publishBody(state.updatedAt), onPublished, publishRecipe);
+      const latest = await publishRecipeAndRefresh(state.recipeId, publishBody(state.updatedAt, state.duplicateReview), onPublished, publishRecipe);
       dispatch({ type: 'LOAD_SUCCESS', recipe: latest, keepStep: true });
     } catch (error) {
-      if (error?.code === 'RECIPE_EDIT_CONFLICT') dispatch({ type: 'CONFLICT' });
+      const freshDuplicateReview = error?.details?.find?.((detail) => detail?.field === 'duplicateReview')?.duplicateReview;
+      if ((error?.code === 'RECIPE_DUPLICATE_REVIEW_STALE' || error?.code === 'RECIPE_DUPLICATE_REVIEW_REQUIRED') && freshDuplicateReview) {
+        dispatch({ type: 'DUPLICATE_REVIEW_STALE', review: freshDuplicateReview, message: errorMessage(error) });
+      }
+      else if (error?.code === 'RECIPE_EDIT_CONFLICT') dispatch({ type: 'CONFLICT' });
       else if (error?.code === 'RECIPE_ARCHIVED') dispatch({ type: 'SAVE_FAILURE', message: 'Restore this archived Draft before publishing.' });
       else if (error?.code === 'RECIPE_INGREDIENT_NOT_FOUND' || error?.code === 'RECIPE_INGREDIENT_INACTIVE') {
         dispatch({ type: 'SET_STEP', step: 'ingredients' });
@@ -190,6 +224,7 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
 
   return {
     state, dispatch, selectedFile, setSelectedFile, previewUrl, change, setStep, saveCurrent, next, back, publish,
+    checkDuplicates, duplicateCheckNeedsSave,
     loadLatest, reloadLatest, requestClose, busy: isMutationBusy(state), dirty: hasUnsavedChanges(state) || Boolean(selectedFile),
     readiness: useMemo(() => publicationReadiness(state.form), [state.form]),
   };

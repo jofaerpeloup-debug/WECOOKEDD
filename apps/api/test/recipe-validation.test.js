@@ -6,6 +6,8 @@ const {
   updateRecipeSchema,
   listRecipesSchema,
   recipeParamsSchema,
+  duplicateCheckSchema,
+  publishRecipeSchema,
 } = require('../src/modules/recipes/recipe.validation');
 
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
@@ -36,6 +38,46 @@ function validPayload(overrides = {}) {
     ...overrides,
   };
 }
+
+test('duplicate-check validation accepts exactly one strict subject form', () => {
+  const expectedUpdatedAt = '2026-09-29T00:00:00.000Z';
+  const { confirmFilipinoCuisine, ...candidate } = validPayload();
+  assert.equal(duplicateCheckSchema.safeParse({ body: { recipeId: RECIPE_ID, expectedUpdatedAt } }).success, true);
+  assert.equal(duplicateCheckSchema.safeParse({ body: { candidate } }).success, true);
+  assert.equal(duplicateCheckSchema.safeParse({ body: { recipeId: RECIPE_ID, expectedUpdatedAt, candidate } }).success, false);
+  assert.equal(duplicateCheckSchema.safeParse({ body: { recipeId: RECIPE_ID } }).success, false);
+  assert.equal(duplicateCheckSchema.safeParse({ body: { candidate, sourceUrl: 'https://example.com' } }).success, false);
+});
+
+test('duplicate acknowledgement preserves strict types and shape while semantic absence reaches service enforcement', () => {
+  const duplicateReview = { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: true };
+  for (const accepted of [
+    duplicateReview,
+    {},
+    { resultDigest: 'a'.repeat(64) },
+    { confirmDistinctRecipe: true },
+    { confirmDistinctRecipe: false },
+  ]) {
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({ duplicateReview: accepted }) }).success, true);
+    assert.equal(publishRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: {
+      confirmFilipinoCuisine: true, duplicateReview: accepted,
+    } }).success, true);
+  }
+  for (const invalid of [
+    { resultDigest: 'A'.repeat(64), confirmDistinctRecipe: true },
+    { resultDigest: 'a'.repeat(63), confirmDistinctRecipe: true },
+    { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: 'true' },
+    { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: true, score: 100 },
+    null,
+    [],
+    'reviewed',
+  ]) {
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({ duplicateReview: invalid }) }).success, false);
+    assert.equal(publishRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: {
+      confirmFilipinoCuisine: true, duplicateReview: invalid,
+    } }).success, false);
+  }
+});
 
 test('createRecipeSchema accepts a valid Filipino recipe payload', () => {
   const result = createRecipeSchema.safeParse({ body: validPayload() });

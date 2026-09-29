@@ -77,4 +77,16 @@ function toStaffRecipe(recipe) {
   };
 }
 
-module.exports = { toPublicRecipe, toStaffRecipe, toStructuredSteps };
+function toDuplicateCandidateRecipe(recipe) {
+  const legacy = recipe.publicationStatus == null;
+  return {
+    id: String(recipe._id || recipe.id),
+    title: recipe.title,
+    publicationStatus: legacy ? 'published' : recipe.publicationStatus,
+    publicationStatusSource: legacy ? 'legacy' : 'explicit',
+    isActive: recipe.isActive !== false,
+    updatedAt: recipe.updatedAt,
+  };
+}
+
+module.exports = { toPublicRecipe, toStaffRecipe, toStructuredSteps, toDuplicateCandidateRecipe };

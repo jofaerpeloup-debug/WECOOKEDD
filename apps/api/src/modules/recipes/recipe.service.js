@@ -2,6 +2,11 @@ const recipeRepository = require('./recipe.repository');
 const ingredientService = require('../ingredients/ingredient.service');
 const { AppError } = require('../../shared/errors/app-error');
 const imageProvider = require('../uploads/cloudinary-image.provider');
+const { toDuplicateCandidateRecipe } = require('./recipe.serializer');
+const {
+  DUPLICATE_CANDIDATE_LIMIT,
+  createDuplicateReview,
+} = require('./recipe-duplicate');
 const {
   publishedRecipeBodySchema,
   legacyPublishedRecipeBodySchema,
@@ -75,6 +80,14 @@ function publicationStateError() {
   return new AppError('Only an active Draft can be published.', {
     statusCode: 409,
     code: 'RECIPE_NOT_DRAFT',
+  });
+}
+
+function duplicateReviewError(code, message, duplicateReview) {
+  return new AppError(message, {
+    statusCode: 409,
+    code,
+    details: [{ field: 'duplicateReview', duplicateReview }],
   });
 }
 
@@ -263,24 +276,11 @@ function toNonAdminView(recipe) {
   return { ...plain, ingredients: plain.ingredients.filter(isIngredientEntryVisibleToNonAdmin) };
 }
 
-async function createRecipe({
-  title,
-  description,
-  region,
-  category,
-  difficulty,
-  prepTimeMinutes,
-  cookTimeMinutes,
-  servings,
-  ingredients,
-  instructions,
-  steps,
-  dietaryTags = [],
-  imageUrl,
-  imageAssetId,
+function buildPublishedRecipeDocument({
+  title, description, region, category, difficulty, prepTimeMinutes,
+  cookTimeMinutes, servings, ingredients, instructions, steps,
+  dietaryTags = [], imageUrl, imageAssetId,
 }, { actorId, now = new Date() } = {}) {
-  await assertIngredientsActive(ingredients);
-
   const doc = {
     title: normalizeTitle(title),
     description: description.trim(),
@@ -304,8 +304,84 @@ async function createRecipe({
   if (region !== undefined) doc.region = region;
   if (category !== undefined) doc.category = category;
 
+  return doc;
+}
+
+function toPublicDuplicateReview(review) {
+  return {
+    fingerprintVersion: review.fingerprintVersion,
+    resultDigest: review.resultDigest,
+    candidateLimit: review.candidateLimit,
+    candidateUniverseCount: review.candidateUniverseCount,
+    comparedCount: review.comparedCount,
+    truncated: review.truncated,
+    candidates: review.matches.map((match) => ({
+      recipe: toDuplicateCandidateRecipe(match.recipe),
+      classification: match.classification,
+      evidence: match.evidence,
+    })),
+  };
+}
+
+async function compareRecipeSubject(subject, { excludeId } = {}) {
+  const retrieval = await recipeRepository.findDuplicateCandidates({
+    excludeId,
+    limit: DUPLICATE_CANDIDATE_LIMIT,
+  });
+  return toPublicDuplicateReview(createDuplicateReview(subject, {
+    ...retrieval,
+    candidateLimit: DUPLICATE_CANDIDATE_LIMIT,
+  }));
+}
+
+function enforceDuplicateReview(freshReview, suppliedReview) {
+  const reviewRequired = freshReview.truncated || freshReview.candidates.length > 0;
+  if (reviewRequired && (!suppliedReview?.resultDigest || suppliedReview.confirmDistinctRecipe !== true)) {
+    throw duplicateReviewError(
+      'RECIPE_DUPLICATE_REVIEW_REQUIRED',
+      'Review the current duplicate and variant evidence before continuing.',
+      freshReview
+    );
+  }
+  if (suppliedReview?.resultDigest && suppliedReview.resultDigest !== freshReview.resultDigest) {
+    throw duplicateReviewError(
+      'RECIPE_DUPLICATE_REVIEW_STALE',
+      'Recipe duplicate review is stale. Review the current candidates before continuing.',
+      freshReview
+    );
+  }
+}
+
+async function createRecipe(input, { actorId, now = new Date() } = {}) {
+  const candidate = { ...input };
+  const duplicateReview = candidate.duplicateReview;
+  delete candidate.duplicateReview;
+  delete candidate.confirmFilipinoCuisine;
+  await assertIngredientsActive(candidate.ingredients);
+  const doc = buildPublishedRecipeDocument(candidate, { actorId, now });
+
   assertPublishedComplete(doc);
+  const freshReview = await compareRecipeSubject(doc);
+  enforceDuplicateReview(freshReview, duplicateReview);
   return recipeRepository.createRecipe(doc);
+}
+
+async function checkRecipeDuplicates({ recipeId, expectedUpdatedAt, candidate }) {
+  if (candidate) {
+    await assertIngredientsActive(candidate.ingredients);
+    const subject = buildPublishedRecipeDocument(candidate);
+    assertPublishedComplete(subject);
+    return compareRecipeSubject(subject);
+  }
+
+  const subject = await recipeRepository.findRawById(recipeId);
+  if (!subject) throw notFoundError();
+  assertCurrentPrecondition(subject, expectedUpdatedAt);
+  if (!subject.isActive) throw inactiveRecipeError();
+  if (effectivePublicationStatus(subject) !== 'draft') throw publicationStateError();
+  assertPublishedComplete(subject);
+  await assertIngredientsActive(subject.ingredients || []);
+  return compareRecipeSubject(subject, { excludeId: subject._id });
 }
 
 async function createDraft(input, { actorId } = {}) {
@@ -592,7 +668,7 @@ async function updateRecipe(id, patch, { actorId } = {}) {
   return updated;
 }
 
-async function publishRecipe(id, { expectedUpdatedAt } = {}, { actorId, now = new Date() } = {}) {
+async function publishRecipe(id, { expectedUpdatedAt, duplicateReview } = {}, { actorId, now = new Date() } = {}) {
   const existing = await recipeRepository.findRawById(id);
   if (!existing) throw notFoundError();
   assertCurrentPrecondition(existing, expectedUpdatedAt);
@@ -600,6 +676,8 @@ async function publishRecipe(id, { expectedUpdatedAt } = {}, { actorId, now = ne
   if (effectivePublicationStatus(existing) !== 'draft') throw publicationStateError();
   assertPublishedComplete(existing);
   await assertIngredientsActive(existing.ingredients || []);
+  const freshReview = await compareRecipeSubject(existing, { excludeId: existing._id });
+  enforceDuplicateReview(freshReview, duplicateReview);
 
   const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;
   const published = await recipeRepository.publishById(id, {
@@ -641,6 +719,7 @@ async function restoreRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
 
 module.exports = {
   createRecipe,
+  checkRecipeDuplicates,
   createDraft,
   findRecipeById,
   findUsableRecipeById,
