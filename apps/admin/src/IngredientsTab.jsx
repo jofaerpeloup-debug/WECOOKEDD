@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Search, Plus, Pencil, X, Check, AlertCircle, Carrot,
   Archive, ArchiveRestore,
@@ -199,8 +199,9 @@ function useIngredients() {
 
   const create = useCallback(
     async (values) => {
-      await createIngredient(values);
+      const ingredient = await createIngredient(values);
       reload();
+      return ingredient;
     },
     [reload],
   );
@@ -507,19 +508,61 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
   );
 }
 
-export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost }) {
+export function ingredientModalInitialForm(ingredient, initialValues) {
+  return {
+    name: initialValues ? String(initialValues.name ?? '').trim() : ingredient?.name ?? '',
+    aliasesText: initialValues ? (initialValues.aliases || []).join(', ') : (ingredient?.aliases || []).join(', '),
+    category: initialValues?.category ?? (ingredient ? editableIngredientCategory(ingredient.category) : DEFAULT_CATEGORY),
+    allergenTags: initialValues?.allergenTags || ingredient?.allergenTags || [],
+    isActive: ingredient ? ingredient.isActive : true,
+  };
+}
+
+export async function submitIngredientForm({ form, ingredient, onSubmit }) {
+  const fieldErrors = validateIngredientForm(form);
+  if (Object.keys(fieldErrors).length > 0) return { status: 'validation', fieldErrors };
+
+  const values = ingredientFormValues(form);
+  let payload = values;
+  if (ingredient) {
+    payload = {};
+    if (values.name !== ingredient.name) payload.name = values.name;
+    if (!arraysEqual(values.aliases, ingredient.aliases || [])) payload.aliases = values.aliases;
+    if (values.category !== ingredient.category) payload.category = values.category;
+    if (!arraysEqual(values.allergenTags, ingredient.allergenTags || [])) payload.allergenTags = values.allergenTags;
+    if (form.isActive !== ingredient.isActive) payload.isActive = form.isActive;
+    if (Object.keys(payload).length === 0) return { status: 'unchanged' };
+  }
+
+  try {
+    return { status: 'success', ingredient: await onSubmit(payload), payload };
+  } catch (error) {
+    return {
+      status: 'error',
+      error,
+      fieldErrors: error instanceof ApiError && error.isValidationError
+        ? ingredientFieldErrorsFromDetails(error.details)
+        : {},
+    };
+  }
+}
+
+export function ingredientSubmitErrorMessage(error, editing = false) {
+  if (!editing && error instanceof ApiError && error.code === 'INGREDIENT_ALREADY_EXISTS') {
+    return 'An Ingredient with this name already exists. Review the Ingredient catalog, including archived records.';
+  }
+  return toMessage(error);
+}
+
+export function IngredientModal({ ingredient, initialValues, sourceContext, onClose, onSubmit, onSuccess, onAuthorityLost }) {
   const editing = Boolean(ingredient);
 
-  const [form, setForm] = useState(() => ({
-    name: ingredient?.name || '',
-    aliasesText: (ingredient?.aliases || []).join(', '),
-    category: ingredient ? editableIngredientCategory(ingredient.category) : DEFAULT_CATEGORY,
-    allergenTags: ingredient?.allergenTags || [],
-    isActive: ingredient ? ingredient.isActive : true,
-  }));
+  const [form, setForm] = useState(() => ingredientModalInitialForm(ingredient, initialValues));
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const dialogRef = useRef(null);
   const aliasAnalysis = analyzeAliases(form.aliasesText);
   const canonicalNameLength = form.name.trim().length;
 
@@ -537,69 +580,57 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
     }));
   };
 
-  const buildPayload = () => {
-    const values = ingredientFormValues(form);
-
-    if (!editing) {
-      return values;
-    }
-
-    // PATCH: only send what actually changed, so an unchanged submit is a
-    // no-op and the API never re-normalizes fields needlessly.
-    const patch = {};
-    if (values.name !== ingredient.name) patch.name = values.name;
-    if (!arraysEqual(values.aliases, ingredient.aliases || [])) patch.aliases = values.aliases;
-    if (values.category !== ingredient.category) patch.category = values.category;
-    if (!arraysEqual(values.allergenTags, ingredient.allergenTags || [])) {
-      patch.allergenTags = values.allergenTags;
-    }
-    if (form.isActive !== ingredient.isActive) patch.isActive = form.isActive;
-    return patch;
-  };
-
   const submit = async (e) => {
     e.preventDefault();
+    if (savingRef.current) return;
     setFormError('');
     setFieldErrors({});
-
-    const errors = validateIngredientForm(form);
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      return;
-    }
-
-    const payload = buildPayload();
-    if (editing && Object.keys(payload).length === 0) {
-      onClose();
-      return;
-    }
-
+    savingRef.current = true;
     setSaving(true);
-    try {
-      await onSubmit(payload);
+    const result = await submitIngredientForm({ form, ingredient, onSubmit });
+    if (result.status === 'success') {
+      onSuccess?.(result.ingredient);
       onClose();
-    } catch (err) {
-      if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
-      if (err instanceof ApiError && err.isValidationError) {
-        setFieldErrors(ingredientFieldErrorsFromDetails(err.details));
+    } else if (result.status === 'unchanged') {
+      onClose();
+    } else if (result.status === 'validation') {
+      setFieldErrors(result.fieldErrors);
+    } else {
+      const { error } = result;
+      if (error instanceof ApiError && error.isForbidden) onAuthorityLost?.();
+      setFieldErrors(result.fieldErrors);
+      if (error instanceof ApiError && error.isValidationError) {
         setFormError('Please fix the highlighted fields.');
-      } else {
-        setFormError(toMessage(err));
-      }
-    } finally {
-      setSaving(false);
+      } else setFormError(ingredientSubmitErrorMessage(error, editing));
     }
+    savingRef.current = false;
+    setSaving(false);
+  };
+
+  const requestClose = () => { if (!savingRef.current) onClose(); };
+  const handleDialogKeyDown = (event) => {
+    event.stopPropagation();
+    if (event.key === 'Escape') { event.preventDefault(); requestClose(); return; }
+    if (event.key !== 'Tab') return;
+    const controls = [...dialogRef.current.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled])')];
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
 
   return (
-    <div className="wc-modal-overlay" onClick={onClose}>
-      <div className="wc-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`wc-modal-overlay${sourceContext ? ' wc-author-ingredient-modal' : ''}`} onMouseDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) requestClose(); }} onKeyDown={(event) => event.stopPropagation()}>
+      <div ref={dialogRef} className="wc-modal" role="dialog" aria-modal="true" aria-labelledby="ingredient-modal-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={handleDialogKeyDown}>
         <div className="wc-modal-header">
-          <h2 className="wc-serif">{editing ? 'Edit ingredient' : 'Add ingredient'}</h2>
-          <button className="wc-modal-close" onClick={onClose} aria-label="Close">
+          <h2 id="ingredient-modal-title" className="wc-serif">{editing ? 'Edit ingredient' : 'Add ingredient'}</h2>
+          <button type="button" className="wc-modal-close" disabled={saving} onClick={requestClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
+
+        {sourceContext && <div className="wc-ing-import-context"><strong>Imported source</strong><span>{sourceContext}</span></div>}
 
         {editing && !ingredient.isActive && (
           <div className="wc-ing-archived-note">
@@ -613,6 +644,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
             <label htmlFor="ingredient-name">Name</label>
             <input
               id="ingredient-name"
+              disabled={saving}
               value={form.name}
               onChange={(e) => {
                 clearFieldError('name');
@@ -636,6 +668,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
             <label htmlFor="ingredient-aliases">Aliases</label>
             <input
               id="ingredient-aliases"
+              disabled={saving}
               value={form.aliasesText}
               onChange={(e) => {
                 clearFieldError('aliases');
@@ -667,6 +700,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
             )}
             <select
               id="ingredient-category"
+              disabled={saving}
               value={form.category}
               onChange={(e) => {
                 clearFieldError('category');
@@ -694,6 +728,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
                 <button
                   type="button"
                   key={tag.value}
+                  disabled={saving}
                   className={`wc-chip ${form.allergenTags.includes(tag.value) ? 'selected' : ''}`}
                   onClick={() => toggleAllergen(tag.value)}
                 >
@@ -702,7 +737,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
               ))}
             </div>
             <div className="wc-ing-modal-hint">
-              Set explicitly by an admin — never inferred automatically.
+              Set explicitly by a Moderator — never inferred automatically.
             </div>
             {fieldErrors.allergenTags && (
               <div className="wc-ing-field-error">{fieldErrors.allergenTags}</div>
@@ -715,6 +750,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
               <div className="wc-status-toggle">
                 <button
                   type="button"
+                  disabled={saving}
                   className={form.isActive ? 'selected active-opt' : ''}
                   onClick={() => setForm({ ...form, isActive: true })}
                 >
@@ -722,6 +758,7 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
                 </button>
                 <button
                   type="button"
+                  disabled={saving}
                   className={!form.isActive ? 'selected inactive-opt' : ''}
                   onClick={() => setForm({ ...form, isActive: false })}
                 >
@@ -732,11 +769,11 @@ export function IngredientModal({ ingredient, onClose, onSubmit, onAuthorityLost
           )}
 
           {formError && (
-            <div className="wc-auth-error"><AlertCircle size={14} /> {formError}</div>
+            <div className="wc-auth-error" role="alert"><AlertCircle size={14} /> {formError}</div>
           )}
 
           <div className="wc-modal-actions">
-            <button type="button" className="wc-btn-secondary" onClick={onClose}>
+            <button type="button" className="wc-btn-secondary" disabled={saving} onClick={requestClose}>
               Cancel
             </button>
             <button type="submit" className="wc-btn-primary" disabled={saving}>

@@ -34,6 +34,7 @@ const {
   ingredientCategoryLabel,
   ingredientFieldErrorsFromDetails,
   ingredientFormValues,
+  ingredientModalInitialForm,
   validateIngredientForm,
 } = ingredientModule;
 const { INGREDIENT_CATEGORIES } = ingredientOptionsModule;
@@ -206,6 +207,15 @@ test('Add/Edit category dropdowns and the category filter expose the approved ta
     assert.match(markup, /<option value="soy">Soy<\/option>/);
     assert.doesNotMatch(markup, /<option value="other">/);
   }
+});
+
+test('standalone Add keeps its default while imported creation starts with only the explicit safe values', () => {
+  assert.equal(ingredientModalInitialForm(null).category, 'produce');
+  assert.deepEqual(ingredientModalInitialForm(null, {
+    name: 'Calamansi', aliases: [], category: '', allergenTags: [],
+  }), {
+    name: 'Calamansi', aliasesText: '', category: '', allergenTags: [], isActive: true,
+  });
 });
 
 test('legacy Other remains readable but edit requires an approved replacement', () => {

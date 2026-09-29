@@ -2,16 +2,37 @@ import { MAX_INGREDIENTS, RECIPE_UNITS, TO_TASTE_UNIT } from '../recipeOptions.j
 import { blankIngredient, parseIngredientQuantity } from './recipeAuthoringModel.js';
 
 const VALID_UNITS = new Set(RECIPE_UNITS.map(({ value }) => value));
+const MAX_INGREDIENT_NAME_LENGTH = 100;
 
 export function createUnresolvedIngredientQueue(lines, generation) {
   return lines.map((sourceText, index) => ({
     key: `source-${generation}-${index}`,
+    generation,
     sourceText,
     resolution: null,
     selectedIngredient: null,
     quantity: '',
     unit: '',
   }));
+}
+
+export function ingredientCreationPrefill(entry, currentGeneration) {
+  const match = entry?.resolution?.match;
+  const parsedName = entry?.resolution?.parsed?.name;
+  const name = typeof parsedName === 'string' ? parsedName.trim() : '';
+  if (entry?.generation !== currentGeneration
+      || entry.resolutionError
+      || match?.kind !== 'none'
+      || match.totalCandidates !== 0
+      || !Array.isArray(match.candidates)
+      || match.candidates.length !== 0
+      || match.truncated !== false
+      || name.length < 1
+      || name.length > MAX_INGREDIENT_NAME_LENGTH
+      || entry.selectedIngredient) {
+    return null;
+  }
+  return { name, aliases: [], category: '', allergenTags: [] };
 }
 
 export function prepareIngredientResolutionRequest(queue) {

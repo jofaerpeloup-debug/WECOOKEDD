@@ -46,7 +46,12 @@ export function recipeAuthoringReducer(state, action) {
         ingredientResolutionError: '', ingredientResolutionRequest: null };
     }
     case 'INGREDIENT_RESOLUTION_START':
-      return { ...state, ingredientResolutionStatus: 'loading', ingredientResolutionError: '',
+      if (action.generation !== state.ingredientResolutionGeneration) return state;
+      return { ...state,
+        unresolvedIngredients: state.unresolvedIngredients.map((entry) => entry.resolution?.match?.kind === 'none'
+          ? { ...entry, resolution: null }
+          : entry),
+        ingredientResolutionStatus: 'loading', ingredientResolutionError: '',
         ingredientResolutionRequest: action.request };
     case 'INGREDIENT_RESOLUTION_SUCCESS':
       if (action.generation !== state.ingredientResolutionGeneration) return state;
@@ -62,6 +67,18 @@ export function recipeAuthoringReducer(state, action) {
       return { ...state, unresolvedIngredients: state.unresolvedIngredients.map((entry, index) => index === action.index
         ? { ...entry, ...action.patch, confirmationError: '' }
         : entry) };
+    case 'INGREDIENT_CREATION_SUCCESS': {
+      if (action.generation !== state.ingredientResolutionGeneration) return state;
+      const ingredient = action.ingredient;
+      if (!ingredient || typeof ingredient.id !== 'string' || typeof ingredient.name !== 'string') return state;
+      let matched = false;
+      const unresolvedIngredients = state.unresolvedIngredients.map((entry) => {
+        if (entry.key !== action.key || entry.generation !== action.generation) return entry;
+        matched = true;
+        return { ...entry, selectedIngredient: { id: ingredient.id, name: ingredient.name }, confirmationError: '' };
+      });
+      return matched ? { ...state, unresolvedIngredients } : state;
+    }
     case 'CONFIRM_INGREDIENT_RESOLUTION': {
       if (state.ingredientResolutionStatus === 'loading') return state;
       const result = confirmIngredientResolution(state.form, state.unresolvedIngredients, action.index);

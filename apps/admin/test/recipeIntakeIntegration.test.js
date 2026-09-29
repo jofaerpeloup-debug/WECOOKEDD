@@ -8,6 +8,7 @@ import {
   buildStepPatch, createDraftBody, emptyRecipeForm, mutationBody, publishBody,
 } from '../src/recipeAuthoring/recipeAuthoringModel.js';
 import { initialAuthoringState, recipeAuthoringReducer } from '../src/recipeAuthoring/recipeAuthoringState.js';
+import { ingredientCreationPrefill, prepareIngredientResolutionRequest } from '../src/recipeAuthoring/recipeIngredientResolution.js';
 
 const payload = JSON.stringify({
   '@type': 'Recipe', name: 'Chicken Adobo', description: 'Braised chicken.', prepTime: 'PT20M', cookTime: 'PT1H10M',
@@ -366,6 +367,46 @@ test('production JSX keeps Preview local, queues unresolved source, and gates re
   assert.ok(wizardSource.includes("state.publicationStatus === 'published' ? 'Save changes' : 'Save Draft'"));
   assert.ok(wizardSource.includes('onClick={publish}'));
   assert.ok(wizardSource.includes("state.publicationStatus === 'draft'"));
+});
+
+test('actual intake resolution create-return confirm-save path preserves both explicit mutation boundaries', () => {
+  const preview = parseRecipeIntake(payload);
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, {
+    type: 'SET_UNRESOLVED_INGREDIENTS', lines: preview.unresolved[0].values,
+  });
+  const generation = state.ingredientResolutionGeneration;
+  const request = prepareIngredientResolutionRequest(state.unresolvedIngredients);
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_RESOLUTION_SUCCESS', generation, request,
+    resolutions: [{
+      index: 0, sourceText: '1 kg chicken', parsed: { quantity: 1, unit: 'kg', name: 'chicken' },
+      match: { kind: 'none', totalCandidates: 0, truncated: false, candidates: [] },
+    }],
+  });
+  const entry = state.unresolvedIngredients[0];
+  assert.deepEqual(ingredientCreationPrefill(entry, generation), {
+    name: 'chicken', aliases: [], category: '', allergenTags: [],
+  });
+  assert.equal(state.form.ingredients[0].ingredient, null, 'resolution must not create a Recipe row');
+
+  const returned = { id: 'server-chicken', name: 'Chicken', category: 'protein', aliases: [] };
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_CREATION_SUCCESS', generation, key: entry.key, ingredient: returned,
+  });
+  assert.deepEqual(state.unresolvedIngredients[0].selectedIngredient, { id: 'server-chicken', name: 'Chicken' });
+  assert.equal(state.unresolvedIngredients.length, 1);
+  assert.equal(state.form.ingredients[0].ingredient, null, 'successful catalog creation must not auto-confirm');
+
+  state = recipeAuthoringReducer(state, { type: 'CONFIRM_INGREDIENT_RESOLUTION', index: 0 });
+  assert.equal(state.unresolvedIngredients.length, 0);
+  assert.deepEqual(state.form.ingredients[0], {
+    ...state.form.ingredients[0],
+    ingredient: { id: 'server-chicken', name: 'Chicken' }, quantity: '1', unit: 'kg', note: '', optional: false,
+  });
+  assert.deepEqual(mutationBody(buildStepPatch(emptyRecipeForm(), state.form, 'ingredients'), 'token').ingredients, [{
+    ingredientId: 'server-chicken', quantity: 1, unit: 'kg', optional: false,
+  }]);
 });
 
 test('actual Draft, PATCH, and Publish payload builders exclude all transient resolver data', () => {
