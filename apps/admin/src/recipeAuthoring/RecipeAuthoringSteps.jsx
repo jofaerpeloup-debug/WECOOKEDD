@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ImageOff, Plus, Trash2 } from 'lucide-react';
 import IngredientPicker from '../IngredientPicker.jsx';
-import { resolveIngredients } from '../ingredientApi.js';
+import { IngredientModal } from '../IngredientsTab.jsx';
+import { createIngredient, resolveIngredients } from '../ingredientApi.js';
 import {
   MAX_DESCRIPTION_LENGTH, MAX_INGREDIENTS, MAX_INSTRUCTION_LENGTH,
   MAX_INSTRUCTIONS, MAX_PREP_TIME_MINUTES, MAX_SERVINGS,
   RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_UNITS, TO_TASTE_UNIT,
 } from '../recipeOptions.js';
 import { blankIngredient } from './recipeAuthoringModel.js';
-import { prepareIngredientResolutionRequest } from './recipeIngredientResolution.js';
+import { ingredientCreationPrefill, prepareIngredientResolutionRequest } from './recipeIngredientResolution.js';
 import { createRecipeIntakeHandlers } from './recipeIntake.js';
 import { createRecipeUrlImportHandlers, RecipeUrlImportControls } from './recipeUrlImport.js';
 import RecipeReview from './RecipeReview.jsx';
@@ -77,7 +78,10 @@ export async function requestIngredientResolutions({ queue, generation, dispatch
   }
 }
 
-export function IngredientResolutionPanel({ state, dispatch, busy }) {
+export function IngredientResolutionPanel({
+  state, dispatch, busy, onAuthorityLost, creationTarget = null, onOpenCreation = () => {},
+  onCloseCreation = () => {}, registerCreateButton = () => {},
+}) {
   const queue = state.unresolvedIngredients || [];
   if (!queue.length) return null;
   const loading = state.ingredientResolutionStatus === 'loading';
@@ -95,6 +99,7 @@ export function IngredientResolutionPanel({ state, dispatch, busy }) {
     <ol className="wc-resolution-list">
       {queue.map((entry, index) => {
         const match = entry.resolution?.match;
+        const creationPrefill = ingredientCreationPrefill(entry, state.ingredientResolutionGeneration);
         return <li key={entry.key} className="wc-resolution-card">
           <p className="wc-resolution-source"><strong>Source:</strong> {entry.sourceText}</p>
           {entry.resolutionError && <p className="wc-author-field-error" role="alert">{entry.resolutionError} Use the manual picker below.</p>}
@@ -109,6 +114,7 @@ export function IngredientResolutionPanel({ state, dispatch, busy }) {
             </fieldset>}
             {(match.kind === 'none' || match.kind === 'unparsed') && <p className="wc-author-muted">No suggested catalog candidate. Choose one manually.</p>}
           </>}
+          {creationPrefill && <button ref={(node) => registerCreateButton(entry.key, node)} type="button" className="wc-btn-secondary wc-resolution-create" disabled={busy || loading || Boolean(creationTarget)} onClick={() => onOpenCreation({ key: entry.key, generation: entry.generation, sourceText: entry.sourceText, initialValues: creationPrefill })}>+ Create Ingredient</button>}
           <div className="wc-resolution-confirm">
             <IngredientPicker value={entry.selectedIngredient} disabled={busy || loading} ariaLabel={`Manual catalog Ingredient for ${entry.sourceText}`} onChange={(ingredient) => update(index, { selectedIngredient: ingredient })} />
             <label>Quantity<input type="text" inputMode="decimal" placeholder="e.g. 1 1/2" disabled={busy || loading || entry.unit === TO_TASTE_UNIT} value={entry.quantity} onChange={(event) => update(index, { quantity: event.target.value })} /></label>
@@ -119,10 +125,46 @@ export function IngredientResolutionPanel({ state, dispatch, busy }) {
         </li>;
       })}
     </ol>
+    {creationTarget && <IngredientModal
+      initialValues={creationTarget.initialValues}
+      sourceContext={creationTarget.sourceText}
+      onClose={onCloseCreation}
+      onSubmit={createIngredient}
+      onAuthorityLost={onAuthorityLost}
+      onSuccess={(ingredient) => dispatch({
+        type: 'INGREDIENT_CREATION_SUCCESS',
+        generation: creationTarget.generation,
+        key: creationTarget.key,
+        ingredient,
+      })}
+    />}
   </section>;
 }
 
-export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }) {
+export function IngredientResolutionPanelWithCreation(props) {
+  const [creationTarget, setCreationTarget] = useState(null);
+  const createButtonsRef = useRef(new Map());
+  const closeCreation = () => {
+    const key = creationTarget?.key;
+    setCreationTarget(null);
+    if (key && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => createButtonsRef.current.get(key)?.focus());
+    }
+  };
+  const registerCreateButton = (key, node) => {
+    if (node) createButtonsRef.current.set(key, node);
+    else createButtonsRef.current.delete(key);
+  };
+  return <IngredientResolutionPanel
+    {...props}
+    creationTarget={creationTarget}
+    onOpenCreation={setCreationTarget}
+    onCloseCreation={closeCreation}
+    registerCreateButton={registerCreateButton}
+  />;
+}
+
+export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage, onAuthorityLost }) {
   const { state, change, selectedFile, setSelectedFile, previewUrl, readiness, setStep, busy, dispatch } = authoring;
   const { form, currentStep, fieldErrors } = state;
   if (currentStep === 'review') return <RecipeReview form={form} readiness={readiness} onNavigate={setStep} recipeMeta={state} />;
@@ -148,7 +190,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage }
 
   if (currentStep === 'ingredients') {
     const updateRow = (index, patch) => change('ingredients', form.ingredients.map((row, i) => i === index ? { ...row, ...patch } : row));
-    return <div><IngredientResolutionPanel state={state} dispatch={dispatch} busy={busy} /><div className="wc-author-section-intro"><p>Blank rows are ignored. Partially completed rows must be finished before saving.</p><button type="button" className="wc-btn-secondary" disabled={form.ingredients.length >= MAX_INGREDIENTS || busy} onClick={() => change('ingredients', [...form.ingredients, blankIngredient()])}><Plus size={15} /> Add ingredient</button></div><FieldError message={err(fieldErrors, 'ingredients')} />
+    return <div><IngredientResolutionPanelWithCreation state={state} dispatch={dispatch} busy={busy} onAuthorityLost={onAuthorityLost} /><div className="wc-author-section-intro"><p>Blank rows are ignored. Partially completed rows must be finished before saving.</p><button type="button" className="wc-btn-secondary" disabled={form.ingredients.length >= MAX_INGREDIENTS || busy} onClick={() => change('ingredients', [...form.ingredients, blankIngredient()])}><Plus size={15} /> Add ingredient</button></div><FieldError message={err(fieldErrors, 'ingredients')} />
       {form.ingredients.map((row, index) => <div className="wc-author-ingredient" key={row.key}>
         <span className="wc-author-row-number">{index + 1}</span><IngredientPicker value={row.ingredient} disabled={busy} ariaLabel={`Ingredient ${index + 1}`} onChange={(ingredient) => updateRow(index, { ingredient })} />
         <label>Quantity<input type="text" inputMode="decimal" placeholder="e.g. 1 1/2" disabled={row.unit === TO_TASTE_UNIT || busy} value={row.quantity} aria-invalid={Boolean(fieldErrors[`ingredients.${index}.quantity`])} onChange={(e) => updateRow(index, { quantity: e.target.value })} /></label>

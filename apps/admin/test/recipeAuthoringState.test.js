@@ -4,6 +4,7 @@ import {
   hasUnsavedChanges, initialAuthoringState, recipeAuthoringReducer, resolveBasicsImageUpload,
 } from '../src/recipeAuthoring/recipeAuthoringState.js';
 import { publicationReadiness } from '../src/recipeAuthoring/recipeAuthoringModel.js';
+import { ingredientCreationPrefill } from '../src/recipeAuthoring/recipeIngredientResolution.js';
 
 test('reducer tracks dirty state, save token replacement, conflict, and close confirmation', () => {
   let state = initialAuthoringState();
@@ -193,4 +194,77 @@ test('resolver-entry selection, edits, and confirmation are ignored while a requ
   assert.equal(state, locked);
   assert.equal(state.form.ingredients[0].ingredient, null);
   assert.deepEqual(state.unresolvedIngredients[0].selectedIngredient, { id: 'old', name: 'Old' });
+});
+
+test('failed resolver retry invalidates stale none creation eligibility until a new successful result', () => {
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['1 calamansi', '1 egg'] });
+  const generation = state.ingredientResolutionGeneration;
+  const request = {
+    lines: ['1 calamansi', '1 egg'],
+    submitted: [
+      { queueIndex: 0, sourceText: '1 calamansi' },
+      { queueIndex: 1, sourceText: '1 egg' },
+    ],
+    excluded: [],
+  };
+  const none = {
+    index: 0, sourceText: '1 calamansi', parsed: { quantity: 1, unit: 'piece', name: 'calamansi' },
+    match: { kind: 'none', totalCandidates: 0, truncated: false, candidates: [] },
+  };
+  const exact = {
+    index: 1, sourceText: '1 egg', parsed: { quantity: 1, unit: 'piece', name: 'egg' },
+    match: { kind: 'exact', totalCandidates: 1, truncated: false, candidates: [{ ingredient: { id: 'egg-id', name: 'Egg' } }] },
+  };
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_RESOLUTION_SUCCESS', generation, request, resolutions: [none, exact],
+  });
+  assert.ok(ingredientCreationPrefill(state.unresolvedIngredients[0], generation));
+  const unrelatedEntry = state.unresolvedIngredients[1];
+  const confirmedRecipeForm = state.form;
+
+  state = recipeAuthoringReducer(state, { type: 'INGREDIENT_RESOLUTION_START', generation, request });
+  assert.equal(ingredientCreationPrefill(state.unresolvedIngredients[0], generation), null);
+  assert.equal(state.unresolvedIngredients[1], unrelatedEntry, 'an unrelated non-none row must be retained');
+  assert.equal(state.form, confirmedRecipeForm, 'resolver retry must not change confirmed Recipe state');
+
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_RESOLUTION_FAILURE', generation, message: 'Catalog temporarily unavailable',
+  });
+  assert.equal(ingredientCreationPrefill(state.unresolvedIngredients[0], generation), null);
+  assert.equal(state.unresolvedIngredients.length, 2);
+  assert.equal(state.form, confirmedRecipeForm);
+
+  state = recipeAuthoringReducer(state, { type: 'INGREDIENT_RESOLUTION_START', generation, request });
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_RESOLUTION_SUCCESS', generation, request, resolutions: [none, exact],
+  });
+  assert.ok(ingredientCreationPrefill(state.unresolvedIngredients[0], generation));
+});
+
+test('created Ingredient selection binds only canonical id/name to the same current generation and key without confirming', () => {
+  let state = initialAuthoringState();
+  state = recipeAuthoringReducer(state, { type: 'SET_UNRESOLVED_INGREDIENTS', lines: ['1 calamansi', '1 calamansi'] });
+  const generation = state.ingredientResolutionGeneration;
+  const [first, second] = state.unresolvedIngredients;
+  const originalForm = state.form;
+  state = recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_CREATION_SUCCESS', generation, key: first.key,
+    ingredient: { id: 'server-id', name: 'Calamansi', category: 'produce', aliases: ['lime'] },
+  });
+  assert.deepEqual(state.unresolvedIngredients[0].selectedIngredient, { id: 'server-id', name: 'Calamansi' });
+  assert.equal(state.unresolvedIngredients[1].selectedIngredient, null);
+  assert.equal(state.unresolvedIngredients.length, 2);
+  assert.equal(state.form, originalForm, 'creation must not add a Recipe ingredient row');
+
+  const selectedState = state;
+  assert.equal(recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_CREATION_SUCCESS', generation: generation - 1, key: first.key,
+    ingredient: { id: 'stale', name: 'Stale' },
+  }), selectedState);
+  assert.equal(recipeAuthoringReducer(state, {
+    type: 'INGREDIENT_CREATION_SUCCESS', generation, key: 'missing-key',
+    ingredient: { id: 'wrong', name: 'Wrong' },
+  }), selectedState);
+  assert.equal(state.unresolvedIngredients[1].key, second.key);
 });

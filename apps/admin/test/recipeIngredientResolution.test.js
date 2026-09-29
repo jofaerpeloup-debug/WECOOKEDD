@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   confirmIngredientResolution, createUnresolvedIngredientQueue, mergeIngredientResolutionResults,
-  prepareIngredientResolutionRequest, resolutionConfirmationError,
+  ingredientCreationPrefill, prepareIngredientResolutionRequest, resolutionConfirmationError,
 } from '../src/recipeAuthoring/recipeIngredientResolution.js';
 import { emptyRecipeForm } from '../src/recipeAuthoring/recipeAuthoringModel.js';
 
@@ -41,6 +41,32 @@ test('result merge fills parser hints but never preselects exact, ambiguous, or 
   assert.equal(merged[0].quantity, '1.5');
   assert.equal(merged[0].unit, 'cup');
   assert.equal(merged[1].unit, '', 'a bare count must not infer a unit');
+});
+
+test('creation prefill requires a current complete none result, valid trimmed name, and no selection', () => {
+  const base = {
+    ...createUnresolvedIngredientQueue(['  2 cups fresh calamansi  '], 7)[0],
+    resolution: resolution(0, 'none', { name: '  fresh calamansi  ' }),
+    resolutionError: '',
+  };
+  assert.deepEqual(ingredientCreationPrefill(base, 7), {
+    name: 'fresh calamansi', aliases: [], category: '', allergenTags: [],
+  });
+
+  const forbidden = [
+    { ...base, generation: 6 },
+    { ...base, resolution: null },
+    { ...base, resolutionError: 'failed' },
+    { ...base, resolution: resolution(0, 'exact', { name: 'calamansi' }) },
+    { ...base, resolution: { ...base.resolution, match: { ...base.resolution.match, totalCandidates: 1 } } },
+    { ...base, resolution: { ...base.resolution, match: { ...base.resolution.match, candidates: [{}] } } },
+    { ...base, resolution: { ...base.resolution, match: { ...base.resolution.match, truncated: true } } },
+    { ...base, resolution: resolution(0, 'none', { name: '   ' }) },
+    { ...base, resolution: resolution(0, 'none', { name: 'x'.repeat(101) }) },
+    { ...base, selectedIngredient: { id: 'i1', name: 'Calamansi' } },
+  ];
+  for (const entry of forbidden) assert.equal(ingredientCreationPrefill(entry, 7), null);
+  assert.equal(ingredientCreationPrefill({ ...base, resolution: resolution(0, 'none', { name: 'x'.repeat(100) }) }, 7).name.length, 100);
 });
 
 test('confirmation requires explicit canonical selection and valid quantity/unit', () => {
