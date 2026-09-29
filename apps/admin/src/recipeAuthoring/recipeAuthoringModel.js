@@ -255,7 +255,13 @@ export function buildStepPatch(savedForm, workingForm, step) {
 }
 
 export function createDraftBody(form) { return { title: collapsed(form.title) }; }
-export function publishBody(updatedAt) { return { confirmFilipinoCuisine: true, expectedUpdatedAt: updatedAt }; }
+export function publishBody(updatedAt, duplicateReview) {
+  const body = { confirmFilipinoCuisine: true, expectedUpdatedAt: updatedAt };
+  if (duplicateReview?.resultDigest) {
+    body.duplicateReview = { resultDigest: duplicateReview.resultDigest, confirmDistinctRecipe: true };
+  }
+  return body;
+}
 export function mutationBody(patch, updatedAt) { return { ...patch, expectedUpdatedAt: updatedAt }; }
 export function statusLabel(recipe) {
   const publication = recipe?.publicationStatus === 'draft' ? 'Draft' : 'Published';

@@ -14,6 +14,7 @@ const {
   listRecipesSchema,
   createRecipeSchema,
   createDraftSchema,
+  duplicateCheckSchema,
   updateRecipeSchema,
   publishRecipeSchema,
   lifecycleRecipeSchema,
@@ -21,6 +22,14 @@ const {
 } = require('./recipe.validation');
 
 const router = Router();
+
+router.post(
+  '/duplicate-check',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(duplicateCheckSchema),
+  recipeController.checkRecipeDuplicates
+);
 
 router.post(
   '/import-url',

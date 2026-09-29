@@ -167,7 +167,22 @@ export function IngredientResolutionPanelWithCreation(props) {
 export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage, onAuthorityLost }) {
   const { state, change, selectedFile, setSelectedFile, previewUrl, readiness, setStep, busy, dispatch } = authoring;
   const { form, currentStep, fieldErrors } = state;
-  if (currentStep === 'review') return <RecipeReview form={form} readiness={readiness} onNavigate={setStep} recipeMeta={state} />;
+  if (currentStep === 'review') return <RecipeReview
+    form={form}
+    readiness={readiness}
+    onNavigate={setStep}
+    recipeMeta={state}
+    duplicateReview={state.duplicateReview}
+    duplicateReviewStatus={state.duplicateReviewStatus}
+    duplicateReviewError={state.duplicateReviewError}
+    duplicateAcknowledgedDigest={state.duplicateAcknowledgedDigest}
+    duplicateReviewFocusRequest={state.duplicateReviewFocusRequest}
+    duplicateCheckNeedsSave={authoring.duplicateCheckNeedsSave}
+    unresolvedIngredientCount={state.unresolvedIngredients?.length || 0}
+    busy={busy}
+    onCheckDuplicates={authoring.checkDuplicates}
+    onAcknowledgeDuplicateReview={(value) => dispatch({ type: 'ACKNOWLEDGE_DUPLICATE_REVIEW', value })}
+  />;
 
   if (currentStep === 'basics') return <div className="wc-author-fields">
     {!state.recipeId && <RecipeIntake form={form} change={change} busy={busy} dispatch={dispatch} />}

@@ -26,6 +26,11 @@ export function createDraft(body) {
   return api.post('/recipes/drafts', { body }).then((data) => data.recipe);
 }
 
+export function checkRecipeDuplicates(recipeId, expectedUpdatedAt) {
+  return api.post('/recipes/duplicate-check', { body: { recipeId, expectedUpdatedAt } })
+    .then((data) => data.duplicateReview);
+}
+
 /** Strict partial content update; expectedUpdatedAt belongs in patch. */
 export function updateRecipe(id, patch) {
   return api.patch(`/recipes/${encodeURIComponent(id)}`, { body: patch }).then((data) => data.recipe);

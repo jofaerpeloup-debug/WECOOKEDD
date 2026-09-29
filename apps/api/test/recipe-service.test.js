@@ -26,6 +26,12 @@ function inactiveIngredient(id, name = 'Ingredient') {
   return { _id: id, name, isActive: false };
 }
 
+function mockNoDuplicateCandidates(t) {
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [], candidateUniverseCount: 0, comparedCount: 0, truncated: false,
+  }));
+}
+
 function adoboPayload(overrides = {}) {
   return {
     title: 'Chicken Adobo',
@@ -76,6 +82,7 @@ function completeStoredRecipe(overrides = {}) {
 }
 
 test('createRecipe validates every ingredient through IngredientService and persists a normalized document', async (t) => {
+  mockNoDuplicateCandidates(t);
   const checkedIds = [];
   t.mock.method(ingredientService, 'findIngredientById', async (id) => {
     checkedIds.push(id);
@@ -96,6 +103,7 @@ test('createRecipe validates every ingredient through IngredientService and pers
 });
 
 test('createRecipe preserves canonical lb/oz quantities without conversion', async (t) => {
+  mockNoDuplicateCandidates(t);
   t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
   let capturedArgs;
   t.mock.method(recipeRepository, 'createRecipe', async (args) => {
@@ -168,6 +176,7 @@ test('createRecipe rejects an inactive ingredient even when the entry is marked 
 });
 
 test('createRecipe collapses internal/surrounding whitespace in the title', async (t) => {
+  mockNoDuplicateCandidates(t);
   t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
   let capturedArgs;
   t.mock.method(recipeRepository, 'createRecipe', async (args) => {
@@ -181,6 +190,7 @@ test('createRecipe collapses internal/surrounding whitespace in the title', asyn
 });
 
 test('createRecipe normalizes a toTaste ingredient entry to have no stored quantity', async (t) => {
+  mockNoDuplicateCandidates(t);
   t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
   let capturedArgs;
   t.mock.method(recipeRepository, 'createRecipe', async (args) => {
@@ -198,6 +208,7 @@ test('createRecipe normalizes a toTaste ingredient entry to have no stored quant
 });
 
 test('createRecipe deduplicates dietary tags', async (t) => {
+  mockNoDuplicateCandidates(t);
   t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
   let capturedArgs;
   t.mock.method(recipeRepository, 'createRecipe', async (args) => {
@@ -437,6 +448,7 @@ test('listRecipes composes a region/category filter with search and count over t
 });
 
 test('createRecipe normalizes structured steps into ordered instruction text and never stores cuisine', async (t) => {
+  mockNoDuplicateCandidates(t);
   t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
   let capturedArgs;
   t.mock.method(recipeRepository, 'createRecipe', async (args) => {
@@ -817,6 +829,195 @@ test('publishRecipe rejects a Draft whose Ingredient was archived while the Draf
       return true;
     }
   );
+});
+
+test('legacy direct create requires current duplicate acknowledgement and never mutates before either 409', async (t) => {
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  let candidate = completeStoredRecipe({
+    _id: 'candidate1',
+    title: 'Chicken Adobo',
+    ingredients: adoboPayload().ingredients,
+    instructions: adoboPayload().instructions,
+    publicationStatus: 'published',
+    updatedAt: new Date('2026-09-29T00:00:00.000Z'),
+  });
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [candidate], candidateUniverseCount: 1, comparedCount: 1, truncated: false,
+  }));
+  let creates = 0;
+  let persisted;
+  t.mock.method(recipeRepository, 'createRecipe', async (doc) => { creates += 1; persisted = doc; return { _id: 'new', ...doc }; });
+
+  let required;
+  await assert.rejects(() => recipeService.createRecipe(adoboPayload()), (error) => {
+    required = error.details[0].duplicateReview;
+    assert.equal(error.code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+    assert.equal(required.candidates[0].recipe.id, 'candidate1');
+    assert.equal('fingerprint' in required.candidates[0].recipe, false);
+    return true;
+  });
+  assert.equal(creates, 0);
+
+  for (const duplicateReview of [
+    {},
+    { confirmDistinctRecipe: true },
+    { resultDigest: required.resultDigest },
+    { resultDigest: required.resultDigest, confirmDistinctRecipe: false },
+  ]) {
+    await assert.rejects(() => recipeService.createRecipe(adoboPayload({ duplicateReview })), (error) => {
+      assert.equal(error.code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+      assert.equal(error.details[0].duplicateReview.resultDigest, required.resultDigest);
+      assert.equal(error.details[0].duplicateReview.candidates[0].recipe.id, 'candidate1');
+      return true;
+    });
+    assert.equal(creates, 0);
+  }
+
+  candidate = { ...candidate, isActive: false };
+  let fresh;
+  await assert.rejects(() => recipeService.createRecipe(adoboPayload({
+    duplicateReview: { resultDigest: required.resultDigest, confirmDistinctRecipe: true },
+  })), (error) => {
+    assert.equal(error.code, 'RECIPE_DUPLICATE_REVIEW_STALE');
+    fresh = error.details[0].duplicateReview;
+    assert.notEqual(fresh.resultDigest, required.resultDigest);
+    return true;
+  });
+  assert.equal(creates, 0);
+
+  await recipeService.createRecipe(adoboPayload({
+    duplicateReview: { resultDigest: fresh.resultDigest, confirmDistinctRecipe: true },
+  }));
+  assert.equal(creates, 1);
+  assert.equal('duplicateReview' in persisted, false);
+  assert.equal('confirmFilipinoCuisine' in persisted, false);
+});
+
+test('publish reruns duplicate comparison immediately before mutation and accepts only the current acknowledged digest', async (t) => {
+  const updatedAt = new Date('2026-09-29T01:00:00.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  let candidate = completeStoredRecipe({
+    _id: 'candidate1', publicationStatus: undefined, updatedAt: new Date('2026-09-29T00:00:00.000Z'),
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [candidate], candidateUniverseCount: 1, comparedCount: 1, truncated: false,
+  }));
+  let publishes = 0;
+  t.mock.method(recipeRepository, 'publishById', async () => { publishes += 1; return { ...draft, publicationStatus: 'published' }; });
+
+  const checked = await recipeService.checkRecipeDuplicates({ recipeId: 'recipe1', expectedUpdatedAt: updatedAt.toISOString() });
+  assert.equal(checked.candidates[0].recipe.publicationStatusSource, 'legacy');
+  candidate = { ...candidate, instructions: ['Candidate changed.'], updatedAt: new Date('2026-09-29T02:00:00.000Z') };
+  await assert.rejects(() => recipeService.publishRecipe('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+    duplicateReview: { resultDigest: checked.resultDigest, confirmDistinctRecipe: true },
+  }, { actorId: 'moderator1' }), { code: 'RECIPE_DUPLICATE_REVIEW_STALE' });
+  assert.equal(publishes, 0);
+
+  const fresh = await recipeService.checkRecipeDuplicates({ recipeId: 'recipe1', expectedUpdatedAt: updatedAt.toISOString() });
+  await recipeService.publishRecipe('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+    duplicateReview: { resultDigest: fresh.resultDigest, confirmDistinctRecipe: true },
+  }, { actorId: 'moderator1' });
+  assert.equal(publishes, 1);
+});
+
+test('publish sends every semantically incomplete acknowledgement to fresh required-review enforcement', async (t) => {
+  const updatedAt = new Date('2026-09-29T01:00:00.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [], candidateUniverseCount: 501, comparedCount: 500, truncated: true,
+  }));
+  let publishes = 0;
+  t.mock.method(recipeRepository, 'publishById', async () => { publishes += 1; return draft; });
+  let freshDigest;
+  for (const duplicateReview of [
+    undefined,
+    {},
+    { confirmDistinctRecipe: true },
+    { resultDigest: 'a'.repeat(64) },
+    { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: false },
+  ]) {
+    await assert.rejects(() => recipeService.publishRecipe('recipe1', {
+      expectedUpdatedAt: updatedAt.toISOString(),
+      ...(duplicateReview === undefined ? {} : { duplicateReview }),
+    }, { actorId: 'moderator1' }), (error) => {
+      assert.equal(error.code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+      assert.equal(error.details[0].duplicateReview.truncated, true);
+      freshDigest ||= error.details[0].duplicateReview.resultDigest;
+      assert.equal(error.details[0].duplicateReview.resultDigest, freshDigest);
+      return true;
+    });
+    assert.equal(publishes, 0);
+  }
+});
+
+test('duplicate repository uses five bounded lifecycle branches, self exclusion, and deterministic 500-window metadata', async (t) => {
+  const calls = [];
+  const newest = Array.from({ length: 501 }, (_, index) => ({
+    _id: String(index).padStart(24, '0'),
+    updatedAt: new Date(Date.UTC(2026, 8, 29, 0, 0, 0, 501 - index)),
+  }));
+  t.mock.method(Recipe, 'find', (filter, projection) => {
+    const call = { filter, projection, sort: null, limit: null };
+    calls.push(call);
+    return {
+      sort(value) { call.sort = value; return this; },
+      limit(value) { call.limit = value; return this; },
+      async lean() { return filter.publicationStatus === 'published' && filter.isActive === true ? newest : []; },
+    };
+  });
+  t.mock.method(Recipe, 'countDocuments', async (filter) => (
+    filter.publicationStatus === 'published' && filter.isActive === true ? 501 : 0
+  ));
+
+  const result = await recipeRepository.findDuplicateCandidates({ excludeId: 'self-id', limit: 500 });
+  assert.equal(calls.length, 5);
+  assert.ok(calls.every((call) => call.limit === 501));
+  assert.ok(calls.every((call) => call.filter._id.$ne === 'self-id'));
+  assert.ok(calls.every((call) => call.sort.updatedAt === -1 && call.sort._id === 1));
+  assert.deepEqual(calls.map((call) => [call.filter.publicationStatus, call.filter.isActive]), [
+    ['published', true], ['published', false], [null, true], [null, false], ['draft', true],
+  ]);
+  assert.equal(result.candidateUniverseCount, 501);
+  assert.equal(result.comparedCount, 500);
+  assert.equal(result.truncated, true);
+  assert.equal(result.candidates.length, 500);
+});
+
+test('duplicate repository resolves merged-window timestamp ties by ascending Recipe id', async (t) => {
+  const tiedAt = new Date('2026-09-29T00:00:00.000Z');
+  const branchIds = ['000000000000000000000005', '000000000000000000000001', '000000000000000000000003'];
+  let branch = 0;
+  t.mock.method(Recipe, 'find', () => {
+    const id = branchIds[branch++];
+    return {
+      sort() { return this; },
+      limit() { return this; },
+      async lean() { return id ? [{ _id: id, updatedAt: tiedAt }] : []; },
+    };
+  });
+  t.mock.method(Recipe, 'countDocuments', async () => 1);
+
+  const result = await recipeRepository.findDuplicateCandidates({ limit: 2 });
+  assert.deepEqual(result.candidates.map(({ _id }) => String(_id)), [
+    '000000000000000000000001',
+    '000000000000000000000003',
+  ]);
+  assert.equal(result.candidateUniverseCount, 5);
+  assert.equal(result.comparedCount, 2);
+  assert.equal(result.truncated, true);
 });
 
 test('updateRecipe does not re-verify ingredients for an unrelated field update while already active', async (t) => {

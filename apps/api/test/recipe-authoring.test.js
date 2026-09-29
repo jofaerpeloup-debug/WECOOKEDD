@@ -376,6 +376,9 @@ test('publish validates completeness and ingredients, then atomically stamps act
   const draft = fullRecipe({ publishedAt: existingPublishedAt });
   let transition;
   t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates: [], candidateUniverseCount: 0, comparedCount: 0, truncated: false,
+  }));
   t.mock.method(ingredientService, 'findIngredientById', async () => ({ _id: INGREDIENT_ID, isActive: true }));
   t.mock.method(recipeRepository, 'publishById', async (id, args) => {
     transition = { id, ...args };
