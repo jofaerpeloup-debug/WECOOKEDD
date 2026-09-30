@@ -1,4 +1,7 @@
-import { RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES } from '../api/recipeOptions';
+import {
+  categoryLabel, dietaryTagLabel, regionLabel, RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS,
+  RECIPE_DIFFICULTIES, RECIPE_REGIONS,
+} from '../api/recipeOptions';
 
 export const MAX_PREP_MINUTES = 1440;
 
@@ -9,15 +12,9 @@ export const DIFFICULTY_OPTIONS = [
   { value: 'hard', label: 'Hard' },
 ];
 
-export const DIETARY_OPTIONS = [
-  { value: '', label: 'Any' },
-  { value: 'vegetarian', label: 'Vegetarian' },
-  { value: 'vegan', label: 'Vegan' },
-  { value: 'pescatarian', label: 'Pescatarian' },
-  { value: 'glutenFree', label: 'Gluten-free' },
-  { value: 'dairyFree', label: 'Dairy-free' },
-  { value: 'nutFree', label: 'Nut-free' },
-];
+export const DIETARY_OPTIONS = [{ value: '', label: 'Any' }, ...RECIPE_DIETARY_TAGS.map((value) => ({ value, label: dietaryTagLabel(value) }))];
+export const REGION_OPTIONS = [{ value: '', label: 'Any' }, ...RECIPE_REGIONS.map((value) => ({ value, label: regionLabel(value) }))];
+export const CATEGORY_OPTIONS = [{ value: '', label: 'Any' }, ...RECIPE_CATEGORIES.map((value) => ({ value, label: categoryLabel(value) }))];
 
 const PRESET_FILTERS = {
   all: {},
@@ -40,6 +37,8 @@ function normalizedPrepMinutes(value) {
 export function normalizeDiscoverFilters(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const normalized = {};
+  if (RECIPE_REGIONS.includes(source.region)) normalized.region = source.region;
+  if (RECIPE_CATEGORIES.includes(source.category)) normalized.category = source.category;
   if (RECIPE_DIFFICULTIES.includes(source.difficulty)) {
     normalized.difficulty = source.difficulty;
   }
@@ -93,6 +92,8 @@ export function discoverFilterQuery(value) {
 export function draftFromFilters(value) {
   const filters = normalizeDiscoverFilters(value);
   return {
+    region: filters.region || '',
+    category: filters.category || '',
     difficulty: filters.difficulty || '',
     dietaryTag: filters.dietaryTag || '',
     maxPrepTimeMinutes:
@@ -104,6 +105,8 @@ export function validateDiscoverFilterDraft(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const difficulty = RECIPE_DIFFICULTIES.includes(source.difficulty) ? source.difficulty : '';
   const dietaryTag = RECIPE_DIETARY_TAGS.includes(source.dietaryTag) ? source.dietaryTag : '';
+  const region = RECIPE_REGIONS.includes(source.region) ? source.region : '';
+  const category = RECIPE_CATEGORIES.includes(source.category) ? source.category : '';
   const rawPrep = String(source.maxPrepTimeMinutes ?? '').trim();
   let prepError = null;
 
@@ -120,6 +123,8 @@ export function validateDiscoverFilterDraft(value) {
 
   return {
     filters: normalizeDiscoverFilters({
+      region,
+      category,
       difficulty,
       dietaryTag,
       maxPrepTimeMinutes: rawPrep,

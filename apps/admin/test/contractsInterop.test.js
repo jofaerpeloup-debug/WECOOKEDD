@@ -26,20 +26,31 @@ function virtualContractsEntry() {
       if (id !== virtualEntryId) return null;
 
       return `
-        import {
+        import contracts from '@wecooked/contracts';
+        const {
           INGREDIENT_CATEGORIES,
           INGREDIENT_CATEGORY_LABELS,
           NEW_PASSWORD_ERROR_MESSAGES,
-        } from '@wecooked/contracts';
+          RECIPE_REGIONS,
+          RECIPE_REGION_LABELS,
+          RECIPE_CATEGORIES,
+          RECIPE_CATEGORY_LABELS,
+          RECIPE_DIETARY_TAGS,
+        } = contracts;
         export const minimumPasswordMessage = NEW_PASSWORD_ERROR_MESSAGES.MIN_CHARS;
         export const ingredientCategories = INGREDIENT_CATEGORIES;
         export const soyCategoryLabel = INGREDIENT_CATEGORY_LABELS.soy;
+        export const recipeRegions = RECIPE_REGIONS;
+        export const recipeRegionLabels = RECIPE_REGION_LABELS;
+        export const recipeCategories = RECIPE_CATEGORIES;
+        export const recipeCategoryLabels = RECIPE_CATEGORY_LABELS;
+        export const recipeDietaryTags = RECIPE_DIETARY_TAGS;
       `;
     },
   };
 }
 
-test('Staff production config bundles named exports from the CommonJS contracts workspace', async () => {
+test('Staff production config bundles the CommonJS contracts workspace exports', async () => {
   const config = await loadStaffConfig('build', 'production');
   const result = await build(mergeConfig(config, {
     configFile: false,
@@ -81,6 +92,7 @@ test('Staff development config optimizes and resolves the contracts workspace de
       server: {
         middlewareMode: true,
       },
+      ssr: { external: ['@wecooked/contracts'] },
     }));
 
     const importer = path.join(adminRoot, 'src', 'main.jsx');
@@ -93,6 +105,36 @@ test('Staff development config optimizes and resolves the contracts workspace de
       ),
       `Expected Vite to resolve the optimized contracts module, received ${resolved.id}`,
     );
+
+    const transformed = await server.transformRequest('/src/recipeOptions.js');
+    assert.ok(transformed, 'Expected the dev server to transform recipeOptions.js');
+    assert.match(
+      transformed.code,
+      /const contracts = .*\.__esModule \? .*\.default :/,
+      'Expected Vite to normalize the CommonJS default export before recipeOptions reads it',
+    );
+    assert.doesNotMatch(transformed.code, /import\s*\{[^}]*RECIPE_REGIONS[^}]*\}\s*from/);
+
+    const options = await server.ssrLoadModule('/src/recipeOptions.js');
+    assert.deepEqual(options.RECIPE_REGIONS.map(({ value, label }) => [value, label]), [
+      ['national-capital-region', 'National Capital Region (NCR)'],
+      ['cordillera-administrative-region', 'Cordillera Administrative Region (CAR)'],
+      ['ilocos-region', 'Ilocos Region'], ['cagayan-valley', 'Cagayan Valley'],
+      ['central-luzon', 'Central Luzon'], ['calabarzon', 'CALABARZON'],
+      ['mimaropa-region', 'MIMAROPA Region'], ['bicol-region', 'Bicol Region'],
+      ['western-visayas', 'Western Visayas'], ['negros-island-region', 'Negros Island Region (NIR)'],
+      ['central-visayas', 'Central Visayas'], ['eastern-visayas', 'Eastern Visayas'],
+      ['zamboanga-peninsula', 'Zamboanga Peninsula'], ['northern-mindanao', 'Northern Mindanao'],
+      ['davao-region', 'Davao Region'], ['soccsksargen', 'SOCCSKSARGEN'],
+      ['caraga', 'Caraga'],
+      ['bangsamoro-autonomous-region-in-muslim-mindanao', 'Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)'],
+    ]);
+    assert.deepEqual(options.RECIPE_CATEGORIES.map(({ value, label }) => [value, label]), [
+      ['breakfast', 'Breakfast'], ['lunch', 'Lunch'], ['dinner', 'Dinner'], ['snack', 'Snack'],
+    ]);
+    assert.deepEqual(options.RECIPE_DIETARY_TAGS.map(({ value }) => value), [
+      'vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree',
+    ]);
   } finally {
     try {
       await server?.close();

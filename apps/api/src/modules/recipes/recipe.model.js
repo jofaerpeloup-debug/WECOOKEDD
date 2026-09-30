@@ -2,11 +2,12 @@ const mongoose = require('mongoose');
 const { UNITS, validateQuantityForUnit } = require('../../shared/constants/measurement-units');
 const { SLUG_MAX_LENGTH, SLUG_PATTERN } = require('../../shared/validation/slug');
 const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
+const { RECIPE_REGIONS, RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS } = require('@wecooked/contracts');
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 const PUBLICATION_STATUSES = ['draft', 'published'];
 
-const DIETARY_TAGS = ['vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree'];
+const DIETARY_TAGS = RECIPE_DIETARY_TAGS;
 
 const MAX_TITLE_LENGTH = 150;
 const MAX_DESCRIPTION_LENGTH = 2000;
@@ -96,23 +97,15 @@ const recipeSchema = new mongoose.Schema(
       trim: true,
       maxlength: MAX_DESCRIPTION_LENGTH,
     },
-    // Philippine `region` and recipe `category` — conservative optional
-    // canonical slugs, not enums (no approved taxonomy yet). Legacy recipes
-    // predating this field remain valid with neither set. See
-    // docs/architecture/recipes.md and shared/validation/slug.js.
+    // Optional canonical metadata. Missing remains meaningful for Drafts and
+    // Published recipes; populated values must come from the shared contract.
     region: {
       type: String,
-      trim: true,
-      lowercase: true,
-      maxlength: SLUG_MAX_LENGTH,
-      match: SLUG_PATTERN,
+      enum: RECIPE_REGIONS,
     },
     category: {
       type: String,
-      trim: true,
-      lowercase: true,
-      maxlength: SLUG_MAX_LENGTH,
-      match: SLUG_PATTERN,
+      enum: RECIPE_CATEGORIES,
     },
     difficulty: {
       type: String,
@@ -239,6 +232,8 @@ module.exports.DIFFICULTIES = DIFFICULTIES;
 module.exports.PUBLICATION_STATUSES = PUBLICATION_STATUSES;
 module.exports.UNITS = UNITS;
 module.exports.DIETARY_TAGS = DIETARY_TAGS;
+module.exports.REGIONS = RECIPE_REGIONS;
+module.exports.CATEGORIES = RECIPE_CATEGORIES;
 module.exports.SLUG_MAX_LENGTH = SLUG_MAX_LENGTH;
 module.exports.SLUG_PATTERN = SLUG_PATTERN;
 module.exports.MAX_TITLE_LENGTH = MAX_TITLE_LENGTH;

@@ -42,7 +42,7 @@ function fakeRecipeDoc(overrides = {}) {
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce, vinegar, garlic, and spices.',
     region: 'central-luzon',
-    category: 'main-dish',
+    category: 'dinner',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -273,12 +273,12 @@ test('GET /api/v1/recipes?region=&category=&maxPrepTimeMinutes=20 is applied as 
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app)
-    .get('/api/v1/recipes?region=Central%20Luzon&category=main-dish&maxPrepTimeMinutes=20')
+    .get('/api/v1/recipes?region=central-luzon&category=dinner&maxPrepTimeMinutes=20')
     .set('Authorization', `Bearer ${token}`);
 
   assert.equal(response.status, 200);
   assert.equal(capturedFilter.region, 'central-luzon');
-  assert.equal(capturedFilter.category, 'main-dish');
+  assert.equal(capturedFilter.category, 'dinner');
   assert.deepEqual(capturedFilter.prepTimeMinutes, { $lte: 20 });
 });
 
@@ -304,7 +304,7 @@ test('GET /api/v1/recipes response carries region/category/steps and no cuisine'
 
   const recipe = response.body.data.recipes[0];
   assert.equal(recipe.region, 'central-luzon');
-  assert.equal(recipe.category, 'main-dish');
+  assert.equal(recipe.category, 'dinner');
   assert.equal('cuisine' in recipe, false);
   assert.equal(recipe.steps[0].order, 1);
   assert.equal(recipe.steps[0].text, recipe.instructions[0]);
@@ -716,7 +716,7 @@ test('POST /api/v1/recipes accepts structured steps and a canonical region/categ
     });
   });
 
-  const body = validCreatePayload({ region: 'Bicol', category: 'Main Dish' });
+  const body = validCreatePayload({ region: 'bicol-region', category: 'dinner' });
   delete body.instructions;
   body.steps = [
     { order: 2, text: 'Simmer until tender.' },
@@ -731,8 +731,8 @@ test('POST /api/v1/recipes accepts structured steps and a canonical region/categ
 
   assert.equal(response.status, 201);
   assert.deepEqual(capturedData.instructions, ['Combine the marinade.', 'Simmer until tender.']);
-  assert.equal(capturedData.region, 'bicol');
-  assert.equal(capturedData.category, 'main-dish');
+  assert.equal(capturedData.region, 'bicol-region');
+  assert.equal(capturedData.category, 'dinner');
   assert.equal('cuisine' in capturedData, false);
 });
 
@@ -742,7 +742,7 @@ test('PATCH /api/v1/recipes/:id clears category with an explicit null and the se
     _id: RECIPE_ID,
     isActive: true,
     region: 'central-luzon',
-    category: 'main-dish',
+    category: 'dinner',
     ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
   }));
   let capturedOps;

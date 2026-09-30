@@ -1,7 +1,7 @@
 const { z } = require('zod');
 const { objectIdSchema } = require('../../shared/validation/object-id');
-const { SLUG_MAX_LENGTH, SLUG_PATTERN, normalizeSlug } = require('../../shared/validation/slug');
 const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
+const { RECIPE_REGIONS, RECIPE_CATEGORIES } = require('@wecooked/contracts');
 const {
   DIFFICULTIES,
   UNITS,
@@ -53,20 +53,17 @@ const descriptionSchema = z
   .min(1, 'Description is required.')
   .max(MAX_DESCRIPTION_LENGTH, `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.`);
 
-// `region` / `category`: a conservative canonical slug. Case and internal
-// whitespace/underscores are normalized ("Central Luzon" -> "central-luzon");
-// anything that still isn't a slug afterwards (stray punctuation, empty) is
-// rejected rather than silently mangled. Shared by list-query, create and
-// update. There is no controlled vocabulary yet — see slug.js.
-const slugFieldSchema = z
-  .string('Value must be a string.')
-  .trim()
-  .min(1, 'Value cannot be empty.')
-  .max(SLUG_MAX_LENGTH, `Value must be ${SLUG_MAX_LENGTH} characters or fewer.`)
-  .transform((value) => normalizeSlug(value))
-  .refine((value) => value.length >= 1 && value.length <= SLUG_MAX_LENGTH && SLUG_PATTERN.test(value), {
-    message: 'Value must be a lowercase slug (letters, numbers and single hyphens), e.g. "central-luzon".',
-  });
+// Exact shared enums: legacy aliases belong only in the one-time migration.
+const regionSchema = z.enum(RECIPE_REGIONS, 'Invalid recipe region.');
+const categorySchema = z.enum(RECIPE_CATEGORIES, 'Invalid recipe category.');
+const legacyStoredRegionSchema = z.enum(
+  [...RECIPE_REGIONS, 'tondo', 'bicol', 'mangaldan'],
+  'Invalid stored recipe region.',
+);
+const legacyStoredCategorySchema = z.enum(
+  [...RECIPE_CATEGORIES, 'fine-dining-restaurant', 'medium'],
+  'Invalid stored recipe category.',
+);
 
 const difficultySchema = z.enum(DIFFICULTIES, 'Invalid difficulty.');
 const unitSchema = z.enum(UNITS, 'Invalid unit.');
@@ -333,8 +330,8 @@ const listRecipesSchema = z.object({
   query: z
     .object({
       search: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
-      region: slugFieldSchema.optional(),
-      category: slugFieldSchema.optional(),
+      region: regionSchema.optional(),
+      category: categorySchema.optional(),
       difficulty: difficultySchema.optional(),
       dietaryTag: dietaryTagSchema.optional(),
       ingredientId: objectIdSchema.optional(),
@@ -361,8 +358,8 @@ const duplicateReviewAcknowledgementSchema = z
 const publishedRecipeFields = {
   title: titleSchema,
   description: descriptionSchema,
-  region: slugFieldSchema.optional(),
-  category: slugFieldSchema.optional(),
+  region: regionSchema.optional(),
+  category: categorySchema.optional(),
   difficulty: difficultySchema,
   prepTimeMinutes: prepTimeMinutesSchema.optional(),
   cookTimeMinutes: cookTimeMinutesSchema,
@@ -402,6 +399,11 @@ const legacyPublishedRecipeBodySchema = z
   .object({
     ...publishedRecipeFields,
     title: legacyTitleSchema,
+    // Read-time completeness remains compatible with the five frozen legacy
+    // values until migration. Request schemas and the Mongoose enums continue
+    // to use regionSchema/categorySchema, so these are not write aliases.
+    region: legacyStoredRegionSchema.optional(),
+    category: legacyStoredCategorySchema.optional(),
     prepTimeMinutes: legacyPrepTimeMinutesSchema.optional(),
     cookTimeMinutes: legacyCookTimeMinutesSchema,
     instructions: legacyInstructionsArraySchema.optional(),
@@ -429,8 +431,8 @@ const createDraftSchema = z.object({
     .object({
       title: titleSchema,
       description: descriptionSchema.optional(),
-      region: slugFieldSchema.optional(),
-      category: slugFieldSchema.optional(),
+      region: regionSchema.optional(),
+      category: categorySchema.optional(),
       difficulty: difficultySchema.optional(),
       prepTimeMinutes: prepTimeMinutesSchema.optional(),
       cookTimeMinutes: cookTimeMinutesSchema.optional(),
@@ -460,10 +462,10 @@ const updateRecipeSchema = z.object({
       // effective publication state's completeness after merging.
       description: descriptionSchema.nullable().optional(),
       // On PATCH, an explicit `null` clears (unsets) the field — the only way
-      // to correct a bad classification. A valid slug replaces it; an empty
-      // string or non-slug is still rejected (never silently unset).
-      region: slugFieldSchema.nullable().optional(),
-      category: slugFieldSchema.nullable().optional(),
+      // to correct a bad classification. A canonical value replaces it; an
+      // empty string or unknown value is rejected (never silently unset).
+      region: regionSchema.nullable().optional(),
+      category: categorySchema.nullable().optional(),
       difficulty: difficultySchema.nullable().optional(),
       prepTimeMinutes: prepTimeMinutesSchema.nullable().optional(),
       cookTimeMinutes: cookTimeMinutesSchema.nullable().optional(),

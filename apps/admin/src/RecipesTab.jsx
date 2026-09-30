@@ -6,8 +6,8 @@ import { archiveRecipeAndRefresh, restoreRecipeAndRefresh } from './recipeCatalo
 import IngredientPicker from './IngredientPicker.jsx';
 import {
   DIETARY_TAG_LABELS, DIFFICULTY_LABELS, MAX_PREP_TIME_MINUTES,
-  RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_SORTS, RECIPE_STATUS_FILTERS,
-  normalizeSlugInput, slugLabel,
+  RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_REGIONS,
+  RECIPE_SORTS, RECIPE_STATUS_FILTERS, categoryLabel, regionLabel,
 } from './recipeOptions.js';
 import RecipeAuthoringWizard from './recipeAuthoring/RecipeAuthoringWizard.jsx';
 import RecipeDetailsModal from './recipeAuthoring/RecipeDetailsModal.jsx';
@@ -35,8 +35,8 @@ function useRecipes() {
       setState((current) => ({ ...current, loading: true, error: '' }));
       try {
         const result = await listRecipes({
-          search: filters.search.trim() || undefined, region: normalizeSlugInput(filters.region) || undefined,
-          category: normalizeSlugInput(filters.category) || undefined, difficulty: filters.difficulty || undefined,
+          search: filters.search.trim() || undefined, region: filters.region || undefined,
+          category: filters.category || undefined, difficulty: filters.difficulty || undefined,
           dietaryTag: filters.dietaryTag || undefined, ingredientId: filters.ingredient?.id || undefined,
           maxPrepTimeMinutes: filters.maxPrepTimeMinutes === '' ? undefined : Number(filters.maxPrepTimeMinutes),
           status: filters.status, sort: filters.sort, page: filters.page, limit: PAGE_LIMIT,
@@ -89,8 +89,8 @@ export default function RecipesTab({ canWrite = false, canUploadRecipeImage = fa
     <div className="wc-topbar"><h1>Recipes</h1><div className="wc-topbar-actions wc-rcp-filters">
       {!canWrite && <span className="wc-pill active">Read-only</span>}
       <div className="wc-search"><Search size={15} /><input placeholder="Search title or description…" value={filters.search} onChange={(e) => patchFilters({ search: e.target.value })} /></div>
-      <input className="wc-rcp-num" aria-label="Filter by region slug" placeholder="Region slug…" value={filters.region} onChange={(e) => patchFilters({ region: e.target.value })} />
-      <input className="wc-rcp-num" aria-label="Filter by category slug" placeholder="Category slug…" value={filters.category} onChange={(e) => patchFilters({ category: e.target.value })} />
+      <select className="wc-rcp-select" aria-label="Filter by region" value={filters.region} onChange={(e) => patchFilters({ region: e.target.value })}><option value="">Any region</option>{RECIPE_REGIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+      <select className="wc-rcp-select" aria-label="Filter by category" value={filters.category} onChange={(e) => patchFilters({ category: e.target.value })}><option value="">Any category</option>{RECIPE_CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
       <select className="wc-rcp-select" aria-label="Filter by difficulty" value={filters.difficulty} onChange={(e) => patchFilters({ difficulty: e.target.value })}><option value="">Any difficulty</option>{RECIPE_DIFFICULTIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
       <select className="wc-rcp-select" aria-label="Filter by dietary tag" value={filters.dietaryTag} onChange={(e) => patchFilters({ dietaryTag: e.target.value })}><option value="">Any dietary tag</option>{RECIPE_DIETARY_TAGS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
       <input className="wc-rcp-num" type="number" min="0" max={MAX_PREP_TIME_MINUTES} aria-label="Filter by maximum prep time" placeholder="Max prep (min)" value={filters.maxPrepTimeMinutes} onChange={(e) => patchFilters({ maxPrepTimeMinutes: e.target.value })} />
@@ -105,7 +105,7 @@ export default function RecipesTab({ canWrite = false, canUploadRecipeImage = fa
     {!error && !loading && <ManagementPagination pagination={pagination} noun="recipe" onPageChange={(page) => patchFilters({ page })} />}
     {!error && filters.status === 'active' && items.length > 0 && <div className="wc-rcp-count-note">The active view hides any recipe whose required ingredient has since been archived, so a page can show fewer than {PAGE_LIMIT} rows and the total can be a slight overcount. Switch status to “All” to see and fix those.</div>}
     {!error && <div className="wc-table-wrap">{loading && !items.length ? <div className="wc-rcp-status">Loading recipes…</div> : !items.length ? <div className="wc-empty"><ChefHat size={28} /><div>No recipes match this view.</div></div> : <table className="wc-table"><thead><tr><th>Title</th><th>Category</th><th>Region</th><th>Difficulty</th><th>Prep</th><th>Cook</th><th>Servings</th><th>Dietary</th><th>Status</th><th>Actions</th></tr></thead><tbody>{items.map((recipe) => <tr key={recipe.id}>
-      <td>{recipe.title}</td><td>{slugLabel(recipe.category) || emDash}</td><td>{slugLabel(recipe.region) || emDash}</td><td>{recipe.difficulty ? <span className={`wc-pill ${recipe.difficulty}`}>{DIFFICULTY_LABELS[recipe.difficulty] || recipe.difficulty}</span> : emDash}</td><td>{recipe.prepTimeMinutes == null ? emDash : `${recipe.prepTimeMinutes}m`}</td><td>{recipe.cookTimeMinutes == null ? emDash : formatDuration(recipe.cookTimeMinutes)}</td><td>{recipe.servings ?? emDash}</td>
+      <td>{recipe.title}</td><td>{categoryLabel(recipe.category) || emDash}</td><td>{regionLabel(recipe.region) || emDash}</td><td>{recipe.difficulty ? <span className={`wc-pill ${recipe.difficulty}`}>{DIFFICULTY_LABELS[recipe.difficulty] || recipe.difficulty}</span> : emDash}</td><td>{recipe.prepTimeMinutes == null ? emDash : `${recipe.prepTimeMinutes}m`}</td><td>{recipe.cookTimeMinutes == null ? emDash : formatDuration(recipe.cookTimeMinutes)}</td><td>{recipe.servings ?? emDash}</td>
       <td className="wc-rcp-tags">{recipe.dietaryTags?.length ? recipe.dietaryTags.map((tag) => <span className="wc-tag" key={tag}>{DIETARY_TAG_LABELS[tag] || tag}</span>) : emDash}</td><td><span className={`wc-pill ${recipe.isActive ? 'active' : 'inactive'}`}>{statusLabel(recipe)}</span></td>
       <td>{rowState.id === recipe.id && rowState.error ? <div className="wc-rcp-confirm"><span className="wc-rcp-error">{rowState.error}</span><button className="wc-btn-secondary" onClick={reload}>Reload table</button><button className="wc-btn-secondary" onClick={() => setRowState({ id: null, error: '' })}>Dismiss</button></div> : confirmArchive?.id === recipe.id ? <div className="wc-rcp-confirm"><span>{recipe.publicationStatus === 'draft' ? 'Archive this Draft? Its publication state will be preserved.' : 'Archive this Published recipe? It will be hidden from users, but remain Published.'}</span><button className="wc-btn-primary" onClick={() => lifecycle(recipe, 'archive')}>Archive</button><button className="wc-btn-secondary" onClick={() => setConfirmArchive(null)}>Cancel</button></div> : <div className="wc-rcp-actions">
         <button className="wc-btn-secondary" onClick={() => open(recipe)}>{canWrite ? (recipe.publicationStatus === 'draft' ? (recipe.isActive ? 'Resume' : 'Edit draft') : 'Edit') : 'View'}</button>

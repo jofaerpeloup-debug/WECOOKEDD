@@ -17,6 +17,8 @@ import { useTheme } from '../theme/ThemeContext';
 import {
   DIETARY_OPTIONS,
   DIFFICULTY_OPTIONS,
+  REGION_OPTIONS,
+  CATEGORY_OPTIONS,
   draftFromFilters,
   validateDiscoverFilterDraft,
 } from '../utils/discoverFilters';
@@ -123,6 +125,20 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.content}
             >
+              <ChoiceGroup
+                label="Region"
+                options={REGION_OPTIONS}
+                value={draft.region}
+                onChange={(region) => setDraft((current) => ({ ...current, region }))}
+                styles={styles}
+              />
+              <ChoiceGroup
+                label="Category"
+                options={CATEGORY_OPTIONS}
+                value={draft.category}
+                onChange={(category) => setDraft((current) => ({ ...current, category }))}
+                styles={styles}
+              />
               <ChoiceGroup
                 label="Difficulty"
                 options={DIFFICULTY_OPTIONS}

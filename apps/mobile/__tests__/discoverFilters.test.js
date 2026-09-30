@@ -1,6 +1,8 @@
 const {
   DIETARY_OPTIONS,
   DIFFICULTY_OPTIONS,
+  REGION_OPTIONS,
+  CATEGORY_OPTIONS,
   MAX_PREP_MINUTES,
   activeFilterCount,
   discoverFilterQuery,
@@ -98,6 +100,12 @@ describe('Discover filter normalization and server query projection', () => {
       'dairyFree',
       'nutFree',
     ]);
+    expect(REGION_OPTIONS.map((option) => option.value).slice(0, 3)).toEqual([
+      '', 'national-capital-region', 'cordillera-administrative-region',
+    ]);
+    expect(CATEGORY_OPTIONS.map((option) => option.value)).toEqual([
+      '', 'breakfast', 'lunch', 'dinner', 'snack',
+    ]);
   });
 
   it('drops unsupported, array-valued, and unrelated fields', () => {
@@ -106,7 +114,7 @@ describe('Discover filter normalization and server query projection', () => {
         difficulty: ['easy'],
         dietaryTag: 'keto',
         maxPrepTimeMinutes: 20.5,
-        category: 'dinner',
+        category: 'dessert',
       })
     ).toEqual({});
     expect(normalizeDiscoverFilters({ maxPrepTimeMinutes: true })).toEqual({});
@@ -116,11 +124,13 @@ describe('Discover filter normalization and server query projection', () => {
   it('projects all approved families with AND-style scalar query keys', () => {
     expect(
       discoverFilterQuery({
+        region: 'bicol-region',
+        category: 'dinner',
         difficulty: 'hard',
         dietaryTag: 'nutFree',
         maxPrepTimeMinutes: '45',
       })
-    ).toEqual({ difficulty: 'hard', dietaryTag: 'nutFree', maxPrepTimeMinutes: 45 });
+    ).toEqual({ region: 'bicol-region', category: 'dinner', difficulty: 'hard', dietaryTag: 'nutFree', maxPrepTimeMinutes: 45 });
   });
 
   it('omits Any and blank optional values', () => {
@@ -170,6 +180,8 @@ describe('Maximum prep draft validation', () => {
         maxPrepTimeMinutes: 60,
       })
     ).toEqual({
+      region: '',
+      category: '',
       difficulty: 'medium',
       dietaryTag: 'pescatarian',
       maxPrepTimeMinutes: '60',

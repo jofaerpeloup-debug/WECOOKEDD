@@ -1,4 +1,18 @@
-// Frontend-safe mirror of the backend recipe enums and limits.
+import contracts from '@wecooked/contracts';
+
+// @wecooked/contracts is CommonJS. Vite's browser dependency optimizer exposes
+// its module.exports object as the default export; requesting newly-added
+// properties as ESM named exports can leave them undefined in the dev runtime.
+const {
+  RECIPE_REGIONS: CONTRACT_RECIPE_REGIONS,
+  RECIPE_REGION_LABELS,
+  RECIPE_CATEGORIES: CONTRACT_RECIPE_CATEGORIES,
+  RECIPE_CATEGORY_LABELS,
+  RECIPE_DIETARY_TAGS: CONTRACT_RECIPE_DIETARY_TAGS,
+  RECIPE_DIETARY_TAG_LABELS,
+} = contracts;
+
+// Frontend-safe recipe options and limits.
 //
 // Source of truth:
 //   apps/api/src/modules/recipes/recipe.model.js
@@ -13,47 +27,8 @@
 // carrying public API contracts, this belongs there (same note as
 // ingredientOptions.js / substitutionOptions.js).
 //
-// `cuisine` was retired from the Recipe domain in M3. `region` (Philippine
-// region) and `category` are open canonical slug strings — no controlled
-// vocabulary exists yet, so there is no enum here, just the slug rules and a
-// `slugLabel` humanizer.
-
-// Mirrors shared/validation/slug.js. A canonical slug: lowercase alphanumeric
-// words joined by single hyphens, 1–64 chars. Case and internal whitespace
-// are normalized by the backend; anything else is rejected.
-export const SLUG_MAX_LENGTH = 64;
-export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-// "central-luzon" -> "Central Luzon". Returns '' for an empty/absent value —
-// never fabricates a label.
-export function slugLabel(value) {
-  if (!value || typeof value !== 'string') return '';
-  return value
-    .split('-')
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-// Client-side pre-check only — the backend Zod schema stays authoritative.
-export function normalizeSlugInput(value) {
-  return String(value ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '');
-}
-
-// PATCH diff for an optional slug field (`region` / `category`). Returns the
-// value to put in the patch body, or `undefined` when the caller should omit
-// the key entirely:
-//   unchanged (incl. still-blank)  -> undefined   (omit)
-//   populated field cleared to ""  -> null        (explicit unset; API $unsets)
-//   changed to a new slug          -> the normalized slug
-// This is the exact contract the backend PATCH accepts (recipe.validation.js
-// updateRecipeSchema + recipe.service.js) — see the API PATCH tests.
-export function slugPatchValue(current, formValue) {
-  const next = normalizeSlugInput(formValue);
-  const prev = current ?? '';
-  if (next === prev) return undefined;
-  return next === '' ? null : next;
-}
+// `cuisine` remains retired. Region, category, and dietary metadata below are
+// projected directly from the dependency-free shared contract.
 
 export const RECIPE_DIFFICULTIES = [
   { value: 'easy', label: 'Easy' },
@@ -62,13 +37,17 @@ export const RECIPE_DIFFICULTIES = [
 ];
 
 export const RECIPE_DIETARY_TAGS = [
-  { value: 'vegetarian', label: 'Vegetarian' },
-  { value: 'vegan', label: 'Vegan' },
-  { value: 'pescatarian', label: 'Pescatarian' },
-  { value: 'glutenFree', label: 'Gluten-free' },
-  { value: 'dairyFree', label: 'Dairy-free' },
-  { value: 'nutFree', label: 'Nut-free' },
+  ...CONTRACT_RECIPE_DIETARY_TAGS.map((value) => ({ value, label: RECIPE_DIETARY_TAG_LABELS[value] })),
 ];
+
+export const RECIPE_REGIONS = CONTRACT_RECIPE_REGIONS.map((value) => ({
+  value, label: RECIPE_REGION_LABELS[value],
+}));
+export const RECIPE_CATEGORIES = CONTRACT_RECIPE_CATEGORIES.map((value) => ({
+  value, label: RECIPE_CATEGORY_LABELS[value],
+}));
+export function regionLabel(value) { return RECIPE_REGION_LABELS[value] || ''; }
+export function categoryLabel(value) { return RECIPE_CATEGORY_LABELS[value] || ''; }
 
 // The controlled measurement-unit set. `toTaste` is special: it means the
 // quantity is deliberately unspecified ("salt to taste"), and the backend

@@ -45,6 +45,41 @@ const INGREDIENT_CATEGORY_LABELS = Object.freeze({
   soy: 'Soy',
 });
 
+const RECIPE_REGIONS = Object.freeze([
+  'national-capital-region', 'cordillera-administrative-region', 'ilocos-region',
+  'cagayan-valley', 'central-luzon', 'calabarzon', 'mimaropa-region',
+  'bicol-region', 'western-visayas', 'negros-island-region', 'central-visayas',
+  'eastern-visayas', 'zamboanga-peninsula', 'northern-mindanao', 'davao-region',
+  'soccsksargen', 'caraga', 'bangsamoro-autonomous-region-in-muslim-mindanao',
+]);
+const RECIPE_REGION_LABELS = Object.freeze({
+  'national-capital-region': 'National Capital Region (NCR)',
+  'cordillera-administrative-region': 'Cordillera Administrative Region (CAR)',
+  'ilocos-region': 'Ilocos Region',
+  'cagayan-valley': 'Cagayan Valley',
+  'central-luzon': 'Central Luzon',
+  calabarzon: 'CALABARZON',
+  'mimaropa-region': 'MIMAROPA Region',
+  'bicol-region': 'Bicol Region',
+  'western-visayas': 'Western Visayas',
+  'negros-island-region': 'Negros Island Region (NIR)',
+  'central-visayas': 'Central Visayas',
+  'eastern-visayas': 'Eastern Visayas',
+  'zamboanga-peninsula': 'Zamboanga Peninsula',
+  'northern-mindanao': 'Northern Mindanao',
+  'davao-region': 'Davao Region',
+  soccsksargen: 'SOCCSKSARGEN',
+  caraga: 'Caraga',
+  'bangsamoro-autonomous-region-in-muslim-mindanao': 'Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)',
+});
+const RECIPE_CATEGORIES = Object.freeze(['breakfast', 'lunch', 'dinner', 'snack']);
+const RECIPE_CATEGORY_LABELS = Object.freeze({ breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' });
+const RECIPE_DIETARY_TAGS = Object.freeze(['vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree']);
+const RECIPE_DIETARY_TAG_LABELS = Object.freeze({
+  vegetarian: 'Vegetarian', vegan: 'Vegan', pescatarian: 'Pescatarian',
+  glutenFree: 'Gluten-free', dairyFree: 'Dairy-free', nutFree: 'Nut-free',
+});
+
 const UPPERCASE_LETTER_PATTERN = /\p{Lu}/u;
 const LOWERCASE_LETTER_PATTERN = /\p{Ll}/u;
 const ASCII_DIGIT_PATTERN = /[0-9]/;
@@ -121,6 +156,12 @@ module.exports = {
   EMAIL_MAX_CHARS,
   INGREDIENT_CATEGORIES,
   INGREDIENT_CATEGORY_LABELS,
+  RECIPE_REGIONS,
+  RECIPE_REGION_LABELS,
+  RECIPE_CATEGORIES,
+  RECIPE_CATEGORY_LABELS,
+  RECIPE_DIETARY_TAGS,
+  RECIPE_DIETARY_TAG_LABELS,
   NEW_PASSWORD_ERROR_MESSAGES,
   utf8ByteLength,
   validateNewPassword,
