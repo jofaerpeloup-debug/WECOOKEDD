@@ -501,6 +501,19 @@ test('listRecipesSchema accepts exact canonical region/category filters', () => 
   assert.equal(result.data.query.category, 'dinner');
 });
 
+test('listRecipesSchema accepts only the frozen Draft publication filter and updated-time sort', () => {
+  const accepted = listRecipesSchema.safeParse({
+    query: { publicationStatus: 'draft', status: 'active', sort: 'updatedDesc' },
+  });
+  assert.equal(accepted.success, true);
+  assert.equal(accepted.data.query.publicationStatus, 'draft');
+  assert.equal(accepted.data.query.sort, 'updatedDesc');
+  assert.equal(listRecipesSchema.safeParse({ query: {} }).success, true);
+  for (const publicationStatus of ['published', 'all', 'Draft', '']) {
+    assert.equal(listRecipesSchema.safeParse({ query: { publicationStatus } }).success, false, publicationStatus);
+  }
+});
+
 test('listRecipesSchema rejects a retired cuisine query param and an invalid region slug', () => {
   assert.equal(listRecipesSchema.safeParse({ query: { cuisine: 'filipino' } }).success, false);
   assert.equal(listRecipesSchema.safeParse({ query: { region: 'not/a/slug' } }).success, false);

@@ -302,7 +302,7 @@ function refineImageConsistency(body, ctx, { update = false } = {}) {
 
 const statusSchema = z.enum(['active', 'inactive', 'all'], 'Invalid status.').default('active');
 const sortSchema = z
-  .enum(['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc'], 'Invalid sort value.')
+  .enum(['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc', 'updatedDesc'], 'Invalid sort value.')
   .default('titleAsc');
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(20);
@@ -330,6 +330,7 @@ const listRecipesSchema = z.object({
   query: z
     .object({
       search: z.string().trim().min(1).max(MAX_TITLE_LENGTH).optional(),
+      publicationStatus: z.literal('draft').optional(),
       region: regionSchema.optional(),
       category: categorySchema.optional(),
       difficulty: difficultySchema.optional(),

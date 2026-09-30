@@ -455,6 +455,50 @@ test('listRecipes composes a region/category filter with search and count over t
   assert.ok(findFilter.$or);
 });
 
+test('listRecipes applies the indexed active-Draft filter and updatedDesc sort to the same paginated universe', async (t) => {
+  let findArgs;
+  let countFilter;
+  t.mock.method(recipeRepository, 'findMany', async (args) => {
+    findArgs = args;
+    return [];
+  });
+  t.mock.method(recipeRepository, 'countByFilter', async (filter) => {
+    countFilter = filter;
+    return 41;
+  });
+
+  const result = await recipeService.listRecipes({
+    search: 'adobo.*',
+    publicationStatus: 'draft',
+    status: 'active',
+    page: 3,
+    limit: 20,
+    sort: 'updatedDesc',
+    isAdmin: true,
+  });
+
+  assert.deepEqual(findArgs.filter, countFilter);
+  assert.equal(findArgs.filter.publicationStatus, 'draft');
+  assert.equal(findArgs.filter.isActive, true);
+  assert.equal(findArgs.filter.$or[0].title.source, 'adobo\\.\\*');
+  assert.deepEqual(findArgs.sort, { updatedAt: -1 });
+  assert.equal(findArgs.skip, 40);
+  assert.equal(findArgs.limit, 20);
+  assert.equal(result.total, 41);
+  assert.equal('$and' in findArgs.filter, false, 'staff Draft list must not add consumer publication logic');
+});
+
+test('listRecipes leaves publication filtering unchanged when publicationStatus is omitted', async (t) => {
+  let capturedFilter;
+  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { capturedFilter = filter; return []; });
+  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
+  await recipeService.listRecipes({
+    status: 'active', page: 1, limit: 20, sort: 'titleAsc', isAdmin: true,
+  });
+  assert.equal('publicationStatus' in capturedFilter, false);
+  assert.deepEqual(capturedFilter, { isActive: true });
+});
+
 test('all five frozen legacy metadata dispositions remain consumer-visible in list and detail before migration', async (t) => {
   const legacyRecipes = [
     completeStoredRecipe({ _id: 'tondo', publicationStatus: 'published', region: 'tondo' }),

@@ -3,7 +3,10 @@ const recipeController = require('./recipe.controller');
 const { validate } = require('../../middleware/validate.middleware');
 const { authenticate } = require('../../middleware/authenticate.middleware');
 const { requireCapability } = require('../../middleware/require-capability.middleware');
-const { requireCatalogReadAllForNonActive } = require('../../middleware/catalog-read.middleware');
+const {
+  requireCatalogReadAllForNonActive,
+  requireCatalogWriteForDraftList,
+} = require('../../middleware/catalog-read.middleware');
 const { CAPABILITIES } = require('../../shared/security/capabilities');
 const {
   recipeImportIpRateLimiter,
@@ -46,6 +49,7 @@ router.get(
   '/',
   authenticate,
   validate(listRecipesSchema),
+  requireCatalogWriteForDraftList,
   requireCatalogReadAllForNonActive,
   recipeController.listRecipes
 );

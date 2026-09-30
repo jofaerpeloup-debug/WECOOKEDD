@@ -12,6 +12,7 @@ function toPagination({ page, limit, total }) {
 const listRecipes = asyncHandler(async (req, res) => {
   const {
     search,
+    publicationStatus,
     region,
     category,
     difficulty,
@@ -27,6 +28,7 @@ const listRecipes = asyncHandler(async (req, res) => {
 
   const { items, total } = await recipeService.listRecipes({
     search,
+    publicationStatus,
     region,
     category,
     difficulty,
