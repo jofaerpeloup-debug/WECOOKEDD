@@ -1,4 +1,5 @@
 import {
+  categoryLabel, DIETARY_TAG_LABELS,
   MAX_COOK_TIME_MINUTES, MAX_DESCRIPTION_LENGTH, MAX_INSTRUCTION_LENGTH,
   MAX_INSTRUCTIONS, MAX_PREP_TIME_MINUTES, MAX_SERVINGS, MAX_TITLE_LENGTH,
 } from '../recipeOptions.js';
@@ -10,9 +11,18 @@ const supportedProperties = new Set([
   'recipeYield', 'recipeInstructions', 'recipeIngredient',
 ]);
 const structuralWrapperProperties = new Set(['@context', '@graph']);
+const metadataProperties = new Set(['recipeCategory', 'suitableForDiet', 'recipeCuisine']);
+const categorySuggestions = new Map([
+  ['breakfast', 'breakfast'], ['lunch', 'lunch'], ['dinner', 'dinner'], ['snack', 'snack'],
+]);
+const dietarySuggestions = new Map([
+  ['VegetarianDiet', 'vegetarian'], ['VeganDiet', 'vegan'], ['GlutenFreeDiet', 'glutenFree'],
+]);
+const MAX_METADATA_SOURCE_DISPLAY = 200;
+const TRUNCATION_MARKER = '… [truncated]';
 
 function emptyResult(error = null) {
-  return { ok: !error, error, values: {}, mapped: [], unsupported: [], invalid: [], unresolved: [] };
+  return { ok: !error, error, values: {}, mapped: [], metadata: [], unsupported: [], invalid: [], unresolved: [] };
 }
 
 function hasType(value, expected) {
@@ -126,6 +136,107 @@ function mapIngredients(result, recipe) {
   });
 }
 
+function sourceDisplay(value) {
+  const serialized = JSON.stringify(value);
+  const text = serialized === undefined ? String(value) : serialized;
+  if (text.length <= MAX_METADATA_SOURCE_DISPLAY) return text;
+  return `${text.slice(0, MAX_METADATA_SOURCE_DISPLAY - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+}
+
+function addMetadata(result, source, value, status, details = {}) {
+  result.metadata.push({ source, sourceValue: sourceDisplay(value), status, ...details });
+}
+
+function mapCategorySuggestion(result, recipe) {
+  if (!Object.hasOwn(recipe, 'recipeCategory')) return;
+  const source = recipe.recipeCategory;
+  if (Array.isArray(source)) {
+    addMetadata(result, 'recipeCategory', source, source.length > 1 ? 'ambiguous' : 'unsupported', {
+      reason: source.length > 1
+        ? 'Multiple category values are ambiguous; no category was suggested.'
+        : 'Category arrays are not supported; no category was suggested.',
+    });
+    return;
+  }
+  if (typeof source !== 'string') {
+    addMetadata(result, 'recipeCategory', source, 'unsupported', {
+      reason: 'Expected one supported category string; no category was suggested.',
+    });
+    return;
+  }
+  const normalized = source.trim();
+  if (normalized.includes(',')) {
+    addMetadata(result, 'recipeCategory', source, 'ambiguous', {
+      reason: 'Comma-separated category values are ambiguous; no category was suggested.',
+    });
+    return;
+  }
+  const value = categorySuggestions.get(normalized.toLowerCase());
+  if (!value) {
+    addMetadata(result, 'recipeCategory', source, 'unsupported', {
+      reason: 'Source category is outside the supported canonical values; no category was suggested.',
+    });
+    return;
+  }
+  addMetadata(result, 'recipeCategory', source, 'suggested', {
+    field: 'category', value, label: categoryLabel(value),
+    reason: 'Exact supported category; Moderator acceptance is required.',
+  });
+}
+
+function dietaryIdentity(value) {
+  if (typeof value === 'string') {
+    const identity = value.trim();
+    if (dietarySuggestions.has(identity)) return identity;
+    const urlMatch = identity.match(/^https:\/\/schema\.org\/(VegetarianDiet|VeganDiet|GlutenFreeDiet)$/u);
+    return urlMatch?.[1] || null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== '@id' || typeof value['@id'] !== 'string') return null;
+  const urlMatch = value['@id'].match(/^https:\/\/schema\.org\/(VegetarianDiet|VeganDiet|GlutenFreeDiet)$/u);
+  return urlMatch?.[1] || null;
+}
+
+function mapDietarySuggestions(result, recipe) {
+  if (!Object.hasOwn(recipe, 'suitableForDiet')) return;
+  const source = recipe.suitableForDiet;
+  if (Array.isArray(source) && source.length === 0) {
+    addMetadata(result, 'suitableForDiet', source, 'unsupported', {
+      reason: 'An empty dietary identity list is unsupported; no dietary tag was suggested.',
+    });
+    return;
+  }
+  const items = Array.isArray(source) ? source : [source];
+  const suggested = new Set();
+  for (const item of items) {
+    const identity = dietaryIdentity(item);
+    if (!identity) {
+      addMetadata(result, 'suitableForDiet', item, 'unsupported', {
+        reason: 'Source value is not an exact supported Schema.org dietary identity.',
+      });
+      continue;
+    }
+    const value = dietarySuggestions.get(identity);
+    if (suggested.has(value)) continue;
+    suggested.add(value);
+    addMetadata(result, 'suitableForDiet', item, 'suggested', {
+      field: 'dietaryTags', value, label: DIETARY_TAG_LABELS[value],
+      reason: 'Exact supported dietary identity; Moderator acceptance is required.',
+    });
+  }
+}
+
+function discloseCuisine(result, recipe) {
+  if (!Object.hasOwn(recipe, 'recipeCuisine')) return;
+  const source = recipe.recipeCuisine;
+  addMetadata(result, 'recipeCuisine', source, Array.isArray(source) && source.length > 1 ? 'ambiguous' : 'unsupported', {
+    reason: Array.isArray(source) && source.length > 1
+      ? 'Multiple cuisine values are ambiguous; META2 does not map cuisine to Region.'
+      : 'META2 does not map recipeCuisine to Region.',
+  });
+}
+
 export function parseRecipeIntake(input) {
   const text = typeof input === 'string' ? input : String(input ?? '');
   if (new TextEncoder().encode(text).byteLength > MAX_RECIPE_INTAKE_BYTES) {
@@ -154,8 +265,13 @@ export function parseRecipeIntake(input) {
   }
   mapInstructions(result, recipe);
   mapIngredients(result, recipe);
+  mapCategorySuggestion(result, recipe);
+  mapDietarySuggestions(result, recipe);
+  discloseCuisine(result, recipe);
   for (const property of Object.keys(recipe)) {
-    if (!supportedProperties.has(property)) result.unsupported.push({ field: property, message: 'Not mapped to the WeCooked Recipe form.' });
+    if (!supportedProperties.has(property) && !metadataProperties.has(property)) {
+      result.unsupported.push({ field: property, message: 'Not mapped to the WeCooked Recipe form.' });
+    }
   }
   if (wrapper) {
     for (const property of Object.keys(wrapper)) {
@@ -197,6 +313,32 @@ export function applyRecipeIntake(form, result) {
   return { form: next, applied, skipped };
 }
 
+export function metadataSuggestionState(form, suggestion, accepted = false) {
+  if (suggestion?.status !== 'suggested') return 'ineligible';
+  if (suggestion.field === 'category') {
+    const current = String(form?.category ?? '').trim();
+    if (current === suggestion.value) return accepted ? 'accepted' : 'already-selected';
+    return current ? 'existing-preserved' : 'eligible';
+  }
+  if (suggestion.field === 'dietaryTags') {
+    const current = Array.isArray(form?.dietaryTags) ? form.dietaryTags : [];
+    if (current.includes(suggestion.value)) return accepted ? 'accepted' : 'already-selected';
+    return 'eligible';
+  }
+  return 'ineligible';
+}
+
+export function acceptMetadataSuggestion({ form, suggestion, change }) {
+  const state = metadataSuggestionState(form, suggestion);
+  if (state !== 'eligible') return { status: state, changed: false };
+  if (suggestion.field === 'category') change('category', suggestion.value);
+  else {
+    const current = Array.isArray(form?.dietaryTags) ? form.dietaryTags : [];
+    change('dietaryTags', [...current, suggestion.value]);
+  }
+  return { status: 'accepted', changed: true, field: suggestion.field, value: suggestion.value };
+}
+
 export function createRecipeIntakeHandlers({ input, form, preview, change, setPreview, setApplication }) {
   return {
     previewInput() {
@@ -212,6 +354,9 @@ export function createRecipeIntakeHandlers({ input, form, preview, change, setPr
       }
       setApplication(outcome);
       return outcome;
+    },
+    acceptSuggestion(suggestion) {
+      return acceptMetadataSuggestion({ form, suggestion, change });
     },
   };
 }

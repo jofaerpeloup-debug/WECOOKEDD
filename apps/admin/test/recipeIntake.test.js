@@ -131,18 +131,130 @@ test('reports invalid durations, ambiguous yields, and unsupported instruction v
   assert.equal(parseRecipeIntake(JSON.stringify(recipe({ recipeYield: '-4 servings' }))).values.servings, undefined);
 });
 
-test('keeps ingredients unresolved and reports unsupported properties without controlled-field or image inference', () => {
+test('keeps ingredients unresolved and separates metadata disclosure from generic unsupported properties', () => {
   const result = parseRecipeIntake(JSON.stringify(recipe({
     recipeIngredient: ['1 cup rice', '2 eggs'], image: 'https://example.test/food.jpg',
     recipeCuisine: 'Filipino', recipeCategory: 'Dinner', suitableForDiet: 'VeganDiet', nutrition: { calories: '1' },
   })));
   assert.deepEqual(result.unresolved[0].values, ['1 cup rice', '2 eggs']);
   assert.deepEqual(Object.keys(result.values), []);
-  assert.deepEqual(result.unsupported.map(({ field }) => field), ['image', 'recipeCuisine', 'recipeCategory', 'suitableForDiet', 'nutrition']);
+  assert.deepEqual(result.unsupported.map(({ field }) => field), ['image', 'nutrition']);
+  assert.deepEqual(result.metadata.map(({ source, status, field, value }) => ({ source, status, field, value })), [
+    { source: 'recipeCategory', status: 'suggested', field: 'category', value: 'dinner' },
+    { source: 'suitableForDiet', status: 'suggested', field: 'dietaryTags', value: 'vegan' },
+    { source: 'recipeCuisine', status: 'unsupported', field: undefined, value: undefined },
+  ]);
   assert.equal(JSON.stringify(result).includes('ingredientId'), false);
   for (const field of ['imageUrl', 'region', 'category', 'difficulty', 'dietaryTags', 'allergens', 'confirmFilipinoCuisine']) {
     assert.equal(Object.hasOwn(result.values, field), false);
   }
+});
+
+test('maps only the four scalar trimmed case-insensitive category suggestions', () => {
+  for (const [source, value, label] of [
+    [' Breakfast ', 'breakfast', 'Breakfast'], ['LUNCH', 'lunch', 'Lunch'],
+    ['Dinner', 'dinner', 'Dinner'], ['snack', 'snack', 'Snack'],
+  ]) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ recipeCategory: source })));
+    assert.deepEqual(result.metadata, [{
+      source: 'recipeCategory', sourceValue: JSON.stringify(source), status: 'suggested',
+      field: 'category', value, label,
+      reason: 'Exact supported category; Moderator acceptance is required.',
+    }], source);
+    assert.equal(result.values.category, undefined);
+  }
+});
+
+test('leaves unsupported and ambiguous category values unresolved without partial matching', () => {
+  const cases = [
+    ['', 'unsupported'], [17, 'unsupported'], [['Dinner'], 'unsupported'],
+    [['Dinner', 'Lunch'], 'ambiguous'], ['Dinner,Lunch', 'ambiguous'],
+    ['Dinner / Lunch', 'unsupported'], ['Dinner; Lunch', 'unsupported'],
+    ['Dinner entree', 'unsupported'], ['Dessert', 'unsupported'], ['breakfast bowl', 'unsupported'],
+  ];
+  for (const [source, status] of cases) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ recipeCategory: source })));
+    assert.equal(result.metadata.length, 1, JSON.stringify(source));
+    assert.equal(result.metadata[0].status, status, JSON.stringify(source));
+    assert.equal(result.metadata[0].field, undefined, JSON.stringify(source));
+    assert.equal(result.values.category, undefined, JSON.stringify(source));
+  }
+});
+
+test('maps all allowed dietary identities, representations, order, and deduplication', () => {
+  const identities = [
+    ['VegetarianDiet', 'vegetarian', 'Vegetarian'],
+    ['VeganDiet', 'vegan', 'Vegan'],
+    ['GlutenFreeDiet', 'glutenFree', 'Gluten-free'],
+  ];
+  for (const [identity, value, label] of identities) {
+    for (const source of [
+      `  ${identity}  `,
+      ` https://schema.org/${identity} `,
+      { '@id': `https://schema.org/${identity}` },
+    ]) {
+      const result = parseRecipeIntake(JSON.stringify(recipe({ suitableForDiet: source })));
+      assert.deepEqual(result.metadata.map(({ status, field, value: mapped, label: mappedLabel }) => ({ status, field, value: mapped, label: mappedLabel })), [
+        { status: 'suggested', field: 'dietaryTags', value, label },
+      ], JSON.stringify(source));
+      assert.equal(result.values.dietaryTags, undefined);
+    }
+  }
+
+  const ordered = parseRecipeIntake(JSON.stringify(recipe({
+    suitableForDiet: [
+      'VeganDiet', 'https://schema.org/VegetarianDiet',
+      { '@id': 'https://schema.org/VeganDiet' },
+      { '@id': 'https://schema.org/GlutenFreeDiet' },
+    ],
+  })));
+  assert.deepEqual(ordered.metadata.map(({ value }) => value), ['vegan', 'vegetarian', 'glutenFree']);
+});
+
+test('rejects dietary near misses and unsupported diets without inference', () => {
+  const unsupported = [
+    [], [['VeganDiet']], 'LowLactoseDiet', 'pescatarian', 'dairyFree', 'nutFree',
+    'vegandiet', 'http://schema.org/VeganDiet', 'https://www.schema.org/VeganDiet',
+    'https://schema.org/VeganDiet/', 'https://schema.org/VeganDiet?x=1',
+    'https://schema.org/VeganDiet#x', 'schema:VeganDiet', './VeganDiet',
+    { '@id': 'https://schema.org/VeganDiet', name: 'Vegan' },
+    { '@id': 'https://schema.org/vegandiet' },
+  ];
+  for (const source of unsupported) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ suitableForDiet: source })));
+    assert.equal(result.metadata.some(({ status }) => status === 'suggested'), false, JSON.stringify(source));
+    assert.equal(result.values.dietaryTags, undefined, JSON.stringify(source));
+  }
+  const mixed = parseRecipeIntake(JSON.stringify(recipe({
+    suitableForDiet: ['VeganDiet', 'LowLactoseDiet', 'nutFree'],
+  })));
+  assert.deepEqual(mixed.metadata.map(({ status, value }) => [status, value]), [
+    ['suggested', 'vegan'], ['unsupported', undefined], ['unsupported', undefined],
+  ]);
+  assert.equal(mixed.metadata.some(({ value }) => value === 'vegetarian'), false);
+});
+
+test('discloses cuisine without ever suggesting Region', () => {
+  for (const source of [
+    'Filipino', 'Philippine', 'Asian', 'Southeast Asian', 'Luzon', 'Visayas', 'Mindanao',
+    'Ilocano', 'Bicolano', 'Kapampangan', 'Cebuano', 'ncr', 'National Capital Region', 17,
+  ]) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ recipeCuisine: source })));
+    assert.equal(result.metadata[0].status, 'unsupported', JSON.stringify(source));
+    assert.equal(result.metadata[0].field, undefined, JSON.stringify(source));
+    assert.equal(result.values.region, undefined, JSON.stringify(source));
+  }
+  const array = parseRecipeIntake(JSON.stringify(recipe({ recipeCuisine: ['Ilocano', 'Bicolano'] })));
+  assert.equal(array.metadata[0].status, 'ambiguous');
+  assert.equal(array.values.region, undefined);
+});
+
+test('bounds metadata source display and preserves JSON text for safe React escaping', () => {
+  const source = `<script>alert("x")</script>${'x'.repeat(300)}`;
+  const result = parseRecipeIntake(JSON.stringify(recipe({ recipeCuisine: source })));
+  assert.equal(result.metadata[0].sourceValue.length, 200);
+  assert.match(result.metadata[0].sourceValue, /… \[truncated\]$/u);
+  assert.equal(result.metadata[0].sourceValue.startsWith('"<script>'), true);
 });
 
 test('@graph wrapper properties are classified as unsupported and never mapped', () => {

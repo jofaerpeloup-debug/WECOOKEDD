@@ -2,10 +2,10 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createElement } from 'react';
+import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
-import { applyRecipeIntake } from '../src/recipeAuthoring/recipeIntake.js';
+import { applyRecipeIntake, parseRecipeIntake } from '../src/recipeAuthoring/recipeIntake.js';
 
 const adminRoot = fileURLToPath(new URL('../', import.meta.url));
 const vite = await createServer({
@@ -21,7 +21,10 @@ const vite = await createServer({
 
 const [
   { default: RecipesTab },
-  { default: RecipeAuthoringSteps, IngredientResolutionPanel, requestIngredientResolutions },
+  {
+    default: RecipeAuthoringSteps, IngredientResolutionPanel, MetadataSuggestionRow,
+    RecipeIntake, requestIngredientResolutions,
+  },
   { emptyRecipeForm },
   { getCatalogPolicy },
 ] = await Promise.all([
@@ -32,6 +35,40 @@ const [
 ]);
 
 after(() => vite.close());
+
+function createHookHarness(component, props) {
+  const slots = [];
+  let cursor = 0;
+  const dispatcher = {
+    useRef(initialValue) {
+      const index = cursor++;
+      if (!slots[index]) slots[index] = { value: { current: initialValue } };
+      return slots[index].value;
+    },
+    useState(initialValue) {
+      const index = cursor++;
+      if (!slots[index]) slots[index] = { value: typeof initialValue === 'function' ? initialValue() : initialValue };
+      return [slots[index].value, (value) => {
+        slots[index].value = typeof value === 'function' ? value(slots[index].value) : value;
+      }];
+    },
+  };
+  return () => {
+    cursor = 0;
+    const internals = React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED;
+    const previous = internals.ReactCurrentDispatcher.current;
+    internals.ReactCurrentDispatcher.current = dispatcher;
+    try { return component(props); }
+    finally { internals.ReactCurrentDispatcher.current = previous; }
+  };
+}
+
+function elementText(node) {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (!node || typeof node !== 'object') return '';
+  const children = Array.isArray(node.props?.children) ? node.props.children : [node.props?.children];
+  return children.map(elementText).join('');
+}
 
 test('recipeApi submits the URL through the shared authenticated API client', async () => {
   const source = readFileSync(new URL('../src/recipeApi.js', import.meta.url), 'utf8');
@@ -92,6 +129,117 @@ test('URL candidates use the sole parser for identical safe and rejected yield c
       recipeYield,
     );
   }
+});
+
+test('URL and paste candidates produce identical metadata suggestions and disclosures', async () => {
+  const candidate = {
+    '@type': 'Recipe', recipeCategory: ' Dinner ',
+    suitableForDiet: [
+      'VeganDiet', { '@id': 'https://schema.org/GlutenFreeDiet' }, 'LowLactoseDiet',
+    ],
+    recipeCuisine: 'Ilocano',
+  };
+  const helper = await loadHelper();
+  const imported = await helper.importRecipeUrlForPreview('https://example.com/recipe', {
+    request: async () => ({ sourceUrl: 'https://example.com/final', candidate }),
+  });
+  const pasted = parseRecipeIntake(JSON.stringify(candidate));
+  assert.deepEqual(imported.preview.metadata, pasted.metadata);
+  assert.deepEqual(imported.preview.metadata.map(({ status, value }) => [status, value]), [
+    ['suggested', 'dinner'], ['suggested', 'vegan'], ['suggested', 'glutenFree'],
+    ['unsupported', undefined], ['unsupported', undefined],
+  ]);
+  assert.equal(imported.preview.values.category, undefined);
+  assert.equal(imported.preview.values.dietaryTags, undefined);
+  assert.equal(imported.preview.values.region, undefined);
+});
+
+test('rendered metadata suggestion distinguishes escaped source, canonical value, eligibility, and busy state', () => {
+  const suggested = parseRecipeIntake(JSON.stringify({
+    '@type': 'Recipe', recipeCategory: 'Dinner',
+  })).metadata[0];
+  const eligible = renderToStaticMarkup(createElement(MetadataSuggestionRow, {
+    item: suggested, form: emptyRecipeForm(), busy: false, accepted: false, onAccept() {},
+  }));
+  assert.match(eligible, /<strong>Source:<\/strong> recipeCategory &quot;Dinner&quot;/u);
+  assert.match(eligible, /<strong>Canonical suggestion:<\/strong> category/u);
+  assert.match(eligible, /dinner \(Dinner\)/u);
+  assert.match(eligible, />Accept suggestion: Dinner<\/button>/u);
+  const escaped = renderToStaticMarkup(createElement(MetadataSuggestionRow, {
+    item: { ...suggested, sourceValue: '"<script>alert(1)</script>"' },
+    form: emptyRecipeForm(), busy: false, accepted: false, onAccept() {},
+  }));
+  assert.equal(escaped.includes('<script>'), false);
+  assert.match(escaped, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
+
+  const busy = renderToStaticMarkup(createElement(MetadataSuggestionRow, {
+    item: suggested, form: emptyRecipeForm(), busy: true, accepted: false, onAccept() {},
+  }));
+  assert.match(busy, /<button[^>]*disabled=""[^>]*>Accept suggestion: Dinner<\/button>/u);
+
+  const preserved = renderToStaticMarkup(createElement(MetadataSuggestionRow, {
+    item: suggested, form: { ...emptyRecipeForm(), category: 'lunch' },
+    busy: false, accepted: false, onAccept() {},
+  }));
+  assert.match(preserved, /Existing category preserved/u);
+  assert.doesNotMatch(preserved, /<button/u);
+
+  const accepted = renderToStaticMarkup(createElement(MetadataSuggestionRow, {
+    item: suggested, form: { ...emptyRecipeForm(), category: 'dinner' },
+    busy: false, accepted: true, onAccept() {},
+  }));
+  assert.match(accepted, /Accepted in current form/u);
+  assert.doesNotMatch(accepted, /<button/u);
+});
+
+test('rendered intake acceptance stays local and source replacement removes stale suggestion actions', () => {
+  const form = emptyRecipeForm();
+  const changes = [];
+  const render = createHookHarness(RecipeIntake, {
+    form,
+    change(field, value) { changes.push([field, value]); form[field] = value; },
+    busy: false,
+    dispatch() {},
+  });
+  let tree = render();
+  let textarea = findElementMatching(tree, ({ type }) => type === 'textarea');
+  textarea.props.onChange({ target: { value: JSON.stringify({
+    '@type': 'Recipe', recipeCategory: 'Dinner', suitableForDiet: 'VeganDiet',
+  }) } });
+  tree = render();
+  findElementMatching(tree, (element) => element.type === 'button' && elementText(element) === 'Preview').props.onClick();
+  tree = render();
+
+  let categoryRow = findElementMatching(tree, (element) => (
+    element.type === MetadataSuggestionRow && element.props.item.value === 'dinner'
+  ));
+  const staleAccept = categoryRow.props.onAccept;
+  staleAccept(categoryRow.props.item);
+  assert.deepEqual(changes, [['category', 'dinner']]);
+  tree = render();
+  categoryRow = findElementMatching(tree, (element) => (
+    element.type === MetadataSuggestionRow && element.props.item.value === 'dinner'
+  ));
+  assert.equal(categoryRow.props.accepted, true);
+  assert.match(elementText(MetadataSuggestionRow(categoryRow.props)), /Accepted in current form/u);
+
+  textarea = findElementMatching(tree, ({ type }) => type === 'textarea');
+  textarea.props.onChange({ target: { value: JSON.stringify({
+    '@type': 'Recipe', recipeCategory: 'Lunch', suitableForDiet: 'GlutenFreeDiet',
+  }) } });
+  tree = render();
+  assert.equal(findElementMatching(tree, (element) => element.type === MetadataSuggestionRow), null);
+  findElementMatching(tree, (element) => element.type === 'button' && elementText(element) === 'Preview').props.onClick();
+  tree = render();
+  assert.equal(findElementMatching(tree, (element) => (
+    element.type === MetadataSuggestionRow && element.props.item.value === 'dinner'
+  )), null);
+  categoryRow = findElementMatching(tree, (element) => (
+    element.type === MetadataSuggestionRow && element.props.item.value === 'lunch'
+  ));
+  assert.ok(categoryRow);
+  assert.match(elementText(MetadataSuggestionRow(categoryRow.props)), /Existing category preserved/u);
+  assert.equal(changes.length, 1, 'replacement Preview must not accept its suggestions');
 });
 
 test('URL import handler exposes loading, safe error, retry, and success without any save call', async () => {

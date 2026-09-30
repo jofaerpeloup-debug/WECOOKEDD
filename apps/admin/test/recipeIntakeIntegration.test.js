@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import React from 'react';
-import { applyRecipeIntake, createRecipeIntakeHandlers, parseRecipeIntake } from '../src/recipeAuthoring/recipeIntake.js';
+import {
+  acceptMetadataSuggestion, applyRecipeIntake, createRecipeIntakeHandlers,
+  metadataSuggestionState, parseRecipeIntake,
+} from '../src/recipeAuthoring/recipeIntake.js';
 import {
   buildStepPatch, createDraftBody, emptyRecipeForm, mutationBody, publishBody,
 } from '../src/recipeAuthoring/recipeAuthoringModel.js';
@@ -167,6 +170,108 @@ test('unsupported and unresolved intake values remain non-applying', () => {
   assert.equal(JSON.stringify(outcome.form).includes('1 kg chicken'), false);
 });
 
+test('Apply blank fields never accepts metadata suggestions', () => {
+  const original = emptyRecipeForm();
+  const parsed = parseRecipeIntake(JSON.stringify({
+    '@type': 'Recipe', name: 'Safe title', recipeCategory: 'Dinner',
+    suitableForDiet: ['VeganDiet', 'GlutenFreeDiet'],
+  }));
+  const outcome = applyRecipeIntake(original, parsed);
+  assert.equal(outcome.form.title, 'Safe title');
+  assert.equal(outcome.form.category, '');
+  assert.deepEqual(outcome.form.dietaryTags, []);
+  assert.deepEqual(outcome.applied, [{ field: 'title' }]);
+});
+
+test('metadata acceptance is explicit, click-time guarded, category-preserving, and dietary append-once', () => {
+  const metadata = parseRecipeIntake(JSON.stringify({
+    '@type': 'Recipe', recipeCategory: 'Dinner',
+    suitableForDiet: ['VeganDiet', 'GlutenFreeDiet'],
+  })).metadata;
+  const category = metadata.find(({ field }) => field === 'category');
+  const vegan = metadata.find(({ value }) => value === 'vegan');
+  const glutenFree = metadata.find(({ value }) => value === 'glutenFree');
+  let form = { ...emptyRecipeForm(), dietaryTags: ['vegetarian'] };
+  const changes = [];
+  const change = (field, value) => { changes.push([field, value]); form = { ...form, [field]: value }; };
+
+  assert.equal(metadataSuggestionState(form, category), 'eligible');
+  assert.deepEqual(acceptMetadataSuggestion({ form, suggestion: category, change }), {
+    status: 'accepted', changed: true, field: 'category', value: 'dinner',
+  });
+  assert.equal(form.category, 'dinner');
+  assert.equal(metadataSuggestionState(form, category, true), 'accepted');
+  assert.deepEqual(acceptMetadataSuggestion({ form, suggestion: category, change }), {
+    status: 'already-selected', changed: false,
+  });
+
+  assert.equal(acceptMetadataSuggestion({ form, suggestion: vegan, change }).changed, true);
+  assert.deepEqual(form.dietaryTags, ['vegetarian', 'vegan']);
+  assert.deepEqual(acceptMetadataSuggestion({ form, suggestion: vegan, change }), {
+    status: 'already-selected', changed: false,
+  });
+  assert.equal(acceptMetadataSuggestion({ form, suggestion: glutenFree, change }).changed, true);
+  assert.deepEqual(form.dietaryTags, ['vegetarian', 'vegan', 'glutenFree']);
+
+  const manualCategory = { ...emptyRecipeForm(), category: 'lunch' };
+  assert.deepEqual(acceptMetadataSuggestion({ form: manualCategory, suggestion: category, change }), {
+    status: 'existing-preserved', changed: false,
+  });
+  assert.equal(manualCategory.category, 'lunch');
+  assert.deepEqual(changes, [
+    ['category', 'dinner'],
+    ['dietaryTags', ['vegetarian', 'vegan']],
+    ['dietaryTags', ['vegetarian', 'vegan', 'glutenFree']],
+  ]);
+});
+
+test('source replacement replaces metadata suggestions and clears prior application state', () => {
+  let preview = null;
+  let application = { applied: [{ field: 'title' }] };
+  const dependencies = {
+    form: emptyRecipeForm(), preview, change() {},
+    setPreview(value) { preview = value; },
+    setApplication(value) { application = value; },
+  };
+  createRecipeIntakeHandlers({
+    ...dependencies,
+    input: JSON.stringify({ '@type': 'Recipe', recipeCategory: 'Dinner', suitableForDiet: 'VeganDiet' }),
+  }).previewInput();
+  assert.deepEqual(preview.metadata.filter(({ status }) => status === 'suggested').map(({ value }) => value), ['dinner', 'vegan']);
+
+  createRecipeIntakeHandlers({
+    ...dependencies,
+    input: JSON.stringify({ '@type': 'Recipe', recipeCategory: 'Lunch', suitableForDiet: 'GlutenFreeDiet' }),
+  }).previewInput();
+  assert.deepEqual(preview.metadata.filter(({ status }) => status === 'suggested').map(({ value }) => value), ['lunch', 'glutenFree']);
+  assert.equal(application, null);
+});
+
+test('ordinary Details PATCH contains only metadata accepted into local form state', () => {
+  const saved = emptyRecipeForm();
+  let working = emptyRecipeForm();
+  const suggestions = parseRecipeIntake(JSON.stringify({
+    '@type': 'Recipe', recipeCategory: 'Dinner',
+    suitableForDiet: ['VeganDiet', 'GlutenFreeDiet', 'LowLactoseDiet'],
+    recipeCuisine: 'Ilocano',
+  })).metadata;
+  const change = (field, value) => { working = { ...working, [field]: value }; };
+  acceptMetadataSuggestion({
+    form: working, suggestion: suggestions.find(({ value }) => value === 'dinner'), change,
+  });
+  acceptMetadataSuggestion({
+    form: working, suggestion: suggestions.find(({ value }) => value === 'vegan'), change,
+  });
+
+  const body = mutationBody(buildStepPatch(saved, working, 'details'), 'details-token');
+  assert.equal(body.category, 'dinner');
+  assert.deepEqual(body.dietaryTags, ['vegan']);
+  assert.equal(Object.hasOwn(body, 'region'), false);
+  assert.equal(JSON.stringify(body).includes('glutenFree'), false);
+  assert.equal(JSON.stringify(body).includes('LowLactoseDiet'), false);
+  assert.equal(JSON.stringify(body).includes('Ilocano'), false);
+});
+
 test('actual Preview and Apply handlers only update local allowlisted form fields', () => {
   const originalFetch = globalThis.fetch;
   let networkCalls = 0;
@@ -175,25 +280,34 @@ test('actual Preview and Apply handlers only update local allowlisted form field
   let application = null;
   const form = emptyRecipeForm();
   const changes = [];
+  const metadataPayload = JSON.stringify({
+    ...JSON.parse(payload), recipeCategory: 'Dinner', suitableForDiet: 'VeganDiet',
+  });
   const dependencies = {
-    input: payload, form, preview, change: (field, value) => changes.push([field, value]),
+    input: metadataPayload, form, preview, change: (field, value) => changes.push([field, value]),
     setPreview: (value) => { preview = value; }, setApplication: (value) => { application = value; },
   };
+  let applyChanges;
   try {
     const previewOutcome = createRecipeIntakeHandlers(dependencies).previewInput();
     assert.equal(preview, previewOutcome);
     assert.equal(application, null);
-    createRecipeIntakeHandlers({ ...dependencies, preview }).applyPreview();
+    const handlers = createRecipeIntakeHandlers({ ...dependencies, preview });
+    handlers.applyPreview();
+    applyChanges = [...changes];
+    handlers.acceptSuggestion(preview.metadata.find(({ field }) => field === 'category'));
+    handlers.acceptSuggestion(preview.metadata.find(({ value }) => value === 'vegan'));
   } finally { globalThis.fetch = originalFetch; }
 
-  assert.equal(networkCalls, 0, 'Preview/Apply must not invoke generic fetch or any API operation backed by it');
-  assert.deepEqual(changes.map(([field]) => field), [
+  assert.equal(networkCalls, 0, 'Preview/Apply/acceptance must not invoke generic fetch or any API operation backed by it');
+  assert.deepEqual(applyChanges.map(([field]) => field), [
     'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeHours', 'cookTimeMinutePart', 'instructions',
   ]);
   assert.deepEqual(application.applied.map(({ field }) => field), [
     'title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes', 'instructions',
   ]);
-  assert.equal(changes.some(([field]) => ['ingredients', 'imageUrl', 'difficulty', 'region', 'category', 'dietaryTags'].includes(field)), false);
+  assert.equal(applyChanges.some(([field]) => ['ingredients', 'imageUrl', 'difficulty', 'region', 'category', 'dietaryTags'].includes(field)), false);
+  assert.deepEqual(changes.slice(applyChanges.length), [['category', 'dinner'], ['dietaryTags', ['vegan']]]);
 });
 
 test('production save path preserves JSON-LD values through Draft creation and unchanged Ingredients saves', async () => {
