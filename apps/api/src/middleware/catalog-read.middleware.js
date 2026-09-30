@@ -2,6 +2,12 @@ const { requireCapability } = require('./require-capability.middleware');
 const { CAPABILITIES } = require('../shared/security/capabilities');
 
 const requireCatalogReadAll = requireCapability(CAPABILITIES.CATALOG_READ_ALL);
+const requireCatalogWrite = requireCapability(CAPABILITIES.CATALOG_WRITE);
+
+function requireCatalogWriteForDraftList(req, res, next) {
+  if (req.validated?.query?.publicationStatus !== 'draft') return next();
+  return requireCatalogWrite(req, res, next);
+}
 
 /**
  * Catalog list routes also serve the consumer-facing active view. Validation
@@ -13,4 +19,4 @@ function requireCatalogReadAllForNonActive(req, res, next) {
   return requireCatalogReadAll(req, res, next);
 }
 
-module.exports = { requireCatalogReadAllForNonActive };
+module.exports = { requireCatalogReadAllForNonActive, requireCatalogWriteForDraftList };

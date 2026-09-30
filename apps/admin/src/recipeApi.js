@@ -3,11 +3,11 @@ import { api } from './apiClient.js';
 export function listRecipes(params = {}) {
   const {
     search, region, category, difficulty, dietaryTag, ingredientId,
-    maxPrepTimeMinutes, status, sort, page, limit,
+    maxPrepTimeMinutes, publicationStatus, status, sort, page, limit,
   } = params;
   return api.get('/recipes', { query: {
     search, region, category, difficulty, dietaryTag, ingredientId,
-    maxPrepTimeMinutes, status, sort, page, limit,
+    maxPrepTimeMinutes, publicationStatus, status, sort, page, limit,
   } }).then((data) => ({ recipes: data.recipes || [], pagination: data.pagination || null }));
 }
 
@@ -29,6 +29,12 @@ export function createDraft(body) {
 export function checkRecipeDuplicates(recipeId, expectedUpdatedAt) {
   return api.post('/recipes/duplicate-check', { body: { recipeId, expectedUpdatedAt } })
     .then((data) => data.duplicateReview);
+}
+
+export function getRecipePublishReadiness(recipeId, expectedUpdatedAt) {
+  return api.post(`/recipes/${encodeURIComponent(recipeId)}/publish-readiness`, {
+    body: { expectedUpdatedAt },
+  }).then((data) => data.publishReadiness);
 }
 
 /** Strict partial content update; expectedUpdatedAt belongs in patch. */

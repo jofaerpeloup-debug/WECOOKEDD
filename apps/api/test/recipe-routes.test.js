@@ -360,6 +360,66 @@ test('GET /api/v1/recipes?status=inactive is allowed for a moderator', async (t)
   assert.equal(response.body.data.recipes[0].isActive, false);
 });
 
+test('GET /api/v1/recipes Draft review filter is Moderator-only and preserves the list envelope', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  let findArgs;
+  t.mock.method(recipeRepository, 'findMany', async (args) => {
+    findArgs = args;
+    return [fakeRecipeDoc({ publicationStatus: 'draft', updatedAt: new Date('2026-09-30T02:00:00.000Z') })];
+  });
+  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .get('/api/v1/recipes?publicationStatus=draft&status=active&sort=updatedDesc&page=1&limit=20')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.recipes[0].publicationStatus, 'draft');
+  assert.deepEqual(response.body.data.pagination, { page: 1, limit: 20, total: 1, totalPages: 1 });
+  assert.deepEqual(findArgs.filter, { publicationStatus: 'draft', isActive: true });
+  assert.deepEqual(findArgs.sort, { updatedAt: -1 });
+});
+
+for (const actor of [
+  { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID },
+  { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID },
+]) {
+  test(`GET /api/v1/recipes Draft review filter denies ${actor.role}`, async (t) => {
+    mockAuth(t, actor);
+    const response = await request(app)
+      .get('/api/v1/recipes?publicationStatus=draft&status=active&sort=updatedDesc')
+      .set('Authorization', `Bearer ${tokenFor(actor)}`);
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'FORBIDDEN');
+  });
+}
+
+test('GET /api/v1/recipes Draft review filter uses database-authoritative role demotion', async (t) => {
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: MODERATOR_SESSION_ID, userId: MODERATOR_ID, revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async () => ({
+    _id: MODERATOR_ID, role: 'user', status: 'active',
+  }));
+  const staleToken = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .get('/api/v1/recipes?publicationStatus=draft')
+    .set('Authorization', `Bearer ${staleToken}`);
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error.code, 'FORBIDDEN');
+});
+
+test('GET /api/v1/recipes validates Draft list query before its capability gate', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const response = await request(app)
+    .get('/api/v1/recipes?publicationStatus=published')
+    .set('Authorization', `Bearer ${token}`);
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+});
+
 test('GET /api/v1/recipes rejects invalid query params', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });

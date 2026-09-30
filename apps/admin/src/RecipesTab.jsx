@@ -13,6 +13,7 @@ import RecipeAuthoringWizard from './recipeAuthoring/RecipeAuthoringWizard.jsx';
 import RecipeDetailsModal from './recipeAuthoring/RecipeDetailsModal.jsx';
 import { formatDuration, statusLabel } from './recipeAuthoring/recipeAuthoringModel.js';
 import ManagementPagination from './ManagementPagination.jsx';
+import RecipeDraftReview from './RecipeDraftReview.jsx';
 
 const PAGE_LIMIT = 20;
 function message(error) {
@@ -23,13 +24,14 @@ function message(error) {
   return 'Something went wrong. Please try again.';
 }
 
-function useRecipes() {
+function useRecipes(enabled = true) {
   const [filters, setFilters] = useState({ search: '', region: '', category: '', difficulty: '', dietaryTag: '', maxPrepTimeMinutes: '', ingredient: null, status: 'active', sort: 'titleAsc', page: 1 });
   const [nonce, setNonce] = useState(0);
   const [state, setState] = useState({ items: [], pagination: null, loading: true, error: '' });
   const reload = useCallback(() => setNonce((value) => value + 1), []);
   const patchFilters = useCallback((patch) => setFilters((current) => ({ ...current, ...patch, page: 'page' in patch ? patch.page : 1 })), []);
   useEffect(() => {
+    if (!enabled) return undefined;
     let active = true;
     const timer = setTimeout(async () => {
       setState((current) => ({ ...current, loading: true, error: '' }));
@@ -45,20 +47,30 @@ function useRecipes() {
       } catch (error) { if (active) setState({ items: [], pagination: null, loading: false, error: message(error) }); }
     }, 250);
     return () => { active = false; clearTimeout(timer); };
-  }, [filters, nonce]);
+  }, [enabled, filters, nonce]);
   return { filters, patchFilters, reload, ...state };
 }
 
 export default function RecipesTab({ canWrite = false, canUploadRecipeImage = false, onAuthorityLost }) {
-  const { filters, patchFilters, reload, items, pagination, loading, error } = useRecipes();
+  const [view, setView] = useState('catalog');
+  const { filters, patchFilters, reload, items, pagination, loading, error } = useRecipes(view === 'catalog');
   const [modal, setModal] = useState(null);
+  const [draftRefreshToken, setDraftRefreshToken] = useState(0);
   const [confirmArchive, setConfirmArchive] = useState(null);
   const [rowState, setRowState] = useState({ id: null, error: '' });
   const [notice, setNotice] = useState('');
   const rowFlight = useRef(false);
   const opener = useRef(null);
+  const draftWasSaved = useRef(false);
   const open = (value) => { opener.current = document.activeElement; setModal(value); };
-  const close = () => { setModal(null); requestAnimationFrame(() => opener.current?.focus?.()); };
+  const close = () => {
+    setModal(null);
+    if (view === 'draftReview' && draftWasSaved.current) {
+      draftWasSaved.current = false;
+      setDraftRefreshToken((value) => value + 1);
+    }
+    requestAnimationFrame(() => opener.current?.focus?.());
+  };
 
   const lifecycle = async (recipe, action) => {
     if (rowFlight.current) return;
@@ -80,6 +92,28 @@ export default function RecipesTab({ canWrite = false, canUploadRecipeImage = fa
     }
   }, [filters.page, loading, pagination, patchFilters]);
 
+  if (view === 'draftReview' && canWrite) {
+    return <div className="wc-management-page">
+      <div className="wc-topbar"><h1>Recipes</h1><div className="wc-topbar-actions" role="group" aria-label="Recipe view">
+        <button className="wc-btn-secondary" aria-pressed="false" onClick={() => setView('catalog')}>Catalog</button>
+        <button className="wc-btn-primary" aria-pressed="true">Draft review</button>
+      </div></div>
+      <RecipeDraftReview onOpenDraft={open} onAuthorityLost={onAuthorityLost} refreshToken={draftRefreshToken} />
+      {modal && <RecipeAuthoringWizard
+        recipe={modal}
+        canUploadRecipeImage={canUploadRecipeImage}
+        onAuthorityLost={onAuthorityLost}
+        onClose={close}
+        onSaved={() => { draftWasSaved.current = true; }}
+        onPublished={(recipe) => {
+          setNotice(`${recipe.title} was published.`);
+          draftWasSaved.current = true;
+          close();
+        }}
+      />}
+    </div>;
+  }
+
   const emDash = <span className="wc-rcp-muted">—</span>;
   return <div className="wc-management-page">
     <style>{`
@@ -87,6 +121,7 @@ export default function RecipesTab({ canWrite = false, canUploadRecipeImage = fa
       .wc-ipick{position:relative}.wc-ipick.compact{width:170px}.wc-ipick-input,.wc-ipick-selected{display:flex;align-items:center;gap:7px;padding:0 10px;border-radius:8px;border:1px solid var(--stone-light);background:var(--parchment)}.wc-ipick-input input{border:0;background:transparent;outline:0;padding:9px 0;min-width:0;width:100%}.wc-ipick-selected{padding:8px 10px;justify-content:space-between}.wc-ipick-clear{border:0;background:none}.wc-ipick-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;background:var(--cream);border:1px solid var(--stone-light);border-radius:8px;box-shadow:0 12px 28px rgba(42,47,40,.18);padding:4px;max-height:220px;overflow:auto}.wc-ipick-option{display:flex;justify-content:space-between;width:100%;border:0;background:none;padding:8px}.wc-ipick-note{padding:9px;font-size:12px}.wc-ipick-opt-tag{font-size:10px;color:var(--clay)}
     `}</style>
     <div className="wc-topbar"><h1>Recipes</h1><div className="wc-topbar-actions wc-rcp-filters">
+      {canWrite && <div role="group" aria-label="Recipe view"><button className="wc-btn-primary" aria-pressed="true">Catalog</button><button className="wc-btn-secondary" aria-pressed="false" onClick={() => setView('draftReview')}>Draft review</button></div>}
       {!canWrite && <span className="wc-pill active">Read-only</span>}
       <div className="wc-search"><Search size={15} /><input placeholder="Search title or description…" value={filters.search} onChange={(e) => patchFilters({ search: e.target.value })} /></div>
       <select className="wc-rcp-select" aria-label="Filter by region" value={filters.region} onChange={(e) => patchFilters({ region: e.target.value })}><option value="">Any region</option>{RECIPE_REGIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>

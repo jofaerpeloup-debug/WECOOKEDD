@@ -27,6 +27,7 @@ const SORT_MAP = {
   oldest: { createdAt: 1 },
   prepTimeAsc: { prepTimeMinutes: 1 },
   prepTimeDesc: { prepTimeMinutes: -1 },
+  updatedDesc: { updatedAt: -1 },
 };
 
 function notFoundError() {
@@ -572,6 +573,7 @@ async function findUsableRecipeById(id) {
 
 async function listRecipes({
   search,
+  publicationStatus,
   region,
   category,
   difficulty,
@@ -589,6 +591,9 @@ async function listRecipes({
   }
 
   const filter = {};
+  if (publicationStatus === 'draft') {
+    filter.publicationStatus = 'draft';
+  }
   if (status === 'active') {
     filter.isActive = true;
   } else if (status === 'inactive') {
