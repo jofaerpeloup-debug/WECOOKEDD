@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
+import { applyRecipeIntake } from '../src/recipeAuthoring/recipeIntake.js';
 
 const adminRoot = fileURLToPath(new URL('../', import.meta.url));
 const vite = await createServer({
@@ -63,6 +64,34 @@ test('raw server candidate is serialized into the sole M27 parser and retains it
   assert.deepEqual(result.preview.invalid.map(({ field }) => field), ['prepTime']);
   assert.deepEqual(result.preview.unsupported.map(({ field }) => field), ['remoteOnlyField']);
   assert.deepEqual(result.preview.unresolved[0].values, ['1 kg chicken']);
+});
+
+test('URL candidates use the sole parser for identical safe and rejected yield classifications', async () => {
+  const helper = await loadHelper();
+  for (const [recipeYield, servings, invalid] of [
+    ['Makes 100 servings', 100, []],
+    ['12 cookies', undefined, ['recipeYield']],
+  ]) {
+    const result = await helper.importRecipeUrlForPreview('https://example.com/recipe', {
+      request: async () => ({
+        sourceUrl: 'https://example.com/final',
+        candidate: { '@type': 'Recipe', name: 'Imported recipe', recipeYield },
+      }),
+    });
+    assert.equal(result.preview.values.servings, servings, recipeYield);
+    assert.deepEqual(result.preview.invalid.map(({ field }) => field), invalid, recipeYield);
+
+    const blank = applyRecipeIntake(emptyRecipeForm(), result.preview);
+    assert.equal(blank.form.servings, servings == null ? '' : String(servings), recipeYield);
+    const existing = { ...emptyRecipeForm(), servings: '8' };
+    const preserved = applyRecipeIntake(existing, result.preview);
+    assert.equal(preserved.form.servings, '8', recipeYield);
+    assert.deepEqual(
+      preserved.skipped.filter(({ field }) => field === 'servings'),
+      servings == null ? [] : [{ field: 'servings', reason: 'Existing value preserved.' }],
+      recipeYield,
+    );
+  }
 });
 
 test('URL import handler exposes loading, safe error, retry, and success without any save call', async () => {
