@@ -1,17 +1,25 @@
 // M3: `cuisine` is retired from the Recipe contract; `region` / `category`
-// are open canonical slugs. These guard the mobile-side contract mirror so a
+// use shared canonical enums. These guard the mobile-side contract so a
 // stale cuisine dependency can't quietly come back.
 
 import {
   RECIPE_DIFFICULTIES,
+  RECIPE_REGIONS,
+  RECIPE_CATEGORIES,
+  RECIPE_DIETARY_TAGS,
   DISCOVER_FILTERS,
-  slugLabel,
   categoryLabel,
   regionLabel,
   difficultyLabel,
+  dietaryTagLabel,
 } from '../src/api/recipeOptions';
 import { recipeBadges } from '../src/utils/recipe';
 import * as recipeOptions from '../src/api/recipeOptions';
+import {
+  RECIPE_REGIONS as SHARED_RECIPE_REGIONS,
+  RECIPE_CATEGORIES as SHARED_RECIPE_CATEGORIES,
+  RECIPE_DIETARY_TAGS as SHARED_RECIPE_DIETARY_TAGS,
+} from '@wecooked/contracts';
 
 describe('recipeOptions no longer carries a cuisine contract', () => {
   it('exports no cuisine enum or cuisine label helper', () => {
@@ -25,6 +33,38 @@ describe('recipeOptions no longer carries a cuisine contract', () => {
     expect(difficultyLabel('easy')).toBe('Easy');
   });
 
+  it('exposes the exact shared region, category, and dietary order', () => {
+    expect(RECIPE_REGIONS).toEqual([
+      'national-capital-region', 'cordillera-administrative-region', 'ilocos-region',
+      'cagayan-valley', 'central-luzon', 'calabarzon', 'mimaropa-region',
+      'bicol-region', 'western-visayas', 'negros-island-region', 'central-visayas',
+      'eastern-visayas', 'zamboanga-peninsula', 'northern-mindanao', 'davao-region',
+      'soccsksargen', 'caraga', 'bangsamoro-autonomous-region-in-muslim-mindanao',
+    ]);
+    expect(RECIPE_CATEGORIES).toEqual(['breakfast', 'lunch', 'dinner', 'snack']);
+    expect(RECIPE_DIETARY_TAGS).toEqual([
+      'vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree',
+    ]);
+    expect(RECIPE_REGIONS).toBe(SHARED_RECIPE_REGIONS);
+    expect(RECIPE_CATEGORIES).toBe(SHARED_RECIPE_CATEGORIES);
+    expect(RECIPE_DIETARY_TAGS).toBe(SHARED_RECIPE_DIETARY_TAGS);
+  });
+
+  it('renders every frozen Region/category/dietary label from shared authority', () => {
+    expect(RECIPE_REGIONS.map(regionLabel)).toEqual([
+      'National Capital Region (NCR)', 'Cordillera Administrative Region (CAR)',
+      'Ilocos Region', 'Cagayan Valley', 'Central Luzon', 'CALABARZON',
+      'MIMAROPA Region', 'Bicol Region', 'Western Visayas',
+      'Negros Island Region (NIR)', 'Central Visayas', 'Eastern Visayas',
+      'Zamboanga Peninsula', 'Northern Mindanao', 'Davao Region', 'SOCCSKSARGEN',
+      'Caraga', 'Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)',
+    ]);
+    expect(RECIPE_CATEGORIES.map(categoryLabel)).toEqual(['Breakfast', 'Lunch', 'Dinner', 'Snack']);
+    expect(RECIPE_DIETARY_TAGS.map(dietaryTagLabel)).toEqual([
+      'Vegetarian', 'Vegan', 'Pescatarian', 'Gluten-free', 'Dairy-free', 'Nut-free',
+    ]);
+  });
+
   it('has no Discover filter that queries cuisine / region / category', () => {
     expect(DISCOVER_FILTERS.map((f) => f.key)).toEqual(['all', 'easy', 'vegetarian', 'vegan']);
     for (const f of DISCOVER_FILTERS) {
@@ -35,25 +75,24 @@ describe('recipeOptions no longer carries a cuisine contract', () => {
   });
 });
 
-describe('slugLabel humanizes an open canonical slug without fabricating', () => {
-  it('title-cases hyphenated slugs', () => {
-    expect(slugLabel('central-luzon')).toBe('Central Luzon');
-    expect(slugLabel('main-dish')).toBe('Main Dish');
-    expect(categoryLabel('dessert')).toBe('Dessert');
-    expect(regionLabel('bicol')).toBe('Bicol');
+describe('canonical metadata labels do not fabricate unknown values', () => {
+  it('uses shared labels for known values', () => {
+    expect(categoryLabel('dinner')).toBe('Dinner');
+    expect(regionLabel('bicol-region')).toBe('Bicol Region');
+    expect(categoryLabel('dessert')).toBe('');
+    expect(regionLabel('bicol')).toBe('');
   });
 
-  it('returns an empty string for an absent value', () => {
-    expect(slugLabel(null)).toBe('');
-    expect(slugLabel(undefined)).toBe('');
-    expect(slugLabel('')).toBe('');
+  it('returns an empty string for absent values', () => {
+    expect(regionLabel(null)).toBe('');
+    expect(categoryLabel(undefined)).toBe('');
   });
 });
 
 describe('recipeBadges uses category/region, never cuisine', () => {
   it('shows the category first, then dietary tags', () => {
-    expect(recipeBadges({ category: 'main-dish', dietaryTags: ['vegan'] })).toEqual([
-      'Main Dish',
+    expect(recipeBadges({ category: 'dinner', dietaryTags: ['vegan'] })).toEqual([
+      'Dinner',
       'Vegan',
     ]);
   });

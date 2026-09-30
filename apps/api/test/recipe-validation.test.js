@@ -1,13 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { RECIPE_REGIONS, RECIPE_CATEGORIES } = require('@wecooked/contracts');
 
 const {
   createRecipeSchema,
+  createDraftSchema,
   updateRecipeSchema,
   listRecipesSchema,
   recipeParamsSchema,
   duplicateCheckSchema,
   publishRecipeSchema,
+  legacyPublishedRecipeBodySchema,
 } = require('../src/modules/recipes/recipe.validation');
 
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
@@ -101,13 +104,16 @@ test('createRecipeSchema rejects a retired cuisine field (strict body)', () => {
   assert.equal(result.success, false);
 });
 
-test('createRecipeSchema accepts optional region/category and normalizes them to canonical slugs', () => {
+test('createRecipeSchema accepts exact optional canonical region/category values', () => {
   const result = createRecipeSchema.safeParse({
-    body: validPayload({ region: '  Central Luzon ', category: 'Main_Dish' }),
+    body: validPayload({ region: 'central-luzon', category: 'dinner' }),
   });
   assert.equal(result.success, true);
   assert.equal(result.data.body.region, 'central-luzon');
-  assert.equal(result.data.body.category, 'main-dish');
+  assert.equal(result.data.body.category, 'dinner');
+
+  for (const region of RECIPE_REGIONS) assert.equal(createRecipeSchema.safeParse({ body: validPayload({ region }) }).success, true, region);
+  for (const category of RECIPE_CATEGORIES) assert.equal(createRecipeSchema.safeParse({ body: validPayload({ category }) }).success, true, category);
 
   // Neither field is required.
   assert.equal(createRecipeSchema.safeParse({ body: validPayload() }).success, true);
@@ -120,6 +126,34 @@ test('createRecipeSchema rejects a region/category value that is not a slug', ()
     createRecipeSchema.safeParse({ body: validPayload({ category: 'x'.repeat(65) }) }).success,
     false
   );
+});
+
+test('Draft create, PATCH, and list filters reject aliases and semantic-axis leakage', () => {
+  for (const region of ['tondo', 'bicol', 'mangaldan', 'Filipino', 'Philippine', 'Asian', 'Luzon', 'Visayas', 'Mindanao']) {
+    assert.equal(createDraftSchema.safeParse({ body: { title: 'Draft', region } }).success, false, region);
+    assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { region } }).success, false, region);
+    assert.equal(listRecipesSchema.safeParse({ query: { region } }).success, false, region);
+  }
+  for (const category of ['dessert', 'brunch', 'appetizer', 'soup', 'pasta', 'stew', 'fine-dining-restaurant', 'medium']) {
+    assert.equal(createDraftSchema.safeParse({ body: { title: 'Draft', category } }).success, false, category);
+    assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { category } }).success, false, category);
+    assert.equal(listRecipesSchema.safeParse({ query: { category } }).success, false, category);
+  }
+  assert.equal(createDraftSchema.safeParse({ body: { title: 'Draft' } }).success, true);
+});
+
+test('stored-record completeness accepts only the five frozen legacy dispositions without weakening writes', () => {
+  const { confirmFilipinoCuisine, ...stored } = validPayload();
+  for (const region of ['tondo', 'bicol', 'mangaldan']) {
+    assert.equal(legacyPublishedRecipeBodySchema.safeParse({ ...stored, region }).success, true, region);
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({ region }) }).success, false, region);
+  }
+  for (const category of ['fine-dining-restaurant', 'medium']) {
+    assert.equal(legacyPublishedRecipeBodySchema.safeParse({ ...stored, category }).success, true, category);
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({ category }) }).success, false, category);
+  }
+  assert.equal(legacyPublishedRecipeBodySchema.safeParse({ ...stored, region: 'cebu' }).success, false);
+  assert.equal(legacyPublishedRecipeBodySchema.safeParse({ ...stored, category: 'dessert' }).success, false);
 });
 
 test('createRecipeSchema rejects an invalid difficulty', () => {
@@ -339,7 +373,7 @@ test('updateRecipeSchema treats a provided ingredients array as a full replaceme
   assert.equal(valid.success, true);
 });
 
-test('updateRecipeSchema accepts an explicit null for region/category (clear), a valid slug, and rejects blank/non-slug', () => {
+test('updateRecipeSchema accepts null clears and exact canonical values only', () => {
   const clearRegion = updateRecipeSchema.safeParse({
     params: { recipeId: RECIPE_ID },
     body: { region: null },
@@ -356,7 +390,7 @@ test('updateRecipeSchema accepts an explicit null for region/category (clear), a
 
   const setRegion = updateRecipeSchema.safeParse({
     params: { recipeId: RECIPE_ID },
-    body: { region: 'Central Luzon' },
+    body: { region: 'central-luzon' },
   });
   assert.equal(setRegion.success, true);
   assert.equal(setRegion.data.body.region, 'central-luzon');
@@ -424,12 +458,12 @@ test('listRecipesSchema applies defaults for status/sort/page/limit', () => {
   assert.equal(result.data.query.limit, 20);
 });
 
-test('listRecipesSchema accepts search, region, category, difficulty, dietaryTag, ingredientId, and maxPrepTimeMinutes', () => {
+test('listRecipesSchema accepts exact canonical region/category filters', () => {
   const result = listRecipesSchema.safeParse({
     query: {
       search: 'adobo',
-      region: 'Central Luzon',
-      category: 'Main-Dish',
+      region: 'central-luzon',
+      category: 'dinner',
       difficulty: 'easy',
       dietaryTag: 'dairyFree',
       ingredientId: INGREDIENT_ID,
@@ -439,7 +473,7 @@ test('listRecipesSchema accepts search, region, category, difficulty, dietaryTag
   assert.equal(result.success, true);
   assert.equal(result.data.query.maxPrepTimeMinutes, 30);
   assert.equal(result.data.query.region, 'central-luzon');
-  assert.equal(result.data.query.category, 'main-dish');
+  assert.equal(result.data.query.category, 'dinner');
 });
 
 test('listRecipesSchema rejects a retired cuisine query param and an invalid region slug', () => {

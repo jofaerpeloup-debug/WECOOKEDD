@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const Recipe = require('../src/modules/recipes/recipe.model');
 const { toPublicRecipe } = require('../src/modules/recipes/recipe.serializer');
+const { RECIPE_REGIONS, RECIPE_CATEGORIES } = require('@wecooked/contracts');
 
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
 const OTHER_INGREDIENT_ID = '507f1f77bcf86cd799439012';
@@ -61,26 +62,20 @@ test('cuisine is no longer part of the Recipe schema (retired in M3)', () => {
   assert.equal(Recipe.CUISINES, undefined);
 });
 
-test('region and category are optional canonical-slug fields (no enum, valid for legacy records)', async () => {
+test('region and category are optional exact canonical enums', async () => {
   for (const field of ['region', 'category']) {
     const path = Recipe.schema.path(field);
     assert.equal(path.isRequired, undefined);
-    assert.equal(path.options.lowercase, true);
-    assert.equal(path.options.maxlength, Recipe.SLUG_MAX_LENGTH);
-    assert.ok(path.options.match);
   }
-
-  // A recipe with neither field still validates.
   await assert.doesNotReject(() => baseRecipe().validate());
-
-  // Case is normalized to a canonical slug.
-  const normalized = baseRecipe({ region: 'Central-Luzon', category: 'Main-Dish' });
-  await normalized.validate();
-  assert.equal(normalized.region, 'central-luzon');
-  assert.equal(normalized.category, 'main-dish');
-
-  // A value that isn't a slug is rejected by the schema `match`.
-  await assert.rejects(() => baseRecipe({ region: 'not/a/slug' }).validate());
+  for (const region of RECIPE_REGIONS) await assert.doesNotReject(() => baseRecipe({ region }).validate());
+  for (const category of RECIPE_CATEGORIES) await assert.doesNotReject(() => baseRecipe({ category }).validate());
+  for (const region of ['bicol', 'Filipino', 'Luzon', 'not/a/slug']) {
+    await assert.rejects(() => baseRecipe({ region }).validate());
+  }
+  for (const category of ['main-dish', 'dessert', 'medium']) {
+    await assert.rejects(() => baseRecipe({ category }).validate());
+  }
 });
 
 test('a legacy document that physically still carries cuisine serializes without leaking it', () => {
@@ -297,7 +292,7 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
     title: 'Chicken Adobo',
     description: 'A classic Filipino chicken dish braised in soy sauce and vinegar.',
     region: 'central-luzon',
-    category: 'main-dish',
+    category: 'dinner',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -323,7 +318,7 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
   assert.equal(publicRecipe.id, recipe._id);
   assert.equal(publicRecipe.title, 'Chicken Adobo');
   assert.equal(publicRecipe.region, 'central-luzon');
-  assert.equal(publicRecipe.category, 'main-dish');
+  assert.equal(publicRecipe.category, 'dinner');
   assert.equal('cuisine' in publicRecipe, false);
   // Derived structured steps mirror the persisted instruction array, 1-based.
   assert.deepEqual(publicRecipe.steps, [

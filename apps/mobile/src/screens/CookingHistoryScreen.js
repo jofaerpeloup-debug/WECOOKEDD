@@ -14,13 +14,9 @@ import TopBar from '../components/TopBar';
 import { getHistory } from '../api/cookHistoryService';
 import { useTheme } from '../theme/ThemeContext';
 import { radius, spacing, typography } from '../theme/theme';
+import { categoryLabel, difficultyLabel, regionLabel } from '../api/recipeOptions';
 
 const PAGE_LIMIT = 20;
-
-function formatLabel(value) {
-  if (!value) return null;
-  return value.replace(/-/g, ' ');
-}
 
 function formatCompletedAt(completedAt) {
   return new Date(completedAt).toLocaleDateString(undefined, {
@@ -32,7 +28,7 @@ function formatCompletedAt(completedAt) {
 
 function metadataFor(item) {
   const { recipe } = item;
-  const labels = [formatLabel(recipe.region), formatLabel(recipe.category), formatLabel(recipe.difficulty)]
+  const labels = [regionLabel(recipe.region), categoryLabel(recipe.category), difficultyLabel(recipe.difficulty)]
     .filter(Boolean);
   const minutes = [recipe.prepTimeMinutes, recipe.cookTimeMinutes]
     .filter((value) => typeof value === 'number')

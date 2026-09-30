@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const sourcePath = path.join(__dirname, '../src/screens/CookingHistoryScreen.js');
-const raw = fs.readFileSync(sourcePath, 'utf8');
+const raw = fs.readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 
 function stripComments(source) {
   return source

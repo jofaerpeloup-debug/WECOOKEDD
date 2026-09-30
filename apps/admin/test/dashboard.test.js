@@ -20,6 +20,7 @@ const server = await createServer({
 
 let ModeratorWorkspace;
 let OverviewTab;
+let RecipeAuthoringSteps;
 let loadRecipeDashboardData;
 let loadUserDashboardData;
 try {
@@ -29,6 +30,7 @@ try {
     loadRecipeDashboardData,
     loadUserDashboardData,
   } = await server.ssrLoadModule('/src/App.jsx'));
+  ({ default: RecipeAuthoringSteps } = await server.ssrLoadModule('/src/recipeAuthoring/RecipeAuthoringSteps.jsx'));
 } catch (error) {
   await server.close();
   throw error;
@@ -48,7 +50,7 @@ const metrics = {
 function renderOverview(overrides = {}) {
   return renderToStaticMarkup(React.createElement(OverviewTab, {
     metrics,
-    latestRecipes: [{ id: 'recipe-1', title: 'Real API Recipe', category: 'main-course' }],
+    latestRecipes: [{ id: 'recipe-1', title: 'Real API Recipe', category: 'dinner' }],
     recipeStatus: 'ready',
     userStatus: 'ready',
     onNavigate: () => {},
@@ -59,11 +61,11 @@ function renderOverview(overrides = {}) {
 test('recipe dashboard loader uses the authoritative total and preserves newest results', async () => {
   const calls = [];
   const recipes = [
-    { id: 'r1', title: 'Newest One', category: 'main-course' },
-    { id: 'r2', title: 'Newest Two', category: 'soup' },
-    { id: 'r3', title: 'Newest Three', category: 'noodles' },
-    { id: 'r4', title: 'Newest Four', category: 'vegetable' },
-    { id: 'r5', title: 'Older Recipe', category: 'dessert' },
+    { id: 'r1', title: 'Newest One', category: 'dinner' },
+    { id: 'r2', title: 'Newest Two', category: 'lunch' },
+    { id: 'r3', title: 'Newest Three', category: 'snack' },
+    { id: 'r4', title: 'Newest Four', category: 'breakfast' },
+    { id: 'r5', title: 'Older Recipe', category: 'dinner' },
   ];
   const state = await loadRecipeDashboardData(async (params) => {
     calls.push(params);
@@ -164,12 +166,65 @@ test('rejected dashboard requests produce unavailable states without error detai
 test('Admin Overview presents only supported REST-backed totals and latest recipes', () => {
   const markup = renderOverview();
 
-  for (const value of ['42', '117', '104', '13', 'Real API Recipe', 'Main Course']) {
+  for (const value of ['42', '117', '104', '13', 'Real API Recipe', 'Dinner']) {
     assert.match(markup, new RegExp(`>${value}<`));
   }
   assert.match(markup, /Admin Overview/);
   assert.match(markup, /Latest recipes/);
   assert.equal((markup.match(/wc-dashboard-stat-icon/g) || []).length, 4);
+});
+
+test('Admin metadata controls render the exact ordered Region/category labels and unset choices', () => {
+  const markup = renderToStaticMarkup(React.createElement(RecipeAuthoringSteps, {
+    authoring: {
+      state: {
+        currentStep: 'details',
+        fieldErrors: {},
+        form: {
+          difficulty: '', prepTimeMinutes: '', cookTimeHours: '', cookTimeMinutePart: '',
+          servings: '', region: '', category: '', dietaryTags: [],
+        },
+      },
+      change: () => {},
+      busy: false,
+    },
+    canUploadRecipeImage: false,
+    onAuthorityLost: () => {},
+  }));
+  const regionSelect = markup.match(/<label>Region<select[\s\S]*?<\/select><\/label>/)?.[0];
+  const categorySelect = markup.match(/<label>Category<select[\s\S]*?<\/select><\/label>/)?.[0];
+  assert.ok(regionSelect);
+  assert.ok(categorySelect);
+  assert.deepEqual([...regionSelect.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((match) => match.slice(1)), [
+    ['', 'Not set'],
+    ['national-capital-region', 'National Capital Region (NCR)'],
+    ['cordillera-administrative-region', 'Cordillera Administrative Region (CAR)'],
+    ['ilocos-region', 'Ilocos Region'], ['cagayan-valley', 'Cagayan Valley'],
+    ['central-luzon', 'Central Luzon'], ['calabarzon', 'CALABARZON'],
+    ['mimaropa-region', 'MIMAROPA Region'], ['bicol-region', 'Bicol Region'],
+    ['western-visayas', 'Western Visayas'], ['negros-island-region', 'Negros Island Region (NIR)'],
+    ['central-visayas', 'Central Visayas'], ['eastern-visayas', 'Eastern Visayas'],
+    ['zamboanga-peninsula', 'Zamboanga Peninsula'], ['northern-mindanao', 'Northern Mindanao'],
+    ['davao-region', 'Davao Region'], ['soccsksargen', 'SOCCSKSARGEN'],
+    ['caraga', 'Caraga'],
+    ['bangsamoro-autonomous-region-in-muslim-mindanao', 'Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)'],
+  ]);
+  assert.deepEqual([...categorySelect.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((match) => match.slice(1)), [
+    ['', 'Not set'], ['breakfast', 'Breakfast'], ['lunch', 'Lunch'],
+    ['dinner', 'Dinner'], ['snack', 'Snack'],
+  ]);
+});
+
+test('legacy metadata display is non-fatal and does not fabricate a canonical label', () => {
+  const markup = renderOverview({
+    latestRecipes: [
+      { id: 'legacy-1', title: 'Legacy Tondo Recipe', region: 'tondo' },
+      { id: 'legacy-2', title: 'Legacy Restaurant Recipe', category: 'fine-dining-restaurant' },
+    ],
+  });
+  assert.match(markup, /Legacy Tondo Recipe/);
+  assert.match(markup, /Legacy Restaurant Recipe/);
+  assert.equal((markup.match(/<small>Recipe<\/small>/g) || []).length, 2);
 });
 
 test('fabricated trends, activity, and chart data are removed from the dashboard source', () => {

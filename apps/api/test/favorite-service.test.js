@@ -22,7 +22,7 @@ function usableRecipe(overrides = {}) {
     _id: RECIPE_ID,
     title: 'Chicken Adobo',
     region: 'central-luzon',
-    category: 'main-dish',
+    category: 'dinner',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,

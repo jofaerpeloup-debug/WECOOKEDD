@@ -598,25 +598,15 @@ describe('P3 server-authoritative advanced filters', () => {
   });
 });
 
-describe('no new cuisine / category / region UX (locked M2 decision)', () => {
-  it('adds no cuisine or category filter UI/query wiring', () => {
+describe('canonical metadata filters without cuisine reintroduction', () => {
+  it('uses shared region/category controls and no cuisine', () => {
+    const sheetCode = stripComments(read('components/DiscoverFiltersSheet.js'));
     expect(code).not.toMatch(/cuisine/i);
-    expect(code).not.toMatch(/\bFilipino\b|\bLuzon\b|\bVisayas\b|\bMindanao\b|\bregion\b/);
     expect(code).not.toMatch(/craving/i);
-
-    expect(
-      hasVisibleLabelFamily(code, [
-        'category',
-        'categories',
-        'browse by category',
-        'browse by categories',
-      ])
-    ).toBe(false);
-    expect(code).not.toMatch(/\b(?:setCategory|activeCategory|categoryFilter|initialCategory)\b/);
-
-    const queryFor = extractBalancedAfter(code, 'const queryFor = useCallback(');
-    expect(queryFor).not.toBeNull();
-    expect(hasCategoryQueryKey(queryFor)).toBe(false);
+    expect(code).toMatch(/categoryLabel\(recipe\.category\)/);
+    expect(code).toMatch(/regionLabel\(recipe\.region\)/);
+    expect(sheetCode).toMatch(/label="Region"/);
+    expect(sheetCode).toMatch(/label="Category"/);
   });
 
   it('allows legitimate recipe.category reads while detecting category query/UI semantics', () => {

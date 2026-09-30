@@ -367,7 +367,7 @@ test('listRecipes builds a filter from region, category, difficulty, dietaryTag,
 
   await recipeService.listRecipes({
     region: 'central-luzon',
-    category: 'main-dish',
+    category: 'dinner',
     difficulty: 'easy',
     dietaryTag: 'dairyFree',
     ingredientId: CHICKEN_ID,
@@ -381,7 +381,7 @@ test('listRecipes builds a filter from region, category, difficulty, dietaryTag,
 
   assert.equal(capturedFilter.isActive, true);
   assert.equal(capturedFilter.region, 'central-luzon');
-  assert.equal(capturedFilter.category, 'main-dish');
+  assert.equal(capturedFilter.category, 'dinner');
   assert.equal(capturedFilter.difficulty, 'easy');
   assert.equal(capturedFilter.dietaryTags, 'dairyFree');
   assert.equal(capturedFilter['ingredients.ingredientId'], CHICKEN_ID);
@@ -432,8 +432,8 @@ test('listRecipes composes a region/category filter with search and count over t
 
   await recipeService.listRecipes({
     search: 'adobo',
-    region: 'bicol',
-    category: 'main-dish',
+    region: 'bicol-region',
+    category: 'dinner',
     status: 'active',
     page: 1,
     limit: 20,
@@ -442,9 +442,48 @@ test('listRecipes composes a region/category filter with search and count over t
   });
 
   assert.deepEqual(findFilter, countFilter);
-  assert.equal(findFilter.region, 'bicol');
-  assert.equal(findFilter.category, 'main-dish');
+  assert.equal(findFilter.region, 'bicol-region');
+  assert.equal(findFilter.category, 'dinner');
   assert.ok(findFilter.$or);
+});
+
+test('all five frozen legacy metadata dispositions remain consumer-visible in list and detail before migration', async (t) => {
+  const legacyRecipes = [
+    completeStoredRecipe({ _id: 'tondo', publicationStatus: 'published', region: 'tondo' }),
+    completeStoredRecipe({ _id: 'bicol', publicationStatus: 'published', region: 'bicol' }),
+    completeStoredRecipe({ _id: 'mangaldan', publicationStatus: 'published', region: 'mangaldan' }),
+    completeStoredRecipe({ _id: 'fine-dining', publicationStatus: 'published', region: 'central-luzon', category: 'fine-dining-restaurant' }),
+    completeStoredRecipe({ _id: 'medium', publicationStatus: 'published', region: 'central-luzon', category: 'medium' }),
+  ].map((recipe) => ({
+    ...recipe,
+    ingredients: [{
+      ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'),
+      quantity: 1,
+      unit: 'piece',
+      optional: false,
+    }],
+  }));
+  t.mock.method(recipeRepository, 'findMany', async () => legacyRecipes);
+  t.mock.method(recipeRepository, 'countByFilter', async () => legacyRecipes.length);
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async (id) => (
+    legacyRecipes.find((recipe) => recipe._id === id) || null
+  ));
+
+  const listed = await recipeService.listRecipes({
+    status: 'active', page: 1, limit: 20, sort: 'titleAsc', isAdmin: false,
+  });
+  assert.deepEqual(listed.items.map(({ region, category }) => ({ region, category })), [
+    { region: 'tondo', category: undefined },
+    { region: 'bicol', category: undefined },
+    { region: 'mangaldan', category: undefined },
+    { region: 'central-luzon', category: 'fine-dining-restaurant' },
+    { region: 'central-luzon', category: 'medium' },
+  ]);
+
+  for (const recipe of legacyRecipes) {
+    const detail = await recipeService.getRecipeById(recipe._id, { isAdmin: false });
+    assert.equal(detail._id, recipe._id);
+  }
 });
 
 test('createRecipe normalizes structured steps into ordered instruction text and never stores cuisine', async (t) => {
@@ -456,7 +495,7 @@ test('createRecipe normalizes structured steps into ordered instruction text and
     return { _id: 'recipe1', ...args };
   });
 
-  const payload = adoboPayload({ region: 'bicol', category: 'main-dish' });
+  const payload = adoboPayload({ region: 'bicol-region', category: 'dinner' });
   delete payload.instructions;
   payload.steps = [
     { order: 3, text: 'Serve hot.' },
@@ -471,8 +510,8 @@ test('createRecipe normalizes structured steps into ordered instruction text and
     'Simmer until tender.',
     'Serve hot.',
   ]);
-  assert.equal(capturedArgs.region, 'bicol');
-  assert.equal(capturedArgs.category, 'main-dish');
+  assert.equal(capturedArgs.region, 'bicol-region');
+  assert.equal(capturedArgs.category, 'dinner');
   assert.equal('cuisine' in capturedArgs, false);
 });
 
@@ -480,8 +519,8 @@ test('updateRecipe clears region/category via $unset on an explicit null, and do
   t.mock.method(recipeRepository, 'findRawById', async () => ({
     _id: 'recipe1',
     isActive: true,
-    region: 'bicol',
-    category: 'main-dish',
+    region: 'bicol-region',
+    category: 'dinner',
     ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
   }));
   let capturedUpdate;
@@ -501,8 +540,8 @@ test('updateRecipe replaces one classifier while clearing the other in a single 
   t.mock.method(recipeRepository, 'findRawById', async () => ({
     _id: 'recipe1',
     isActive: true,
-    region: 'bicol',
-    category: 'main-dish',
+    region: 'bicol-region',
+    category: 'dinner',
     ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', optional: false }],
   }));
   let capturedUpdate;
@@ -511,10 +550,10 @@ test('updateRecipe replaces one classifier while clearing the other in a single 
     return { _id: id, ...(update.$set || {}) };
   });
 
-  await recipeService.updateRecipe('recipe1', { region: null, category: 'dessert' });
+  await recipeService.updateRecipe('recipe1', { region: null, category: 'snack' });
 
   assert.deepEqual(capturedUpdate.$unset, { region: '' });
-  assert.deepEqual(capturedUpdate.$set, { category: 'dessert' });
+  assert.deepEqual(capturedUpdate.$set, { category: 'snack' });
 });
 
 test('updateRecipe accepts structured steps as an instructions replacement', async (t) => {

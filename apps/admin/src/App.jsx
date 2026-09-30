@@ -13,7 +13,7 @@ import {
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
 import { listUsers } from './userApi.js';
-import { slugLabel } from './recipeOptions.js';
+import { categoryLabel, regionLabel } from './recipeOptions.js';
 import IngredientsTab from './IngredientsTab.jsx';
 import SubstitutionsTab from './SubstitutionsTab.jsx';
 import RecipesTab from './RecipesTab.jsx';
@@ -1874,7 +1874,7 @@ export function OverviewTab({ metrics, latestRecipes, recipeStatus, userStatus, 
             <ul className="wc-dashboard-recipe-list">
               {latestRecipes.map((recipe) => (
                 <li key={recipe.id}>
-                  <span><strong>{recipe.title}</strong><small>{slugLabel(recipe.category) || slugLabel(recipe.region) || 'Recipe'}</small></span>
+                  <span><strong>{recipe.title}</strong><small>{categoryLabel(recipe.category) || regionLabel(recipe.region) || 'Recipe'}</small></span>
                 </li>
               ))}
             </ul>

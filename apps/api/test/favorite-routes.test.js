@@ -34,7 +34,7 @@ function fakeRecipeDoc(overrides = {}) {
     title: 'Chicken Adobo',
     description: 'A complete Filipino braised chicken recipe.',
     region: 'central-luzon',
-    category: 'main-dish',
+    category: 'dinner',
     difficulty: 'easy',
     prepTimeMinutes: 15,
     cookTimeMinutes: 40,
@@ -97,7 +97,7 @@ test('GET /api/v1/favorites returns the current user\'s favorites in the standar
   // Favorite recipe summary follows the retired-cuisine target contract.
   assert.equal('cuisine' in response.body.data.favorites[0].recipe, false);
   assert.equal(response.body.data.favorites[0].recipe.region, 'central-luzon');
-  assert.equal(response.body.data.favorites[0].recipe.category, 'main-dish');
+  assert.equal(response.body.data.favorites[0].recipe.category, 'dinner');
   assert.deepEqual(response.body.data.pagination, { page: 1, limit: 20, total: 1, totalPages: 1 });
   // Ownership is derived from req.auth only — never from a client-supplied filter.
   assert.deepEqual(capturedFilter, { userId: USER_ID });

@@ -9,12 +9,11 @@ import {
   MAX_SERVINGS,
   MAX_TITLE_LENGTH,
   RECIPE_DIETARY_TAGS,
+  RECIPE_CATEGORIES,
   RECIPE_DIFFICULTIES,
+  RECIPE_REGIONS,
   RECIPE_UNITS,
-  SLUG_MAX_LENGTH,
-  SLUG_PATTERN,
   TO_TASTE_UNIT,
-  normalizeSlugInput,
 } from '../recipeOptions.js';
 
 export const AUTHORING_STEPS = Object.freeze(['basics', 'ingredients', 'instructions', 'details', 'review']);
@@ -24,6 +23,8 @@ export const STEP_LABELS = Object.freeze({
 
 const DIFFICULTIES = new Set(RECIPE_DIFFICULTIES.map(({ value }) => value));
 const DIETARY_TAGS = new Set(RECIPE_DIETARY_TAGS.map(({ value }) => value));
+const REGIONS = new Set(RECIPE_REGIONS.map(({ value }) => value));
+const CATEGORIES = new Set(RECIPE_CATEGORIES.map(({ value }) => value));
 const UNITS = new Set(RECIPE_UNITS.map(({ value }) => value));
 const scalarDetails = ['difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings'];
 
@@ -144,8 +145,8 @@ export function normalizeSection(form, step) {
     prepTimeMinutes: form.prepTimeMinutes === '' ? '' : Number(form.prepTimeMinutes),
     cookTimeMinutes: combineDuration(form.cookTimeHours, form.cookTimeMinutePart) ?? '',
     servings: form.servings === '' ? '' : Number(form.servings),
-    region: normalizeSlugInput(form.region), category: normalizeSlugInput(form.category),
-    dietaryTags: [...new Set(form.dietaryTags || [])].sort(),
+    region: form.region || '', category: form.category || '',
+    dietaryTags: [...new Set(form.dietaryTags || [])],
   };
   return {};
 }
@@ -206,10 +207,8 @@ export function validateStep(form, step, { published = false } = {}) {
       error(errors, 'cookTimeMinutes', `Cooking time must use whole hours and 0–59 minutes, totaling 3 to ${MAX_COOK_TIME_MINUTES} minutes.`);
     }
     validateInteger(errors, 'servings', form.servings, 1, MAX_SERVINGS, 'Servings', published);
-    for (const field of ['region', 'category']) {
-      const value = normalizeSlugInput(form[field]);
-      if (value && (value.length > SLUG_MAX_LENGTH || !SLUG_PATTERN.test(value))) error(errors, field, `${field === 'region' ? 'Region' : 'Category'} must use letters, numbers, and single hyphens.`);
-    }
+    if (form.region && !REGIONS.has(form.region)) error(errors, 'region', 'Choose a supported region.');
+    if (form.category && !CATEGORIES.has(form.category)) error(errors, 'category', 'Choose a supported category.');
     if ((form.dietaryTags || []).some((tag) => !DIETARY_TAGS.has(tag))) error(errors, 'dietaryTags', 'Choose only supported dietary tags.');
   }
   return errors;

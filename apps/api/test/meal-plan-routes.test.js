@@ -53,7 +53,7 @@ function entry(overrides = {}) {
 }
 
 function recipe() {
-  return { _id: RECIPE_ID, title: 'Adobo', region: 'central-luzon', category: 'main-dish', difficulty: 'easy', prepTimeMinutes: 10, cookTimeMinutes: 30, imageUrl: null };
+  return { _id: RECIPE_ID, title: 'Adobo', region: 'central-luzon', category: 'dinner', difficulty: 'easy', prepTimeMinutes: 10, cookTimeMinutes: 30, imageUrl: null };
 }
 
 test('all meal-plan routes require authentication', async () => {

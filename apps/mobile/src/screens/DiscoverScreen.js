@@ -19,7 +19,7 @@ import FavoriteHeart from '../components/FavoriteHeart';
 import DiscoverFiltersSheet from '../components/DiscoverFiltersSheet';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
-import { DISCOVER_FILTERS, difficultyLabel } from '../api/recipeOptions';
+import { categoryLabel, DISCOVER_FILTERS, difficultyLabel, regionLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 import { recipeCollectionPhaseAfterFailure } from '../utils/recipeFreshnessState';
 import {
@@ -80,7 +80,7 @@ const M2_FILTERS = M2_FILTER_KEYS
 const FILTER_BY_KEY = Object.fromEntries(M2_FILTERS.map((f) => [f.key, f]));
 
 function metaLine(recipe) {
-  return [recipeTimeLabel(recipe), difficultyLabel(recipe.difficulty)]
+  return [categoryLabel(recipe.category), regionLabel(recipe.region), recipeTimeLabel(recipe), difficultyLabel(recipe.difficulty)]
     .filter(Boolean)
     .join(' · ');
 }

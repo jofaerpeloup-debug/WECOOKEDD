@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, CircleAlert, ImageOff } from 'lucide-react';
 import { getRecipe } from '../recipeApi.js';
-import { DIETARY_TAG_LABELS, DIFFICULTY_LABELS, UNIT_LABELS, slugLabel } from '../recipeOptions.js';
+import { categoryLabel, DIETARY_TAG_LABELS, DIFFICULTY_LABELS, regionLabel, UNIT_LABELS } from '../recipeOptions.js';
 import { STEP_LABELS, combineDuration, formatDuration, statusLabel } from './recipeAuthoringModel.js';
 
 const shown = (value, suffix = '') => value === '' || value == null ? '—' : `${value}${suffix}`;
@@ -140,8 +140,8 @@ export default function RecipeReview({
           <div><dt>Prep</dt><dd>{shown(form.prepTimeMinutes, ' min')}</dd></div>
           <div><dt>Cook</dt><dd>{formatDuration(combineDuration(form.cookTimeHours, form.cookTimeMinutePart))}</dd></div>
           <div><dt>Servings</dt><dd>{shown(form.servings)}</dd></div>
-          {form.region && <div><dt>Region</dt><dd>{slugLabel(form.region)}</dd></div>}
-          {form.category && <div><dt>Category</dt><dd>{slugLabel(form.category)}</dd></div>}
+          {form.region && <div><dt>Region</dt><dd>{regionLabel(form.region)}</dd></div>}
+          {form.category && <div><dt>Category</dt><dd>{categoryLabel(form.category)}</dd></div>}
         </dl>{form.dietaryTags.length > 0 && <div className="wc-author-tags">{form.dietaryTags.map((tag) => <span className="wc-tag" key={tag}>{DIETARY_TAG_LABELS[tag] || tag}</span>)}</div>}</section>
         <section><h3>Ingredients</h3>{ingredients.length ? <ul>{ingredients.map((row, index) => <li key={row.key || index}><strong>{row.ingredient.name}</strong> — {row.unit === 'toTaste' ? 'to taste' : `${row.quantity} ${UNIT_LABELS[row.unit] || row.unit}`}{row.optional ? ' (optional)' : ''}{row.note ? `, ${row.note}` : ''}</li>)}</ul> : <p className="wc-author-muted">None yet.</p>}</section>
       </div>
