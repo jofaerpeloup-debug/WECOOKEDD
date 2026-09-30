@@ -81,6 +81,12 @@ const publishRecipe = asyncHandler(async (req, res) => {
   sendSuccess(res, { recipe: toStaffRecipe(recipe) });
 });
 
+const getRecipePublishReadiness = asyncHandler(async (req, res) => {
+  const { recipeId } = req.params;
+  const publishReadiness = await recipeService.getRecipePublishReadiness(recipeId, req.body);
+  sendSuccess(res, { publishReadiness });
+});
+
 const archiveRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const recipe = await recipeService.archiveRecipe(recipeId, req.body || {}, { actorId: req.auth.userId });
@@ -105,6 +111,7 @@ module.exports = {
   createDraft,
   checkRecipeDuplicates,
   updateRecipe,
+  getRecipePublishReadiness,
   publishRecipe,
   archiveRecipe,
   restoreRecipe,

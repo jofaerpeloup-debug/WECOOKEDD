@@ -32,6 +32,14 @@ function mockNoDuplicateCandidates(t) {
   }));
 }
 
+function failOnRecipeWrites(t) {
+  for (const method of ['createRecipe', 'updateById', 'publishById', 'archiveById', 'restoreById']) {
+    t.mock.method(recipeRepository, method, async () => {
+      assert.fail(`readiness must not call recipeRepository.${method}`);
+    });
+  }
+}
+
 function adoboPayload(overrides = {}) {
   return {
     title: 'Chicken Adobo',
@@ -867,6 +875,315 @@ test('publishRecipe rejects a Draft whose Ingredient was archived while the Draf
       assert.equal(err.code, 'RECIPE_INGREDIENT_INACTIVE');
       return true;
     }
+  );
+});
+
+test('publish readiness returns the exact ready projection and performs no Recipe write', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft',
+    updatedAt,
+    prepTimeMinutes: undefined,
+    region: undefined,
+    category: undefined,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  mockNoDuplicateCandidates(t);
+  failOnRecipeWrites(t);
+
+  const result = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+
+  assert.equal(result.ready, true);
+  assert.equal(result.recipeId, 'recipe1');
+  assert.equal(result.recipeUpdatedAt, updatedAt.toISOString());
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.duplicateReview.fingerprintVersion, 'recipe-duplicate-v1');
+  assert.equal(result.duplicateReview.candidates.length, 0);
+});
+
+test('publish readiness preserves lifecycle fail-fast order and skips deeper evaluation', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  let recipe = completeStoredRecipe({ publicationStatus: 'published', isActive: false, updatedAt });
+  t.mock.method(recipeRepository, 'findRawById', async () => recipe);
+  t.mock.method(ingredientService, 'findIngredientById', async () => assert.fail('ingredient lookup must be skipped'));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => assert.fail('DUP1 must be skipped'));
+  failOnRecipeWrites(t);
+
+  const archived = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.deepEqual(archived.issues, [{
+    code: 'RECIPE_ARCHIVED', path: 'isActive', message: 'An archived recipe cannot be published.',
+  }]);
+  assert.equal(archived.duplicateReview, null);
+
+  recipe = { ...recipe, isActive: true };
+  const published = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.deepEqual(published.issues, [{
+    code: 'RECIPE_NOT_DRAFT', path: 'publicationStatus', message: 'Only an active Draft can be published.',
+  }]);
+  assert.equal(published.duplicateReview, null);
+});
+
+test('publish readiness returns deterministic schema then repeated Ingredient issues with dotted paths', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft',
+    updatedAt,
+    servings: undefined,
+    instructions: [],
+    prepTimeMinutes: -1,
+    region: 'not/a/slug',
+    dietaryTags: ['not-a-tag'],
+    ingredients: [
+      { ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false },
+      { ingredientId: GARLIC_ID, quantity: 1, unit: 'piece', optional: true },
+      { ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: true },
+    ],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => (
+    id === CHICKEN_ID ? null : inactiveIngredient(id)
+  ));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => assert.fail('DUP1 must be skipped'));
+
+  const result = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.issues.map(({ code, path }) => ({ code, path })), [
+    { code: 'RECIPE_INCOMPLETE', path: 'region' },
+    { code: 'RECIPE_INCOMPLETE', path: 'prepTimeMinutes' },
+    { code: 'RECIPE_INCOMPLETE', path: 'servings' },
+    { code: 'RECIPE_INCOMPLETE', path: 'instructions' },
+    { code: 'RECIPE_INCOMPLETE', path: 'dietaryTags.0' },
+    { code: 'RECIPE_INGREDIENT_NOT_FOUND', path: 'ingredients.0.ingredientId' },
+    { code: 'RECIPE_INGREDIENT_INACTIVE', path: 'ingredients.1.ingredientId' },
+    { code: 'RECIPE_INGREDIENT_NOT_FOUND', path: 'ingredients.2.ingredientId' },
+  ]);
+  assert.ok(result.issues.slice(0, 5).every((issue) => issue.message.length > 0));
+  assert.equal(result.duplicateReview, null);
+});
+
+test('publish readiness reports empty ingredients as authoritative incompleteness only', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  t.mock.method(recipeRepository, 'findRawById', async () => completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt, ingredients: [],
+  }));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => assert.fail('DUP1 must be skipped'));
+
+  const result = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.ok(result.issues.some((issue) => issue.code === 'RECIPE_INCOMPLETE' && issue.path === 'ingredients'));
+  assert.equal(result.issues.some((issue) => issue.code.startsWith('RECIPE_INGREDIENT_')), false);
+});
+
+test('publish readiness derives every required-content issue from the strict Published schema', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    title: undefined,
+    description: undefined,
+    difficulty: undefined,
+    cookTimeMinutes: undefined,
+    servings: undefined,
+    instructions: [],
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => assert.fail('DUP1 must be skipped'));
+
+  const result = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.deepEqual(result.issues.map((issue) => issue.path), [
+    'title', 'description', 'difficulty', 'cookTimeMinutes', 'servings', 'instructions',
+  ]);
+  assert.ok(result.issues.every((issue) => issue.code === 'RECIPE_INCOMPLETE'));
+});
+
+test('publish readiness returns not-found/conflict errors and performs no writes', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  let recipe = null;
+  t.mock.method(recipeRepository, 'findRawById', async () => recipe);
+  failOnRecipeWrites(t);
+  await assert.rejects(
+    () => recipeService.getRecipePublishReadiness('missing', { expectedUpdatedAt: updatedAt.toISOString() }),
+    { code: 'RECIPE_NOT_FOUND', statusCode: 404 }
+  );
+
+  recipe = completeStoredRecipe({ publicationStatus: 'draft', updatedAt });
+  await assert.rejects(
+    () => recipeService.getRecipePublishReadiness('recipe1', {
+      expectedUpdatedAt: '2026-09-30T00:00:00.000Z',
+    }),
+    { code: 'RECIPE_EDIT_CONFLICT', statusCode: 409 }
+  );
+});
+
+test('publish readiness reuses DUP1 required, matching, stale, truncated, and changed-result semantics', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  let candidates = [completeStoredRecipe({
+    _id: 'candidate1', publicationStatus: 'published', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  })];
+  let truncated = false;
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => ({
+    candidates,
+    candidateUniverseCount: truncated ? 501 : candidates.length,
+    comparedCount: truncated ? 500 : candidates.length,
+    truncated,
+  }));
+  failOnRecipeWrites(t);
+
+  const required = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(), duplicateReview: { confirmDistinctRecipe: true },
+  });
+  assert.equal(required.issues.at(-1).code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+  assert.equal(required.duplicateReview.candidates[0].recipe.id, 'candidate1');
+
+  const ready = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+    duplicateReview: { resultDigest: required.duplicateReview.resultDigest, confirmDistinctRecipe: true },
+  });
+  assert.equal(ready.ready, true);
+
+  candidates = [];
+  const stale = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+    duplicateReview: { resultDigest: required.duplicateReview.resultDigest, confirmDistinctRecipe: true },
+  });
+  assert.equal(stale.issues[0].code, 'RECIPE_DUPLICATE_REVIEW_STALE');
+  assert.notEqual(stale.duplicateReview.resultDigest, required.duplicateReview.resultDigest);
+
+  truncated = true;
+  const bounded = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.equal(bounded.duplicateReview.truncated, true);
+  assert.equal(bounded.issues[0].code, 'RECIPE_DUPLICATE_REVIEW_REQUIRED');
+});
+
+test('readiness and Publish have decision parity, and Publish reruns DUP1 before its atomic transition', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  let comparisons = 0;
+  let transition;
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => {
+    comparisons += 1;
+    return { candidates: [], candidateUniverseCount: 0, comparedCount: 0, truncated: false };
+  });
+  t.mock.method(recipeRepository, 'publishById', async (id, args) => {
+    transition = { id, ...args };
+    return { ...draft, publicationStatus: 'published' };
+  });
+
+  const readiness = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.equal(readiness.ready, true);
+  await recipeService.publishRecipe('recipe1', { expectedUpdatedAt: updatedAt.toISOString() }, {
+    actorId: 'moderator1', now: new Date('2026-09-30T02:00:00.000Z'),
+  });
+  assert.equal(comparisons, 2);
+  assert.deepEqual(transition, {
+    id: 'recipe1',
+    actorId: 'moderator1',
+    publishedAt: new Date('2026-09-30T02:00:00.000Z'),
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+});
+
+test('Publish retains the atomic updatedAt precondition after a ready evaluation', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  let atomicArgs;
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  mockNoDuplicateCandidates(t);
+  t.mock.method(recipeRepository, 'publishById', async (id, args) => {
+    atomicArgs = args;
+    return null;
+  });
+
+  await assert.rejects(
+    () => recipeService.publishRecipe('recipe1', { expectedUpdatedAt: updatedAt.toISOString() }, {
+      actorId: 'moderator1',
+    }),
+    { code: 'RECIPE_EDIT_CONFLICT', statusCode: 409 }
+  );
+  assert.equal(atomicArgs.expectedUpdatedAt, updatedAt.toISOString());
+});
+
+test('Publish translates the shared multi-issue evaluation to its existing fail-fast error contract', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt, servings: undefined,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async () => null);
+  t.mock.method(recipeRepository, 'publishById', async () => assert.fail('blocked Publish must not write'));
+
+  const readiness = await recipeService.getRecipePublishReadiness('recipe1', {
+    expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.deepEqual(readiness.issues.map((issue) => issue.code), [
+    'RECIPE_INCOMPLETE', 'RECIPE_INGREDIENT_NOT_FOUND',
+  ]);
+  await assert.rejects(
+    () => recipeService.publishRecipe('recipe1', { expectedUpdatedAt: updatedAt.toISOString() }),
+    (error) => error.code === 'RECIPE_INCOMPLETE' && error.details.some((issue) => issue.path[0] === 'servings')
+  );
+});
+
+test('publish readiness propagates repository, Ingredient, and DUP1 failures', async (t) => {
+  const updatedAt = new Date('2026-09-30T01:02:03.000Z');
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece', optional: false }],
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => { throw new Error('repository failed'); });
+  await assert.rejects(
+    () => recipeService.getRecipePublishReadiness('recipe1', { expectedUpdatedAt: updatedAt.toISOString() }),
+    /repository failed/
+  );
+
+  recipeRepository.findRawById.mock.mockImplementation(async () => draft);
+  t.mock.method(ingredientService, 'findIngredientById', async () => { throw new Error('ingredient failed'); });
+  await assert.rejects(
+    () => recipeService.getRecipePublishReadiness('recipe1', { expectedUpdatedAt: updatedAt.toISOString() }),
+    /ingredient failed/
+  );
+
+  ingredientService.findIngredientById.mock.mockImplementation(async (id) => activeIngredient(id));
+  t.mock.method(recipeRepository, 'findDuplicateCandidates', async () => { throw new Error('comparator failed'); });
+  await assert.rejects(
+    () => recipeService.getRecipePublishReadiness('recipe1', { expectedUpdatedAt: updatedAt.toISOString() }),
+    /comparator failed/
   );
 });
 
