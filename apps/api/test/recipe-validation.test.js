@@ -10,6 +10,7 @@ const {
   recipeParamsSchema,
   duplicateCheckSchema,
   publishRecipeSchema,
+  publishReadinessSchema,
   legacyPublishedRecipeBodySchema,
 } = require('../src/modules/recipes/recipe.validation');
 
@@ -79,6 +80,30 @@ test('duplicate acknowledgement preserves strict types and shape while semantic 
     assert.equal(publishRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: {
       confirmFilipinoCuisine: true, duplicateReview: invalid,
     } }).success, false);
+  }
+});
+
+test('publish-readiness validation requires a strict saved-version request and reuses DUP1 acknowledgement shape', () => {
+  const expectedUpdatedAt = '2026-09-30T00:00:00.000Z';
+  const base = { params: { recipeId: RECIPE_ID }, body: { expectedUpdatedAt } };
+  assert.equal(publishReadinessSchema.safeParse(base).success, true);
+  assert.equal(publishReadinessSchema.safeParse({
+    ...base,
+    body: {
+      expectedUpdatedAt,
+      duplicateReview: { resultDigest: 'a'.repeat(64), confirmDistinctRecipe: true },
+    },
+  }).success, true);
+
+  for (const invalid of [
+    { params: { recipeId: RECIPE_ID }, body: {} },
+    { params: { recipeId: 'invalid' }, body: { expectedUpdatedAt } },
+    { ...base, body: { expectedUpdatedAt, confirmFilipinoCuisine: true } },
+    { ...base, body: { expectedUpdatedAt, extra: true } },
+    { ...base, body: { expectedUpdatedAt, duplicateReview: { resultDigest: 'A'.repeat(64) } } },
+    { ...base, body: { expectedUpdatedAt, duplicateReview: { confirmDistinctRecipe: 'true' } } },
+  ]) {
+    assert.equal(publishReadinessSchema.safeParse(invalid).success, false);
   }
 });
 

@@ -155,18 +155,44 @@ function toInstructionsList({ instructions, steps }) {
 // tolerates an optional entry going inactive after the fact. Verified via
 // IngredientService only: RecipeService never imports the Ingredient
 // model/repository directly (cross-module boundary rule).
-async function assertIngredientsActive(ingredients) {
-  const uniqueIds = [...new Set(ingredients.map((entry) => String(entry.ingredientId)))];
+async function evaluateIngredientEligibility(ingredients) {
+  const uniqueIds = [...new Set(
+    ingredients
+      .filter((entry) => entry.ingredientId !== undefined)
+      .map((entry) => String(entry.ingredientId))
+  )];
   const found = await Promise.all(uniqueIds.map((id) => ingredientService.findIngredientById(id)));
+  const byId = new Map(uniqueIds.map((id, index) => [id, found[index]]));
 
-  found.forEach((ingredient) => {
+  return ingredients.flatMap((entry, index) => {
+    if (entry.ingredientId === undefined) return [];
+    const ingredient = byId.get(String(entry.ingredientId));
     if (!ingredient) {
-      throw ingredientNotFoundError();
+      return [{
+        code: 'RECIPE_INGREDIENT_NOT_FOUND',
+        path: `ingredients.${index}.ingredientId`,
+        message: 'One or more referenced ingredients do not exist.',
+      }];
     }
     if (!ingredient.isActive) {
-      throw ingredientInactiveError();
+      return [{
+        code: 'RECIPE_INGREDIENT_INACTIVE',
+        path: `ingredients.${index}.ingredientId`,
+        message: 'One or more referenced ingredients are not active.',
+      }];
     }
+    return [];
   });
+}
+
+async function assertIngredientsActive(ingredients) {
+  const issues = await evaluateIngredientEligibility(ingredients);
+  if (issues[0]?.code === 'RECIPE_INGREDIENT_NOT_FOUND') {
+    throw ingredientNotFoundError();
+  }
+  if (issues.length > 0) {
+    throw ingredientInactiveError();
+  }
 }
 
 function normalizeIngredients(ingredients) {
@@ -335,21 +361,100 @@ async function compareRecipeSubject(subject, { excludeId } = {}) {
 }
 
 function enforceDuplicateReview(freshReview, suppliedReview) {
+  const issue = evaluateDuplicateReview(freshReview, suppliedReview);
+  if (issue) {
+    throw duplicateReviewError(issue.code, issue.message, freshReview);
+  }
+}
+
+function evaluateDuplicateReview(freshReview, suppliedReview) {
   const reviewRequired = freshReview.truncated || freshReview.candidates.length > 0;
   if (reviewRequired && (!suppliedReview?.resultDigest || suppliedReview.confirmDistinctRecipe !== true)) {
-    throw duplicateReviewError(
-      'RECIPE_DUPLICATE_REVIEW_REQUIRED',
-      'Review the current duplicate and variant evidence before continuing.',
-      freshReview
-    );
+    return {
+      code: 'RECIPE_DUPLICATE_REVIEW_REQUIRED',
+      path: 'duplicateReview',
+      message: 'Review the current duplicate and variant evidence before continuing.',
+    };
   }
   if (suppliedReview?.resultDigest && suppliedReview.resultDigest !== freshReview.resultDigest) {
-    throw duplicateReviewError(
-      'RECIPE_DUPLICATE_REVIEW_STALE',
-      'Recipe duplicate review is stale. Review the current candidates before continuing.',
-      freshReview
-    );
+    return {
+      code: 'RECIPE_DUPLICATE_REVIEW_STALE',
+      path: 'duplicateReview',
+      message: 'Recipe duplicate review is stale. Review the current candidates before continuing.',
+    };
   }
+  return null;
+}
+
+async function evaluatePublishReadiness(recipe, { duplicateReview, collectAllIssues = true } = {}) {
+  if (!recipe.isActive) {
+    return {
+      issues: [{
+        code: 'RECIPE_ARCHIVED',
+        path: 'isActive',
+        message: 'An archived recipe cannot be published.',
+      }],
+      duplicateReview: null,
+      completenessIssues: [],
+    };
+  }
+  if (effectivePublicationStatus(recipe) !== 'draft') {
+    return {
+      issues: [{
+        code: 'RECIPE_NOT_DRAFT',
+        path: 'publicationStatus',
+        message: 'Only an active Draft can be published.',
+      }],
+      duplicateReview: null,
+      completenessIssues: [],
+    };
+  }
+
+  const completeness = publishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe));
+  const completenessIssues = completeness.success ? [] : completeness.error.issues;
+  const issues = completenessIssues.map((issue) => ({
+    code: 'RECIPE_INCOMPLETE',
+    path: issue.path.join('.'),
+    message: issue.message,
+  }));
+  if (!collectAllIssues && completenessIssues.length > 0) {
+    return { issues, duplicateReview: null, completenessIssues };
+  }
+  const ingredientIssues = await evaluateIngredientEligibility(recipe.ingredients || []);
+  issues.push(...ingredientIssues);
+
+  if (completenessIssues.length > 0 || ingredientIssues.length > 0) {
+    return { issues, duplicateReview: null, completenessIssues };
+  }
+
+  const freshReview = await compareRecipeSubject(recipe, { excludeId: recipe._id });
+  const duplicateIssue = evaluateDuplicateReview(freshReview, duplicateReview);
+  if (duplicateIssue) issues.push(duplicateIssue);
+  return { issues, duplicateReview: freshReview, completenessIssues };
+}
+
+function toPublishReadinessProjection(recipe, evaluation) {
+  const recipeUpdatedAt = recipe.updatedAt instanceof Date
+    ? recipe.updatedAt.toISOString()
+    : new Date(recipe.updatedAt).toISOString();
+  return {
+    ready: evaluation.issues.length === 0,
+    recipeId: String(recipe._id),
+    recipeUpdatedAt,
+    issues: evaluation.issues,
+    duplicateReview: evaluation.duplicateReview,
+  };
+}
+
+function throwPublishReadinessIssue(evaluation) {
+  const issue = evaluation.issues[0];
+  if (!issue) return;
+  if (issue.code === 'RECIPE_ARCHIVED') throw inactiveRecipeError();
+  if (issue.code === 'RECIPE_NOT_DRAFT') throw publicationStateError();
+  if (issue.code === 'RECIPE_INCOMPLETE') throw incompleteRecipeError(evaluation.completenessIssues);
+  if (issue.code === 'RECIPE_INGREDIENT_NOT_FOUND') throw ingredientNotFoundError();
+  if (issue.code === 'RECIPE_INGREDIENT_INACTIVE') throw ingredientInactiveError();
+  throw duplicateReviewError(issue.code, issue.message, evaluation.duplicateReview);
 }
 
 async function createRecipe(input, { actorId, now = new Date() } = {}) {
@@ -668,16 +773,23 @@ async function updateRecipe(id, patch, { actorId } = {}) {
   return updated;
 }
 
+async function getRecipePublishReadiness(id, { expectedUpdatedAt, duplicateReview }) {
+  const existing = await recipeRepository.findRawById(id);
+  if (!existing) throw notFoundError();
+  assertCurrentPrecondition(existing, expectedUpdatedAt);
+  const evaluation = await evaluatePublishReadiness(existing, { duplicateReview });
+  return toPublishReadinessProjection(existing, evaluation);
+}
+
 async function publishRecipe(id, { expectedUpdatedAt, duplicateReview } = {}, { actorId, now = new Date() } = {}) {
   const existing = await recipeRepository.findRawById(id);
   if (!existing) throw notFoundError();
   assertCurrentPrecondition(existing, expectedUpdatedAt);
-  if (!existing.isActive) throw inactiveRecipeError();
-  if (effectivePublicationStatus(existing) !== 'draft') throw publicationStateError();
-  assertPublishedComplete(existing);
-  await assertIngredientsActive(existing.ingredients || []);
-  const freshReview = await compareRecipeSubject(existing, { excludeId: existing._id });
-  enforceDuplicateReview(freshReview, duplicateReview);
+  const evaluation = await evaluatePublishReadiness(existing, {
+    duplicateReview,
+    collectAllIssues: false,
+  });
+  throwPublishReadinessIssue(evaluation);
 
   const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;
   const published = await recipeRepository.publishById(id, {
@@ -726,6 +838,7 @@ module.exports = {
   getRecipeById,
   listRecipes,
   updateRecipe,
+  getRecipePublishReadiness,
   publishRecipe,
   archiveRecipe,
   restoreRecipe,

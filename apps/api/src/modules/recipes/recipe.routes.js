@@ -17,6 +17,7 @@ const {
   duplicateCheckSchema,
   updateRecipeSchema,
   publishRecipeSchema,
+  publishReadinessSchema,
   lifecycleRecipeSchema,
   importRecipeUrlSchema,
 } = require('./recipe.validation');
@@ -47,6 +48,13 @@ router.get(
   validate(listRecipesSchema),
   requireCatalogReadAllForNonActive,
   recipeController.listRecipes
+);
+router.post(
+  '/:recipeId/publish-readiness',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(publishReadinessSchema),
+  recipeController.getRecipePublishReadiness
 );
 router.get('/:recipeId', authenticate, validate(recipeParamsSchema), recipeController.getRecipe);
 

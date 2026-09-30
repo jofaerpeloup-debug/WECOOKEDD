@@ -156,6 +156,116 @@ for (const actor of [
   });
 }
 
+test('POST /api/v1/recipes/:id/publish-readiness returns the frozen success envelope for a Moderator', async (t) => {
+  const updatedAt = new Date('2026-09-30T00:00:00.000Z');
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(recipeRepository, 'findRawById', async () => ({
+    ...validCreatePayload(), _id: RECIPE_ID, publicationStatus: 'draft', isActive: true, updatedAt,
+  }));
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  for (const method of ['createRecipe', 'updateById', 'publishById', 'archiveById', 'restoreById']) {
+    t.mock.method(recipeRepository, method, async () => assert.fail(`readiness must not call ${method}`));
+  }
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/publish-readiness`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ expectedUpdatedAt: updatedAt.toISOString() });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.deepEqual(Object.keys(response.body.data), ['publishReadiness']);
+  assert.deepEqual(response.body.data.publishReadiness, {
+    ready: true,
+    recipeId: RECIPE_ID,
+    recipeUpdatedAt: updatedAt.toISOString(),
+    issues: [],
+    duplicateReview: {
+      fingerprintVersion: 'recipe-duplicate-v1',
+      resultDigest: response.body.data.publishReadiness.duplicateReview.resultDigest,
+      candidateLimit: 500,
+      candidateUniverseCount: 0,
+      comparedCount: 0,
+      truncated: false,
+      candidates: [],
+    },
+  });
+  assert.match(response.body.data.publishReadiness.duplicateReview.resultDigest, /^[0-9a-f]{64}$/);
+});
+
+test('publish-readiness rejects stale versions and invalid requests rather than returning a negative projection', async (t) => {
+  const updatedAt = new Date('2026-09-30T00:00:00.000Z');
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(recipeRepository, 'findRawById', async () => fakeRecipeDoc({
+    publicationStatus: 'draft', updatedAt,
+  }));
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const stale = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/publish-readiness`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ expectedUpdatedAt: '2026-09-29T00:00:00.000Z' });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error.code, 'RECIPE_EDIT_CONFLICT');
+
+  for (const { path, body } of [
+    { path: RECIPE_ID, body: {} },
+    { path: RECIPE_ID, body: { expectedUpdatedAt: updatedAt.toISOString(), unknown: true } },
+    { path: 'invalid', body: { expectedUpdatedAt: updatedAt.toISOString() } },
+  ]) {
+    const invalid = await request(app)
+      .post(`/api/v1/recipes/${path}/publish-readiness`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.body.error.code, 'VALIDATION_ERROR');
+  }
+});
+
+for (const actor of [
+  { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID },
+  { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID },
+]) {
+  test(`POST /api/v1/recipes/:id/publish-readiness denies ${actor.role} before validation`, async (t) => {
+    mockAuth(t, actor);
+    const token = tokenFor(actor);
+    const response = await request(app)
+      .post(`/api/v1/recipes/${RECIPE_ID}/publish-readiness`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'FORBIDDEN');
+  });
+}
+
+test('publish-readiness denies unauthenticated callers before validation', async () => {
+  const response = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/publish-readiness`)
+    .send({});
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
+});
+
+test('publish-readiness uses the current database role, not a stale Moderator token claim', async (t) => {
+  t.mock.method(sessionRepository, 'findActiveById', async () => ({
+    _id: MODERATOR_SESSION_ID, userId: MODERATOR_ID, revokedAt: null,
+  }));
+  t.mock.method(userRepository, 'findById', async () => ({
+    _id: MODERATOR_ID, role: 'user', status: 'active',
+  }));
+  const staleModeratorToken = tokenFor({
+    id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID,
+  });
+
+  const response = await request(app)
+    .post(`/api/v1/recipes/${RECIPE_ID}/publish-readiness`)
+    .set('Authorization', `Bearer ${staleModeratorToken}`)
+    .send({});
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error.code, 'FORBIDDEN');
+});
+
 test('GET /api/v1/recipes without a token is rejected', async () => {
   const response = await request(app).get('/api/v1/recipes');
   assert.equal(response.status, 401);

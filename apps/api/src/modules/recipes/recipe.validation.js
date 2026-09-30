@@ -499,6 +499,16 @@ const publishRecipeSchema = z.object({
     .strict(),
 });
 
+const publishReadinessSchema = z.object({
+  params: z.object({ recipeId: objectIdSchema }).strict(),
+  body: z
+    .object({
+      expectedUpdatedAt: expectedUpdatedAtSchema,
+      duplicateReview: duplicateReviewAcknowledgementSchema.optional(),
+    })
+    .strict(),
+});
+
 const duplicateCheckSchema = z.object({
   body: z.union([
     z.object({
@@ -521,6 +531,7 @@ module.exports = {
   createDraftSchema,
   updateRecipeSchema,
   publishRecipeSchema,
+  publishReadinessSchema,
   lifecycleRecipeSchema,
   duplicateCheckSchema,
   importRecipeUrlSchema,
