@@ -11,20 +11,41 @@ import {
 } from '../recipeOptions.js';
 import { blankIngredient } from './recipeAuthoringModel.js';
 import { ingredientCreationPrefill, prepareIngredientResolutionRequest } from './recipeIngredientResolution.js';
-import { createRecipeIntakeHandlers } from './recipeIntake.js';
+import { createRecipeIntakeHandlers, metadataSuggestionState } from './recipeIntake.js';
 import { createRecipeUrlImportHandlers, RecipeUrlImportControls } from './recipeUrlImport.js';
 import RecipeReview from './RecipeReview.jsx';
 
 function FieldError({ message }) { return message ? <div className="wc-author-field-error" role="alert">{message}</div> : null; }
 function err(errors, prefix) { return errors[prefix] || Object.entries(errors).find(([key]) => key.startsWith(`${prefix}.`))?.[1]; }
 
-function RecipeIntake({ form, change, busy, dispatch }) {
+function metadataSuggestionKey(item) {
+  return `${item.source}:${item.field}:${item.value}`;
+}
+
+export function MetadataSuggestionRow({ item, form, busy, accepted, onAccept }) {
+  const state = metadataSuggestionState(form, item, accepted);
+  const stateLabel = {
+    accepted: 'Accepted in current form',
+    'already-selected': 'Already selected',
+    'existing-preserved': 'Existing category preserved',
+  }[state];
+  return <li>
+    <p><strong>Source:</strong> {item.source} {item.sourceValue}</p>
+    <p><strong>Canonical suggestion:</strong> {item.field} → {item.value} ({item.label})</p>
+    {state === 'eligible'
+      ? <button type="button" className="wc-btn-secondary" disabled={busy} onClick={() => onAccept(item)}>Accept suggestion: {item.label}</button>
+      : <p aria-live="polite">{stateLabel}</p>}
+  </li>;
+}
+
+export function RecipeIntake({ form, change, busy, dispatch }) {
   const [input, setInput] = useState('');
   const [preview, setPreview] = useState(null);
   const [application, setApplication] = useState(null);
+  const [acceptedMetadata, setAcceptedMetadata] = useState(() => new Set());
   const [url, setUrl] = useState('');
   const [urlImport, setUrlImport] = useState({ status: 'idle', sourceUrl: '', error: '' });
-  const { previewInput, applyPreview } = createRecipeIntakeHandlers({
+  const { previewInput, applyPreview, acceptSuggestion } = createRecipeIntakeHandlers({
     input, form, preview, change, setPreview,
     setApplication,
   });
@@ -37,12 +58,22 @@ function RecipeIntake({ form, change, busy, dispatch }) {
   };
   const handlePreview = () => {
     const result = previewInput();
+    setAcceptedMetadata(new Set());
     setUnresolvedFromPreview(result);
   };
   const handleUrlImport = async () => {
     const result = await importFromUrl();
+    if (result.preview) setAcceptedMetadata(new Set());
     setUnresolvedFromPreview(result.preview);
   };
+  const handleMetadataAcceptance = (item) => {
+    const outcome = acceptSuggestion(item);
+    if (outcome.changed) {
+      setAcceptedMetadata((current) => new Set(current).add(metadataSuggestionKey(item)));
+    }
+  };
+  const suggestedMetadata = preview?.metadata.filter(({ status }) => status === 'suggested') || [];
+  const unsupportedMetadata = preview?.metadata.filter(({ status }) => status !== 'suggested') || [];
   return <section className="wc-recipe-intake" aria-labelledby="recipe-intake-title">
     <h2 id="recipe-intake-title">Prefill from Recipe JSON-LD</h2>
     <p>Paste one Recipe object to preview safe fields. Nothing is saved or published automatically.</p>
@@ -53,12 +84,20 @@ function RecipeIntake({ form, change, busy, dispatch }) {
       onUrlChange={(value) => { setUrl(value); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }}
       onImport={handleUrlImport}
     />
-    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }} /></label>
+    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); setAcceptedMetadata(new Set()); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }} /></label>
     <div className="wc-recipe-intake-actions"><button type="button" className="wc-btn-secondary" disabled={busy || !input.trim()} onClick={handlePreview}>Preview</button>{preview?.ok && preview.mapped.length > 0 && <button type="button" className="wc-btn-secondary" disabled={busy} onClick={applyPreview}>Apply blank fields</button>}</div>
     {preview && !preview.ok && <div className="wc-author-field-error" role="alert">{preview.error.message}</div>}
-    {preview?.ok && <div className="wc-recipe-intake-preview" role="status">
+    {preview?.ok && <div className="wc-recipe-intake-preview">
       <strong>{preview.mapped.length} mapped</strong>
       {preview.mapped.length > 0 && <ul>{preview.mapped.map((item) => <li key={item.field}>{item.source} → {item.field}</li>)}</ul>}
+      {suggestedMetadata.length > 0 && <><strong>Metadata suggestions</strong><ul>{suggestedMetadata.map((item) => <MetadataSuggestionRow
+        key={metadataSuggestionKey(item)} item={item} form={form} busy={busy}
+        accepted={acceptedMetadata.has(metadataSuggestionKey(item))} onAccept={handleMetadataAcceptance}
+      />)}</ul></>}
+      {unsupportedMetadata.length > 0 && <><strong>Unsupported or ambiguous metadata</strong><ul>{unsupportedMetadata.map((item, index) => <li key={`${item.source}-${index}`}>
+        <p><strong>Source:</strong> {item.source} {item.sourceValue}</p>
+        <p><strong>{item.status === 'ambiguous' ? 'Ambiguous' : 'Unsupported'}:</strong> {item.reason}</p>
+      </li>)}</ul></>}
       {preview.unsupported.length > 0 && <><strong>Unsupported</strong><ul>{preview.unsupported.map((item, index) => <li key={`${item.location || 'recipe'}-${item.field}-${index}`}>{item.location ? `${item.location} ${item.field}` : item.field}: {item.message}</li>)}</ul></>}
       {preview.invalid.length > 0 && <><strong>Invalid</strong><ul>{preview.invalid.map((item) => <li key={item.field}>{item.field}: {item.message}</li>)}</ul></>}
       {preview.unresolved.length > 0 && <><strong>Unresolved ingredients</strong><p>{preview.unresolved[0].message}</p><ol>{preview.unresolved[0].values.map((value, index) => <li key={`${index}-${value}`}>{value}</li>)}</ol></>}
