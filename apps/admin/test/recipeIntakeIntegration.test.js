@@ -12,7 +12,7 @@ import { ingredientCreationPrefill, prepareIngredientResolutionRequest } from '.
 
 const payload = JSON.stringify({
   '@type': 'Recipe', name: 'Chicken Adobo', description: 'Braised chicken.', prepTime: 'PT20M', cookTime: 'PT1H10M',
-  recipeYield: 6, recipeInstructions: ['Brown the chicken.', 'Simmer until tender.'], recipeIngredient: ['1 kg chicken'],
+  recipeYield: '6 people', recipeInstructions: ['Brown the chicken.', 'Simmer until tender.'], recipeIngredient: ['1 kg chicken'],
 });
 
 function createHookHarness(hook, props = {}) {
@@ -107,6 +107,34 @@ test('application preserves every meaningful conflict and reports skipped fields
   const outcome = applyRecipeIntake(original, parseRecipeIntake(payload));
   assert.equal(outcome.form, original);
   assert.deepEqual(outcome.skipped.map(({ field }) => field), ['title', 'description', 'servings', 'prepTimeMinutes', 'cookTimeMinutes', 'instructions']);
+});
+
+test('rejected yields neither fill nor clear servings while other valid pasted fields still apply', () => {
+  for (const servings of ['', '8']) {
+    const original = { ...emptyRecipeForm(), servings };
+    const parsed = parseRecipeIntake(JSON.stringify({
+      '@type': 'Recipe', name: 'Safe title', recipeYield: '12 cookies',
+    }));
+    const outcome = applyRecipeIntake(original, parsed);
+    assert.equal(parsed.values.servings, undefined);
+    assert.deepEqual(parsed.invalid.map(({ field }) => field), ['recipeYield']);
+    assert.equal(outcome.form.servings, servings);
+    assert.equal(outcome.form.title, 'Safe title');
+    assert.equal(outcome.applied.some(({ field }) => field === 'servings'), false);
+    assert.equal(outcome.skipped.some(({ field }) => field === 'servings'), false);
+  }
+});
+
+test('accepted pasted yields fill only blank servings and preserve Moderator-entered servings', () => {
+  const parsed = parseRecipeIntake(JSON.stringify({ '@type': 'Recipe', recipeYield: 'Serves 6' }));
+  const blank = applyRecipeIntake(emptyRecipeForm(), parsed);
+  assert.equal(blank.form.servings, '6');
+  assert.deepEqual(blank.applied, [{ field: 'servings' }]);
+
+  const existing = { ...emptyRecipeForm(), servings: '8' };
+  const preserved = applyRecipeIntake(existing, parsed);
+  assert.equal(preserved.form, existing);
+  assert.deepEqual(preserved.skipped, [{ field: 'servings', reason: 'Existing value preserved.' }]);
 });
 
 test('cooking time requires both fields blank while all-blank instruction rows may be replaced', () => {

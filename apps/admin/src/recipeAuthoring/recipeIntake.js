@@ -83,16 +83,11 @@ function mapDuration(result, recipe, source, field, minimum, maximum) {
 }
 
 function yieldNumber(value) {
-  if (typeof value === 'number') return Number.isSafeInteger(value) ? value : null;
   if (typeof value !== 'string') return null;
   const normalized = value.trim().normalize('NFKC');
-  if (!normalized || /\b(?:minus|negative|zero|one|two|three|four|five|six|seven|eight|nine|ten|half|halves|quarter|quarters|third|thirds|dozen|dozens|score|point)\b/iu.test(normalized)) return null;
-  if (/[+\u2212\uFE63\uFF0D]/u.test(normalized) || /-\s*\p{N}/u.test(normalized)) return null;
-  if (/\p{N}\s*[\/.\u2044]\s*\p{N}/u.test(normalized)) return null;
-  if (/\p{N}\s*(?:[x×*]|\b(?:to|through|or)\b)/iu.test(normalized)) return null;
-  const numbers = normalized.match(/\p{N}+/gu) || [];
-  if (numbers.length !== 1 || !/^\d+$/.test(numbers[0])) return null;
-  const parsed = Number(numbers[0]);
+  const match = normalized.match(/^(?:(\d+)\s+(?:servings?|person|people)|serves\s+(\d+)(?:\s+(?:servings?|person|people))?|makes\s+(\d+)\s+servings?)$/iu);
+  if (!match) return null;
+  const parsed = Number(match[1] ?? match[2] ?? match[3]);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
@@ -154,7 +149,7 @@ export function parseRecipeIntake(input) {
   mapDuration(result, recipe, 'cookTime', 'cookTimeMinutes', 3, MAX_COOK_TIME_MINUTES);
   if (Object.hasOwn(recipe, 'recipeYield')) {
     const servings = yieldNumber(recipe.recipeYield);
-    if (servings == null || servings < 1 || servings > MAX_SERVINGS) addInvalid(result, 'recipeYield', `Expected one positive whole number from 1 to ${MAX_SERVINGS}.`);
+    if (servings == null || servings < 1 || servings > MAX_SERVINGS) addInvalid(result, 'recipeYield', `Expected an exact serving/person count from 1 to ${MAX_SERVINGS}, such as "4 servings" or "Serves 4".`);
     else addMapped(result, 'recipeYield', 'servings', servings);
   }
   mapInstructions(result, recipe);

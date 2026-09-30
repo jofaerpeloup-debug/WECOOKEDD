@@ -62,18 +62,63 @@ test('accepts valid whole-minute ISO duration forms and rejects fractions before
   }
 });
 
-test('requires an unambiguous positive whole-number yield within Recipe bounds', () => {
-  for (const [value, servings] of [[1, 1], ['Makes 100 servings', 100], ['Serves 4 people', 4]]) {
-    assert.equal(parseRecipeIntake(JSON.stringify(recipe({ recipeYield: value }))).values.servings, servings);
+test('maps every exact serving/person yield form with normalization and 1-100 boundaries', () => {
+  const accepted = [
+    ['1 serving', 1], ['4 servings', 4], ['0004 servings', 4], ['1 person', 1], ['6 people', 6],
+    ['Serves 4', 4], ['SERVES\t4 SERVING', 4], [' serves 4 servings ', 4],
+    ['Serves 4 person', 4], ['Serves 4 people', 4],
+    ['Makes 4 serving', 4], ['  MAKES\n１００ SERVINGS  ', 100],
+  ];
+  for (const [value, servings] of accepted) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ recipeYield: value })));
+    assert.equal(result.values.servings, servings, value);
+    assert.deepEqual(result.invalid, [], value);
   }
-  for (const value of [
-    0, 101, '−4 servings', '4½ servings', '4.5 servings', '4/5 servings', '4-6 servings',
-    '4 to 6 servings', '4 and a half servings', '4 or six servings', '4 dozen servings', 'minus 4 servings',
+});
+
+test('maps noun-first yields case-insensitively with approved surrounding whitespace', () => {
+  for (const [recipeYield, servings] of [
+    ['  4 SERVINGS  ', 4],
+    ['  1 SeRvInG  ', 1],
+    ['  6 PeOpLe  ', 6],
+    ['  1 PERSON  ', 1],
   ]) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ recipeYield })));
+    assert.equal(result.values.servings, servings, recipeYield);
+    assert.deepEqual(result.invalid, [], recipeYield);
+  }
+});
+
+test('rejects the required ambiguous yield matrix and exact-vocabulary near misses', () => {
+  const rejected = [
+    '4', 4, '1 loaf', '12 cookies', 'Makes 2 cakes', '4-6 servings', '4–6 servings',
+    'about 4 servings', 'serves four', '4 portions', '4 plates', '4 guests', 'feeds 4',
+    'Serves: 4', '4 servings total', 'Makes 4 people', 'Makes 4',
+  ];
+  for (const value of rejected) {
     const result = parseRecipeIntake(JSON.stringify(recipe({ recipeYield: value })));
     assert.equal(result.values.servings, undefined, String(value));
     assert.deepEqual(result.invalid.map(({ field }) => field), ['recipeYield'], String(value));
   }
+});
+
+test('rejects missing semantics, unsupported shapes, bounds, fractions, qualifiers, and multiple numbers', () => {
+  const rejected = [
+    '', '   ', null, true, [], {}, { '@type': 'QuantitativeValue', value: 4, unitText: 'servings' },
+    0, 101, 4.5, '0 servings', '101 servings', '−4 servings', '+4 servings', '4½ servings', '4.5 servings',
+    '4/5 servings', '4 to 6 servings', '4 through 6 servings', '4 or 6 servings',
+    'approximately 4 servings', 'approx. 4 servings', 'around 4 servings', 'up to 4 servings',
+    'at least 4 servings', '~4 servings', 'four servings', 'dozen servings', '4 and a half servings',
+  ];
+  for (const value of rejected) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ recipeYield: value })));
+    assert.equal(result.values.servings, undefined, JSON.stringify(value));
+    assert.deepEqual(result.invalid.map(({ field }) => field), ['recipeYield'], JSON.stringify(value));
+    assert.match(result.invalid[0].message, /exact serving\/person count from 1 to 100/u);
+  }
+  const absent = parseRecipeIntake(JSON.stringify(recipe()));
+  assert.equal(absent.values.servings, undefined);
+  assert.deepEqual(absent.invalid, []);
 });
 
 test('reports invalid durations, ambiguous yields, and unsupported instruction variants without mapping them', () => {
