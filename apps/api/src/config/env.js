@@ -119,6 +119,8 @@ const envSchema = z
     CLOUDINARY_API_KEY: z.string().trim().optional().default(''),
     CLOUDINARY_API_SECRET: z.string().trim().optional().default(''),
     CLOUDINARY_RECIPE_FOLDER: z.string().trim().max(255).optional().default('wecooked/recipes'),
+    OPENAI_API_KEY: z.string().trim().optional().default(''),
+    OPENAI_MODEL: z.string().trim().optional().default(''),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === 'production' && !hasExplicitMongoDatabase(value.MONGODB_URI)) {
@@ -208,6 +210,10 @@ function parseEnv(source) {
       apiKey: parsed.CLOUDINARY_API_KEY,
       apiSecret: parsed.CLOUDINARY_API_SECRET,
       recipeFolder: parsed.CLOUDINARY_RECIPE_FOLDER || 'wecooked/recipes',
+    },
+    openai: {
+      apiKey: parsed.OPENAI_API_KEY,
+      model: parsed.OPENAI_MODEL,
     },
   };
 }

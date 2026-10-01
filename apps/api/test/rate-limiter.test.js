@@ -15,9 +15,11 @@ const {
   SOCIAL_RATE_LIMITS,
   INGREDIENT_RESOLUTION_RATE_LIMIT,
   createIngredientResolutionRateLimiter,
+  ASSISTANT_RATE_LIMITS,
+  createAssistantRateLimiters,
 } = require('../src/middleware/rate-limiter');
 const { errorMiddleware } = require('../src/middleware/error.middleware');
-const { configureProxyTrust } = require('../src/app');
+const { createApp, configureProxyTrust } = require('../src/app');
 
 // A tiny test-only app with a 1-request limit, so the standardized 429
 // behavior can be proven with two requests instead of hundreds.
@@ -123,4 +125,64 @@ test('ingredient resolution permits 30 requests per user and rejects request 31 
   assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
   const independent = await request(app).post('/resolve').set('X-Test-User', 'moderator-b');
   assert.equal(independent.status, 200);
+});
+
+function buildAssistantLimiterApp({ useUser, useIp }) {
+  const limiters = createAssistantRateLimiters();
+  const app = express();
+  app.use((req, res, next) => {
+    req.auth = { userId: req.get('X-Test-User') || 'user-a' };
+    next();
+  });
+  if (useUser) app.use(limiters.user);
+  if (useIp) app.use(limiters.ip);
+  app.post('/chat', (req, res) => res.json({ success: true }));
+  app.use(errorMiddleware);
+  return app;
+}
+
+test('Assistant limiters have independent frozen user and IP budgets', async () => {
+  assert.deepEqual(ASSISTANT_RATE_LIMITS, {
+    user: { windowMs: 15 * 60 * 1000, limit: 10 },
+    ip: { windowMs: 15 * 60 * 1000, limit: 20 },
+  });
+
+  const byUser = buildAssistantLimiterApp({ useUser: true, useIp: false });
+  for (let count = 1; count <= 10; count += 1) {
+    assert.equal((await request(byUser).post('/chat')).status, 200);
+  }
+  assert.equal((await request(byUser).post('/chat')).body.error.code, 'RATE_LIMIT_EXCEEDED');
+  assert.equal(
+    (await request(byUser).post('/chat').set('X-Test-User', 'user-b')).status,
+    200
+  );
+
+  const byIp = buildAssistantLimiterApp({ useUser: false, useIp: true });
+  for (let count = 1; count <= 20; count += 1) {
+    assert.equal(
+      (await request(byIp).post('/chat').set('X-Test-User', `user-${count}`)).status,
+      200
+    );
+  }
+  const limited = await request(byIp).post('/chat').set('X-Test-User', 'user-21');
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error.code, 'RATE_LIMIT_EXCEEDED');
+});
+
+test('the existing global limiter permits 300 requests per IP and rejects request 301', async () => {
+  const app = createApp();
+  for (let count = 1; count <= 300; count += 1) {
+    const response = await request(app).get('/api/v1/health');
+    assert.equal(response.status, 200, `request ${count}`);
+  }
+
+  const limited = await request(app).get('/api/v1/health');
+  assert.equal(limited.status, 429);
+  assert.deepEqual(limited.body, {
+    success: false,
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many requests. Please try again later.',
+    },
+  });
 });

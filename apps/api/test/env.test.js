@@ -67,6 +67,35 @@ test('parseEnv accepts optional Cloudinary recipe-upload configuration', () => {
   });
 });
 
+test('parseEnv keeps OpenAI configuration optional, trimmed, and server-only', () => {
+  const absent = parseEnv({
+    NODE_ENV: 'test',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  });
+  assert.deepEqual(absent.openai, { apiKey: '', model: '' });
+
+  const whitespaceOnly = parseEnv({
+    NODE_ENV: 'test',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    OPENAI_API_KEY: '   ',
+    OPENAI_MODEL: '\t ',
+  });
+  assert.deepEqual(whitespaceOnly.openai, { apiKey: '', model: '' });
+
+  const configured = parseEnv({
+    NODE_ENV: 'test',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    OPENAI_API_KEY: '  secret-key  ',
+    OPENAI_MODEL: '  selected-model  ',
+  });
+  assert.deepEqual(configured.openai, { apiKey: 'secret-key', model: 'selected-model' });
+  assert.equal('openaiApiKey' in configured, false);
+  assert.equal('openaiModel' in configured, false);
+});
+
 test('parseEnv treats a blank optional Cloudinary folder as the safe default', () => {
   const result = parseEnv({
     ...REQUIRED_EMAIL_ENV,
