@@ -398,6 +398,17 @@ export default function IngredientsTab({ canWrite = false, onAuthorityLost }) {
           </select>
           <select
             className="wc-ing-select"
+            value={filters.allergen}
+            onChange={(e) => patchFilters({ allergen: e.target.value })}
+            aria-label="Filter by allergen"
+          >
+            <option value="">All allergens</option>
+            {INGREDIENT_ALLERGEN_TAGS.map((tag) => (
+              <option key={tag.value} value={tag.value}>{tag.label}</option>
+            ))}
+          </select>
+          <select
+            className="wc-ing-select"
             value={filters.status}
             onChange={(e) => patchFilters({ status: e.target.value })}
             aria-label="Filter by status"
