@@ -15,6 +15,9 @@ const {
   classifyRecipe,
   classifySubstitution,
   summarizeFindings,
+  normalizeIngredientName,
+  classifyIngredientAliasCollisions,
+  summarizeIngredientAliasCollisions,
   classifyCatalogSnapshot,
   formatHumanReport,
   formatJsonReport,
@@ -94,26 +97,6 @@ function relationshipFinding(recipe, ingredients) {
 function memoryWriter() {
   let value = '';
   return { write(chunk) { value += chunk; }, value() { return value; } };
-}
-
-async function readWithStrictObjectIdLookup(recipes, storedIngredients) {
-  let capturedLookup;
-  const ingredientCollection = {
-    find(filter) {
-      capturedLookup = filter._id.$in;
-      const matches = storedIngredients.filter((stored) => capturedLookup.some((lookup) =>
-        lookup instanceof mongoose.Types.ObjectId && lookup.equals(stored._id)
-      ));
-      return { toArray: async () => matches };
-    },
-    countDocuments: async () => storedIngredients.length,
-  };
-  const result = await readCatalogSnapshot({
-    recipeCollection: { find() { return { toArray: async () => recipes }; } },
-    substitutionCollection: { find() { return { toArray: async () => [] }; } },
-    ingredientCollection,
-  });
-  return { result, capturedLookup };
 }
 
 test('publication lifecycle classifier distinguishes absence, valid values, and invalid explicit values', () => {
@@ -282,7 +265,115 @@ test('classification ordering is deterministic across input order', () => {
   assert.deepEqual(first.findings, second.findings);
 });
 
-test('snapshot reads only projected catalog data, batches Ingredient lookup, counts all Ingredients, and ignores Shopping Lists', async () => {
+test('alias normalization is string-only and uses exact case and Unicode-whitespace folding', () => {
+  assert.equal(normalizeIngredientName('  Green\u00a0\tONION  '), 'green onion');
+  assert.equal(normalizeIngredientName(''), undefined);
+  assert.equal(normalizeIngredientName(' \n\t '), undefined);
+  assert.equal(normalizeIngredientName(42), undefined);
+  assert.equal(normalizeIngredientName('jalapeño!'), 'jalapeño!');
+});
+
+test('alias-to-canonical, self-alias, and statuses expose only frozen participant fields', () => {
+  const collisions = classifyIngredientAliasCollisions([
+    { _id: 'a', name: 'Green Onion', aliases: ['  SCALLION\u00a0 '], isActive: true, category: 'produce' },
+    { _id: 'b', name: 'Scallion', aliases: [], isActive: false, allergenTags: ['secret'] },
+    { _id: 'c', name: 'Garlic', aliases: [' garlic '], isActive: 'corrupt', privateField: 'hidden' },
+  ]);
+  assert.deepEqual(collisions.map((item) => [item.normalizedValue, item.collisionType]), [
+    ['garlic', 'SELF_ALIAS_TO_CANONICAL'],
+    ['scallion', 'ALIAS_TO_CANONICAL'],
+  ]);
+  assert.deepEqual(collisions[1].participants, [
+    {
+      ingredientId: 'a',
+      canonicalName: 'Green Onion',
+      status: 'active',
+      source: 'alias',
+      sourceValue: '  SCALLION\u00a0 ',
+      sourceIndex: 0,
+    },
+    {
+      ingredientId: 'b',
+      canonicalName: 'Scallion',
+      status: 'archived',
+      source: 'canonical',
+      sourceValue: 'Scallion',
+    },
+  ]);
+  assert.equal(collisions[0].participants[0].status, 'unknown');
+  for (const collision of collisions) {
+    assert.deepEqual(Object.keys(collision).sort(), ['collisionType', 'normalizedValue', 'participants']);
+    for (const participant of collision.participants) {
+      const expected = participant.source === 'alias'
+        ? ['canonicalName', 'ingredientId', 'source', 'sourceIndex', 'sourceValue', 'status']
+        : ['canonicalName', 'ingredientId', 'source', 'sourceValue', 'status'];
+      assert.deepEqual(Object.keys(participant).sort(), expected);
+    }
+  }
+});
+
+test('alias-to-alias and duplicate-within-Ingredient keep stored occurrences and indexes', () => {
+  const collisions = classifyIngredientAliasCollisions([
+    { _id: 'a', name: 'Green Onion', aliases: ['Spring Onion', ' spring\t onion '], isActive: true },
+    { _id: 'b', name: 'Welsh Onion', aliases: ['SPRING ONION'], isActive: false },
+  ]);
+  assert.deepEqual(collisions.map((item) => item.collisionType), [
+    'ALIAS_TO_ALIAS',
+    'DUPLICATE_ALIASES_WITHIN_INGREDIENT',
+  ]);
+  assert.deepEqual(collisions[0].participants.map((item) => [item.ingredientId, item.sourceIndex]), [
+    ['a', 1],
+    ['a', 0],
+    ['b', 0],
+  ]);
+  assert.deepEqual(collisions[1].participants.map((item) => [item.ingredientId, item.sourceIndex]), [
+    ['a', 1],
+    ['a', 0],
+  ]);
+});
+
+test('three-way overlap emits explicit non-pairwise types in deterministic order', () => {
+  const ingredients = [
+    { _id: 'c', name: 'Welsh Onion', aliases: ['scallion'], isActive: true },
+    { _id: 'b', name: 'Scallion', aliases: [], isActive: false },
+    { _id: 'a', name: 'Green Onion', aliases: ['Scallion'], isActive: true },
+    { _id: 'z', name: 'Unrelated', aliases: ['other'], isActive: true },
+  ];
+  const first = classifyIngredientAliasCollisions(ingredients);
+  const second = classifyIngredientAliasCollisions([...ingredients].reverse());
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.map((item) => item.collisionType), ['ALIAS_TO_CANONICAL', 'ALIAS_TO_ALIAS']);
+  assert.deepEqual(first.map((item) => item.participants.map((participant) => participant.ingredientId)), [
+    ['a', 'b', 'c'],
+    ['a', 'c'],
+  ]);
+});
+
+test('unrelated, empty, and non-string aliases produce no collisions', () => {
+  assert.deepEqual(classifyIngredientAliasCollisions([
+    { _id: 'a', name: 'Garlic', aliases: ['Ajo', '', 42], isActive: true },
+    { _id: 'b', name: 'Onion', aliases: ['Cebolla', '   '], isActive: true },
+  ]), []);
+});
+
+test('collision summary counts records by fixed type and distinct affected Ingredients', () => {
+  const collisions = classifyIngredientAliasCollisions([
+    { _id: 'a', name: 'Green Onion', aliases: ['scallion', 'spring onion', ' SPRING  ONION '], isActive: true },
+    { _id: 'b', name: 'Scallion', aliases: ['spring onion'], isActive: false },
+  ]);
+  assert.deepEqual(summarizeIngredientAliasCollisions(collisions), {
+    total: 3,
+    affectedIngredients: 2,
+    byType: {
+      ALIAS_TO_CANONICAL: 1,
+      ALIAS_TO_ALIAS: 1,
+      SELF_ALIAS_TO_CANONICAL: 0,
+      DUPLICATE_ALIASES_WITHIN_INGREDIENT: 1,
+    },
+  });
+});
+
+test('snapshot reads the complete active and archived Ingredient catalog with only the frozen projection', async () => {
   const calls = [];
   const recipe = validRecipe();
   const sub = substitution();
@@ -295,7 +386,7 @@ test('snapshot reads only projected catalog data, batches Ingredient lookup, cou
   const recipeCollection = makeCollection('recipe', [recipe]);
   const substitutionCollection = makeCollection('substitution', [sub]);
   const ingredientCollection = {
-    ...makeCollection('ingredient', [ingredient(), ingredient(OTHER_INGREDIENT_ID)]),
+    ...makeCollection('ingredient', [ingredient(), ingredient(OTHER_INGREDIENT_ID, false)]),
     async countDocuments(filter) {
       calls.push({ label: 'ingredient', method: 'countDocuments', filter });
       return 11;
@@ -312,83 +403,74 @@ test('snapshot reads only projected catalog data, batches Ingredient lookup, cou
   assert.deepEqual(calls[0], { label: 'recipe', method: 'find', filter: {}, options: { projection: RECIPE_PROJECTION } });
   assert.deepEqual(calls[1], { label: 'substitution', method: 'find', filter: {}, options: { projection: SUBSTITUTION_PROJECTION } });
   const ingredientFind = calls.find((call) => call.label === 'ingredient' && call.method === 'find');
+  assert.deepEqual(ingredientFind.filter, {});
   assert.deepEqual(ingredientFind.options, { projection: INGREDIENT_PROJECTION });
-  assert.equal(ingredientFind.filter._id.$in.length, 2);
+  assert.deepEqual(INGREDIENT_PROJECTION, { _id: 1, name: 1, aliases: 1, isActive: 1 });
+  assert.equal(result.ingredients[0].isActive, true);
+  assert.equal(result.ingredients[1].isActive, false);
   assert.equal(calls.filter((call) => call.label === 'ingredient' && call.method === 'find').length, 1);
 });
 
-test('valid string-form ObjectId is normalized to BSON for lookup and resolves without a false missing finding', async () => {
-  const storedId = new mongoose.Types.ObjectId(INGREDIENT_ID);
-  const { result, capturedLookup } = await readWithStrictObjectIdLookup(
-    [validRecipe({ ingredients: [{ ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg', optional: false }] })],
-    [ingredient(storedId)]
-  );
-  assert.equal(capturedLookup.length, 1);
-  assert.ok(capturedLookup[0] instanceof mongoose.Types.ObjectId);
-  assert.equal(capturedLookup[0].toHexString(), INGREDIENT_ID);
-  const report = classifyCatalogSnapshot(result, 'unit-test');
-  assert.equal(codes(report.findings).includes('RECIPE_INGREDIENT_MISSING'), false);
-});
-
-test('string-first duplicate references normalize to one BSON lookup target and share one map key', async () => {
+test('complete Ingredient scan resolves equivalent string and BSON ObjectId relationship keys', () => {
   const storedId = new mongoose.Types.ObjectId(INGREDIENT_ID);
   const recipes = [
     validRecipe({ _id: 'string-first', ingredients: [{ ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg' }] }),
     validRecipe({ _id: 'object-second', ingredients: [{ ingredientId: storedId, quantity: 1, unit: 'kg' }] }),
   ];
-  const { result, capturedLookup } = await readWithStrictObjectIdLookup(recipes, [ingredient(storedId)]);
-  assert.equal(capturedLookup.length, 1);
-  assert.ok(capturedLookup[0] instanceof mongoose.Types.ObjectId);
-  assert.equal(capturedLookup[0].toHexString(), INGREDIENT_ID);
-  const report = classifyCatalogSnapshot(result, 'unit-test');
+  const report = classifyCatalogSnapshot(snapshot({ recipes, ingredients: [ingredient(storedId)] }), 'unit-test');
   assert.equal(report.findings.filter((finding) => finding.code === 'RECIPE_INGREDIENT_MISSING').length, 0);
 });
 
-test('ObjectId-first duplicate references produce the same single BSON lookup target and map resolution', async () => {
-  const storedId = new mongoose.Types.ObjectId(INGREDIENT_ID);
-  const recipes = [
-    validRecipe({ _id: 'object-first', ingredients: [{ ingredientId: storedId, quantity: 1, unit: 'kg' }] }),
-    validRecipe({ _id: 'string-second', ingredients: [{ ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg' }] }),
-  ];
-  const { result, capturedLookup } = await readWithStrictObjectIdLookup(recipes, [ingredient(storedId)]);
-  assert.equal(capturedLookup.length, 1);
-  assert.ok(capturedLookup[0] instanceof mongoose.Types.ObjectId);
-  assert.equal(capturedLookup[0].toHexString(), INGREDIENT_ID);
-  const report = classifyCatalogSnapshot(result, 'unit-test');
-  assert.equal(report.findings.filter((finding) => finding.code === 'RECIPE_INGREDIENT_MISSING').length, 0);
-});
-
-test('invalid string reference remains unconverted, does not throw, and retains missing classification', async () => {
+test('invalid string reference remains printable and retains missing classification', () => {
   const invalidId = 'clearly-not-an-object-id';
-  const { result, capturedLookup } = await readWithStrictObjectIdLookup(
-    [validRecipe({ ingredients: [{ ingredientId: invalidId, quantity: 1, unit: 'kg' }] })],
-    []
-  );
-  assert.deepEqual(capturedLookup, [invalidId]);
-  assert.equal(capturedLookup[0] instanceof mongoose.Types.ObjectId, false);
-  const report = classifyCatalogSnapshot(result, 'unit-test');
+  const report = classifyCatalogSnapshot(snapshot({
+    recipes: [validRecipe({ ingredients: [{ ingredientId: invalidId, quantity: 1, unit: 'kg' }] })],
+  }), 'unit-test');
   const missing = report.findings.find((finding) => finding.code === 'RECIPE_INGREDIENT_MISSING');
   assert.equal(missing.ingredientId, invalidId);
 });
 
-test('read path never invokes write-capable collection methods', async () => {
-  const readCollection = (docs) => ({
-    find() { return { toArray: async () => docs }; },
-    insertOne() { throw new Error('write invoked'); },
-    updateOne() { throw new Error('write invoked'); },
-    updateMany() { throw new Error('write invoked'); },
-    deleteOne() { throw new Error('write invoked'); },
-    deleteMany() { throw new Error('write invoked'); },
-    bulkWrite() { throw new Error('write invoked'); },
-    createIndex() { throw new Error('schema mutation invoked'); },
-  });
-  const ingredientCollection = readCollection([]);
-  ingredientCollection.countDocuments = async () => 0;
-  await readCatalogSnapshot({
+test('successful, empty, collision, and failed read paths invoke no write or index mutation', async () => {
+  let mutationCalls = 0;
+  const readCollection = (docs, readError) => {
+    const collection = {
+      find() { return { toArray: async () => {
+        if (readError) throw readError;
+        return docs;
+      } }; },
+    };
+    for (const method of [
+      'insertOne', 'insertMany', 'replaceOne', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany',
+      'bulkWrite', 'createIndex', 'createIndexes', 'dropIndex', 'dropIndexes',
+    ]) {
+      collection[method] = () => { mutationCalls += 1; throw new Error(`${method} invoked`); };
+    }
+    return collection;
+  };
+  for (const ingredients of [
+    [],
+    [ingredient()],
+    [
+      { ...ingredient(), aliases: ['scallion'] },
+      { ...ingredient(OTHER_INGREDIENT_ID, false, 'Scallion'), aliases: [] },
+    ],
+  ]) {
+    const ingredientCollection = readCollection(ingredients);
+    ingredientCollection.countDocuments = async () => ingredients.length;
+    await readCatalogSnapshot({
+      recipeCollection: readCollection([]),
+      substitutionCollection: readCollection([]),
+      ingredientCollection,
+    });
+  }
+  const failedIngredientCollection = readCollection([], new Error('read failed'));
+  failedIngredientCollection.countDocuments = async () => 0;
+  await assert.rejects(readCatalogSnapshot({
     recipeCollection: readCollection([]),
     substitutionCollection: readCollection([]),
-    ingredientCollection,
-  });
+    ingredientCollection: failedIngredientCollection,
+  }), /read failed/);
+  assert.equal(mutationCalls, 0);
 });
 
 test('human report has stable headings, total counts, finding details, and no sensitive raw fields', () => {
@@ -400,8 +482,23 @@ test('human report has stable headings, total counts, finding details, and no se
   assert.match(output, /recipes=1 substitutions=0 ingredients=0/);
   assert.match(output, /ERROR \(1 findings \/ 1 documents\)/);
   assert.match(output, /WARNING \(0 findings \/ 0 documents\)\n  none/);
+  assert.match(output, /INGREDIENT ALIAS COLLISIONS \(0 collisions \/ 0 ingredients\)/);
+  assert.match(output, /ALIAS_TO_CANONICAL=0/);
   assert.match(output, /SUMMARY errors=1 warnings=0 info=0 affectedDocuments=1/);
   assert.doesNotMatch(output, /secret|private|password|token/);
+});
+
+test('human collision section is deterministic and bounded to frozen investigation fields', () => {
+  const report = classifyCatalogSnapshot(snapshot({ ingredients: [
+    { _id: 'a', name: 'Green Onion', aliases: ['Scallion'], isActive: true, secret: 'hidden' },
+    { _id: 'b', name: 'Scallion', aliases: [], isActive: false },
+  ] }), 'unit-test');
+  const output = formatHumanReport(report);
+  assert.match(output, /INGREDIENT ALIAS COLLISIONS \(1 collisions \/ 2 ingredients\)/);
+  assert.match(output, /value="scallion" type=ALIAS_TO_CANONICAL/);
+  assert.match(output, /ingredientId=a canonicalName="Green Onion" status=active source=alias sourceValue="Scallion" sourceIndex=0/);
+  assert.match(output, /ingredientId=b canonicalName="Scallion" status=archived source=canonical sourceValue="Scallion"/);
+  assert.doesNotMatch(output, /secret|hidden/);
 });
 
 test('JSON report is one parseable document with schema, counts, summary, findings, and no human prefix', () => {
@@ -409,10 +506,21 @@ test('JSON report is one parseable document with schema, counts, summary, findin
   const output = formatJsonReport(report);
   const parsed = JSON.parse(output);
   assert.equal(parsed.tool, 'catalog-consistency-audit');
-  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.schemaVersion, 2);
   assert.equal(parsed.readOnly, true);
   assert.deepEqual(parsed.counts, { recipes: 1, substitutions: 0, ingredients: 0 });
   assert.equal(Array.isArray(parsed.findings), true);
+  assert.deepEqual(parsed.ingredientAliasCollisionSummary, {
+    total: 0,
+    affectedIngredients: 0,
+    byType: {
+      ALIAS_TO_CANONICAL: 0,
+      ALIAS_TO_ALIAS: 0,
+      SELF_ALIAS_TO_CANONICAL: 0,
+      DUPLICATE_ALIASES_WITHIN_INGREDIENT: 0,
+    },
+  });
+  assert.deepEqual(parsed.ingredientAliasCollisions, []);
   assert.doesNotMatch(output, /\[catalog-audit\]/);
 });
 
@@ -420,6 +528,13 @@ test('exit codes are 0 for zero errors or warnings/info only and 1 for errors', 
   assert.equal(determineExitCode({ summary: { errors: 0 } }), 0);
   assert.equal(determineExitCode({ summary: { errors: 0, warnings: 3, info: 2 } }), 0);
   assert.equal(determineExitCode({ summary: { errors: 1 } }), 1);
+  const collisionOnly = classifyCatalogSnapshot(snapshot({ ingredients: [
+    { _id: 'a', name: 'Green Onion', aliases: ['scallion'], isActive: true },
+    { _id: 'b', name: 'Scallion', aliases: [], isActive: true },
+  ] }));
+  assert.equal(collisionOnly.ingredientAliasCollisionSummary.total, 1);
+  assert.deepEqual(collisionOnly.findings, []);
+  assert.equal(determineExitCode(collisionOnly), 0);
 });
 
 test('CLI argument parser accepts only no args or --json', () => {
