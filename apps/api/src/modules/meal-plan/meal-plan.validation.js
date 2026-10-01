@@ -55,6 +55,20 @@ const createMealPlanEntrySchema = z.object({
   body: z.object({ dateKey: dateKeySchema, recipeId: objectIdSchema }).strict(),
 });
 
+const expectedUpdatedAtSchema = z
+  .string()
+  .datetime({ offset: true, message: 'expectedUpdatedAt must be an ISO-8601 timestamp.' })
+  .refine((value) => {
+    const fractionalSeconds = value.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i)?.[1];
+    return !fractionalSeconds || fractionalSeconds.length <= 3;
+  }, 'expectedUpdatedAt must not be more precise than milliseconds.');
+
+const moveMealPlanEntrySchema = z.object({
+  params: z.object({ entryId: objectIdSchema }).strict(),
+  body: z.object({ dateKey: dateKeySchema, expectedUpdatedAt: expectedUpdatedAtSchema }).strict(),
+  query: z.object({}).strict(),
+});
+
 const entryParamsSchema = z.object({
   params: z.object({ entryId: objectIdSchema }).strict(),
   query: z.object({}).strict(),
@@ -68,6 +82,7 @@ module.exports = {
   dateKeySchema,
   listMealPlanSchema,
   createMealPlanEntrySchema,
+  moveMealPlanEntrySchema,
   entryParamsSchema,
   clearMealPlanSchema,
 };

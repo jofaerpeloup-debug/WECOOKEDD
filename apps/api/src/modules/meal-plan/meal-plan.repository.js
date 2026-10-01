@@ -12,6 +12,18 @@ function findByUserAndRange(userId, startDate, endDate) {
   });
 }
 
+function moveByIdAndUser(entryId, userId, dateKey, expectedUpdatedAt) {
+  return MealPlanEntry.findOneAndUpdate(
+    { _id: entryId, userId, updatedAt: new Date(expectedUpdatedAt), dateKey: { $ne: dateKey } },
+    { $set: { dateKey } },
+    { returnDocument: 'after', runValidators: true }
+  );
+}
+
+function findByIdAndUser(entryId, userId) {
+  return MealPlanEntry.findOne({ _id: entryId, userId });
+}
+
 function deleteByIdAndUser(entryId, userId) {
   return MealPlanEntry.findOneAndDelete({ _id: entryId, userId });
 }
@@ -20,4 +32,11 @@ function deleteByUserAndRange(userId, startDate, endDate) {
   return MealPlanEntry.deleteMany({ userId, dateKey: { $gte: startDate, $lte: endDate } });
 }
 
-module.exports = { create, findByUserAndRange, deleteByIdAndUser, deleteByUserAndRange };
+module.exports = {
+  create,
+  findByUserAndRange,
+  moveByIdAndUser,
+  findByIdAndUser,
+  deleteByIdAndUser,
+  deleteByUserAndRange,
+};
