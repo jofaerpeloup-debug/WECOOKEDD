@@ -16,6 +16,7 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import IngredientPickerModal from '../components/IngredientPickerModal';
+import ShoppingItemEditModal from '../components/ShoppingItemEditModal';
 import { formatQuantity } from '../utils/recipe';
 import { unitLabel } from '../api/recipeOptions';
 import { groupShoppingListItems } from '../utils/shoppingListGrouping';
@@ -31,7 +32,7 @@ function itemAmountText(item) {
   return [quantity, unit].filter(Boolean).join(' ') || null;
 }
 
-function ItemRow({ item, editing, disabled, pending, onToggle, onRemove }) {
+function ItemRow({ item, editing, disabled, pending, onToggle, onRemove, onEdit }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const available = item.isAvailable !== false && !!item.ingredient?.name;
@@ -82,6 +83,19 @@ function ItemRow({ item, editing, disabled, pending, onToggle, onRemove }) {
         {!available ? <Text style={styles.unavailable}>No longer in the ingredient catalog</Text> : null}
       </View>
       {amount ? <Text style={styles.qty}>{amount}</Text> : null}
+      {!editing && available ? (
+        <Pressable
+          style={styles.editItemButton}
+          onPress={onEdit}
+          disabled={disabled}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={`Edit quantity and unit for ${primary}`}
+          accessibilityState={{ disabled }}
+        >
+          <Ionicons name="create-outline" size={18} color={colors.sageDeep} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -99,6 +113,7 @@ export default function ShoppingListScreen({ navigation }) {
     isItemPending,
     reload,
     addItem,
+    updateItem,
     setChecked,
     removeItem,
     clear,
@@ -107,6 +122,7 @@ export default function ShoppingListScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [selectedEditItem, setSelectedEditItem] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -117,6 +133,14 @@ export default function ShoppingListScreen({ navigation }) {
   useEffect(() => {
     if (editing && items.length === 0) setEditing(false);
   }, [editing, items.length]);
+
+  useEffect(() => {
+    if (!selectedEditItem) return;
+    const current = items.find((item) => item.id === selectedEditItem.id);
+    if (!current || current.isAvailable === false || !current.ingredient) {
+      setSelectedEditItem(null);
+    }
+  }, [items, selectedEditItem]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -279,6 +303,7 @@ export default function ShoppingListScreen({ navigation }) {
                   pending={isItemPending(item.id)}
                   onToggle={() => onToggle(item)}
                   onRemove={() => onRemove(item)}
+                  onEdit={() => setSelectedEditItem(item)}
                 />
               ))}
             </View>
@@ -304,6 +329,12 @@ export default function ShoppingListScreen({ navigation }) {
         visible={pickerVisible}
         onClose={() => setPickerVisible(false)}
         onAdd={addItem}
+      />
+      <ShoppingItemEditModal
+        visible={!!selectedEditItem}
+        item={selectedEditItem}
+        onClose={() => setSelectedEditItem(null)}
+        onSave={updateItem}
       />
     </View>
   );
@@ -367,6 +398,7 @@ function makeStyles(colors) {
     nameUnavailable: { color: colors.inkFaint, fontStyle: 'italic' },
     unavailable: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 2 },
     qty: { marginLeft: spacing.sm, fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkFaint },
+    editItemButton: { width: 44, minHeight: 44, alignItems: 'flex-end', justifyContent: 'center' },
     ctaWrap: {
       position: 'absolute', left: 0, right: 0, bottom: 0,
       paddingHorizontal: spacing.xl, paddingTop: spacing.md,
