@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { ApiError } from './apiClient.js';
 import {
-  listSubstitutions, createSubstitution, updateSubstitution,
+  listSubstitutions, listExactSubstitutionPair, createSubstitution, updateSubstitution,
   archiveSubstitution, restoreSubstitution,
 } from './substitutionApi.js';
 import { listIngredients } from './ingredientApi.js';
@@ -15,8 +15,11 @@ import {
 } from './substitutionOptions.js';
 import ManagementPagination from './ManagementPagination.jsx';
 
+export { ApiError };
+
 const PAGE_LIMIT = 20;
 const INGREDIENT_PICKER_LIMIT = 10;
+const DUPLICATE_LOOKUP_DEADLINE_MS = 5000;
 
 // Turns any thrown error into one safe, human sentence. Backend `AppError`
 // messages are already safe to show (the API maps Mongo internals like E11000
@@ -78,6 +81,29 @@ function ratiosEqual(a, b) {
 function formatRatio(ratio) {
   if (!ratio) return '—';
   return `${ratio.sourceAmount} : ${ratio.substituteAmount}`;
+}
+
+function duplicateSignature(sourceId, substituteId, currentId) {
+  return `${sourceId}\u0000${substituteId}\u0000${currentId || 'create'}`;
+}
+
+async function exactDuplicateLookup(sourceId, substituteId, currentId) {
+  let deadlineTimer;
+  const deadline = new Promise((_, reject) => {
+    deadlineTimer = setTimeout(() => reject(new Error('DUPLICATE_LOOKUP_TIMEOUT')), DUPLICATE_LOOKUP_DEADLINE_MS);
+  });
+
+  try {
+    const result = await Promise.race([
+      listExactSubstitutionPair(sourceId, substituteId),
+      deadline,
+    ]);
+    const match = result[0] || null;
+    if (!match || match.id === currentId) return null;
+    return match;
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
 }
 
 // A finite number strictly greater than zero — mirrors the backend
@@ -232,6 +258,7 @@ function IngredientPicker({
               className="wc-sub-picker-clear"
               onClick={clear}
               aria-label={`Clear ${ariaLabel || 'ingredient'}`}
+              aria-describedby={ariaDescribedBy}
             >
               <X size={13} />
             </button>
@@ -455,6 +482,17 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
     }
   };
 
+  const showExistingSubstitution = ({ source, substitute }) => {
+    setModal(null);
+    patchFilters({
+      source: { id: source.id, name: source.name },
+      substitute: { id: substitute.id, name: substitute.name },
+      context: '',
+      status: 'all',
+      page: 1,
+    });
+  };
+
   return (
     <div className="wc-management-page">
       <style>{`
@@ -527,6 +565,13 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
           background: var(--parchment); border: 1px solid var(--stone-light);
           border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;
         }
+        .wc-sub-duplicate-guidance {
+          display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+          font-size: 12.5px; color: var(--clay); line-height: 1.5;
+          background: #E9D3CB; border-radius: 8px; padding: 10px 12px; margin: -4px 0 14px;
+        }
+        .wc-sub-duplicate-guidance.unavailable { color: var(--stone); background: var(--parchment); border: 1px solid var(--stone-light); }
+        .wc-sub-duplicate-guidance button { flex-shrink: 0; }
         .wc-sub-count-note {
           font-size: 11.5px; color: var(--stone); padding: 10px 4px 0; line-height: 1.4;
         }
@@ -804,6 +849,7 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
           substitution={modal === 'new' ? null : modal}
           onClose={() => setModal(null)}
           onSubmit={handleSubmit}
+          onShowExisting={showExistingSubstitution}
           onAuthorityLost={onAuthorityLost}
         />
       )}
@@ -814,7 +860,9 @@ export default function SubstitutionsTab({ canWrite = false, onAuthorityLost }) 
 // ---------------------------------------------------------------------------
 // Create / edit modal
 // ---------------------------------------------------------------------------
-export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthorityLost }) {
+export function SubstitutionModal({
+  substitution, onClose, onSubmit, onShowExisting, onAuthorityLost,
+}) {
   const editing = Boolean(substitution);
 
   const [form, setForm] = useState(() => ({
@@ -835,15 +883,72 @@ export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthority
   const [formError, setFormError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const [duplicateState, setDuplicateState] = useState({ kind: 'idle', signature: '' });
+  const duplicateGenerationRef = useRef(0);
   const contextCount = parseContexts(form.contextsText).length;
   const canonicalNotesLength = form.notes.trim().length;
+  const currentDuplicateSignature = form.source && form.substitute
+    ? duplicateSignature(form.source.id, form.substitute.id, substitution?.id)
+    : '';
+  const currentDuplicateSignatureRef = useRef(currentDuplicateSignature);
+  currentDuplicateSignatureRef.current = currentDuplicateSignature;
+  const duplicateIsCurrent = duplicateState.signature === currentDuplicateSignature;
+  const knownDuplicate = duplicateIsCurrent && (
+    duplicateState.kind === 'duplicate-active'
+    || duplicateState.kind === 'duplicate-archived'
+    || duplicateState.kind === 'duplicate-unknown'
+  );
 
   const setField = (patch, errorFields = []) => {
+    if ('source' in patch || 'substitute' in patch) {
+      duplicateGenerationRef.current += 1;
+      setDuplicateState({ kind: 'idle', signature: '' });
+    }
     setForm((f) => ({ ...f, ...patch }));
     if (errorFields.length > 0) {
       setFieldErrors((errors) => clearSubstitutionFieldErrors(errors, errorFields));
     }
   };
+
+  const setDuplicateFromMatch = (match, signature) => {
+    setDuplicateState({
+      kind: match.isActive ? 'duplicate-active' : 'duplicate-archived',
+      signature,
+      record: match,
+    });
+  };
+
+  useEffect(() => {
+    const sourceId = form.source?.id;
+    const substituteId = form.substitute?.id;
+    const generation = ++duplicateGenerationRef.current;
+
+    if (!sourceId || !substituteId || sourceId === substituteId) {
+      setDuplicateState({ kind: 'idle', signature: '' });
+      return undefined;
+    }
+
+    const signature = duplicateSignature(sourceId, substituteId, substitution?.id);
+    setDuplicateState({ kind: 'checking', signature });
+
+    const run = async () => {
+      try {
+        const match = await exactDuplicateLookup(sourceId, substituteId, substitution?.id);
+        if (generation !== duplicateGenerationRef.current) return;
+        if (match) setDuplicateFromMatch(match, signature);
+        else setDuplicateState({ kind: 'clear', signature });
+      } catch (err) {
+        if (generation !== duplicateGenerationRef.current) return;
+        if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
+        setDuplicateState({ kind: 'unavailable', signature });
+      }
+    };
+    run();
+
+    return () => {
+      duplicateGenerationRef.current += 1;
+    };
+  }, [form.source?.id, form.substitute?.id, substitution?.id]);
 
   const buildPayload = () => {
     const values = substitutionFormValues(form);
@@ -886,13 +991,80 @@ export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthority
       return;
     }
 
+    const submitted = {
+      source: form.source,
+      substitute: form.substitute,
+      signature: duplicateSignature(form.source.id, form.substitute.id, substitution?.id),
+    };
+
     setSaving(true);
+    const submissionGeneration = ++duplicateGenerationRef.current;
     try {
+      const signature = submitted.signature;
+      setDuplicateState({ kind: 'checking', signature });
+      try {
+        const match = await exactDuplicateLookup(
+          submitted.source.id,
+          submitted.substitute.id,
+          substitution?.id,
+        );
+        if (
+          submissionGeneration !== duplicateGenerationRef.current
+          || currentDuplicateSignatureRef.current !== signature
+        ) return;
+        if (match) {
+          setDuplicateFromMatch(match, signature);
+          return;
+        }
+        setDuplicateState({ kind: 'clear', signature });
+      } catch (lookupError) {
+        if (
+          submissionGeneration !== duplicateGenerationRef.current
+          || currentDuplicateSignatureRef.current !== signature
+        ) return;
+        if (lookupError instanceof ApiError && lookupError.isForbidden) onAuthorityLost?.();
+        setDuplicateState({ kind: 'unavailable', signature });
+      }
+
       await onSubmit(payload);
+      if (
+        submissionGeneration !== duplicateGenerationRef.current
+        || currentDuplicateSignatureRef.current !== signature
+      ) return;
       onClose();
     } catch (err) {
       if (err instanceof ApiError && err.isForbidden) onAuthorityLost?.();
-      if (err instanceof ApiError && err.isValidationError) {
+      if (err instanceof ApiError && err.code === 'SUBSTITUTION_ALREADY_EXISTS') {
+        const signature = submitted.signature;
+        if (
+          submissionGeneration !== duplicateGenerationRef.current
+          || currentDuplicateSignatureRef.current !== signature
+        ) return;
+        setDuplicateState({ kind: 'duplicate-unknown', signature });
+        const generation = ++duplicateGenerationRef.current;
+        try {
+          const match = await exactDuplicateLookup(
+            submitted.source.id,
+            submitted.substitute.id,
+            substitution?.id,
+          );
+          if (
+            generation === duplicateGenerationRef.current
+            && currentDuplicateSignatureRef.current === signature
+            && match
+          ) {
+            setDuplicateFromMatch(match, signature);
+          }
+        } catch (lookupError) {
+          if (
+            generation === duplicateGenerationRef.current
+            && currentDuplicateSignatureRef.current === signature
+          ) {
+            if (lookupError instanceof ApiError && lookupError.isForbidden) onAuthorityLost?.();
+            setDuplicateState({ kind: 'duplicate-unknown', signature });
+          }
+        }
+      } else if (err instanceof ApiError && err.isValidationError) {
         setFieldErrors(substitutionFieldErrorsFromDetails(err.details));
         setFormError('Please fix the highlighted fields.');
       } else {
@@ -931,7 +1103,7 @@ export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthority
               placeholder="Search ingredients…"
               ariaLabel="Source ingredient"
               ariaInvalid={Boolean(fieldErrors.source)}
-              ariaDescribedBy="substitution-source-hint substitution-source-error"
+              ariaDescribedBy="substitution-source-hint substitution-source-error substitution-duplicate-guidance"
             />
             <div id="substitution-source-hint" className="wc-sub-modal-hint">
               The ingredient a recipe calls for. Only active ingredients can be used.
@@ -949,13 +1121,51 @@ export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthority
               placeholder="Search ingredients…"
               ariaLabel="Substitute ingredient"
               ariaInvalid={Boolean(fieldErrors.substitute)}
-              ariaDescribedBy="substitution-substitute-hint substitution-substitute-error"
+              ariaDescribedBy="substitution-substitute-hint substitution-substitute-error substitution-duplicate-guidance"
             />
             <div id="substitution-substitute-hint" className="wc-sub-modal-hint">
               What can be used instead. This relationship is one-directional.
             </div>
             {fieldErrors.substitute && (
               <div id="substitution-substitute-error" className="wc-sub-field-error">{fieldErrors.substitute}</div>
+            )}
+          </div>
+
+          <div id="substitution-duplicate-guidance" aria-live="polite" aria-atomic="true">
+            {duplicateIsCurrent && duplicateState.kind === 'checking' && (
+              <div className="wc-sub-modal-hint">Checking for an existing directed substitution...</div>
+            )}
+            {duplicateIsCurrent && duplicateState.kind === 'unavailable' && (
+              <div className="wc-sub-duplicate-guidance unavailable">
+                Duplicate status could not be checked. You can still save; the server will protect against duplicates.
+              </div>
+            )}
+            {knownDuplicate && (
+              <div className="wc-sub-duplicate-guidance">
+                <div>
+                  <strong>This directed substitution already exists.</strong>{' '}
+                  {(duplicateState.record?.sourceIngredient?.name || form.source?.name)} {'->'}{' '}
+                  {(duplicateState.record?.substituteIngredient?.name || form.substitute?.name)}.
+                  {' '}Status: <strong>{duplicateState.kind === 'duplicate-active'
+                    ? 'Active'
+                    : duplicateState.kind === 'duplicate-archived' ? 'Archived' : 'Unknown'}</strong>.
+                  {duplicateState.kind === 'duplicate-archived'
+                    ? ' Show the existing record to restore or edit it explicitly.'
+                    : duplicateState.kind === 'duplicate-active'
+                      ? ' Show the existing record to edit it.'
+                      : ' Its status could not be loaded, but the server confirmed the duplicate.'}
+                </div>
+                <button
+                  type="button"
+                  className="wc-btn-secondary"
+                  onClick={() => onShowExisting?.({
+                    source: duplicateState.record?.sourceIngredient || form.source,
+                    substitute: duplicateState.record?.substituteIngredient || form.substitute,
+                  })}
+                >
+                  Show existing substitution
+                </button>
+              </div>
             )}
           </div>
 
@@ -1067,7 +1277,7 @@ export function SubstitutionModal({ substitution, onClose, onSubmit, onAuthority
             <button type="button" className="wc-btn-secondary" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="wc-btn-primary" disabled={saving}>
+            <button type="submit" className="wc-btn-primary" disabled={saving || knownDuplicate}>
               <Check size={15} />{' '}
               {saving ? 'Saving…' : editing ? 'Save changes' : 'Add substitution'}
             </button>

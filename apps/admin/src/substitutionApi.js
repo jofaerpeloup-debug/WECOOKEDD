@@ -45,6 +45,37 @@ export function listSubstitutions(params = {}) {
     }));
 }
 
+/**
+ * Strict exact ordered-pair lookup for duplicate guidance.
+ *
+ * Unlike listSubstitutions, this deliberately rejects a successful response
+ * whose substitutions collection is absent or malformed. The general list
+ * keeps its existing compatibility fallback for unrelated Admin consumers.
+ *
+ * @param {string} sourceIngredientId
+ * @param {string} substituteIngredientId
+ * @returns {Promise<object[]>}
+ */
+export function listExactSubstitutionPair(sourceIngredientId, substituteIngredientId) {
+  return api
+    .get('/substitutions', {
+      query: {
+        sourceIngredientId,
+        substituteIngredientId,
+        status: 'all',
+        sort: 'newest',
+        page: 1,
+        limit: 1,
+      },
+    })
+    .then((data) => {
+      if (!data || !Array.isArray(data.substitutions)) {
+        throw new Error('MALFORMED_SUBSTITUTION_LOOKUP_RESPONSE');
+      }
+      return data.substitutions;
+    });
+}
+
 // GET /api/v1/substitutions/:id exists on the backend but is intentionally not
 // wrapped here — the list serializer already inlines every field the table and
 // the edit modal render, so this slice never needs a single-resource read.
