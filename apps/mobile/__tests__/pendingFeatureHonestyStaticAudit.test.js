@@ -6,15 +6,19 @@ const SRC = path.join(MOBILE, 'src');
 const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
 
 describe('production-reachable deferred features remain honest', () => {
-  it('preserves the Assistant shell but never fakes or persists a conversation', () => {
+  it('activates Assistant only through the WeCooked service without fake or persisted replies', () => {
     const assistant = read('screens/AssistantScreen.js');
+    const service = read('api/assistantService.js');
     expect(assistant).toMatch(/KeyboardAvoidingView/);
     expect(assistant).toMatch(/QUICK_PROMPTS/);
     expect(assistant).toMatch(/styles\.prompts/);
     expect(assistant).toMatch(/styles\.composer/);
     expect(assistant).toMatch(/placeholder="Ask anything\.\.\."/);
-    expect(assistant).toMatch(/Your message was not sent or saved/);
-    expect(assistant).not.toMatch(/data\/mockData|AsyncStorage|loadJSON|saveJSON|setTimeout/);
+    expect(assistant).toMatch(/sendAssistantMessage/);
+    expect(service).toMatch(/api\.post\('\/assistant\/chat'/);
+    expect(`${assistant}\n${service}`).not.toMatch(
+      /data\/mockData|AsyncStorage|loadJSON|saveJSON|setTimeout|\bfetch\s*\(|EXPO_PUBLIC_OPENAI_/
+    );
   });
 
   it('preserves the Community shell while using the real M10A service without fabricated activity', () => {
