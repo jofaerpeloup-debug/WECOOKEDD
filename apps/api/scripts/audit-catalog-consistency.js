@@ -4,21 +4,17 @@ const Recipe = require('../src/modules/recipes/recipe.model');
 const Ingredient = require('../src/modules/ingredients/ingredient.model');
 const Substitution = require('../src/modules/substitutions/substitution.model');
 const { legacyPublishedRecipeBodySchema } = require('../src/modules/recipes/recipe.validation');
-const { normalizeResolverName } = require('../src/modules/ingredients/ingredient-resolution');
+const {
+  ALIAS_COLLISION_TYPES,
+  normalizeIngredientName,
+  classifyIngredientAliasCollisions,
+  summarizeIngredientAliasCollisions,
+} = require('../src/modules/ingredients/ingredient-alias-collisions');
 
 const TOOL_NAME = 'catalog-consistency-audit';
 const SCHEMA_VERSION = 2;
 const AUDIT_CONNECTION_OPTIONS = Object.freeze({ autoIndex: false, autoCreate: false });
 const SEVERITY_ORDER = Object.freeze({ ERROR: 0, WARNING: 1, INFO: 2 });
-const ALIAS_COLLISION_TYPES = Object.freeze([
-  'ALIAS_TO_CANONICAL',
-  'ALIAS_TO_ALIAS',
-  'SELF_ALIAS_TO_CANONICAL',
-  'DUPLICATE_ALIASES_WITHIN_INGREDIENT',
-]);
-const ALIAS_COLLISION_TYPE_ORDER = Object.freeze(
-  Object.fromEntries(ALIAS_COLLISION_TYPES.map((type, index) => [type, index]))
-);
 
 const RECIPE_PROJECTION = Object.freeze({
   _id: 1,
@@ -445,120 +441,6 @@ function summarizeFindings(findings) {
   }
   summary.affectedDocuments = affected.size;
   return summary;
-}
-
-function normalizeIngredientName(value) {
-  if (typeof value !== 'string') return undefined;
-  const normalized = normalizeResolverName(value);
-  return normalized || undefined;
-}
-
-function ingredientAliasStatus(isActive) {
-  if (isActive === true) return 'active';
-  if (isActive === false) return 'archived';
-  return 'unknown';
-}
-
-function compareAliasParticipants(left, right) {
-  return compareText(left.ingredientId, right.ingredientId) ||
-    (left.source === right.source ? 0 : left.source === 'canonical' ? -1 : 1) ||
-    compareText(normalizeIngredientName(left.sourceValue), normalizeIngredientName(right.sourceValue)) ||
-    compareText(left.sourceValue, right.sourceValue) ||
-    ((left.sourceIndex ?? -1) - (right.sourceIndex ?? -1));
-}
-
-function classifyIngredientAliasCollisions(ingredients) {
-  const occurrencesByValue = new Map();
-  const addOccurrence = (normalizedValue, occurrence) => {
-    if (!normalizedValue) return;
-    if (!occurrencesByValue.has(normalizedValue)) occurrencesByValue.set(normalizedValue, []);
-    occurrencesByValue.get(normalizedValue).push(occurrence);
-  };
-
-  for (const ingredient of ingredients) {
-    const common = {
-      ingredientId: printableId(ingredient?._id),
-      canonicalName: ingredient?.name,
-      status: ingredientAliasStatus(ingredient?.isActive),
-    };
-    addOccurrence(normalizeIngredientName(ingredient?.name), {
-      ...common,
-      source: 'canonical',
-      sourceValue: ingredient?.name,
-    });
-    if (!Array.isArray(ingredient?.aliases)) continue;
-    ingredient.aliases.forEach((alias, sourceIndex) => {
-      addOccurrence(normalizeIngredientName(alias), {
-        ...common,
-        source: 'alias',
-        sourceValue: alias,
-        sourceIndex,
-      });
-    });
-  }
-
-  const collisions = [];
-  const addCollision = (normalizedValue, collisionType, participants) => {
-    collisions.push({
-      normalizedValue,
-      collisionType,
-      participants: [...participants].sort(compareAliasParticipants),
-    });
-  };
-
-  for (const [normalizedValue, occurrences] of occurrencesByValue) {
-    const canonicals = occurrences.filter((item) => item.source === 'canonical');
-    const aliases = occurrences.filter((item) => item.source === 'alias');
-
-    const crossAliases = aliases.filter((alias) =>
-      canonicals.some((canonical) => canonical.ingredientId !== alias.ingredientId)
-    );
-    const crossCanonicals = canonicals.filter((canonical) =>
-      aliases.some((alias) => alias.ingredientId !== canonical.ingredientId)
-    );
-    if (crossAliases.length > 0) {
-      addCollision(normalizedValue, 'ALIAS_TO_CANONICAL', [...crossAliases, ...crossCanonicals]);
-    }
-
-    if (new Set(aliases.map((alias) => alias.ingredientId)).size > 1) {
-      addCollision(normalizedValue, 'ALIAS_TO_ALIAS', aliases);
-    }
-
-    const selfAliases = aliases.filter((alias) =>
-      canonicals.some((canonical) => canonical.ingredientId === alias.ingredientId)
-    );
-    if (selfAliases.length > 0) {
-      const selfOwnerIds = new Set(selfAliases.map((alias) => alias.ingredientId));
-      addCollision(normalizedValue, 'SELF_ALIAS_TO_CANONICAL', [
-        ...canonicals.filter((canonical) => selfOwnerIds.has(canonical.ingredientId)),
-        ...selfAliases,
-      ]);
-    }
-
-    const aliasCountsByOwner = new Map();
-    for (const alias of aliases) {
-      aliasCountsByOwner.set(alias.ingredientId, (aliasCountsByOwner.get(alias.ingredientId) || 0) + 1);
-    }
-    const duplicateAliases = aliases.filter((alias) => aliasCountsByOwner.get(alias.ingredientId) > 1);
-    if (duplicateAliases.length > 0) {
-      addCollision(normalizedValue, 'DUPLICATE_ALIASES_WITHIN_INGREDIENT', duplicateAliases);
-    }
-  }
-
-  return collisions.sort((left, right) =>
-    compareText(left.normalizedValue, right.normalizedValue) ||
-    (ALIAS_COLLISION_TYPE_ORDER[left.collisionType] - ALIAS_COLLISION_TYPE_ORDER[right.collisionType])
-  );
-}
-
-function summarizeIngredientAliasCollisions(collisions) {
-  const affectedIngredients = new Set();
-  const byType = Object.fromEntries(ALIAS_COLLISION_TYPES.map((type) => [type, 0]));
-  for (const collision of collisions) {
-    byType[collision.collisionType] += 1;
-    collision.participants.forEach((participant) => affectedIngredients.add(participant.ingredientId));
-  }
-  return { total: collisions.length, affectedIngredients: affectedIngredients.size, byType };
 }
 
 function classifyCatalogSnapshot(snapshot, database = '(unknown)') {

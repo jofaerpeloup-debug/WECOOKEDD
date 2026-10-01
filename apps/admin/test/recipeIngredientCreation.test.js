@@ -254,6 +254,24 @@ async function settleSubmit(submission) {
   await act(async () => { await submission.promise; });
 }
 
+async function flushAsyncWork() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
+function successfulCollisionLookup(requests, trace) {
+  return async (url, options = {}) => {
+    requests.push({ url, options });
+    trace?.push('alias-collision lookup');
+    assert.equal(options.method, 'POST');
+    assert.match(url, /\/ingredients\/alias-collisions$/u);
+    return {
+      ok: true,
+      status: 200,
+      async json() { return { success: true, data: { warnings: [] } }; },
+    };
+  };
+}
+
 function resolvedAuthoringState(lines = ['1 calamansi']) {
   let state = recipeAuthoringReducer(initialAuthoringState(), {
     type: 'SET_UNRESOLVED_INGREDIENTS', lines,
@@ -427,6 +445,10 @@ test('mounted imported modal requires an explicit category before any request', 
 });
 
 test('mounted modal prevents double submit and dismissal, locks every field while saving, then retains values and permits retry', async () => {
+  const originalFetch = globalThis.fetch;
+  const advisoryRequests = [];
+  const requestTrace = [];
+  globalThis.fetch = successfulCollisionLookup(advisoryRequests, requestTrace);
   const pending = deferred();
   const calls = [];
   const successes = [];
@@ -437,6 +459,7 @@ test('mounted modal prevents double submit and dismissal, locks every field whil
     onClose() { closes += 1; },
     onSuccess(ingredient) { successes.push(ingredient); },
     onSubmit(payload) {
+      requestTrace.push('Ingredient mutation');
       calls.push(payload);
       return calls.length === 1 ? pending.promise : Promise.resolve({ id: 'created-id', name: payload.name });
     },
@@ -447,9 +470,15 @@ test('mounted modal prevents double submit and dismissal, locks every field whil
     await click(button(mounted.container, 'Milk'));
     const mountedForm = form(mounted.container);
     const firstSubmission = await startSubmit(mountedForm);
+    await flushAsyncWork();
     const duplicateSubmission = reactProps(mountedForm).onSubmit({ preventDefault() {} });
     await duplicateSubmission;
     assert.equal(calls.length, 1, 'a deferred request must not permit a second submit');
+    assert.deepEqual(requestTrace, ['alias-collision lookup', 'Ingredient mutation']);
+    assert.equal(advisoryRequests.length, 1, 'the advisory lookup must occur exactly once before the deferred mutation');
+    assert.deepEqual(JSON.parse(advisoryRequests[0].options.body), {
+      name: 'Calamansi', aliases: ['golden lime'],
+    });
 
     for (const id of ['ingredient-name', 'ingredient-aliases', 'ingredient-category']) {
       assert.equal(byId(mounted.container, id).disabled, true, `${id} must be disabled while saving`);
@@ -489,12 +518,15 @@ test('mounted modal prevents double submit and dismissal, locks every field whil
     const retry = await startSubmit(form(mounted.container));
     await settleSubmit(retry);
     assert.equal(calls.length, 2, 'retry must be another explicit submit');
+    assert.deepEqual(requestTrace, ['alias-collision lookup', 'Ingredient mutation', 'alias-collision lookup', 'Ingredient mutation']);
+    assert.equal(advisoryRequests.length, 2, 'the explicit retry must recheck before its single mutation attempt');
     assert.deepEqual(calls[1], {
       name: 'Calamansi', aliases: ['golden lime'], category: 'produce', allergenTags: ['milk'],
     });
     assert.deepEqual(successes, [{ id: 'created-id', name: 'Calamansi' }]);
     assert.equal(closes, 1);
   } finally {
+    globalThis.fetch = originalFetch;
     await mounted.unmount();
   }
 });
@@ -514,6 +546,10 @@ test('mounted modal retains reviewed values for 400, 409, final 401, 403, and 5x
     { error: new ApiError('Safe server failure.', { status: 500 }), expected: /Safe server failure/u },
   ];
   for (const failure of cases) {
+    const originalFetch = globalThis.fetch;
+    const advisoryRequests = [];
+    const requestTrace = [];
+    globalThis.fetch = successfulCollisionLookup(advisoryRequests, requestTrace);
     let authorityLosses = 0;
     let closes = 0;
     const mounted = await mount(createElement(IngredientModal, {
@@ -521,13 +557,18 @@ test('mounted modal retains reviewed values for 400, 409, final 401, 403, and 5x
       sourceContext: 'source',
       onClose() { closes += 1; },
       onAuthorityLost() { authorityLosses += 1; },
-      async onSubmit() { throw failure.error; },
+      async onSubmit() { requestTrace.push('Ingredient mutation'); throw failure.error; },
     }));
     try {
       await change(byId(mounted.container, 'ingredient-aliases'), 'reviewed alias');
       await change(byId(mounted.container, 'ingredient-category'), 'pantry');
       const submission = await startSubmit(form(mounted.container));
       await settleSubmit(submission);
+      assert.deepEqual(requestTrace, ['alias-collision lookup', 'Ingredient mutation']);
+      assert.equal(advisoryRequests.length, 1, 'the read-only advisory lookup must precede the single failing mutation');
+      assert.deepEqual(JSON.parse(advisoryRequests[0].options.body), {
+        name: 'Reviewed name', aliases: ['reviewed alias'],
+      });
       assert.match(mounted.container.textContent, failure.expected);
       assert.equal(byId(mounted.container, 'ingredient-name').value, 'Reviewed name');
       assert.equal(byId(mounted.container, 'ingredient-aliases').value, 'reviewed alias');
@@ -536,6 +577,7 @@ test('mounted modal retains reviewed values for 400, 409, final 401, 403, and 5x
       assert.equal(closes, 0);
       assert.equal(authorityLosses, failure.authority ? 1 : 0);
     } finally {
+      globalThis.fetch = originalFetch;
       await mounted.unmount();
     }
   }
@@ -545,8 +587,11 @@ test('mounted imported flow submits the real create API body, binds only the tar
   const originalFetch = globalThis.fetch;
   const requests = [];
   const serverIngredient = { id: 'server-id', name: 'Canonical Calamansi', category: 'produce', aliases: [] };
-  globalThis.fetch = async (url, options) => {
+  globalThis.fetch = async (url, options = {}) => {
     requests.push({ url, options });
+    if (/\/ingredients\/alias-collisions$/u.test(url)) {
+      return { ok: true, status: 200, async json() { return { success: true, data: { warnings: [] } }; } };
+    }
     return { ok: true, status: 201, async json() { return { success: true, data: { ingredient: serverIngredient } }; } };
   };
   let state = resolvedAuthoringState(['1 calamansi', '1 calamansi']);
@@ -561,9 +606,14 @@ test('mounted imported flow submits the real create API body, binds only the tar
     await change(byId(mounted.container, 'ingredient-category'), 'produce');
     const submission = await startSubmit(form(mounted.container));
     await settleSubmit(submission);
-    assert.equal(requests.length, 1);
-    assert.match(requests[0].url, /\/ingredients$/u);
-    assert.deepEqual(JSON.parse(requests[0].options.body), {
+    assert.equal(requests.length, 2);
+    assert.match(requests[0].url, /\/ingredients\/alias-collisions$/u);
+    assert.equal(requests[0].options.method, 'POST');
+    assert.deepEqual(JSON.parse(requests[0].options.body), { name: 'calamansi', aliases: [] });
+    assert.match(requests[1].url, /\/ingredients$/u);
+    assert.equal(requests[1].options.method, 'POST');
+    assert.equal(requests.filter(({ url }) => /\/ingredients$/u.test(url)).length, 1, 'the advisory lookup must not create an Ingredient');
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
       name: 'calamansi', aliases: [], category: 'produce', allergenTags: [],
     });
     assert.equal(state.unresolvedIngredients.length, 2);
@@ -619,6 +669,10 @@ test('mounted pending success cannot bind after source replacement or disappeara
 });
 
 test('mounted standalone Ingredient edit retains PATCH behavior', async () => {
+  const originalFetch = globalThis.fetch;
+  const advisoryRequests = [];
+  const requestTrace = [];
+  globalThis.fetch = successfulCollisionLookup(advisoryRequests, requestTrace);
   const payloads = [];
   let closes = 0;
   const ingredient = {
@@ -627,15 +681,21 @@ test('mounted standalone Ingredient edit retains PATCH behavior', async () => {
   const mounted = await mount(createElement(IngredientModal, {
     ingredient,
     onClose() { closes += 1; },
-    async onSubmit(payload) { payloads.push(payload); return { ...ingredient, ...payload }; },
+    async onSubmit(payload) { requestTrace.push('Ingredient mutation'); payloads.push(payload); return { ...ingredient, ...payload }; },
   }));
   try {
     await change(byId(mounted.container, 'ingredient-name'), 'Cultured Butter');
     const submission = await startSubmit(form(mounted.container));
     await settleSubmit(submission);
+    assert.deepEqual(requestTrace, ['alias-collision lookup', 'Ingredient mutation']);
+    assert.equal(advisoryRequests.length, 1, 'the read-only advisory lookup must precede the single PATCH callback');
+    assert.deepEqual(JSON.parse(advisoryRequests[0].options.body), {
+      name: 'Cultured Butter', aliases: [], ingredientId: 'existing-id',
+    });
     assert.deepEqual(payloads, [{ name: 'Cultured Butter' }]);
     assert.equal(closes, 1);
   } finally {
+    globalThis.fetch = originalFetch;
     await mounted.unmount();
   }
 });
@@ -669,9 +729,12 @@ test('mounted standalone Add keeps its default category and real successful crea
     await settleSubmit(submission);
 
     const posts = requests.filter(({ options }) => options.method === 'POST');
-    assert.equal(posts.length, 1);
-    assert.match(posts[0].url, /\/ingredients$/u);
-    assert.deepEqual(JSON.parse(posts[0].options.body), {
+    assert.equal(posts.length, 2);
+    assert.match(posts[0].url, /\/ingredients\/alias-collisions$/u);
+    assert.deepEqual(JSON.parse(posts[0].options.body), { name: 'Ginger', aliases: [] });
+    assert.match(posts[1].url, /\/ingredients$/u);
+    assert.equal(posts.filter(({ url }) => /\/ingredients$/u.test(url)).length, 1, 'the advisory lookup must not create an Ingredient');
+    assert.deepEqual(JSON.parse(posts[1].options.body), {
       name: 'Ginger', aliases: [], category: 'produce', allergenTags: [],
     });
     assert.equal(findAll(mounted.container, (node) => node.getAttribute?.('role') === 'dialog').length, 0, 'successful standalone creation must close the modal');

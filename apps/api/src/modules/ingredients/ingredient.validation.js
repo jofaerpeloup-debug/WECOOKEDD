@@ -53,6 +53,16 @@ const ingredientResolutionSchema = z.object({
     .strict(),
 });
 
+const ingredientAliasCollisionSchema = z.object({
+  body: z
+    .object({
+      name: nameSchema,
+      aliases: aliasesArraySchema,
+      ingredientId: objectIdSchema.optional(),
+    })
+    .strict(),
+});
+
 const ingredientParamsSchema = z.object({
   params: z.object({ ingredientId: objectIdSchema }).strict(),
 });
@@ -104,4 +114,5 @@ module.exports = {
   createIngredientSchema,
   updateIngredientSchema,
   ingredientResolutionSchema,
+  ingredientAliasCollisionSchema,
 };

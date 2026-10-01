@@ -35,6 +35,13 @@ function findActiveResolutionCatalog() {
     .lean();
 }
 
+function findAliasCollisionCatalog() {
+  return Ingredient.find({})
+    .select({ _id: 1, name: 1, aliases: 1, isActive: 1 })
+    .sort({ normalizedName: 1, _id: 1 })
+    .lean();
+}
+
 module.exports = {
   createIngredient,
   findById,
@@ -43,4 +50,5 @@ module.exports = {
   findMany,
   countByFilter,
   findActiveResolutionCatalog,
+  findAliasCollisionCatalog,
 };

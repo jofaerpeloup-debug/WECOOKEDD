@@ -2,6 +2,7 @@ const ingredientRepository = require('./ingredient.repository');
 const { assertIngredientCanDeactivate } = require('./ingredient-dependency.guard');
 const { AppError } = require('../../shared/errors/app-error');
 const { resolveIngredientLines } = require('./ingredient-resolution');
+const { classifyProposedIngredientAliasWarnings } = require('./ingredient-alias-collisions');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 const MAX_DEACTIVATION_WRITE_ATTEMPTS = 2;
@@ -141,6 +142,15 @@ async function resolveIngredients(lines) {
   return resolveIngredientLines(lines, catalog);
 }
 
+async function findAliasCollisions({ name, aliases, ingredientId }) {
+  const catalog = await ingredientRepository.findAliasCollisionCatalog();
+  return classifyProposedIngredientAliasWarnings({
+    name: name.trim(),
+    aliases: normalizeAliases(aliases),
+    ingredientId,
+  }, catalog);
+}
+
 async function applyInactiveUpdate(id, update, { runValidators = true } = {}) {
   let existing = await ingredientRepository.findById(id);
   if (!existing) {
@@ -224,4 +234,5 @@ module.exports = {
   updateIngredient,
   archiveIngredient,
   resolveIngredients,
+  findAliasCollisions,
 };

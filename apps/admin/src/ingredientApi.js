@@ -39,6 +39,20 @@ export function resolveIngredients(lines) {
     .then((data) => data.resolutions || []);
 }
 
+const ALIAS_COLLISION_DEADLINE_MS = 5000;
+
+/** POST /api/v1/ingredients/alias-collisions (catalog.write, read-only advisory) */
+export function findIngredientAliasCollisions({ name, aliases, ingredientId }, { timeoutMs = ALIAS_COLLISION_DEADLINE_MS } = {}) {
+  const request = api
+    .post('/ingredients/alias-collisions', { body: { name, aliases, ...(ingredientId ? { ingredientId } : {}) } })
+    .then((data) => data.warnings || []);
+  let timer;
+  const deadline = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('Alias collision lookup timed out.')), timeoutMs);
+  });
+  return Promise.race([request, deadline]).finally(() => clearTimeout(timer));
+}
+
 /** GET /api/v1/ingredients/:id */
 export function getIngredient(id) {
   return api.get(`/ingredients/${encodeURIComponent(id)}`).then((data) => data.ingredient);

@@ -7,6 +7,7 @@ const {
   listIngredientsSchema,
   ingredientParamsSchema,
   ingredientResolutionSchema,
+  ingredientAliasCollisionSchema,
 } = require('../src/modules/ingredients/ingredient.validation');
 
 const VALID_ID = '507f1f77bcf86cd799439011';
@@ -189,4 +190,18 @@ test('ingredientResolutionSchema enforces a strict 1-50 line body and 500-charac
   assert.equal(boundary.success, true);
   const preserved = ingredientResolutionSchema.safeParse({ body: { lines: ['  rice  '] } });
   assert.deepEqual(preserved.data.body.lines, ['  rice  ']);
+});
+
+test('ingredientAliasCollisionSchema is strict and enforces existing name, alias, and optional id bounds', () => {
+  assert.equal(ingredientAliasCollisionSchema.safeParse({
+    body: { name: 'Scallion', aliases: ['green onion'], ingredientId: VALID_ID },
+  }).success, true);
+  for (const body of [
+    { aliases: [] },
+    { name: 'Scallion' },
+    { name: 'Scallion', aliases: [], unknown: true },
+    { name: 'Scallion', aliases: Array(21).fill('x') },
+    { name: 'Scallion', aliases: ['x'.repeat(101)] },
+    { name: 'Scallion', aliases: [], ingredientId: 'bad' },
+  ]) assert.equal(ingredientAliasCollisionSchema.safeParse({ body }).success, false);
 });
