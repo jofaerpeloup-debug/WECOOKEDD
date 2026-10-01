@@ -146,6 +146,51 @@ test('POST /api/v1/ingredients/resolve requires authentication', async () => {
   assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
 });
 
+test('POST /api/v1/ingredients/alias-collisions requires catalog.write and reads no catalog for User or Admin', async (t) => {
+  const unauthenticated = await request(app).post('/api/v1/ingredients/alias-collisions').send({ name: 'X', aliases: [] });
+  assert.equal(unauthenticated.status, 401);
+  let reads = 0;
+  t.mock.method(ingredientRepository, 'findAliasCollisionCatalog', async () => { reads += 1; return []; });
+  for (const actor of [
+    { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID },
+    { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID },
+  ]) {
+    mockAuth(t, actor);
+    const response = await request(app)
+      .post('/api/v1/ingredients/alias-collisions')
+      .set('Authorization', `Bearer ${tokenFor(actor)}`)
+      .send({ name: 'X', aliases: [] });
+    assert.equal(response.status, 403);
+    t.mock.restoreAll();
+    if (actor.role === 'user') t.mock.method(ingredientRepository, 'findAliasCollisionCatalog', async () => { reads += 1; return []; });
+  }
+  assert.equal(reads, 0);
+});
+
+test('POST /api/v1/ingredients/alias-collisions returns bounded public warnings for a Moderator', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findAliasCollisionCatalog', async () => [
+    { _id: 'a', name: 'Green Onion', aliases: ['spring onion'], isActive: true },
+    { _id: 'b', name: 'Scallion', aliases: [], isActive: false },
+  ]);
+  const response = await request(app)
+    .post('/api/v1/ingredients/alias-collisions')
+    .set('Authorization', `Bearer ${tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID })}`)
+    .send({ name: 'Spring Onion', aliases: ['scallion', 'spring onion'] });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data.warnings.map(({ collisionType }) => collisionType), [
+    'ALIAS_TO_CANONICAL', 'ALIAS_TO_CANONICAL', 'ALIAS_TO_ALIAS', 'SELF_ALIAS_TO_CANONICAL',
+  ]);
+  assert.equal(JSON.stringify(response.body).includes('normalizedValue'), false);
+  assert.equal(JSON.stringify(response.body).includes('ingredientId'), false);
+
+  const invalid = await request(app)
+    .post('/api/v1/ingredients/alias-collisions')
+    .set('Authorization', `Bearer ${tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID })}`)
+    .send({ name: 'X', aliases: [], extra: true });
+  assert.equal(invalid.status, 400);
+});
+
 test('POST /api/v1/ingredients/resolve rejects User and Admin before catalog resolution', async (t) => {
   let resolutionReads = 0;
   t.mock.method(ingredientRepository, 'findActiveResolutionCatalog', async () => { resolutionReads += 1; return []; });

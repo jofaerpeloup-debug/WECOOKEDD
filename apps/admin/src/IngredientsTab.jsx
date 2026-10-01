@@ -6,6 +6,7 @@ import {
 import { ApiError } from './apiClient.js';
 import {
   listIngredients, createIngredient, updateIngredient, archiveIngredient, restoreIngredient,
+  findIngredientAliasCollisions,
 } from './ingredientApi.js';
 import {
   INGREDIENT_CATEGORIES, INGREDIENT_ALLERGEN_TAGS, INGREDIENT_SORTS,
@@ -104,6 +105,58 @@ export function ingredientFormValues(form) {
     category: form.category,
     allergenTags: form.allergenTags,
   };
+}
+
+export function ingredientAliasCollisionSignature(form, ingredient) {
+  const values = ingredientFormValues(form);
+  return JSON.stringify({
+    name: values.name.toLowerCase().replace(/\s+/gu, ' '),
+    aliases: values.aliases.map((alias) => alias.toLowerCase().replace(/\s+/gu, ' ')),
+    ingredientId: ingredient?.id || null,
+  });
+}
+
+function collisionWarningsEqual(left = [], right = []) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function AliasCollisionWarnings({ state }) {
+  const warnings = state.warnings || [];
+  const stale = Boolean(state.stale);
+  return (
+    <div id="ingredient-alias-collisions" className="wc-ing-collision-region" aria-live="polite">
+      {state.status === 'checking' && <div className="wc-ing-modal-hint">Checking catalog alias conflicts…</div>}
+      {state.status === 'unavailable' && (
+        <div className="wc-ing-collision-unavailable">
+          Alias conflicts could not be checked. You can still save, but review the catalog when the check is available.
+        </div>
+      )}
+      {stale && warnings.length > 0 && (
+        <div className="wc-ing-modal-hint">Previously found warnings are stale while the current values are checked.</div>
+      )}
+      {warnings.map((warning, index) => {
+        const self = warning.collisionType === 'SELF_ALIAS_TO_CANONICAL';
+        return (
+          <div className={self ? 'wc-ing-collision-self' : 'wc-ing-collision-strong'} key={`${warning.alias}:${warning.collisionType}:${index}`}>
+            {self ? (
+              <><strong>{warning.alias}</strong> is the same as this Ingredient&apos;s canonical name and is redundant.</>
+            ) : (
+              <>
+                <strong>{warning.alias}</strong> conflicts with{' '}
+                {warning.conflicts.map((conflict, conflictIndex) => (
+                  <span key={`${conflict.ingredientName}:${conflictIndex}`}>
+                    {conflictIndex > 0 ? '; ' : ''}
+                    {conflict.ingredientName} ({conflict.status === 'active' ? 'Active' : conflict.status === 'archived' ? 'Archived' : 'Status unknown'}, matched by {conflict.matchedOn === 'canonical' ? 'canonical name' : 'alias'})
+                  </span>
+                ))}
+                {warning.truncated && <>; {warning.totalConflicts - warning.conflicts.length} additional owner{warning.totalConflicts - warning.conflicts.length === 1 ? '' : 's'}</>}.
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // Maps backend VALIDATION_ERROR details ([{ field, message }]) onto the form's
@@ -547,6 +600,16 @@ export async function submitIngredientForm({ form, ingredient, onSubmit }) {
   }
 }
 
+function ingredientFormIsUnchanged(form, ingredient) {
+  if (!ingredient) return false;
+  const values = ingredientFormValues(form);
+  return values.name === ingredient.name
+    && arraysEqual(values.aliases, ingredient.aliases || [])
+    && values.category === ingredient.category
+    && arraysEqual(values.allergenTags, ingredient.allergenTags || [])
+    && form.isActive === ingredient.isActive;
+}
+
 export function ingredientSubmitErrorMessage(error, editing = false) {
   if (!editing && error instanceof ApiError && error.code === 'INGREDIENT_ALREADY_EXISTS') {
     return 'An Ingredient with this name already exists. Review the Ingredient catalog, including archived records.';
@@ -563,8 +626,43 @@ export function IngredientModal({ ingredient, initialValues, sourceContext, onCl
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const dialogRef = useRef(null);
+  const collisionGenerationRef = useRef(0);
+  const collisionOverrideRef = useRef(null);
+  const [collisionState, setCollisionState] = useState({ status: 'idle', signature: null, warnings: [], stale: false });
   const aliasAnalysis = analyzeAliases(form.aliasesText);
   const canonicalNameLength = form.name.trim().length;
+  const collisionSignature = ingredientAliasCollisionSignature(form, ingredient);
+  const collisionInputValid = !validateIngredientForm(form).name && !validateIngredientForm(form).aliases;
+
+  useEffect(() => {
+    collisionOverrideRef.current = null;
+    const generation = ++collisionGenerationRef.current;
+    setCollisionState((current) => ({
+      ...current,
+      status: collisionInputValid ? 'checking' : 'idle',
+      signature: null,
+      stale: current.warnings.length > 0,
+    }));
+    if (!collisionInputValid) return undefined;
+
+    const timer = setTimeout(async () => {
+      const values = ingredientFormValues(form);
+      try {
+        const warnings = await findIngredientAliasCollisions({
+          name: values.name,
+          aliases: values.aliases,
+          ingredientId: ingredient?.id,
+        });
+        if (generation !== collisionGenerationRef.current) return;
+        setCollisionState({ status: 'success', signature: collisionSignature, warnings, stale: false });
+      } catch (error) {
+        if (generation !== collisionGenerationRef.current) return;
+        if (error instanceof ApiError && error.isForbidden) onAuthorityLost?.();
+        setCollisionState((current) => ({ ...current, status: 'unavailable', signature: collisionSignature, stale: current.warnings.length > 0 }));
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [collisionSignature, collisionInputValid, ingredient?.id, onAuthorityLost]);
 
   const clearFieldError = (field) => {
     setFieldErrors((errors) => clearIngredientFieldError(errors, field));
@@ -584,9 +682,48 @@ export function IngredientModal({ ingredient, initialValues, sourceContext, onCl
     e.preventDefault();
     if (savingRef.current) return;
     setFormError('');
-    setFieldErrors({});
+    const localErrors = validateIngredientForm(form);
+    setFieldErrors(localErrors);
+    if (Object.keys(localErrors).length > 0) return;
+    if (ingredientFormIsUnchanged(form, ingredient)) {
+      onClose();
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
+
+    const signature = ingredientAliasCollisionSignature(form, ingredient);
+    if (collisionOverrideRef.current !== signature) {
+      const generation = ++collisionGenerationRef.current;
+      const values = ingredientFormValues(form);
+      try {
+        const warnings = await findIngredientAliasCollisions({
+          name: values.name,
+          aliases: values.aliases,
+          ingredientId: ingredient?.id,
+        });
+        if (generation !== collisionGenerationRef.current) return;
+        const alreadyDisplayed = collisionState.status === 'success'
+          && collisionState.signature === signature
+          && collisionWarningsEqual(collisionState.warnings, warnings);
+        setCollisionState({ status: 'success', signature, warnings, stale: false });
+        if (warnings.length > 0 && !alreadyDisplayed) {
+          collisionOverrideRef.current = signature;
+          savingRef.current = false;
+          setSaving(false);
+          return;
+        }
+      } catch (error) {
+        if (generation !== collisionGenerationRef.current) return;
+        if (error instanceof ApiError && error.isForbidden) onAuthorityLost?.();
+        setCollisionState((current) => ({ ...current, status: 'unavailable', signature, stale: current.warnings.length > 0 }));
+        collisionOverrideRef.current = signature;
+        savingRef.current = false;
+        setSaving(false);
+        return;
+      }
+    }
+    collisionOverrideRef.current = null;
     const result = await submitIngredientForm({ form, ingredient, onSubmit });
     if (result.status === 'success') {
       onSuccess?.(result.ingredient);
@@ -622,6 +759,16 @@ export function IngredientModal({ ingredient, initialValues, sourceContext, onCl
 
   return (
     <div className={`wc-modal-overlay${sourceContext ? ' wc-author-ingredient-modal' : ''}`} onMouseDown={(event) => { event.stopPropagation(); if (event.target === event.currentTarget) requestClose(); }} onKeyDown={(event) => event.stopPropagation()}>
+      <style>{`
+        .wc-ing-collision-region { margin-top: 7px; font-size: 12px; line-height: 1.45; }
+        .wc-ing-collision-strong, .wc-ing-collision-unavailable {
+          color: var(--clay); background: #E9D3CB; border-radius: 7px; padding: 7px 9px; margin-top: 5px;
+        }
+        .wc-ing-collision-self {
+          color: var(--stone); background: var(--parchment); border: 1px solid var(--stone-light);
+          border-radius: 7px; padding: 7px 9px; margin-top: 5px;
+        }
+      `}</style>
       <div ref={dialogRef} className="wc-modal" role="dialog" aria-modal="true" aria-labelledby="ingredient-modal-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={handleDialogKeyDown}>
         <div className="wc-modal-header">
           <h2 id="ingredient-modal-title" className="wc-serif">{editing ? 'Edit ingredient' : 'Add ingredient'}</h2>
@@ -676,7 +823,7 @@ export function IngredientModal({ ingredient, initialValues, sourceContext, onCl
               }}
               placeholder="e.g. sweet cream butter, unsalted butter"
               aria-invalid={Boolean(fieldErrors.aliases)}
-              aria-describedby="ingredient-aliases-hint ingredient-aliases-error"
+              aria-describedby="ingredient-aliases-hint ingredient-aliases-error ingredient-alias-collisions"
             />
             <div id="ingredient-aliases-hint" className="wc-ing-modal-hint">
               Separate with commas. {aliasAnalysis.entries.length}/{INGREDIENT_FORM_LIMITS.aliases}{' '}
@@ -688,6 +835,7 @@ export function IngredientModal({ ingredient, initialValues, sourceContext, onCl
             {fieldErrors.aliases && (
               <div id="ingredient-aliases-error" className="wc-ing-field-error">{fieldErrors.aliases}</div>
             )}
+            <AliasCollisionWarnings state={collisionState} />
           </div>
 
           <div className="wc-field">

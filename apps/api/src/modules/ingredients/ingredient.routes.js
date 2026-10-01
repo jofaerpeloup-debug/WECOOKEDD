@@ -11,6 +11,7 @@ const {
   createIngredientSchema,
   updateIngredientSchema,
   ingredientResolutionSchema,
+  ingredientAliasCollisionSchema,
 } = require('./ingredient.validation');
 const { ingredientResolutionRateLimiter } = require('../../middleware/rate-limiter');
 
@@ -22,6 +23,13 @@ router.get(
   validate(listIngredientsSchema),
   requireCatalogReadAllForNonActive,
   ingredientController.listIngredients
+);
+router.post(
+  '/alias-collisions',
+  authenticate,
+  requireCapability(CAPABILITIES.CATALOG_WRITE),
+  validate(ingredientAliasCollisionSchema),
+  ingredientController.findAliasCollisions
 );
 router.post(
   '/resolve',

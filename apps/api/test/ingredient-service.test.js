@@ -755,3 +755,80 @@ test('active resolution catalog uses the required complete deterministic lean pr
     ['lean'],
   ]);
 });
+
+test('findAliasCollisions analyzes proposed aliases and canonical name against active and archived owners without writes', async (t) => {
+  const currentId = '507f1f77bcf86cd799439011';
+  t.mock.method(ingredientRepository, 'findAliasCollisionCatalog', async () => [
+    { _id: currentId, name: 'Green Onion', aliases: ['scallion'], isActive: true },
+    { _id: 'a', name: 'Scallion', aliases: ['spring onion'], isActive: false },
+    { _id: 'b', name: 'Welsh Onion', aliases: ['SCALLION'], isActive: true },
+  ]);
+  for (const method of ['createIngredient', 'updateById', 'updateByIdIfActiveState']) {
+    t.mock.method(ingredientRepository, method, async () => assert.fail(`${method} must not be called`));
+  }
+
+  const warnings = await ingredientService.findAliasCollisions({
+    name: '  Spring\u00a0 Onion ',
+    aliases: [' scallion ', 'SPRING ONION'],
+    ingredientId: currentId,
+  });
+  assert.deepEqual(warnings.map(({ alias, collisionType }) => [alias, collisionType]), [
+    ['Spring Onion', 'ALIAS_TO_CANONICAL'],
+    ['scallion', 'ALIAS_TO_CANONICAL'],
+    ['scallion', 'ALIAS_TO_ALIAS'],
+    ['SPRING ONION', 'ALIAS_TO_ALIAS'],
+    ['SPRING ONION', 'SELF_ALIAS_TO_CANONICAL'],
+  ]);
+  assert.deepEqual(warnings[0].conflicts, [{ ingredientName: 'Scallion', status: 'archived', matchedOn: 'alias' }]);
+  assert.deepEqual(
+    warnings.find((warning) => warning.alias === 'scallion' && warning.collisionType === 'ALIAS_TO_ALIAS').conflicts,
+    [{ ingredientName: 'Welsh Onion', status: 'active', matchedOn: 'alias' }],
+    'the current Ingredient\'s stored scallion alias must not become a cross-owner conflict'
+  );
+  assert.equal(JSON.stringify(warnings).includes(currentId), false);
+});
+
+test('findAliasCollisions bounds deterministic distinct owners and fails closed on malformed status', async (t) => {
+  const catalog = Array.from({ length: 12 }, (_, index) => ({
+    _id: String(20 - index),
+    name: `Owner ${String(index).padStart(2, '0')}`,
+    aliases: ['shared'],
+    isActive: index === 0 ? 'legacy' : index % 2 === 0,
+  }));
+  t.mock.method(ingredientRepository, 'findAliasCollisionCatalog', async () => catalog);
+  const [warning] = await ingredientService.findAliasCollisions({ name: 'New', aliases: [' SHARED '] });
+  assert.equal(warning.collisionType, 'ALIAS_TO_ALIAS');
+  assert.equal(warning.totalConflicts, 12);
+  assert.equal(warning.conflicts.length, 10);
+  assert.equal(warning.truncated, true);
+  assert.equal(warning.conflicts[0].ingredientName, 'Owner 00');
+  assert.equal(warning.conflicts[0].status, 'unknown');
+  assert.deepEqual(Object.keys(warning.conflicts[0]).sort(), ['ingredientName', 'matchedOn', 'status']);
+});
+
+test('findAliasCollisions returns an exact empty warning array for unrelated values', async (t) => {
+  t.mock.method(ingredientRepository, 'findAliasCollisionCatalog', async () => [
+    { _id: 'a', name: 'Garlic', aliases: ['ajo'], isActive: true },
+  ]);
+  assert.deepEqual(await ingredientService.findAliasCollisions({ name: 'Onion', aliases: ['cebolla'] }), []);
+});
+
+test('alias collision catalog read is complete, projected, deterministic, and lean', async (t) => {
+  const catalog = [{ _id: '1', name: 'Rice', aliases: [], isActive: false }];
+  const calls = [];
+  const query = {
+    select(value) { calls.push(['select', value]); return this; },
+    sort(value) { calls.push(['sort', value]); return this; },
+    lean() { calls.push(['lean']); return Promise.resolve(catalog); },
+    skip() { assert.fail('collision query must not skip rows'); },
+    limit() { assert.fail('collision query must not truncate rows'); },
+  };
+  t.mock.method(Ingredient, 'find', (filter) => { calls.push(['find', filter]); return query; });
+  assert.equal(await ingredientRepository.findAliasCollisionCatalog(), catalog);
+  assert.deepEqual(calls, [
+    ['find', {}],
+    ['select', { _id: 1, name: 1, aliases: 1, isActive: 1 }],
+    ['sort', { normalizedName: 1, _id: 1 }],
+    ['lean'],
+  ]);
+});

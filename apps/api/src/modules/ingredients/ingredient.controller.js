@@ -59,6 +59,11 @@ const resolveIngredients = asyncHandler(async (req, res) => {
   sendSuccess(res, { resolutions });
 });
 
+const findAliasCollisions = asyncHandler(async (req, res) => {
+  const warnings = await ingredientService.findAliasCollisions(req.validated.body);
+  sendSuccess(res, { warnings });
+});
+
 module.exports = {
   listIngredients,
   getIngredient,
@@ -66,4 +71,5 @@ module.exports = {
   updateIngredient,
   archiveIngredient,
   resolveIngredients,
+  findAliasCollisions,
 };
