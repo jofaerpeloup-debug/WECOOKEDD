@@ -46,6 +46,15 @@ export const RECIPE_UNITS = [
 
 export const RECIPE_SORTS = ['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc'];
 
+export const DISCOVER_SORT_OPTIONS = [
+  { value: 'titleAsc', label: 'Title: A-Z' },
+  { value: 'titleDesc', label: 'Title: Z-A' },
+  { value: 'newest', label: 'Newest added' },
+  { value: 'oldest', label: 'Oldest added' },
+  { value: 'prepTimeAsc', label: 'Prep time: low to high' },
+  { value: 'prepTimeDesc', label: 'Prep time: high to low' },
+];
+
 const DIFFICULTY_LABELS = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
 // Terse measurement units render as-is except where a nicer casing helps.
@@ -78,6 +87,10 @@ export function difficultyLabel(value) {
 
 export function dietaryTagLabel(value) {
   return RECIPE_DIETARY_TAG_LABELS[value] || value || '';
+}
+
+export function discoverSortLabel(value) {
+  return DISCOVER_SORT_OPTIONS.find((option) => option.value === value)?.label || '';
 }
 
 export function unitLabel(value) {
