@@ -22,6 +22,7 @@ const RECIPE_ID = '507f1f77bcf86cd799439099';
 const ENTRY_ID = '507f1f77bcf86cd799439077';
 const OTHER_USER_ID = '507f1f77bcf86cd799439088';
 const OTHER_SESSION_ID = '507f1f77bcf86cd799439089';
+const UPDATED_AT = '2026-09-01T00:00:00.000Z';
 
 function mockAuth(t, role = 'user') {
   t.mock.method(sessionRepository, 'findActiveById', async (id) => ({
@@ -60,6 +61,7 @@ test('all meal-plan routes require authentication', async () => {
   const responses = await Promise.all([
     request(app).get('/api/v1/meal-plan?startDate=2026-09-14&endDate=2026-09-20'),
     request(app).post('/api/v1/meal-plan').send({ dateKey: '2026-09-14', recipeId: RECIPE_ID }),
+    request(app).patch(`/api/v1/meal-plan/${ENTRY_ID}`).send({ dateKey: '2026-09-15', expectedUpdatedAt: UPDATED_AT }),
     request(app).delete(`/api/v1/meal-plan/${ENTRY_ID}`),
     request(app).delete('/api/v1/meal-plan?startDate=2026-09-14&endDate=2026-09-20'),
   ]);
@@ -115,6 +117,167 @@ test('POST rejects malformed recipe ids and all mass-assignment fields', async (
     const response = await request(app).post('/api/v1/meal-plan').set('Authorization', `Bearer ${token()}`).send({ dateKey: '2026-09-14', recipeId: RECIPE_ID, [field]: 'x' });
     assert.equal(response.status, 400, field);
   }
+});
+
+test('PATCH moves atomically for the authenticated owner and returns the standard safe shape', async (t) => {
+  mockAuth(t);
+  const createdAt = new Date('2026-09-01T00:00:00.000Z');
+  const nextUpdatedAt = new Date('2026-09-14T09:00:00.000Z');
+  let args;
+  t.mock.method(mealPlanRepository, 'moveByIdAndUser', async (...value) => {
+    args = value;
+    return entry({ dateKey: '2026-09-16', createdAt, updatedAt: nextUpdatedAt });
+  });
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => recipe());
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT });
+  assert.equal(response.status, 200);
+  assert.deepEqual(args, [ENTRY_ID, USER_ID, '2026-09-16', UPDATED_AT]);
+  assert.deepEqual(response.body.data.mealPlanEntry, {
+    id: ENTRY_ID,
+    dateKey: '2026-09-16',
+    recipeId: RECIPE_ID,
+    isAvailable: true,
+    recipe: {
+      id: RECIPE_ID,
+      title: 'Adobo',
+      region: 'central-luzon',
+      category: 'dinner',
+      difficulty: 'easy',
+      prepTimeMinutes: 10,
+      cookTimeMinutes: 30,
+      imageUrl: null,
+    },
+    createdAt: createdAt.toISOString(),
+    updatedAt: nextUpdatedAt.toISOString(),
+  });
+  assert.equal('userId' in response.body.data.mealPlanEntry, false);
+});
+
+test('PATCH can move an entry whose recipe projection is unavailable', async (t) => {
+  mockAuth(t);
+  t.mock.method(mealPlanRepository, 'moveByIdAndUser', async () => entry({ dateKey: '2026-09-16', updatedAt: new Date('2026-09-14T09:00:00.000Z') }));
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.mealPlanEntry.isAvailable, false);
+  assert.equal(response.body.data.mealPlanEntry.recipe, null);
+});
+
+test('PATCH same-date exact-version request returns the unchanged authoritative entry', async (t) => {
+  mockAuth(t);
+  const current = entry();
+  const moveCall = t.mock.method(mealPlanRepository, 'moveByIdAndUser', async () => null);
+  const findCall = t.mock.method(mealPlanRepository, 'findByIdAndUser', async () => current);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => recipe());
+
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: current.dateKey, expectedUpdatedAt: UPDATED_AT });
+
+  assert.equal(response.status, 200);
+  assert.equal(moveCall.mock.callCount(), 1);
+  assert.equal(findCall.mock.callCount(), 1);
+  assert.equal(response.body.data.mealPlanEntry.id, ENTRY_ID);
+  assert.equal(response.body.data.mealPlanEntry.recipeId, RECIPE_ID);
+  assert.equal(response.body.data.mealPlanEntry.dateKey, current.dateKey);
+  assert.equal(response.body.data.mealPlanEntry.createdAt, current.createdAt.toISOString());
+  assert.equal(response.body.data.mealPlanEntry.updatedAt, UPDATED_AT);
+});
+
+test('PATCH same-date request preserves stale-version protection', async (t) => {
+  mockAuth(t);
+  t.mock.method(mealPlanRepository, 'moveByIdAndUser', async () => null);
+  t.mock.method(mealPlanRepository, 'findByIdAndUser', async () => entry({
+    updatedAt: new Date('2026-09-01T00:00:01.000Z'),
+  }));
+
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: '2026-09-14', expectedUpdatedAt: UPDATED_AT });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'MEAL_PLAN_ENTRY_STALE');
+});
+
+test('PATCH rejects invalid dates, timestamps, ids, queries, and mass-assignment fields', async (t) => {
+  mockAuth(t);
+  const invalidRequests = [
+    { path: ENTRY_ID, body: { dateKey: '2026-02-30', expectedUpdatedAt: UPDATED_AT } },
+    { path: ENTRY_ID, body: { dateKey: '2026-09-16', expectedUpdatedAt: 'invalid' } },
+    { path: ENTRY_ID, body: { dateKey: '2026-09-16', expectedUpdatedAt: '2026-10-02T10:20:30.0009Z' } },
+    { path: ENTRY_ID, body: { dateKey: '2026-09-16', expectedUpdatedAt: '2026-10-02T10:20:30.1234+08:00' } },
+    { path: 'invalid', body: { dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT } },
+  ];
+  for (const field of ['userId', 'recipeId', 'mealType', 'createdAt', 'updatedAt', 'unknown']) {
+    invalidRequests.push({ path: ENTRY_ID, body: { dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT, [field]: 'x' } });
+  }
+  for (const invalid of invalidRequests) {
+    const response = await request(app)
+      .patch(`/api/v1/meal-plan/${invalid.path}`)
+      .set('Authorization', `Bearer ${token()}`)
+      .send(invalid.body);
+    assert.equal(response.status, 400, JSON.stringify(invalid));
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
+  const queryResponse = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}?userId=${USER_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT });
+  assert.equal(queryResponse.status, 400);
+});
+
+test('PATCH returns stale only when the owner entry still exists', async (t) => {
+  mockAuth(t);
+  t.mock.method(mealPlanRepository, 'moveByIdAndUser', async () => null);
+  t.mock.method(mealPlanRepository, 'findByIdAndUser', async (entryId, userId) => entry({ _id: entryId, userId }));
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT });
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'MEAL_PLAN_ENTRY_STALE');
+});
+
+test('PATCH maps one failed atomic duplicate update without delete, create, or retry', async (t) => {
+  mockAuth(t);
+  const moveCall = t.mock.method(mealPlanRepository, 'moveByIdAndUser', async () => { const err = new Error('E11000'); err.code = 11000; throw err; });
+  const createCall = t.mock.method(mealPlanRepository, 'create', async () => { throw new Error('must not create'); });
+  const deleteCall = t.mock.method(mealPlanRepository, 'deleteByIdAndUser', async () => { throw new Error('must not delete'); });
+  const classifyCall = t.mock.method(mealPlanRepository, 'findByIdAndUser', async () => { throw new Error('must not classify duplicate'); });
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT });
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'MEAL_PLAN_ENTRY_ALREADY_EXISTS');
+  assert.equal(moveCall.mock.callCount(), 1);
+  assert.equal(createCall.mock.callCount(), 0);
+  assert.equal(deleteCall.mock.callCount(), 0);
+  assert.equal(classifyCall.mock.callCount(), 0);
+});
+
+test('PATCH is owner-scoped and makes a foreign entry indistinguishable from missing', async (t) => {
+  mockAuth(t);
+  let moveArgs;
+  let existenceArgs;
+  t.mock.method(mealPlanRepository, 'moveByIdAndUser', async (...value) => { moveArgs = value; return null; });
+  t.mock.method(mealPlanRepository, 'findByIdAndUser', async (...value) => { existenceArgs = value; return null; });
+  const response = await request(app)
+    .patch(`/api/v1/meal-plan/${ENTRY_ID}`)
+    .set('Authorization', `Bearer ${otherUserToken()}`)
+    .send({ dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT });
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error.code, 'MEAL_PLAN_ENTRY_NOT_FOUND');
+  assert.deepEqual(moveArgs, [ENTRY_ID, OTHER_USER_ID, '2026-09-16', UPDATED_AT]);
+  assert.deepEqual(existenceArgs, [ENTRY_ID, OTHER_USER_ID]);
 });
 
 test('DELETE by id remains owner-scoped for both user and admin accounts', async (t) => {

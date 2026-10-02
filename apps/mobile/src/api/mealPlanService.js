@@ -23,6 +23,12 @@ export function createMealPlanEntry({ dateKey, recipeId }) {
   return api.post('/meal-plan', { body: { dateKey, recipeId } }).then((data) => normalizeEntry(data?.mealPlanEntry));
 }
 
+export function moveMealPlanEntry(entryId, { dateKey, expectedUpdatedAt }) {
+  return api
+    .patch(`/meal-plan/${encodeURIComponent(entryId)}`, { body: { dateKey, expectedUpdatedAt } })
+    .then((data) => normalizeEntry(data?.mealPlanEntry));
+}
+
 export function removeMealPlanEntry(entryId) {
   return api.del(`/meal-plan/${encodeURIComponent(entryId)}`).then((data) => data?.deleted === true);
 }

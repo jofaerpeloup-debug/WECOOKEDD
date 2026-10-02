@@ -14,6 +14,15 @@ const createEntry = asyncHandler(async (req, res) => {
   sendSuccess(res, { mealPlanEntry: toPublicMealPlanEntry(result) }, 201);
 });
 
+const moveEntry = asyncHandler(async (req, res) => {
+  const result = await mealPlanService.moveEntry(
+    req.auth.userId,
+    req.validated.params.entryId,
+    req.validated.body
+  );
+  sendSuccess(res, { mealPlanEntry: toPublicMealPlanEntry(result) });
+});
+
 const removeEntry = asyncHandler(async (req, res) => {
   await mealPlanService.removeEntry(req.auth.userId, req.validated.params.entryId);
   sendSuccess(res, { deleted: true });
@@ -25,4 +34,4 @@ const clearRange = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
-module.exports = { listEntries, createEntry, removeEntry, clearRange };
+module.exports = { listEntries, createEntry, moveEntry, removeEntry, clearRange };

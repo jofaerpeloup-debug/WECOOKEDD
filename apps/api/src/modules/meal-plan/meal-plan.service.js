@@ -22,6 +22,18 @@ function entryNotFoundError() {
   });
 }
 
+function staleEntryError() {
+  return new AppError('This meal plan entry changed. Refresh your meal plan and try again.', {
+    statusCode: 409,
+    code: 'MEAL_PLAN_ENTRY_STALE',
+  });
+}
+
+function hasExpectedVersion(entry, expectedUpdatedAt) {
+  return entry.updatedAt instanceof Date
+    && entry.updatedAt.getTime() === new Date(expectedUpdatedAt).getTime();
+}
+
 async function createEntry(userId, { dateKey, recipeId }) {
   const recipe = await recipeService.findUsableRecipeById(recipeId);
   if (!recipe) throw recipeNotFoundError();
@@ -45,6 +57,33 @@ async function listEntries(userId, startDate, endDate) {
   );
 }
 
+async function moveEntry(userId, entryId, { dateKey, expectedUpdatedAt }) {
+  let entry;
+  try {
+    entry = await mealPlanRepository.moveByIdAndUser(
+      entryId,
+      userId,
+      dateKey,
+      expectedUpdatedAt
+    );
+  } catch (err) {
+    if (err && err.code === DUPLICATE_KEY_ERROR_CODE) throw duplicateEntryError();
+    throw err;
+  }
+
+  if (!entry) {
+    const existing = await mealPlanRepository.findByIdAndUser(entryId, userId);
+    if (!existing) throw entryNotFoundError();
+    if (existing.dateKey !== dateKey || !hasExpectedVersion(existing, expectedUpdatedAt)) {
+      throw staleEntryError();
+    }
+    entry = existing;
+  }
+
+  const recipe = await recipeService.findUsableRecipeById(entry.recipeId);
+  return { entry, recipe };
+}
+
 async function removeEntry(userId, entryId) {
   const deleted = await mealPlanRepository.deleteByIdAndUser(entryId, userId);
   if (!deleted) throw entryNotFoundError();
@@ -56,4 +95,4 @@ async function clearRange(userId, startDate, endDate) {
   return { deletedCount: result.deletedCount ?? 0 };
 }
 
-module.exports = { createEntry, listEntries, removeEntry, clearRange };
+module.exports = { createEntry, listEntries, moveEntry, removeEntry, clearRange };

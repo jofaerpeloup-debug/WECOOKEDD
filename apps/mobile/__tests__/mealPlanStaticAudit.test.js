@@ -5,6 +5,8 @@ const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
 
 const screen = read('screens/MealPlanScreen.js');
 const sheet = read('components/MealPlanSheet.js');
+const moveSheet = read('components/MealPlanMoveSheet.js');
+const service = read('api/mealPlanService.js');
 const dates = read('utils/mealPlanDates.js');
 const detail = read('screens/RecipeDetailScreen.js');
 const shopping = read('utils/mealPlanShopping.js');
@@ -30,7 +32,31 @@ describe('MealPlan real backend integration', () => {
     expect(screen).toMatch(/await removeMealPlanEntry/);
     expect(screen).toMatch(/await clearMealPlanRange/);
     expect(screen).toMatch(/Recipe unavailable/);
-    expect(screen).toMatch(/can still be removed/);
+    expect(screen).toMatch(/can still be moved or removed/);
+  });
+
+  it('wires one conditional PATCH move and reconciles only from its returned entry', () => {
+    expect(service).toMatch(/api\s*\.patch\(`\/meal-plan\/\$\{encodeURIComponent\(entryId\)\}`/);
+    expect(service).toMatch(/body:\s*\{\s*dateKey,\s*expectedUpdatedAt\s*\}/);
+    expect(screen).toMatch(/await moveMealPlanEntry\(submittedEntry\.id/);
+    expect(screen).toMatch(/current\.updatedAt !== submittedEntry\.updatedAt/);
+    expect(screen).toMatch(/old\.entries\.map\(\(entry\) => entry\.id === submittedEntry\.id \? returnedEntry : entry\)/);
+    expect(screen).toMatch(/old\.entries\.filter\(\(entry\) => entry\.id !== submittedEntry\.id\)/);
+    expect(screen).not.toMatch(/removeMealPlanEntry[\s\S]{0,300}createMealPlanEntry|createMealPlanEntry[\s\S]{0,300}removeMealPlanEntry/);
+  });
+
+  it('keeps Move real-date, accessible, pessimistic, and stale-refetch aware', () => {
+    expect(moveSheet).toMatch(/accessibilityViewIsModal/);
+    expect(moveSheet).toMatch(/accessibilityState=\{\{ disabled: moveDisabled, busy: pending \}\}/);
+    expect(moveSheet).toMatch(/selectedDateKey === entry\.dateKey/);
+    expect(moveSheet).toMatch(/Moving from/);
+    expect(moveSheet).toMatch(/Selected target/);
+    expect(moveSheet).toMatch(/shiftWeek\(date, -1\)/);
+    expect(moveSheet).toMatch(/shiftWeek\(date, 1\)/);
+    expect(screen).toMatch(/Your meal plan changed\. Reloading the latest plan\./);
+    expect(screen).toMatch(/const reloadResult = await load\(\)/);
+    expect(screen).toMatch(/generationRef\.current !== requestGeneration/);
+    expect(screen).toMatch(/attempt !== moveAttemptRef\.current/);
   });
 });
 
@@ -60,7 +86,7 @@ describe('shopping-list and deferred boundaries', () => {
   });
 
   it('has no mock/local source, meal types, reminders, AI, or global context', () => {
-    for (const source of [screen, sheet]) {
+    for (const source of [screen, sheet, moveSheet]) {
       expect(source).not.toMatch(/AsyncStorage|MealPlanContext|useMealPlan|mockData|TimePickerSheet|expo-notifications/);
       expect(source).not.toMatch(/mealType|breakfast|lunch|dinner|generate plan|auto-plan/i);
     }
@@ -69,5 +95,12 @@ describe('shopping-list and deferred boundaries', () => {
   it('date helpers never use duration arithmetic or UTC serialization', () => {
     expect(dates).not.toMatch(/86400000|toISOString|setTime|getTime|Date\.UTC/);
     expect(dates).toMatch(/new Date\(year, monthIndex, day, 12/);
+  });
+
+  it('Move sources contain no local persistence, drag behavior, slots, reminders, mock recipes, or UTC date generation', () => {
+    for (const source of [screen, moveSheet, service]) {
+      expect(source).not.toMatch(/AsyncStorage|PanResponder|drag(?:ging)?|mock(?:Recipe|Data)|toISOString|Date\.UTC|86400000/i);
+      expect(source).not.toMatch(/mealType|reminder|expo-notifications/i);
+    }
   });
 });

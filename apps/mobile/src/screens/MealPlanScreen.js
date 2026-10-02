@@ -9,8 +9,9 @@ import { useTheme } from '../theme/ThemeContext';
 import { typography, spacing, radius } from '../theme/theme';
 import RecipeImage from '../components/RecipeImage';
 import MealPlanSheet from '../components/MealPlanSheet';
-import { clearMealPlanRange, getMealPlan, removeMealPlanEntry } from '../api/mealPlanService';
-import { getMealPlanErrorMessage } from '../api/mealPlanErrors';
+import MealPlanMoveSheet from '../components/MealPlanMoveSheet';
+import { clearMealPlanRange, getMealPlan, moveMealPlanEntry, removeMealPlanEntry } from '../api/mealPlanService';
+import { getMealPlanErrorMessage, getMealPlanErrorState } from '../api/mealPlanErrors';
 import { difficultyLabel } from '../api/recipeOptions';
 import { formatMinutes } from '../utils/recipe';
 import { formatDayDate, formatWeekRange, shiftWeek, startOfLocalWeek, weekDays } from '../utils/mealPlanDates';
@@ -31,29 +32,49 @@ export default function MealPlanScreen({ navigation }) {
   const range = `${startDate}:${endDate}`;
   const [data, setData] = useState({ ownerId: null, range: null, entries: [], status: 'loading', error: null });
   const [pickDay, setPickDay] = useState(null);
+  const [moveEntry, setMoveEntry] = useState(null);
+  const [moveError, setMoveError] = useState(null);
   const [pendingEntryId, setPendingEntryId] = useState(null);
   const [clearing, setClearing] = useState(false);
   const [addingGroceries, setAddingGroceries] = useState(false);
   const generationRef = useRef(0);
+  const moveAttemptRef = useRef(0);
+  const mountedRef = useRef(true);
   const ownerRef = useRef(ownerId);
   const rangeRef = useRef(range);
 
   useEffect(() => {
     ownerRef.current = ownerId;
     generationRef.current += 1;
+    moveAttemptRef.current += 1;
     setData({ ownerId, range: null, entries: [], status: ownerId ? 'loading' : 'idle', error: null });
     setPickDay(null);
+    setMoveEntry(null);
+    setMoveError(null);
     setPendingEntryId(null);
     setClearing(false);
     setAddingGroceries(false);
   }, [ownerId]);
 
   useEffect(() => {
+    if (rangeRef.current !== range) {
+      moveAttemptRef.current += 1;
+      setMoveEntry(null);
+      setMoveError(null);
+    }
     rangeRef.current = range;
   }, [range]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      moveAttemptRef.current += 1;
+    };
+  }, []);
+
   const load = useCallback(async () => {
-    if (!ownerId) return;
+    if (!ownerId) return 'ignored';
     const generation = ++generationRef.current;
     setData((old) => ({
       ownerId,
@@ -64,11 +85,13 @@ export default function MealPlanScreen({ navigation }) {
     }));
     try {
       const entries = await getMealPlan(startDate, endDate);
-      if (generation !== generationRef.current || ownerRef.current !== ownerId) return;
+      if (generation !== generationRef.current || ownerRef.current !== ownerId) return 'ignored';
       setData({ ownerId, range, entries, status: 'ready', error: null });
+      return 'success';
     } catch (err) {
-      if (generation !== generationRef.current || ownerRef.current !== ownerId) return;
+      if (generation !== generationRef.current || ownerRef.current !== ownerId) return 'ignored';
       setData((old) => ({ ...old, ownerId, range, status: 'error', error: getMealPlanErrorMessage(err) }));
+      return 'error';
     }
   }, [ownerId, range, startDate, endDate]);
 
@@ -82,6 +105,95 @@ export default function MealPlanScreen({ navigation }) {
     for (const entry of entries) if (map[entry.dateKey]) map[entry.dateKey].push(entry);
     return map;
   }, [days, entries]);
+
+  useEffect(() => {
+    if (!moveEntry || pendingEntryId || !trusted || data.status !== 'ready') return;
+    const authoritative = entries.find((entry) => entry.id === moveEntry.id);
+    if (authoritative && authoritative.updatedAt !== moveEntry.updatedAt) {
+      setMoveEntry(authoritative);
+    }
+  }, [data.status, entries, moveEntry, pendingEntryId, trusted]);
+
+  const openMove = (entry) => {
+    if (pendingEntryId || clearing) return;
+    moveAttemptRef.current += 1;
+    setMoveError(null);
+    setMoveEntry(entry);
+  };
+
+  const closeMove = () => {
+    if (pendingEntryId) return;
+    moveAttemptRef.current += 1;
+    setMoveError(null);
+    setMoveEntry(null);
+  };
+
+  const move = async (dateKey) => {
+    if (!moveEntry || pendingEntryId || clearing || dateKey === moveEntry.dateKey) return;
+    const submittedEntry = moveEntry;
+    const requestOwner = ownerId;
+    const requestRange = range;
+    const requestGeneration = generationRef.current;
+    const attempt = ++moveAttemptRef.current;
+    setMoveError(null);
+    setPendingEntryId(submittedEntry.id);
+    try {
+      const returnedEntry = await moveMealPlanEntry(submittedEntry.id, {
+        dateKey,
+        expectedUpdatedAt: submittedEntry.updatedAt,
+      });
+      if (
+        !mountedRef.current ||
+        attempt !== moveAttemptRef.current ||
+        generationRef.current !== requestGeneration ||
+        ownerRef.current !== requestOwner ||
+        rangeRef.current !== requestRange
+      ) return;
+      setData((old) => {
+        if (old.ownerId !== requestOwner || old.range !== requestRange) return old;
+        const current = old.entries.find((entry) => entry.id === submittedEntry.id);
+        if (!current || current.updatedAt !== submittedEntry.updatedAt) return old;
+        const inDisplayedWeek = returnedEntry.dateKey >= startDate && returnedEntry.dateKey <= endDate;
+        return {
+          ...old,
+          entries: inDisplayedWeek
+            ? old.entries.map((entry) => entry.id === submittedEntry.id ? returnedEntry : entry)
+            : old.entries.filter((entry) => entry.id !== submittedEntry.id),
+        };
+      });
+      setMoveEntry(null);
+      setMoveError(null);
+    } catch (err) {
+      if (
+        !mountedRef.current ||
+        attempt !== moveAttemptRef.current ||
+        generationRef.current !== requestGeneration ||
+        ownerRef.current !== requestOwner ||
+        rangeRef.current !== requestRange
+      ) return;
+      const failure = getMealPlanErrorState(err);
+      if (failure.kind === 'stale') {
+        setMoveError('Your meal plan changed. Reloading the latest plan.');
+        const reloadResult = await load();
+        if (
+          mountedRef.current &&
+          attempt === moveAttemptRef.current &&
+          ownerRef.current === requestOwner &&
+          rangeRef.current === requestRange
+        ) {
+          setMoveError(reloadResult === 'success'
+            ? 'Your meal plan changed. The latest plan is now loaded.'
+            : 'Your meal plan changed. Reload the latest plan and try again.');
+        }
+      } else {
+        setMoveError(failure.message);
+      }
+    } finally {
+      if (mountedRef.current && ownerRef.current === requestOwner) {
+        setPendingEntryId((current) => current === submittedEntry.id ? null : current);
+      }
+    }
+  };
 
   const remove = async (entryId) => {
     if (pendingEntryId || clearing) return;
@@ -147,7 +259,7 @@ export default function MealPlanScreen({ navigation }) {
         <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}><Ionicons name="chevron-back" size={18} color={colors.ink} /></Pressable>
         <View style={{ flex: 1 }}><Text style={styles.title}>Meal Plan</Text><Text style={styles.subtitle}>{plannedCount} {plannedCount === 1 ? 'meal' : 'meals'} this week</Text></View>
         {plannedCount > 0 ? (
-          <Pressable hitSlop={8} disabled={clearing} onPress={() => confirm('Clear meal plan', 'Remove every planned meal in this week?', clearWeek, { confirmLabel: 'Clear', destructive: true })}>
+          <Pressable hitSlop={8} disabled={clearing || !!pendingEntryId} onPress={() => confirm('Clear meal plan', 'Remove every planned meal in this week?', clearWeek, { confirmLabel: 'Clear', destructive: true })}>
             <Text style={styles.clear}>{clearing ? 'Clearing…' : 'Clear'}</Text>
           </Pressable>
         ) : null}
@@ -164,10 +276,10 @@ export default function MealPlanScreen({ navigation }) {
 
       {status === 'ready' || entries.length > 0 ? <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {days.map((day) => (
-          <View key={day.dateKey} style={styles.daySection}>
+          <View key={day.dateKey} style={styles.daySection} testID={`meal-plan-day-${day.dateKey}`}>
             <View style={styles.dayHead}>
               <View><Text style={styles.dayName}>{day.label}</Text><Text style={styles.dayDate}>{formatDayDate(day.date)}</Text></View>
-              <Pressable style={styles.addBtn} hitSlop={6} onPress={() => setPickDay(day)} disabled={status !== 'ready'}><Ionicons name="add" size={16} color={colors.sageDeep} /></Pressable>
+              <Pressable style={styles.addBtn} hitSlop={6} onPress={() => setPickDay(day)} disabled={status !== 'ready'} accessibilityRole="button" accessibilityLabel={`Add recipe to ${day.label}`}><Ionicons name="add" size={16} color={colors.sageDeep} /></Pressable>
             </View>
             {grouped[day.dateKey].length === 0 ? (
               <Pressable style={styles.emptyDay} onPress={() => setPickDay(day)} disabled={status !== 'ready'}><Text style={styles.emptyText}>Tap + to plan a meal</Text></Pressable>
@@ -175,14 +287,34 @@ export default function MealPlanScreen({ navigation }) {
               <View key={entry.id} style={styles.mealRow}>
                 <View style={styles.mealTop}>
                   {entry.isAvailable ? (
-                    <Pressable style={styles.mealMain} onPress={() => navigation.navigate('RecipeDetail', { recipeSource: 'api', recipeId: entry.recipeId, initialRecipe: entry.recipe })}>
+                    <Pressable style={styles.mealMain} onPress={() => navigation.navigate('RecipeDetail', { recipeSource: 'api', recipeId: entry.recipeId, initialRecipe: entry.recipe })} accessibilityRole="button" accessibilityLabel={`Open ${entry.recipe.title}`}>
                       <RecipeImage source={entry.recipe.imageUrl} style={styles.thumb} />
                       <View style={{ flex: 1 }}><Text style={styles.mealTitle}>{entry.recipe.title}</Text><Text style={styles.mealMeta}>{formatMinutes((entry.recipe.prepTimeMinutes || 0) + (entry.recipe.cookTimeMinutes || 0))} · {difficultyLabel(entry.recipe.difficulty)}</Text></View>
                     </Pressable>
                   ) : (
-                    <View style={styles.mealMain}><View style={styles.unavailableIcon}><Ionicons name="restaurant-outline" size={20} color={colors.inkFaint} /></View><View style={{ flex: 1 }}><Text style={styles.mealTitle}>Recipe unavailable</Text><Text style={styles.mealMeta}>This planned entry can still be removed.</Text></View></View>
+                    <View style={styles.mealMain}><View style={styles.unavailableIcon}><Ionicons name="restaurant-outline" size={20} color={colors.inkFaint} /></View><View style={{ flex: 1 }}><Text style={styles.mealTitle}>Recipe unavailable</Text><Text style={styles.mealMeta}>This planned entry can still be moved or removed.</Text></View></View>
                   )}
-                  <Pressable hitSlop={8} onPress={() => remove(entry.id)} style={styles.remove} disabled={!!pendingEntryId || clearing}>
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => openMove(entry)}
+                    style={styles.move}
+                    disabled={!!pendingEntryId || clearing}
+                    accessibilityRole="button"
+                    accessibilityLabel={entry.isAvailable ? `Move ${entry.recipe.title}` : `Move unavailable recipe planned for ${formatDayDate(day.date)}`}
+                    accessibilityState={{ disabled: !!pendingEntryId || clearing }}
+                  >
+                    <Ionicons name="calendar-outline" size={16} color={colors.sageDeep} />
+                    <Text style={styles.moveText}>Move</Text>
+                  </Pressable>
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => remove(entry.id)}
+                    style={styles.remove}
+                    disabled={!!pendingEntryId || clearing}
+                    accessibilityRole="button"
+                    accessibilityLabel={entry.isAvailable ? `Remove ${entry.recipe.title}` : `Remove unavailable recipe planned for ${formatDayDate(day.date)}`}
+                    accessibilityState={{ disabled: !!pendingEntryId || clearing }}
+                  >
                     {pendingEntryId === entry.id ? <ActivityIndicator size="small" color={colors.inkFaint} /> : <Ionicons name="remove-circle-outline" size={20} color={colors.inkFaint} />}
                   </Pressable>
                 </View>
@@ -201,6 +333,14 @@ export default function MealPlanScreen({ navigation }) {
         </View>
       ) : null}
       <MealPlanSheet visible={!!pickDay} day={pickDay} onClose={() => setPickDay(null)} onAdded={load} />
+      <MealPlanMoveSheet
+        visible={!!moveEntry}
+        entry={moveEntry}
+        pending={pendingEntryId === moveEntry?.id}
+        error={moveError}
+        onClose={closeMove}
+        onMove={move}
+      />
     </View>
   );
 }
@@ -234,6 +374,8 @@ function makeStyles(colors) {
     unavailableIcon: { width: 48, height: 48, borderRadius: 10, backgroundColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
     mealTitle: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
     mealMeta: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 2 },
+    move: { paddingHorizontal: 7, paddingVertical: 6, alignItems: 'center', gap: 1 },
+    moveText: { fontFamily: typography.body.semibold, fontSize: 10, color: colors.sageDeep },
     remove: { padding: 6 },
     ctaWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: spacing.xl, paddingTop: spacing.md, backgroundColor: colors.cream, borderTopWidth: 1, borderTopColor: colors.hairline },
     cta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 52, borderRadius: radius.pill, backgroundColor: colors.sageDeep },
