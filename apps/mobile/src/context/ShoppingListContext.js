@@ -81,7 +81,7 @@ export function ShoppingListProvider({ children }) {
   // 'idle' (no session) | 'loading' (initial load) | 'ready' | 'error' (initial load failed, nothing to show)
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState(null);
-  // { type: 'addItem' | 'addRecipe' | 'setChecked' | 'removeItem' | 'clear', itemId?: string } | null
+  // { type: 'addItem' | 'addRecipe' | 'updateItem' | 'setChecked' | 'removeItem' | 'clear', itemId?: string } | null
   const [pendingAction, setPendingAction] = useState(null);
 
   // --- refs: latest values readable inside async closures --------------------
@@ -266,6 +266,14 @@ export function ShoppingListProvider({ children }) {
     [runMutation]
   );
 
+  const updateItem = useCallback(
+    (itemId, { quantity, unit }) =>
+      runMutation({ type: 'updateItem', itemId }, () =>
+        shoppingListService.updateItem(itemId, { quantity, unit })
+      ),
+    [runMutation]
+  );
+
   const removeItem = useCallback(
     async (itemId) => {
       const result = await runMutation({ type: 'removeItem', itemId }, () =>
@@ -330,6 +338,7 @@ export function ShoppingListProvider({ children }) {
       reload,
       addItem,
       addRecipe,
+      updateItem,
       setChecked,
       removeItem,
       clear,
@@ -346,6 +355,7 @@ export function ShoppingListProvider({ children }) {
       reload,
       addItem,
       addRecipe,
+      updateItem,
       setChecked,
       removeItem,
       clear,
