@@ -1,9 +1,10 @@
 import {
   categoryLabel, dietaryTagLabel, regionLabel, RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS,
-  RECIPE_DIFFICULTIES, RECIPE_REGIONS,
+  RECIPE_DIFFICULTIES, RECIPE_REGIONS, RECIPE_SORTS,
 } from '../api/recipeOptions';
 
 export const MAX_PREP_MINUTES = 1440;
+export const DEFAULT_DISCOVER_SORT = 'titleAsc';
 
 export const DIFFICULTY_OPTIONS = [
   { value: '', label: 'Any' },
@@ -34,9 +35,20 @@ function normalizedPrepMinutes(value) {
   return number;
 }
 
+function normalizedSort(value) {
+  return RECIPE_SORTS.includes(value) ? value : DEFAULT_DISCOVER_SORT;
+}
+
+function normalizedIngredient(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const name = typeof value.name === 'string' ? value.name.trim() : '';
+  return id && name ? { id, name } : undefined;
+}
+
 export function normalizeDiscoverFilters(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  const normalized = {};
+  const normalized = { sort: normalizedSort(source.sort) };
   if (RECIPE_REGIONS.includes(source.region)) normalized.region = source.region;
   if (RECIPE_CATEGORIES.includes(source.category)) normalized.category = source.category;
   if (RECIPE_DIFFICULTIES.includes(source.difficulty)) {
@@ -47,23 +59,31 @@ export function normalizeDiscoverFilters(value) {
   }
   const prep = normalizedPrepMinutes(source.maxPrepTimeMinutes);
   if (prep !== undefined) normalized.maxPrepTimeMinutes = prep;
+  const ingredient = normalizedIngredient(source.ingredient);
+  if (ingredient) normalized.ingredient = ingredient;
   return normalized;
 }
 
-export function presetFilters(key) {
-  return { ...(PRESET_FILTERS[key] || PRESET_FILTERS.all) };
+export function presetFilters(key, sort = DEFAULT_DISCOVER_SORT) {
+  return { ...(PRESET_FILTERS[key] || PRESET_FILTERS.all), sort: normalizedSort(sort) };
 }
 
 export function presetFiltersState(current, key) {
   const normalizedCurrent = normalizeDiscoverFilters(current);
-  const next = presetFilters(key);
+  const next = presetFilters(key, normalizedCurrent.sort);
   const currentKeys = Object.keys(normalizedCurrent);
   const nextKeys = Object.keys(next);
   const sourceKeys =
     current && typeof current === 'object' && !Array.isArray(current) ? Object.keys(current) : [];
   const currentIsNormalized =
     sourceKeys.length === currentKeys.length &&
-    currentKeys.every((filterKey) => current[filterKey] === normalizedCurrent[filterKey]);
+    currentKeys.every((filterKey) => {
+      if (filterKey !== 'ingredient') return current[filterKey] === normalizedCurrent[filterKey];
+      return (
+        current.ingredient?.id === normalizedCurrent.ingredient.id &&
+        current.ingredient?.name === normalizedCurrent.ingredient.name
+      );
+    });
   const equivalent =
     currentKeys.length === nextKeys.length &&
     nextKeys.every((filterKey) => normalizedCurrent[filterKey] === next[filterKey]);
@@ -72,7 +92,7 @@ export function presetFiltersState(current, key) {
 
 export function selectedPresetKey(value) {
   const filters = normalizeDiscoverFilters(value);
-  const keys = Object.keys(filters);
+  const keys = Object.keys(filters).filter((key) => key !== 'sort');
   if (keys.length === 0) return 'all';
   if (keys.length !== 1) return null;
   if (filters.difficulty === 'easy') return 'easy';
@@ -82,11 +102,15 @@ export function selectedPresetKey(value) {
 }
 
 export function activeFilterCount(value) {
-  return Object.keys(normalizeDiscoverFilters(value)).length;
+  return Object.keys(normalizeDiscoverFilters(value)).filter((key) => key !== 'sort').length;
 }
 
 export function discoverFilterQuery(value) {
-  return normalizeDiscoverFilters(value);
+  const { ingredient, ...filters } = normalizeDiscoverFilters(value);
+  return {
+    ...filters,
+    ...(ingredient ? { ingredientId: ingredient.id } : {}),
+  };
 }
 
 export function draftFromFilters(value) {
@@ -98,6 +122,8 @@ export function draftFromFilters(value) {
     dietaryTag: filters.dietaryTag || '',
     maxPrepTimeMinutes:
       filters.maxPrepTimeMinutes === undefined ? '' : String(filters.maxPrepTimeMinutes),
+    ingredient: filters.ingredient || null,
+    sort: filters.sort,
   };
 }
 
@@ -128,6 +154,8 @@ export function validateDiscoverFilterDraft(value) {
       difficulty,
       dietaryTag,
       maxPrepTimeMinutes: rawPrep,
+      ingredient: source.ingredient,
+      sort: source.sort,
     }),
     prepError: null,
   };

@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,6 +15,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { radius, spacing, typography } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
+import { DISCOVER_SORT_OPTIONS } from '../api/recipeOptions';
+import { searchIngredientsStrict } from '../api/ingredientService';
+import { getIngredientErrorMessage } from '../api/ingredientErrors';
 import {
   DIETARY_OPTIONS,
   DIFFICULTY_OPTIONS,
@@ -22,6 +26,9 @@ import {
   draftFromFilters,
   validateDiscoverFilterDraft,
 } from '../utils/discoverFilters';
+
+const INGREDIENT_SEARCH_DEBOUNCE_MS = 300;
+const INGREDIENT_SEARCH_LIMIT = 20;
 
 function ChoiceGroup({ label, options, value, onChange, styles }) {
   return (
@@ -56,14 +63,115 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
   const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState(() => draftFromFilters(appliedFilters));
   const [prepError, setPrepError] = useState(null);
+  const [ingredientQuery, setIngredientQuery] = useState('');
+  const [ingredientResults, setIngredientResults] = useState([]);
+  const [ingredientTruncated, setIngredientTruncated] = useState(false);
+  const [ingredientLoading, setIngredientLoading] = useState(false);
+  const [ingredientError, setIngredientError] = useState(null);
+  const [ingredientSearchAttempt, setIngredientSearchAttempt] = useState(0);
+  const mountedRef = useRef(true);
+  const ingredientSearchGenRef = useRef(0);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      ingredientSearchGenRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    ingredientSearchGenRef.current += 1;
+    setIngredientQuery('');
+    setIngredientResults([]);
+    setIngredientTruncated(false);
+    setIngredientLoading(false);
+    setIngredientError(null);
     if (!visible) return;
     setDraft(draftFromFilters(appliedFilters));
     setPrepError(null);
   }, [visible, appliedFilters]);
 
+  const trimmedIngredientQuery = ingredientQuery.trim();
+
+  useEffect(() => {
+    if (!visible || !trimmedIngredientQuery) return undefined;
+
+    const gen = ingredientSearchGenRef.current;
+    setIngredientLoading(true);
+    setIngredientError(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const { ingredients, pagination } = await searchIngredientsStrict({
+          search: trimmedIngredientQuery,
+          limit: INGREDIENT_SEARCH_LIMIT,
+        });
+        if (!mountedRef.current || gen !== ingredientSearchGenRef.current) return;
+        setIngredientResults(ingredients);
+        setIngredientTruncated(!!pagination && pagination.total > ingredients.length);
+      } catch (error) {
+        if (!mountedRef.current || gen !== ingredientSearchGenRef.current) return;
+        setIngredientResults([]);
+        setIngredientTruncated(false);
+        setIngredientError(getIngredientErrorMessage(error));
+      } finally {
+        if (mountedRef.current && gen === ingredientSearchGenRef.current) {
+          setIngredientLoading(false);
+        }
+      }
+    }, INGREDIENT_SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [visible, ingredientQuery, ingredientSearchAttempt, trimmedIngredientQuery]);
+
+  const clearIngredientSearch = useCallback(() => {
+    ingredientSearchGenRef.current += 1;
+    setIngredientQuery('');
+    setIngredientResults([]);
+    setIngredientTruncated(false);
+    setIngredientLoading(false);
+    setIngredientError(null);
+  }, []);
+
+  const changeIngredientQuery = useCallback((value) => {
+    ingredientSearchGenRef.current += 1;
+    setIngredientQuery(value);
+    setIngredientResults([]);
+    setIngredientTruncated(false);
+    setIngredientLoading(false);
+    setIngredientError(null);
+  }, []);
+
+  const retryIngredientSearch = useCallback(() => {
+    ingredientSearchGenRef.current += 1;
+    setIngredientResults([]);
+    setIngredientTruncated(false);
+    setIngredientLoading(false);
+    setIngredientError(null);
+    setIngredientSearchAttempt((attempt) => attempt + 1);
+  }, []);
+
+  const selectIngredient = useCallback((ingredient) => {
+    ingredientSearchGenRef.current += 1;
+    setDraft((current) => ({
+      ...current,
+      ingredient: { id: ingredient.id, name: ingredient.name },
+    }));
+    setIngredientQuery('');
+    setIngredientResults([]);
+    setIngredientTruncated(false);
+    setIngredientLoading(false);
+    setIngredientError(null);
+  }, []);
+
+  const clearIngredient = useCallback(() => {
+    setDraft((current) => ({ ...current, ingredient: null }));
+    clearIngredientSearch();
+  }, [clearIngredientSearch]);
+
   const cancel = () => {
+    clearIngredientSearch();
     setDraft(draftFromFilters(appliedFilters));
     setPrepError(null);
     onCancel();
@@ -73,11 +181,13 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
     const result = validateDiscoverFilterDraft(draft);
     setPrepError(result.prepError);
     if (!result.filters) return;
+    clearIngredientSearch();
     onApply(result.filters);
   };
 
   const reset = () => {
-    setDraft(draftFromFilters({}));
+    clearIngredientSearch();
+    setDraft((current) => draftFromFilters({ sort: current.sort }));
     setPrepError(null);
   };
 
@@ -179,6 +289,115 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
                   </Text>
                 )}
               </View>
+
+              <View style={styles.group}>
+                <Text style={styles.groupLabel}>Ingredient</Text>
+                {draft.ingredient ? (
+                  <View style={styles.selectedIngredient}>
+                    <Text style={styles.selectedIngredientName}>{draft.ingredient.name}</Text>
+                    <Pressable
+                      onPress={clearIngredient}
+                      style={styles.ingredientAction}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Clear ingredient ${draft.ingredient.name}`}
+                    >
+                      <Ionicons name="close" size={18} color={colors.sageDeep} />
+                      <Text style={styles.ingredientActionText}>Clear</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.ingredientSearchField}>
+                      <Ionicons name="search" size={17} color={colors.inkFaint} />
+                      <TextInput
+                        style={styles.ingredientSearchInput}
+                        value={ingredientQuery}
+                        onChangeText={changeIngredientQuery}
+                        placeholder="Search ingredients..."
+                        placeholderTextColor={colors.inkFaint}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        autoComplete="off"
+                        returnKeyType="search"
+                        accessibilityLabel="Search ingredients"
+                        accessibilityHint="Type a canonical ingredient name or alias"
+                      />
+                      {ingredientQuery.length > 0 && (
+                        <Pressable
+                          onPress={clearIngredientSearch}
+                          style={styles.ingredientSearchClear}
+                          accessibilityRole="button"
+                          accessibilityLabel="Clear ingredient search"
+                        >
+                          <Ionicons name="close-circle" size={17} color={colors.inkFaint} />
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {!trimmedIngredientQuery ? (
+                      <Text style={styles.hint}>
+                        Type an ingredient name to search the WeCooked catalog.
+                      </Text>
+                    ) : ingredientLoading ? (
+                      <View style={styles.ingredientState}>
+                        <ActivityIndicator
+                          color={colors.sageDeep}
+                          accessible
+                          accessibilityLabel="Searching ingredients"
+                          accessibilityState={{ busy: ingredientLoading }}
+                        />
+                      </View>
+                    ) : ingredientError ? (
+                      <View style={styles.ingredientErrorState}>
+                        <Text style={styles.errorText} accessibilityLiveRegion="polite">
+                          {ingredientError}
+                        </Text>
+                        <Pressable
+                          onPress={retryIngredientSearch}
+                          style={styles.ingredientRetry}
+                          accessibilityRole="button"
+                          accessibilityLabel="Retry ingredient search"
+                        >
+                          <Ionicons name="refresh" size={15} color={colors.sageDeep} />
+                          <Text style={styles.ingredientActionText}>Retry</Text>
+                        </Pressable>
+                      </View>
+                    ) : ingredientResults.length === 0 ? (
+                      <Text style={styles.hint}>
+                        No ingredients match “{trimmedIngredientQuery}”.
+                      </Text>
+                    ) : (
+                      <View style={styles.ingredientResults}>
+                        {ingredientResults.map((ingredient) => (
+                          <Pressable
+                            key={ingredient.id}
+                            onPress={() => selectIngredient(ingredient)}
+                            style={styles.ingredientResult}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Select ingredient ${ingredient.name}`}
+                          >
+                            <Text style={styles.ingredientResultName}>{ingredient.name}</Text>
+                            <Ionicons name="add" size={18} color={colors.sageDeep} />
+                          </Pressable>
+                        ))}
+                        {ingredientTruncated && (
+                          <Text style={styles.hint}>
+                            Showing the first {ingredientResults.length}. Keep typing to narrow it down.
+                          </Text>
+                        )}
+                      </View>
+                    )}
+                  </>
+                )}
+              </View>
+
+              <ChoiceGroup
+                label="Sort"
+                options={DISCOVER_SORT_OPTIONS}
+                value={draft.sort}
+                onChange={(sort) => setDraft((current) => ({ ...current, sort }))}
+                styles={styles}
+              />
             </ScrollView>
 
             <View style={styles.actions}>
@@ -196,7 +415,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
                 accessibilityRole="button"
                 accessibilityLabel="Apply recipe filters"
               >
-                <Text style={styles.applyText}>Apply filters</Text>
+                <Text style={styles.applyText}>Show recipes</Text>
               </Pressable>
             </View>
           </View>
@@ -240,11 +459,14 @@ function makeStyles(colors) {
     group: { gap: spacing.sm },
     groupLabel: {
       fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.base,
-      color: colors.ink,
+      fontSize: 11.5,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: colors.sageDeep,
     },
     choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     choice: {
+      minWidth: 44,
       minHeight: 44,
       justifyContent: 'center',
       paddingHorizontal: spacing.md,
@@ -273,6 +495,90 @@ function makeStyles(colors) {
       outlineStyle: 'none',
     },
     prepInputError: { borderColor: colors.error },
+    ingredientSearchField: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.md,
+      backgroundColor: colors.creamDeep,
+    },
+    ingredientSearchInput: {
+      flex: 1,
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+      outlineStyle: 'none',
+    },
+    ingredientSearchClear: {
+      minWidth: 44,
+      minHeight: 44,
+      marginRight: -spacing.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    ingredientState: { minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+    ingredientErrorState: { gap: spacing.sm, alignItems: 'flex-start' },
+    ingredientRetry: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.pill,
+    },
+    ingredientResults: { gap: spacing.xs },
+    ingredientResult: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.md,
+      backgroundColor: colors.paper,
+    },
+    ingredientResultName: {
+      flex: 1,
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+    },
+    selectedIngredient: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.sageDeep,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sagePale,
+    },
+    selectedIngredientName: {
+      flex: 1,
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+    },
+    ingredientAction: {
+      minWidth: 44,
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.xs,
+    },
+    ingredientActionText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.sageDeep,
+    },
     hint: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,

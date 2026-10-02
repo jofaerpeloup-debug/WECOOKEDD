@@ -3,6 +3,7 @@ const {
   DIFFICULTY_OPTIONS,
   REGION_OPTIONS,
   CATEGORY_OPTIONS,
+  DEFAULT_DISCOVER_SORT,
   MAX_PREP_MINUTES,
   activeFilterCount,
   discoverFilterQuery,
@@ -13,20 +14,21 @@ const {
   selectedPresetKey,
   validateDiscoverFilterDraft,
 } = require('../src/utils/discoverFilters');
+const { DISCOVER_SORT_OPTIONS } = require('../src/api/recipeOptions');
 
 describe('Discover replacement presets', () => {
   it.each([
-    ['all', {}],
-    ['easy', { difficulty: 'easy' }],
-    ['vegetarian', { dietaryTag: 'vegetarian' }],
-    ['vegan', { dietaryTag: 'vegan' }],
+    ['all', { sort: 'titleAsc' }],
+    ['easy', { difficulty: 'easy', sort: 'titleAsc' }],
+    ['vegetarian', { dietaryTag: 'vegetarian', sort: 'titleAsc' }],
+    ['vegan', { dietaryTag: 'vegan', sort: 'titleAsc' }],
   ])('%s replaces the complete filter state', (key, expected) => {
     expect(presetFilters(key)).toEqual(expected);
     expect(selectedPresetKey(expected)).toBe(key);
   });
 
   it('fails closed to All for an unsupported preset key', () => {
-    expect(presetFilters('medium')).toEqual({});
+    expect(presetFilters('medium')).toEqual({ sort: 'titleAsc' });
   });
 
   it('preserves state identity for the equivalent initial Dashboard handoff', () => {
@@ -54,7 +56,7 @@ describe('Discover replacement presets', () => {
     const nextState = presetFiltersState(initialState, 'vegetarian');
 
     expect(nextState).not.toBe(initialState);
-    expect(nextState).toEqual({ dietaryTag: 'vegetarian' });
+    expect(nextState).toEqual({ dietaryTag: 'vegetarian', sort: 'titleAsc' });
   });
 
   it('does not preserve an equivalent but unnormalized state object', () => {
@@ -62,7 +64,7 @@ describe('Discover replacement presets', () => {
     const nextState = presetFiltersState(invalidState, 'vegan');
 
     expect(nextState).not.toBe(invalidState);
-    expect(nextState).toEqual({ dietaryTag: 'vegan' });
+    expect(nextState).toEqual({ dietaryTag: 'vegan', sort: 'titleAsc' });
   });
 
   it('leaves every preset unselected for non-preset states', () => {
@@ -70,17 +72,30 @@ describe('Discover replacement presets', () => {
     expect(selectedPresetKey({ difficulty: 'easy', dietaryTag: 'vegan' })).toBeNull();
     expect(selectedPresetKey({ maxPrepTimeMinutes: 30 })).toBeNull();
   });
+
+  it('preserves the approved sort while replacing every narrowing filter', () => {
+    expect(
+      presetFiltersState(
+        {
+          difficulty: 'hard',
+          ingredient: { id: 'ingredient-1', name: 'Garlic' },
+          sort: 'newest',
+        },
+        'vegan'
+      )
+    ).toEqual({ dietaryTag: 'vegan', sort: 'newest' });
+  });
 });
 
 describe('Discover filter normalization and server query projection', () => {
   it.each(['easy', 'medium', 'hard'])('accepts Difficulty %s', (difficulty) => {
-    expect(normalizeDiscoverFilters({ difficulty })).toEqual({ difficulty });
+    expect(normalizeDiscoverFilters({ difficulty })).toEqual({ sort: 'titleAsc', difficulty });
   });
 
   it.each(['vegetarian', 'vegan', 'pescatarian', 'glutenFree', 'dairyFree', 'nutFree'])(
     'accepts Dietary tag %s',
     (dietaryTag) => {
-      expect(normalizeDiscoverFilters({ dietaryTag })).toEqual({ dietaryTag });
+      expect(normalizeDiscoverFilters({ dietaryTag })).toEqual({ sort: 'titleAsc', dietaryTag });
     }
   );
 
@@ -116,9 +131,9 @@ describe('Discover filter normalization and server query projection', () => {
         maxPrepTimeMinutes: 20.5,
         category: 'dessert',
       })
-    ).toEqual({});
-    expect(normalizeDiscoverFilters({ maxPrepTimeMinutes: true })).toEqual({});
-    expect(normalizeDiscoverFilters({ maxPrepTimeMinutes: '1e2' })).toEqual({});
+    ).toEqual({ sort: 'titleAsc' });
+    expect(normalizeDiscoverFilters({ maxPrepTimeMinutes: true })).toEqual({ sort: 'titleAsc' });
+    expect(normalizeDiscoverFilters({ maxPrepTimeMinutes: '1e2' })).toEqual({ sort: 'titleAsc' });
   });
 
   it('projects all approved families with AND-style scalar query keys', () => {
@@ -129,19 +144,59 @@ describe('Discover filter normalization and server query projection', () => {
         difficulty: 'hard',
         dietaryTag: 'nutFree',
         maxPrepTimeMinutes: '45',
+        ingredient: { id: 'ingredient-123', name: '  Garlic  ', aliases: ['bawang'] },
+        sort: 'prepTimeDesc',
       })
-    ).toEqual({ region: 'bicol-region', category: 'dinner', difficulty: 'hard', dietaryTag: 'nutFree', maxPrepTimeMinutes: 45 });
+    ).toEqual({
+      sort: 'prepTimeDesc',
+      region: 'bicol-region',
+      category: 'dinner',
+      difficulty: 'hard',
+      dietaryTag: 'nutFree',
+      maxPrepTimeMinutes: 45,
+      ingredientId: 'ingredient-123',
+    });
   });
 
   it('omits Any and blank optional values', () => {
     expect(
       discoverFilterQuery({ difficulty: '', dietaryTag: '', maxPrepTimeMinutes: '  ' })
-    ).toEqual({});
+    ).toEqual({ sort: 'titleAsc' });
   });
 
   it('counts only valid active filter families', () => {
     expect(activeFilterCount({ difficulty: 'easy', dietaryTag: 'vegan', maxPrepTimeMinutes: 30 })).toBe(3);
     expect(activeFilterCount({ difficulty: 'impossible', maxPrepTimeMinutes: 0 })).toBe(0);
+    expect(activeFilterCount({ sort: 'newest' })).toBe(0);
+    expect(activeFilterCount({ ingredient: { id: 'ingredient-1', name: 'Garlic' } })).toBe(1);
+  });
+
+  it('fails closed for malformed Ingredient selections and never projects names or aliases', () => {
+    expect(discoverFilterQuery({ ingredient: { id: '', name: 'Garlic' } })).toEqual({
+      sort: 'titleAsc',
+    });
+    expect(discoverFilterQuery({ ingredient: { id: 'ingredient-1' } })).toEqual({
+      sort: 'titleAsc',
+    });
+    expect(
+      discoverFilterQuery({
+        ingredient: { id: ' ingredient-1 ', name: ' Garlic ', aliases: ['bawang'] },
+      })
+    ).toEqual({ sort: 'titleAsc', ingredientId: 'ingredient-1' });
+  });
+
+  it('freezes the exact six consumer sorts and defaults invalid values', () => {
+    expect(DEFAULT_DISCOVER_SORT).toBe('titleAsc');
+    expect(DISCOVER_SORT_OPTIONS).toEqual([
+      { value: 'titleAsc', label: 'Title: A-Z' },
+      { value: 'titleDesc', label: 'Title: Z-A' },
+      { value: 'newest', label: 'Newest added' },
+      { value: 'oldest', label: 'Oldest added' },
+      { value: 'prepTimeAsc', label: 'Prep time: low to high' },
+      { value: 'prepTimeDesc', label: 'Prep time: high to low' },
+    ]);
+    expect(normalizeDiscoverFilters({ sort: 'updatedDesc' })).toEqual({ sort: 'titleAsc' });
+    expect(normalizeDiscoverFilters({ sort: 'rating' })).toEqual({ sort: 'titleAsc' });
   });
 });
 
@@ -151,7 +206,7 @@ describe('Maximum prep draft validation', () => {
     [String(MAX_PREP_MINUTES), MAX_PREP_MINUTES],
   ])('accepts boundary value %s', (input, expected) => {
     expect(validateDiscoverFilterDraft({ maxPrepTimeMinutes: input })).toEqual({
-      filters: { maxPrepTimeMinutes: expected },
+      filters: { sort: 'titleAsc', maxPrepTimeMinutes: expected },
       prepError: null,
     });
   });
@@ -169,7 +224,7 @@ describe('Maximum prep draft validation', () => {
         dietaryTag: ['vegan'],
         maxPrepTimeMinutes: ' ',
       })
-    ).toEqual({ filters: {}, prepError: null });
+    ).toEqual({ filters: { sort: 'titleAsc' }, prepError: null });
   });
 
   it('copies applied state into editable string draft state', () => {
@@ -178,6 +233,8 @@ describe('Maximum prep draft validation', () => {
         difficulty: 'medium',
         dietaryTag: 'pescatarian',
         maxPrepTimeMinutes: 60,
+      ingredient: { id: 'ingredient-1', name: 'Garlic' },
+      sort: 'newest',
       })
     ).toEqual({
       region: '',
@@ -185,6 +242,23 @@ describe('Maximum prep draft validation', () => {
       difficulty: 'medium',
       dietaryTag: 'pescatarian',
       maxPrepTimeMinutes: '60',
+      ingredient: { id: 'ingredient-1', name: 'Garlic' },
+      sort: 'newest',
     });
+  });
+
+  it('validates Ingredient and sort through the same fail-closed normalizer', () => {
+    expect(
+      validateDiscoverFilterDraft({
+        ingredient: { id: 'ingredient-2', name: 'Onion', category: 'vegetable' },
+        sort: 'oldest',
+      })
+    ).toEqual({
+      filters: { sort: 'oldest', ingredient: { id: 'ingredient-2', name: 'Onion' } },
+      prepError: null,
+    });
+    expect(
+      validateDiscoverFilterDraft({ ingredient: { id: 'typed-only', name: '' }, sort: 'updatedDesc' })
+    ).toEqual({ filters: { sort: 'titleAsc' }, prepError: null });
   });
 });

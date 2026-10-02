@@ -19,7 +19,13 @@ import FavoriteHeart from '../components/FavoriteHeart';
 import DiscoverFiltersSheet from '../components/DiscoverFiltersSheet';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
-import { categoryLabel, DISCOVER_FILTERS, difficultyLabel, regionLabel } from '../api/recipeOptions';
+import {
+  categoryLabel,
+  discoverSortLabel,
+  DISCOVER_FILTERS,
+  difficultyLabel,
+  regionLabel,
+} from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 import { recipeCollectionPhaseAfterFailure } from '../utils/recipeFreshnessState';
 import {
@@ -120,6 +126,7 @@ export default function DiscoverScreen({ navigation, route }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const activePresetKey = selectedPresetKey(appliedFilters);
   const filterCount = activeFilterCount(appliedFilters);
+  const appliedSortLabel = discoverSortLabel(appliedFilters.sort);
 
   // Real backend search: `search` is the live field value, `debouncedSearch`
   // is what actually reaches the API (trimmed, settled).
@@ -279,11 +286,18 @@ export default function DiscoverScreen({ navigation, route }) {
   const clearAll = () => {
     setSearch('');
     setDebouncedSearch('');
-    setAppliedFilters(presetFilters('all'));
+    setAppliedFilters((current) => presetFilters('all', current.sort));
   };
 
   const applyPreset = (key) => {
-    setAppliedFilters(presetFilters(key));
+    setAppliedFilters((current) => presetFilters(key, current.sort));
+  };
+
+  const clearAppliedIngredient = () => {
+    setAppliedFilters((current) => {
+      const { ingredient, ...next } = current;
+      return next;
+    });
   };
 
   const applyAdvancedFilters = (filters) => {
@@ -327,7 +341,12 @@ export default function DiscoverScreen({ navigation, route }) {
     if (phase === 'loading') {
       return (
         <View style={styles.centerBox}>
-          <ActivityIndicator color={colors.sageDeep} />
+          <ActivityIndicator
+            color={colors.sageDeep}
+            accessible
+            accessibilityLabel="Loading recipes"
+            accessibilityState={{ busy: true }}
+          />
           <Text style={styles.stateMessage}>Loading recipes…</Text>
         </View>
       );
@@ -340,7 +359,13 @@ export default function DiscoverScreen({ navigation, route }) {
           </View>
           <Text style={styles.stateTitle}>We couldn’t load recipes</Text>
           <Text style={styles.errorText}>{error}</Text>
-          <Pressable style={styles.retryBtn} onPress={() => loadFirstPage()} hitSlop={8}>
+          <Pressable
+            style={styles.retryBtn}
+            onPress={() => loadFirstPage()}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading recipes"
+          >
             <Ionicons name="refresh" size={14} color={colors.sageDeep} />
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
@@ -366,13 +391,24 @@ export default function DiscoverScreen({ navigation, route }) {
     if (loadingMore) {
       return (
         <View style={styles.footerBox}>
-          <ActivityIndicator color={colors.sageDeep} />
+          <ActivityIndicator
+            color={colors.sageDeep}
+            accessible
+            accessibilityLabel="Loading more recipes"
+            accessibilityState={{ busy: true }}
+          />
         </View>
       );
     }
     if (moreError) {
       return (
-        <Pressable style={styles.footerBox} onPress={loadMore} hitSlop={8}>
+        <Pressable
+          style={styles.footerBox}
+          onPress={loadMore}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading more recipes"
+        >
           <Text style={styles.errorText}>{moreError} Tap to retry.</Text>
         </Pressable>
       );
@@ -407,7 +443,7 @@ export default function DiscoverScreen({ navigation, route }) {
             {search.length > 0 && (
               <Pressable
                 onPress={() => setSearch('')}
-                hitSlop={8}
+                style={styles.searchClear}
                 accessibilityRole="button"
                 accessibilityLabel="Clear search"
               >
@@ -418,7 +454,7 @@ export default function DiscoverScreen({ navigation, route }) {
           {(search.length > 0 || filterCount > 0) && (
             <Pressable
               onPress={clearAll}
-              hitSlop={8}
+              style={styles.clearAllButton}
               accessibilityRole="button"
               accessibilityLabel="Clear search and filters"
             >
@@ -476,6 +512,30 @@ export default function DiscoverScreen({ navigation, route }) {
             )}
           </Pressable>
         </ScrollView>
+
+        <View style={styles.appliedSummary}>
+          {appliedFilters.ingredient && (
+            <View style={styles.appliedIngredientPill}>
+              <Text style={styles.appliedIngredientText}>{appliedFilters.ingredient.name}</Text>
+              <Pressable
+                onPress={clearAppliedIngredient}
+                style={styles.appliedIngredientClear}
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ingredient filter ${appliedFilters.ingredient.name}`}
+              >
+                <Ionicons name="close" size={16} color={colors.sageDeep} />
+              </Pressable>
+            </View>
+          )}
+          <View
+            style={styles.appliedSortPill}
+            accessible
+            accessibilityLabel={`Sorted by ${appliedSortLabel}`}
+          >
+            <Ionicons name="swap-vertical-outline" size={14} color={colors.inkSoft} />
+            <Text style={styles.appliedSortText}>{appliedSortLabel}</Text>
+          </View>
+        </View>
 
         {countLabel && (
           <View style={styles.countRow}>
@@ -554,6 +614,19 @@ function makeStyles(colors) {
       color: colors.ink,
       outlineStyle: 'none',
     },
+    searchClear: {
+      minWidth: 44,
+      minHeight: 44,
+      marginRight: -spacing.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    clearAllButton: {
+      minWidth: 44,
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     clearText: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
@@ -561,6 +634,9 @@ function makeStyles(colors) {
     },
     chipRow: { gap: spacing.sm, paddingTop: spacing.md, paddingRight: spacing.md },
     chip: {
+      minWidth: 44,
+      minHeight: 44,
+      justifyContent: 'center',
       paddingHorizontal: 15,
       paddingVertical: 9,
       borderRadius: radius.pill,
@@ -606,6 +682,51 @@ function makeStyles(colors) {
       fontSize: typography.sizes.xs,
       color: colors.sageDeep,
     },
+    appliedSummary: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingTop: spacing.sm,
+    },
+    appliedIngredientPill: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingLeft: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.sageDeep,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sagePale,
+    },
+    appliedIngredientText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+    },
+    appliedIngredientClear: {
+      minWidth: 44,
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    appliedSortPill: {
+      minHeight: 44,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.pill,
+      backgroundColor: colors.paper,
+    },
+    appliedSortText: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+    },
     countRow: {
       alignSelf: 'flex-start',
       marginTop: spacing.lg,
@@ -628,7 +749,13 @@ function makeStyles(colors) {
       padding: 10,
       marginBottom: spacing.md,
     },
-    rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    rowMain: {
+      flex: 1,
+      minHeight: 60,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
     thumb: {
       width: 60,
       height: 60,
@@ -648,7 +775,7 @@ function makeStyles(colors) {
       color: colors.inkFaint,
       marginTop: 3,
     },
-    rowHeart: { paddingHorizontal: spacing.xs },
+    rowHeart: { minWidth: 44, minHeight: 44, paddingHorizontal: spacing.xs },
     centerBox: {
       alignItems: 'center',
       justifyContent: 'center',
@@ -690,6 +817,7 @@ function makeStyles(colors) {
       textAlign: 'center',
     },
     retryBtn: {
+      minHeight: 44,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,

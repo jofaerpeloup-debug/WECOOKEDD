@@ -352,7 +352,9 @@ describe('Clear-all owns only search and the supported filter selection', () => 
     expect(clearAll).not.toBeNull();
     expect(clearAll).toMatch(/setSearch\(\s*['"]{2}\s*\)/);
     expect(clearAll).toMatch(/setDebouncedSearch\(\s*['"]{2}\s*\)/);
-    expect(clearAll).toMatch(/setAppliedFilters\(presetFilters\(\s*['"]all['"]\s*\)\)/);
+    expect(clearAll).toMatch(
+      /setAppliedFilters\(\(current\) => presetFilters\(\s*['"]all['"]\s*,\s*current\.sort\s*\)\)/
+    );
     expect(clearAll).not.toMatch(/\bsetFilters\b|AsyncStorage|saveJSON|navigation\./);
   });
 
@@ -563,7 +565,9 @@ describe('P3 server-authoritative advanced filters', () => {
   it('uses replacement presets and leaves non-preset combinations unselected', () => {
     expect(code).toMatch(/const activePresetKey = selectedPresetKey\(appliedFilters\)/);
     expect(code).toMatch(/const isActive = f\.key === activePresetKey/);
-    expect(code).toMatch(/setAppliedFilters\(presetFilters\(key\)\)/);
+    expect(code).toMatch(
+      /setAppliedFilters\(\(current\) => presetFilters\(key, current\.sort\)\)/
+    );
     expect(code).toMatch(/filterCount > 0 \? `Filters, \$\{filterCount\} active`/);
   });
 
@@ -576,8 +580,12 @@ describe('P3 server-authoritative advanced filters', () => {
   it('keeps filter changes draft-only until Apply and supports Cancel, back, and Reset', () => {
     expect(sheetCode).toMatch(/if \(!visible\) return;[\s\S]*setDraft\(draftFromFilters\(appliedFilters\)\)/);
     expect(sheetCode).toMatch(/onRequestClose=\{cancel\}/);
-    expect(sheetCode).toMatch(/const reset = \(\) => \{[\s\S]*setDraft\(draftFromFilters\(\{\}\)\)/);
-    expect(sheetCode).toMatch(/if \(!result\.filters\) return;\s*onApply\(result\.filters\)/);
+    expect(sheetCode).toMatch(
+      /const reset = \(\) => \{[\s\S]*setDraft\(\(current\) => draftFromFilters\(\{ sort: current\.sort \}\)\)/
+    );
+    expect(sheetCode).toMatch(
+      /if \(!result\.filters\) return;[\s\S]*onApply\(result\.filters\)/
+    );
     expect(sheetCode).not.toMatch(/listRecipes\(/);
   });
 
@@ -595,6 +603,166 @@ describe('P3 server-authoritative advanced filters', () => {
     expect(hasClientSideRecipeFiltering(code)).toBe(false);
     expect(code).toMatch(/const nextRecipes = dedupeById\(data\.recipes\)/);
     expect(code).toMatch(/setRecipes\(\(prev\) => mergeById\(prev, data\.recipes\)\)/);
+  });
+});
+
+describe('DISC4 canonical Ingredient and consumer sort contract', () => {
+  const sheetRaw = read('components/DiscoverFiltersSheet.js');
+  const sheetCode = stripComments(sheetRaw);
+  const filtersRaw = read('utils/discoverFilters.js');
+  const filtersCode = stripComments(filtersRaw);
+  const optionsRaw = read('api/recipeOptions.js');
+  const optionsCode = stripComments(optionsRaw);
+  const favoriteCode = stripComments(read('components/FavoriteHeart.js'));
+
+  it('uses the strict canonical Ingredient service with trimmed debounced limit-20 search', () => {
+    expect(sheetRaw).toMatch(
+      /import \{ searchIngredientsStrict \} from '\.\.\/api\/ingredientService'/
+    );
+    expect(sheetRaw).toMatch(
+      /import \{ getIngredientErrorMessage \} from '\.\.\/api\/ingredientErrors'/
+    );
+    expect(sheetCode).toMatch(/INGREDIENT_SEARCH_DEBOUNCE_MS = 300/);
+    expect(sheetCode).toMatch(/INGREDIENT_SEARCH_LIMIT = 20/);
+    expect(sheetCode).toMatch(
+      /searchIngredientsStrict\(\{\s*search: trimmedIngredientQuery,\s*limit: INGREDIENT_SEARCH_LIMIT,?\s*\}\)/
+    );
+    expect(sheetCode).not.toMatch(/listIngredients|createIngredient|IngredientPickerModal/);
+  });
+
+  it('invalidates Ingredient search immediately on query changes and every close lifecycle', () => {
+    const changeQuery = extractBalancedAfter(sheetCode, 'const changeIngredientQuery = useCallback(');
+    const clearSearch = extractBalancedAfter(sheetCode, 'const clearIngredientSearch = useCallback(');
+    const selectIngredient = extractBalancedAfter(sheetCode, 'const selectIngredient = useCallback(');
+    const cancel = extractBalancedAfter(sheetCode, 'const cancel = () =>');
+    const apply = extractBalancedAfter(sheetCode, 'const apply = () =>');
+
+    expect(changeQuery).not.toBeNull();
+    expect(changeQuery.indexOf('ingredientSearchGenRef.current += 1')).toBeLessThan(
+      changeQuery.indexOf('setIngredientQuery(value)')
+    );
+    expect(clearSearch).toMatch(/ingredientSearchGenRef\.current \+= 1/);
+    expect(selectIngredient).toMatch(/ingredientSearchGenRef\.current \+= 1/);
+    expect(selectIngredient.indexOf('ingredientSearchGenRef.current += 1')).toBeLessThan(
+      selectIngredient.indexOf('setDraft(')
+    );
+    expect(cancel).toMatch(/clearIngredientSearch\(\)/);
+    expect(cancel.indexOf('clearIngredientSearch()')).toBeLessThan(cancel.indexOf('onCancel()'));
+    expect(apply).toMatch(/clearIngredientSearch\(\)/);
+    expect(apply.indexOf('clearIngredientSearch()')).toBeLessThan(apply.indexOf('onApply(result.filters)'));
+    expect(sheetCode).toMatch(
+      /return \(\) => \{\s*mountedRef\.current = false;\s*ingredientSearchGenRef\.current \+= 1;/
+    );
+    expect(sheetCode).toMatch(
+      /if \(!mountedRef\.current \|\| gen !== ingredientSearchGenRef\.current\) return;/
+    );
+  });
+
+  it('projects only canonical Ingredient id while retaining its name in applied UI', () => {
+    expect(filtersCode).toMatch(/ingredientId: ingredient\.id/);
+    expect(filtersCode).not.toMatch(/ingredientName\s*:|aliases\s*:/);
+    expect(code).toMatch(/\{appliedFilters\.ingredient\.name\}/);
+    expect(code).toMatch(/accessibilityLabel=\{`Remove ingredient filter \$\{appliedFilters\.ingredient\.name\}`\}/);
+    expect(code).not.toMatch(/\{appliedFilters\.ingredient\.id\}/);
+  });
+
+  it('freezes exactly six truthful consumer sort descriptors and no Moderator sort', () => {
+    const { DISCOVER_SORT_OPTIONS, RECIPE_SORTS } = require('../src/api/recipeOptions');
+    expect(RECIPE_SORTS).toEqual([
+      'titleAsc',
+      'titleDesc',
+      'newest',
+      'oldest',
+      'prepTimeAsc',
+      'prepTimeDesc',
+    ]);
+    expect(DISCOVER_SORT_OPTIONS.map(({ value, label }) => `${value}|${label}`)).toEqual([
+      'titleAsc|Title: A-Z',
+      'titleDesc|Title: Z-A',
+      'newest|Newest added',
+      'oldest|Oldest added',
+      'prepTimeAsc|Prep time: low to high',
+      'prepTimeDesc|Prep time: high to low',
+    ]);
+    expect(optionsCode).not.toMatch(/updatedDesc|Top Rated|Trending|Relevance|Most Popular|Best Match/i);
+  });
+
+  it('keeps the frozen sheet group order, staged Apply, and no direct Recipe request', () => {
+    const orderedAnchors = [
+      'label="Region"',
+      'label="Category"',
+      'label="Difficulty"',
+      'label="Dietary tag"',
+      '>Maximum prep minutes<',
+      '>Ingredient<',
+      'label="Sort"',
+    ];
+    let previous = -1;
+    for (const anchor of orderedAnchors) {
+      const next = sheetCode.indexOf(anchor);
+      expect(next).toBeGreaterThan(previous);
+      previous = next;
+    }
+    expect(sheetCode).toMatch(/<Text style=\{styles\.applyText\}>Show recipes<\/Text>/);
+    expect(sheetCode).not.toMatch(/listRecipes\(/);
+  });
+
+  it('keeps sort outside the narrowing count and preserves it across clear and presets', () => {
+    expect(filtersCode).toMatch(
+      /Object\.keys\(normalizeDiscoverFilters\(value\)\)\.filter\(\(key\) => key !== 'sort'\)\.length/
+    );
+    expect(code).toMatch(/presetFilters\('all', current\.sort\)/);
+    expect(code).toMatch(/presetFilters\(key, current\.sort\)/);
+    expect(code).toMatch(/presetFiltersState\(current, key\)/);
+    expect(code).toMatch(/accessibilityLabel=\{`Sorted by \$\{appliedSortLabel\}`\}/);
+  });
+
+  it('binds the relevant interactive controls to explicit 44-point targets', () => {
+    expect(sheetCode).toMatch(/accessibilityViewIsModal/);
+    expect(sheetCode).toMatch(/keyboardShouldPersistTaps="handled"/);
+    expect(sheetCode).toMatch(/accessibilityLabel="Search ingredients"/);
+    expect(sheetCode).toMatch(/accessibilityState=\{\{ busy: ingredientLoading \}\}/);
+    expect(sheetCode).toMatch(/accessibilityRole="radiogroup"/);
+    expect(sheetCode).toMatch(/textTransform: 'uppercase'/);
+    expect(sheetCode).toMatch(/letterSpacing: 1\.1/);
+
+    for (const [source, styleName, dimensions] of [
+      [sheetCode, 'ingredientSearchClear:', ['minWidth: 44', 'minHeight: 44']],
+      [sheetCode, 'choice:', ['minWidth: 44', 'minHeight: 44']],
+      [sheetCode, 'ingredientResult:', ['minHeight: 44']],
+      [sheetCode, 'ingredientAction:', ['minWidth: 44', 'minHeight: 44']],
+      [sheetCode, 'closeButton:', ['minWidth: 44', 'minHeight: 44']],
+      [sheetCode, 'resetButton:', ['minHeight: 48']],
+      [sheetCode, 'applyButton:', ['minHeight: 48']],
+      [code, 'searchClear:', ['minWidth: 44', 'minHeight: 44']],
+      [code, 'clearAllButton:', ['minWidth: 44', 'minHeight: 44']],
+      [code, 'chip:', ['minWidth: 44', 'minHeight: 44']],
+      [code, 'filterButton:', ['minHeight: 44']],
+      [code, 'appliedIngredientClear:', ['minWidth: 44', 'minHeight: 44']],
+      [code, 'rowMain:', ['minHeight: 60']],
+      [code, 'rowHeart:', ['minWidth: 44', 'minHeight: 44']],
+    ]) {
+      const style = extractBalancedAfter(source, styleName);
+      expect(style).not.toBeNull();
+      for (const dimension of dimensions) expect(style).toContain(dimension);
+    }
+
+    expect(sheetCode).toMatch(/style=\{styles\.ingredientSearchClear\}/);
+    expect(sheetCode).toMatch(/style=\{styles\.ingredientResult\}/);
+    expect(code).toMatch(/style=\{styles\.searchClear\}/);
+    expect(code).toMatch(/style=\{styles\.rowHeart\}/);
+    expect(favoriteCode).toMatch(/style=\{\[styles\.base, style\]\}/);
+  });
+
+  it('contains no mock-only filter, ranking, or Recipe-card metadata semantics', () => {
+    const combined = `${code}\n${sheetCode}\n${filtersCode}\n${optionsCode}`;
+    expect(combined).not.toMatch(/\bcuisine\b|\bmood\b|\bvibe\b/i);
+    expect(combined).not.toMatch(/Top Rated|Trending|Most Popular|Best Match|Relevance/);
+    expect(combined).not.toMatch(
+      /\b(?:recipe|item)\.(?:rating|reviews|reviewCount|calories|popularity|editorialLabel)\b/i
+    );
+    expect(hasClientSideRecipeFiltering(code)).toBe(false);
+    expect(combined).not.toMatch(/updatedDesc/);
   });
 });
 
