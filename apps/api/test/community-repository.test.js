@@ -7,6 +7,8 @@ const communityRepository = require('../src/modules/community/community.reposito
 const communityLikeRepository = require('../src/modules/community/community-like.repository');
 const CommunityComment = require('../src/modules/community/community-comment.model');
 const communityCommentRepository = require('../src/modules/community/community-comment.repository');
+const CommunityFollow = require('../src/modules/community/community-follow.model');
+const communityFollowRepository = require('../src/modules/community/community-follow.repository');
 
 test('create repository delegates the allowlisted post document to Mongoose', async (t) => {
   const document = { authorId: 'author', caption: 'Persist me', recipeId: 'recipe' };
@@ -60,6 +62,48 @@ test('delete repository scopes the atomic query by both post and author', (t) =>
   });
   communityRepository.deleteOwnedById('post', 'author');
   assert.deepEqual(filter, { _id: 'post', authorId: 'author' });
+});
+
+test('Following repository scopes deterministic post reads and counts to authoritative authors', (t) => {
+  const calls = [];
+  const query = {
+    sort(value) { calls.push(['sort', value]); return this; },
+    skip(value) { calls.push(['skip', value]); return this; },
+    limit(value) { calls.push(['limit', value]); return this; },
+  };
+  t.mock.method(CommunityPost, 'find', (filter) => { calls.push(['find', filter]); return query; });
+  t.mock.method(CommunityPost, 'countDocuments', (filter) => { calls.push(['count', filter]); return 2; });
+  const authorIds = ['a', 'b'];
+  assert.equal(communityRepository.findManyByAuthorIds(authorIds, { skip: 10, limit: 5 }), query);
+  assert.equal(communityRepository.countPostsByAuthorIds(authorIds), 2);
+  assert.deepEqual(calls, [
+    ['find', { authorId: { $in: authorIds } }],
+    ['sort', { createdAt: -1, _id: -1 }],
+    ['skip', 10],
+    ['limit', 5],
+    ['count', { authorId: { $in: authorIds } }],
+  ]);
+});
+
+test('follow repository owns exact pair mutations and bulk relation reads', async (t) => {
+  const calls = [];
+  const rows = [{ followedUserId: 'b' }];
+  t.mock.method(CommunityFollow, 'create', async (doc) => { calls.push(['create', doc]); return doc; });
+  t.mock.method(CommunityFollow, 'findOneAndDelete', (filter) => { calls.push(['delete', filter]); return null; });
+  t.mock.method(CommunityFollow, 'find', (filter) => ({
+    select(projection) { calls.push(['find', filter, projection]); return Promise.resolve(rows); },
+  }));
+  await communityFollowRepository.createFollow({ followerId: 'a', followedUserId: 'b' });
+  communityFollowRepository.deleteFollow('a', 'b');
+  assert.deepEqual(await communityFollowRepository.findFollowedUserIds('a'), ['b']);
+  assert.deepEqual(await communityFollowRepository.findFollowedUserIdsAmong('a', ['b', 'c']), ['b']);
+  assert.deepEqual(await communityFollowRepository.findFollowedUserIdsAmong('a', []), []);
+  assert.deepEqual(calls, [
+    ['create', { followerId: 'a', followedUserId: 'b' }],
+    ['delete', { followerId: 'a', followedUserId: 'b' }],
+    ['find', { followerId: 'a' }, 'followedUserId'],
+    ['find', { followerId: 'a', followedUserId: { $in: ['b', 'c'] } }, 'followedUserId'],
+  ]);
 });
 
 test('like repository scopes viewer mutations and post cleanup', (t) => {

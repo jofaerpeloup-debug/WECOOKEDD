@@ -9,11 +9,30 @@ const {
   listCommunityCommentsSchema,
   createCommunityCommentSchema,
   communityCommentParamsSchema,
+  communityFollowSchema,
 } = require('./community.validation');
 
 const router = Router();
 
 router.get('/posts', authenticate, validate(listCommunityPostsSchema), communityController.listPosts);
+router.get(
+  '/posts/following',
+  authenticate,
+  validate(listCommunityPostsSchema),
+  communityController.listFollowingPosts
+);
+router.post(
+  '/users/:userId/follow',
+  authenticate,
+  validate(communityFollowSchema),
+  communityController.followUser
+);
+router.delete(
+  '/users/:userId/follow',
+  authenticate,
+  validate(communityFollowSchema),
+  communityController.unfollowUser
+);
 router.post('/posts', authenticate, validate(createCommunityPostSchema), communityController.createPost);
 router.delete(
   '/posts/:postId',

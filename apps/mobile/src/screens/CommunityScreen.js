@@ -23,7 +23,9 @@ import {
   deleteCommunityComment,
   deleteCommunityPost,
   listCommunityComments,
+  listFollowingCommunityPosts,
   listCommunityPosts,
+  setCommunityAuthorFollowed,
   setCommunityPostLiked,
 } from '../api/communityService';
 import { getCommunityErrorMessage } from '../api/communityErrors';
@@ -34,6 +36,8 @@ const PAGE_SIZE = 20;
 const RECIPE_PAGE_SIZE = 20;
 const MAX_CAPTION_LENGTH = 2000;
 const MAX_COMMENT_LENGTH = 1000;
+const FEED_ALL = 'all';
+const FEED_FOLLOWING = 'following';
 
 function initialFor(name) {
   return (name || 'C').trim().charAt(0).toUpperCase() || 'C';
@@ -55,6 +59,12 @@ function appendUnique(existing, incoming) {
   return [...existing, ...incoming.filter((item) => !seen.has(item.id))];
 }
 
+function readFeed(mode, params) {
+  return mode === FEED_FOLLOWING
+    ? listFollowingCommunityPosts(params)
+    : listCommunityPosts(params);
+}
+
 export default function CommunityScreen() {
   const { colors, shadow } = useTheme();
   const { user } = useAuth();
@@ -62,6 +72,7 @@ export default function CommunityScreen() {
   const ownerId = user?.id || null;
 
   const [caption, setCaption] = useState('');
+  const [feedMode, setFeedMode] = useState(FEED_ALL);
   const [selectedRecipe, setSelectedRecipe] = useState(null);
   const [posting, setPosting] = useState(false);
   const [posts, setPosts] = useState([]);
@@ -92,10 +103,12 @@ export default function CommunityScreen() {
   const feedGenerationRef = useRef(0);
   const feedOperationRef = useRef(null);
   const feedMutationVersionRef = useRef(0);
+  const feedModeRef = useRef(FEED_ALL);
   const postCreateOperationRef = useRef(null);
   const recipeGenerationRef = useRef(0);
   const pendingLikesRef = useRef(new Map());
   const pendingDeletesRef = useRef(new Map());
+  const pendingFollowsRef = useRef(new Map());
   const activePostRef = useRef(null);
   const commentGenerationRef = useRef(0);
   const commentMutationVersionRef = useRef(0);
@@ -135,6 +148,7 @@ export default function CommunityScreen() {
       commentCreateOperationRef.current = null;
       pendingLikesRef.current.clear();
       pendingDeletesRef.current.clear();
+      pendingFollowsRef.current.clear();
       pendingCommentDeletesRef.current.clear();
     };
   }, []);
@@ -143,9 +157,12 @@ export default function CommunityScreen() {
     ownerRef.current = ownerId;
     pendingLikesRef.current.clear();
     pendingDeletesRef.current.clear();
+    pendingFollowsRef.current.clear();
     feedOperationRef.current = null;
     postCreateOperationRef.current = null;
     feedGenerationRef.current += 1;
+    feedModeRef.current = FEED_ALL;
+    setFeedMode(FEED_ALL);
     setCaption('');
     setSelectedRecipe(null);
     setPosting(false);
@@ -175,9 +192,9 @@ export default function CommunityScreen() {
       while (operation === feedOperationRef.current
         && generation === feedGenerationRef.current && ownerRef.current === ownerId) {
         try {
-          const result = await listCommunityPosts({ page: 1, limit: PAGE_SIZE });
+          const result = await readFeed(feedMode, { page: 1, limit: PAGE_SIZE });
           if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
-            || ownerRef.current !== ownerId) return;
+            || ownerRef.current !== ownerId || feedModeRef.current !== feedMode) return;
           if (requestMutationVersion !== feedMutationVersionRef.current) {
             requestMutationVersion = feedMutationVersionRef.current;
             continue;
@@ -188,7 +205,7 @@ export default function CommunityScreen() {
           feedOperationRef.current = null;
         } catch (error) {
           if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
-            || ownerRef.current !== ownerId) return;
+            || ownerRef.current !== ownerId || feedModeRef.current !== feedMode) return;
           if (requestMutationVersion !== feedMutationVersionRef.current) {
             requestMutationVersion = feedMutationVersionRef.current;
             continue;
@@ -203,7 +220,7 @@ export default function CommunityScreen() {
       if (feedOperationRef.current === operation) feedOperationRef.current = null;
       feedGenerationRef.current += 1;
     };
-  }, [ownerId, feedReloadKey]);
+  }, [ownerId, feedMode, feedReloadKey]);
 
   useEffect(() => {
     setRecipes([]);
@@ -244,15 +261,17 @@ export default function CommunityScreen() {
     const generation = ++feedGenerationRef.current;
     const screenGeneration = mountedGenerationRef.current;
     const mutationVersion = feedMutationVersionRef.current;
+    const requestMode = feedMode;
     const operation = {};
     feedOperationRef.current = operation;
     setLoadingMore(false);
     setRefreshing(true);
     try {
-      const result = await listCommunityPosts({ page: 1, limit: PAGE_SIZE });
+      const result = await readFeed(requestMode, { page: 1, limit: PAGE_SIZE });
       if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
         || screenGeneration !== mountedGenerationRef.current || ownerRef.current !== requestOwner
-        || mutationVersion !== feedMutationVersionRef.current) return;
+        || mutationVersion !== feedMutationVersionRef.current
+        || feedModeRef.current !== requestMode) return;
       setPosts(result.posts);
       setPagination(result.pagination);
       setFeedError('');
@@ -260,12 +279,14 @@ export default function CommunityScreen() {
     } catch (error) {
       if (operation === feedOperationRef.current && generation === feedGenerationRef.current
         && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner
-        && mutationVersion === feedMutationVersionRef.current) {
+        && mutationVersion === feedMutationVersionRef.current
+        && feedModeRef.current === requestMode) {
         notify('Couldn’t refresh Community', getCommunityErrorMessage(error));
       }
     } finally {
       if (operation === feedOperationRef.current && generation === feedGenerationRef.current
-        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner) {
+        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner
+        && feedModeRef.current === requestMode) {
         setRefreshing(false);
         feedOperationRef.current = null;
       }
@@ -278,25 +299,29 @@ export default function CommunityScreen() {
     const generation = feedGenerationRef.current;
     const screenGeneration = mountedGenerationRef.current;
     const mutationVersion = feedMutationVersionRef.current;
+    const requestMode = feedMode;
     const operation = {};
     feedOperationRef.current = operation;
     setLoadingMore(true);
     try {
-      const result = await listCommunityPosts({ page: pagination.page + 1, limit: PAGE_SIZE });
+      const result = await readFeed(requestMode, { page: pagination.page + 1, limit: PAGE_SIZE });
       if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
         || screenGeneration !== mountedGenerationRef.current || ownerRef.current !== requestOwner
-        || mutationVersion !== feedMutationVersionRef.current) return;
+        || mutationVersion !== feedMutationVersionRef.current
+        || feedModeRef.current !== requestMode) return;
       setPosts((current) => appendUnique(current, result.posts));
       setPagination(result.pagination);
     } catch (error) {
       if (operation === feedOperationRef.current && generation === feedGenerationRef.current
         && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner
-        && mutationVersion === feedMutationVersionRef.current) {
+        && mutationVersion === feedMutationVersionRef.current
+        && feedModeRef.current === requestMode) {
         notify('Couldn’t load more posts', getCommunityErrorMessage(error));
       }
     } finally {
       if (operation === feedOperationRef.current && generation === feedGenerationRef.current
-        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner) {
+        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner
+        && feedModeRef.current === requestMode) {
         setLoadingMore(false);
         feedOperationRef.current = null;
       }
@@ -340,12 +365,14 @@ export default function CommunityScreen() {
       if (postCreateOperationRef.current !== operation || ownerRef.current !== requestOwner
         || screenGeneration !== mountedGenerationRef.current) return;
       feedMutationVersionRef.current += 1;
-      setPosts((current) => [post, ...current.filter((item) => item.id !== post.id)]);
-      setPagination((current) => current ? {
-        ...current,
-        total: current.total + 1,
-        totalPages: Math.ceil((current.total + 1) / current.limit),
-      } : current);
+      if (feedModeRef.current === FEED_ALL) {
+        setPosts((current) => [post, ...current.filter((item) => item.id !== post.id)]);
+        setPagination((current) => current ? {
+          ...current,
+          total: current.total + 1,
+          totalPages: Math.ceil((current.total + 1) / current.limit),
+        } : current);
+      }
       setFeedStatus('ready');
       setCaption('');
       setSelectedRecipe(null);
@@ -384,6 +411,61 @@ export default function CommunityScreen() {
       if (pendingLikesRef.current.get(post.id) === operation) {
         pendingLikesRef.current.delete(post.id);
         if (ownerRef.current === requestOwner && screenGeneration === mountedGenerationRef.current) forcePendingRender((value) => value + 1);
+      }
+    }
+  };
+
+  const switchFeedMode = (mode) => {
+    if (mode === feedModeRef.current) return;
+    feedModeRef.current = mode;
+    feedOperationRef.current = null;
+    feedGenerationRef.current += 1;
+    clearCommentPanel();
+    setPosts([]);
+    setPagination(null);
+    setFeedError('');
+    setFeedStatus('loading');
+    setRefreshing(false);
+    setLoadingMore(false);
+    setFeedMode(mode);
+  };
+
+  const toggleFollow = async (post) => {
+    const authorId = post.author?.id;
+    if (!ownerId || !authorId || authorId === ownerId || pendingFollowsRef.current.has(authorId)) return;
+    const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
+    const desiredFollowing = !post.isFollowingAuthor;
+    const operation = {};
+    feedMutationVersionRef.current += 1;
+    pendingFollowsRef.current.set(authorId, operation);
+    forcePendingRender((value) => value + 1);
+    try {
+      const state = await setCommunityAuthorFollowed(authorId, desiredFollowing);
+      if (pendingFollowsRef.current.get(authorId) !== operation
+        || ownerRef.current !== requestOwner
+        || screenGeneration !== mountedGenerationRef.current) return;
+      if (feedModeRef.current === FEED_FOLLOWING) {
+        feedOperationRef.current = null;
+        feedGenerationRef.current += 1;
+        clearCommentPanel();
+        setFeedReloadKey((key) => key + 1);
+      } else {
+        setPosts((current) => current.map((item) => item.author?.id === authorId
+          ? { ...item, isFollowingAuthor: state.following }
+          : item));
+      }
+    } catch (error) {
+      if (pendingFollowsRef.current.get(authorId) === operation
+        && ownerRef.current === requestOwner
+        && screenGeneration === mountedGenerationRef.current) {
+        notify('Couldn’t update follow', getCommunityErrorMessage(error));
+      }
+    } finally {
+      if (pendingFollowsRef.current.get(authorId) === operation) {
+        pendingFollowsRef.current.delete(authorId);
+        if (ownerRef.current === requestOwner
+          && screenGeneration === mountedGenerationRef.current) forcePendingRender((value) => value + 1);
       }
     }
   };
@@ -592,6 +674,21 @@ export default function CommunityScreen() {
       >
         <Text style={styles.subtitle}>See what other home cooks are making.</Text>
 
+        <View style={styles.modeRow} accessibilityRole="tablist">
+          {[[FEED_ALL, 'All'], [FEED_FOLLOWING, 'Following']].map(([mode, label]) => (
+            <Pressable
+              key={mode}
+              style={[styles.modeButton, feedMode === mode && styles.modeButtonActive]}
+              onPress={() => switchFeedMode(mode)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: feedMode === mode }}
+              accessibilityLabel={`${label} Community posts`}
+            >
+              <Text style={[styles.modeText, feedMode === mode && styles.modeTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
         <View style={styles.composeCard}>
           <View style={styles.composeHeader}>
             <AuthorAvatar author={user} style={styles.avatar} textStyle={styles.avatarInitial} />
@@ -673,8 +770,10 @@ export default function CommunityScreen() {
         {feedStatus === 'ready' && posts.length === 0 && (
           <View style={styles.stateCard}>
             <Ionicons name="people-outline" size={24} color={colors.sageDeep} />
-            <Text style={styles.stateTitle}>No posts yet</Text>
-            <Text style={styles.stateText}>Share what you’re cooking to start the Community feed.</Text>
+            <Text style={styles.stateTitle}>{feedMode === FEED_FOLLOWING ? 'Not following anyone yet' : 'No posts yet'}</Text>
+            <Text style={styles.stateText}>{feedMode === FEED_FOLLOWING
+              ? "Tap Follow on a post's author to see their cooking here."
+              : 'Share what you’re cooking to start the Community feed.'}</Text>
           </View>
         )}
 
@@ -683,6 +782,7 @@ export default function CommunityScreen() {
           const attachment = post.recipeAttachment;
           const likePending = pendingLikesRef.current.has(post.id);
           const deletePending = pendingDeletesRef.current.has(post.id);
+          const followPending = post.author ? pendingFollowsRef.current.has(post.author.id) : false;
           return (
             <View key={post.id} style={styles.card}>
               <View style={styles.postHeader}>
@@ -691,6 +791,19 @@ export default function CommunityScreen() {
                   <Text style={styles.authorName}>{authorName}</Text>
                   <Text style={styles.time}>{formatCommunityTime(post.createdAt)}</Text>
                 </View>
+                {post.author && post.author.id !== ownerId && (
+                  <Pressable
+                    style={styles.followButton}
+                    onPress={() => toggleFollow(post)}
+                    disabled={followPending}
+                    accessibilityLabel={post.isFollowingAuthor ? `Unfollow ${authorName}` : `Follow ${authorName}`}
+                    accessibilityState={{ disabled: followPending, busy: followPending }}
+                  >
+                    {followPending
+                      ? <ActivityIndicator size="small" color={colors.sageDeep} />
+                      : <Text style={styles.followText}>{post.isFollowingAuthor ? 'Following' : 'Follow'}</Text>}
+                  </Pressable>
+                )}
                 {post.isOwner && (
                   <Pressable onPress={() => removePost(post.id)} hitSlop={8} disabled={deletePending} accessibilityLabel="Delete post">
                     {deletePending ? <ActivityIndicator size="small" color={colors.inkFaint} /> : <Ionicons name="trash-outline" size={17} color={colors.inkFaint} />}
@@ -840,6 +953,11 @@ function makeStyles(colors, shadow) {
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
     subtitle: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.inkSoft, marginBottom: spacing.lg, lineHeight: 19 },
+    modeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
+    modeButton: { flex: 1, alignItems: 'center', paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.paper },
+    modeButtonActive: { backgroundColor: colors.sagePale, borderColor: colors.sageDeep },
+    modeText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.inkSoft },
+    modeTextActive: { color: colors.sageDeep },
     composeCard: { backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.hairline, padding: spacing.md, marginBottom: spacing.xl, ...shadow.soft },
     composeHeader: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
     avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
@@ -867,6 +985,8 @@ function makeStyles(colors, shadow) {
     card: { backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.hairline, overflow: 'hidden', marginBottom: spacing.lg, ...shadow.soft },
     postHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md },
     headerText: { flex: 1 },
+    followButton: { minWidth: 70, minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.sageDeep },
+    followText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.xs, color: colors.sageDeep },
     authorName: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.ink },
     time: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, color: colors.inkFaint, marginTop: 1 },
     postImage: { width: '100%', height: 200 },

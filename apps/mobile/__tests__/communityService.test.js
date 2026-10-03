@@ -3,12 +3,14 @@ jest.mock('../src/api/client', () => ({ api: { get: jest.fn(), post: jest.fn(), 
 const { api } = require('../src/api/client');
 const {
   listCommunityPosts,
+  listFollowingCommunityPosts,
   createCommunityPost,
   createCommunityComment,
   deleteCommunityComment,
   deleteCommunityPost,
   listCommunityComments,
   setCommunityPostLiked,
+  setCommunityAuthorFollowed,
 } = require('../src/api/communityService');
 
 beforeEach(() => jest.clearAllMocks());
@@ -24,15 +26,73 @@ function publicComment(overrides = {}) {
   };
 }
 
+function publicPost(overrides = {}) {
+  return {
+    id: 'p1',
+    caption: 'Dinner',
+    createdAt: '2026-10-03T00:00:00.000Z',
+    author: { id: 'u1', name: 'User One', avatarUrl: null },
+    recipeAttachment: null,
+    likeCount: 0,
+    likedByCurrentUser: false,
+    commentCount: 0,
+    isOwner: false,
+    isFollowingAuthor: false,
+    ...overrides,
+  };
+}
+
 it('lists only page/limit and preserves the server feed envelope', async () => {
-  api.get.mockResolvedValue({ posts: [{ id: 'p1' }], pagination: { page: 2 } });
+  const response = { posts: [publicPost()], pagination: { page: 2, limit: 20, total: 21, totalPages: 2 } };
+  api.get.mockResolvedValue(response);
   await expect(listCommunityPosts({ page: 2, limit: 20, userId: 'never-send', sort: 'oldest' }))
-    .resolves.toEqual({ posts: [{ id: 'p1' }], pagination: { page: 2 } });
+    .resolves.toEqual(response);
   expect(api.get).toHaveBeenCalledWith('/community/posts', { query: { page: 2, limit: 20 } });
 });
 
+it('uses the exact Following endpoint with the same strict page/limit allowlist', async () => {
+  const response = { posts: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } };
+  api.get.mockResolvedValue(response);
+  await expect(listFollowingCommunityPosts({ page: 1, limit: 20, actor: 'never-send' }))
+    .resolves.toEqual(response);
+  expect(api.get).toHaveBeenCalledWith('/community/posts/following', { query: { page: 1, limit: 20 } });
+});
+
+it('uses encoded bodyless follow routes and requires the authoritative Boolean', async () => {
+  api.post.mockResolvedValue({ following: true });
+  api.del.mockResolvedValue({ following: false });
+  await expect(setCommunityAuthorFollowed('user/id', true)).resolves.toEqual({ following: true });
+  await expect(setCommunityAuthorFollowed('user/id', false)).resolves.toEqual({ following: false });
+  expect(api.post).toHaveBeenCalledWith('/community/users/user%2Fid/follow');
+  expect(api.del).toHaveBeenCalledWith('/community/users/user%2Fid/follow');
+});
+
+it.each([
+  null,
+  {},
+  { following: 'yes' },
+  { following: true, followerId: 'u1' },
+])('rejects malformed successful follow responses', async (response) => {
+  api.post.mockResolvedValue(response);
+  await expect(setCommunityAuthorFollowed('u1', true)).rejects.toThrow('Invalid Community follow response.');
+});
+
+it.each([
+  null,
+  {},
+  { posts: [], pagination: { page: 1 } },
+  { posts: [publicPost({ isFollowingAuthor: undefined })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+  { posts: [publicPost({ author: { id: 'u1', name: 'User', avatarUrl: null, email: 'private' } })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+  { posts: [publicPost({ followerCount: 4 })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+  { posts: [], pagination: { page: 2, limit: 20, total: 0, totalPages: 0 } },
+  { posts: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0, cursor: null } },
+])('rejects malformed successful feed envelopes and rows', async (response) => {
+  api.get.mockResolvedValue(response);
+  await expect(listCommunityPosts()).rejects.toThrow('Invalid Community feed response.');
+});
+
 it('creates with caption and optional recipeId only', async () => {
-  api.post.mockResolvedValue({ post: { id: 'p1' } });
+  api.post.mockResolvedValue({ post: publicPost() });
   await createCommunityPost({
     caption: 'Dinner',
     recipeId: 'r1',
@@ -46,7 +106,7 @@ it('creates with caption and optional recipeId only', async () => {
 });
 
 it('omits recipeId for a text-only post', async () => {
-  api.post.mockResolvedValue({ post: { id: 'p1' } });
+  api.post.mockResolvedValue({ post: publicPost() });
   await createCommunityPost({ caption: 'Text only', recipeId: null });
   expect(api.post).toHaveBeenCalledWith('/community/posts', { body: { caption: 'Text only' } });
 });
@@ -130,6 +190,7 @@ it.each([
   ['malformed comment', { comments: [{ id: 'c1' }], commentCount: 1, pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } }],
   ['malformed author', { comments: [publicComment({ author: { id: 'u1' } })], commentCount: 1, pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } }],
   ['malformed pagination', { comments: [], commentCount: 0, pagination: { page: 1 } }],
+  ['pagination with an extra key', { comments: [], commentCount: 0, pagination: { page: 1, limit: 20, total: 0, totalPages: 0, cursor: null } }],
   ['inconsistent total', { comments: [], commentCount: 2, pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } }],
   ['inconsistent pages', { comments: [], commentCount: 21, pagination: { page: 1, limit: 20, total: 21, totalPages: 1 } }],
 ])('rejects a malformed successful comment list: %s', async (_name, response) => {

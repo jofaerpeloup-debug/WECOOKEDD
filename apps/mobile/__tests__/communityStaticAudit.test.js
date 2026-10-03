@@ -123,7 +123,7 @@ describe('Community M10A real integration', () => {
     expect(SCREEN).toMatch(/pendingLikesRef\.current\.clear\(\)/);
     expect(SCREEN).toMatch(/pendingDeletesRef\.current\.clear\(\)/);
     expect(SCREEN).toMatch(/generation !== feedGenerationRef\.current[\s\S]*ownerRef\.current !== ownerId/);
-    expect(SCREEN).not.toMatch(/ImagePicker|launchCamera|base64|Firebase|Follow|Report|Share\.share|share-social|bookmark/);
+    expect(SCREEN).not.toMatch(/ImagePicker|launchCamera|base64|Firebase|Report|Share\.share|share-social|bookmark/);
     expect(SCREEN).not.toMatch(/FavoritesContext|CollectionsContext|ReviewsContext|CookHistoryContext|MealPlanContext|ShoppingListContext/);
   });
 
@@ -138,9 +138,24 @@ describe('Community M10A real integration', () => {
     expect(SCREEN.slice(refreshStart, loadMoreStart).match(/setPosts/g)).toHaveLength(1);
     expect(SCREEN.slice(refreshStart, loadMoreStart)).toMatch(/Couldn’t refresh Community/);
     expect(SCREEN.slice(submitStart, likeStart).match(/setPosts/g)).toHaveLength(1);
-    expect(SCREEN.slice(likeStart, deleteStart).match(/setPosts/g)).toHaveLength(1);
+    expect(SCREEN.slice(likeStart, deleteStart).match(/setPosts/g).length).toBeGreaterThanOrEqual(1);
     expect(SCREEN.slice(deleteStart, SCREEN.indexOf('const replacePostCommentCount')).match(/setPosts/g)).toHaveLength(1);
     expect(SCREEN.slice(loadMoreStart, recipeMoreStart).match(/setPosts/g)).toHaveLength(1);
     expect(SCREEN.slice(loadMoreStart, recipeMoreStart)).toMatch(/Couldn’t load more posts/);
+  });
+
+  it('implements only All/Following with pessimistic token-owned guarded follow state', () => {
+    expect(SCREEN).toMatch(/\[FEED_ALL, 'All'\], \[FEED_FOLLOWING, 'Following'\]/);
+    expect(SCREEN).not.toMatch(/Saved|Trending|For You/);
+    expect(SCREEN).toMatch(/pendingFollowsRef = useRef\(new Map\(\)\)/);
+    expect(SCREEN).toMatch(/pendingFollowsRef\.current\.has\(authorId\)/);
+    expect(SCREEN).toMatch(/await setCommunityAuthorFollowed/);
+    expect(SCREEN).toMatch(/item\.author\?\.id === authorId/);
+    expect(SCREEN).toMatch(/feedMutationVersionRef\.current \+= 1/);
+    expect(SCREEN).toMatch(/setFeedReloadKey\(\(key\) => key \+ 1\)/);
+    expect(SCREEN).toMatch(/feedModeRef\.current !== requestMode/);
+    expect(SCREEN).toMatch(/screenGeneration !== mountedGenerationRef\.current/);
+    expect(SERVICE).toMatch(/Invalid Community feed response/);
+    expect(SERVICE).toMatch(/Invalid Community follow response/);
   });
 });

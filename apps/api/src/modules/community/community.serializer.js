@@ -12,6 +12,7 @@ function toPublicCommunityPost({
   likedByCurrentUser,
   commentCount,
   isOwner,
+  isFollowingAuthor,
 }) {
   return {
     id: String(post._id),
@@ -34,6 +35,7 @@ function toPublicCommunityPost({
     likedByCurrentUser,
     commentCount,
     isOwner,
+    isFollowingAuthor: isFollowingAuthor === true,
   };
 }
 

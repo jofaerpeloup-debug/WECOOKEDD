@@ -20,6 +20,7 @@ const communityPostSchema = new mongoose.Schema(
 // Global feed order is fixed and deterministic: newest timestamp first, then
 // newest ObjectId when two posts share a timestamp.
 communityPostSchema.index({ createdAt: -1, _id: -1 });
+communityPostSchema.index({ authorId: 1, createdAt: -1, _id: -1 });
 
 const CommunityPost = mongoose.model('CommunityPost', communityPostSchema);
 
