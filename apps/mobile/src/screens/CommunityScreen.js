@@ -18,7 +18,10 @@ import RecipeImage from '../components/RecipeImage';
 import { listRecipes } from '../api/recipeService';
 import {
   createCommunityPost,
+  createCommunityComment,
+  deleteCommunityComment,
   deleteCommunityPost,
+  listCommunityComments,
   listCommunityPosts,
   setCommunityPostLiked,
 } from '../api/communityService';
@@ -29,6 +32,7 @@ import { notify } from '../utils/alert';
 const PAGE_SIZE = 20;
 const RECIPE_PAGE_SIZE = 20;
 const MAX_CAPTION_LENGTH = 2000;
+const MAX_COMMENT_LENGTH = 1000;
 
 function initialFor(name) {
   return (name || 'C').trim().charAt(0).toUpperCase() || 'C';
@@ -61,22 +65,80 @@ export default function CommunityScreen() {
   const [recipeStatus, setRecipeStatus] = useState('loading');
   const [recipeReloadKey, setRecipeReloadKey] = useState(0);
   const [loadingMoreRecipes, setLoadingMoreRecipes] = useState(false);
+  const [activePostId, setActivePostId] = useState(null);
+  const [comments, setComments] = useState([]);
+  const [commentPagination, setCommentPagination] = useState(null);
+  const [commentStatus, setCommentStatus] = useState('closed');
+  const [commentError, setCommentError] = useState('');
+  const [commentActionError, setCommentActionError] = useState('');
+  const [commentDraft, setCommentDraft] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
 
   const ownerRef = useRef(ownerId);
+  const mountedGenerationRef = useRef(0);
   const feedGenerationRef = useRef(0);
+  const feedOperationRef = useRef(null);
+  const feedMutationVersionRef = useRef(0);
+  const postCreateOperationRef = useRef(null);
   const recipeGenerationRef = useRef(0);
   const pendingLikesRef = useRef(new Map());
   const pendingDeletesRef = useRef(new Map());
+  const activePostRef = useRef(null);
+  const commentGenerationRef = useRef(0);
+  const commentMutationVersionRef = useRef(0);
+  const commentMutationSequenceRef = useRef(0);
+  const commentAppliedMutationRef = useRef(0);
+  const commentReadOperationRef = useRef(null);
+  const commentCreateOperationRef = useRef(null);
+  const pendingCommentDeletesRef = useRef(new Map());
   const [, forcePendingRender] = useState(0);
+
+  const clearCommentPanel = () => {
+    commentGenerationRef.current += 1;
+    activePostRef.current = null;
+    commentReadOperationRef.current = null;
+    commentCreateOperationRef.current = null;
+    pendingCommentDeletesRef.current.clear();
+    setActivePostId(null);
+    setComments([]);
+    setCommentPagination(null);
+    setCommentStatus('closed');
+    setCommentError('');
+    setCommentActionError('');
+    setCommentDraft('');
+    setCommentSubmitting(false);
+    setLoadingMoreComments(false);
+  };
+
+  useEffect(() => {
+    mountedGenerationRef.current += 1;
+    return () => {
+      mountedGenerationRef.current += 1;
+      feedGenerationRef.current += 1;
+      commentGenerationRef.current += 1;
+      feedOperationRef.current = null;
+      postCreateOperationRef.current = null;
+      commentReadOperationRef.current = null;
+      commentCreateOperationRef.current = null;
+      pendingLikesRef.current.clear();
+      pendingDeletesRef.current.clear();
+      pendingCommentDeletesRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     ownerRef.current = ownerId;
     pendingLikesRef.current.clear();
     pendingDeletesRef.current.clear();
+    feedOperationRef.current = null;
+    postCreateOperationRef.current = null;
+    feedGenerationRef.current += 1;
     setCaption('');
     setSelectedRecipe(null);
     setPosting(false);
     setRecipeQuery('');
+    clearCommentPanel();
     forcePendingRender((value) => value + 1);
   }, [ownerId]);
 
@@ -88,25 +150,45 @@ export default function CommunityScreen() {
     setLoadingMore(false);
 
     const generation = ++feedGenerationRef.current;
+    const operation = {};
+    const mutationVersion = feedMutationVersionRef.current;
+    feedOperationRef.current = operation;
     if (!ownerId) {
       setFeedStatus('error');
       return undefined;
     }
     setFeedStatus('loading');
     (async () => {
-      try {
-        const result = await listCommunityPosts({ page: 1, limit: PAGE_SIZE });
-        if (generation !== feedGenerationRef.current || ownerRef.current !== ownerId) return;
-        setPosts(result.posts);
-        setPagination(result.pagination);
-        setFeedStatus('ready');
-      } catch (error) {
-        if (generation !== feedGenerationRef.current || ownerRef.current !== ownerId) return;
-        setFeedError(getCommunityErrorMessage(error));
-        setFeedStatus('error');
+      let requestMutationVersion = mutationVersion;
+      while (operation === feedOperationRef.current
+        && generation === feedGenerationRef.current && ownerRef.current === ownerId) {
+        try {
+          const result = await listCommunityPosts({ page: 1, limit: PAGE_SIZE });
+          if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
+            || ownerRef.current !== ownerId) return;
+          if (requestMutationVersion !== feedMutationVersionRef.current) {
+            requestMutationVersion = feedMutationVersionRef.current;
+            continue;
+          }
+          setPosts(result.posts);
+          setPagination(result.pagination);
+          setFeedStatus('ready');
+          feedOperationRef.current = null;
+        } catch (error) {
+          if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
+            || ownerRef.current !== ownerId) return;
+          if (requestMutationVersion !== feedMutationVersionRef.current) {
+            requestMutationVersion = feedMutationVersionRef.current;
+            continue;
+          }
+          setFeedError(getCommunityErrorMessage(error));
+          setFeedStatus('error');
+          feedOperationRef.current = null;
+        }
       }
     })();
     return () => {
+      if (feedOperationRef.current === operation) feedOperationRef.current = null;
       feedGenerationRef.current += 1;
     };
   }, [ownerId, feedReloadKey]);
@@ -145,44 +227,67 @@ export default function CommunityScreen() {
   }, [ownerId, recipeQuery, recipeReloadKey]);
 
   const refreshFeed = async () => {
-    if (!ownerId || refreshing) return;
+    if (!ownerId) return;
     const requestOwner = ownerId;
     const generation = ++feedGenerationRef.current;
+    const screenGeneration = mountedGenerationRef.current;
+    const mutationVersion = feedMutationVersionRef.current;
+    const operation = {};
+    feedOperationRef.current = operation;
+    setLoadingMore(false);
     setRefreshing(true);
     try {
       const result = await listCommunityPosts({ page: 1, limit: PAGE_SIZE });
-      if (generation !== feedGenerationRef.current || ownerRef.current !== requestOwner) return;
+      if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
+        || screenGeneration !== mountedGenerationRef.current || ownerRef.current !== requestOwner
+        || mutationVersion !== feedMutationVersionRef.current) return;
       setPosts(result.posts);
       setPagination(result.pagination);
       setFeedError('');
       setFeedStatus('ready');
     } catch (error) {
-      if (generation === feedGenerationRef.current && ownerRef.current === requestOwner) {
+      if (operation === feedOperationRef.current && generation === feedGenerationRef.current
+        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner
+        && mutationVersion === feedMutationVersionRef.current) {
         notify('Couldn’t refresh Community', getCommunityErrorMessage(error));
       }
     } finally {
-      if (generation === feedGenerationRef.current && ownerRef.current === requestOwner) {
+      if (operation === feedOperationRef.current && generation === feedGenerationRef.current
+        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner) {
         setRefreshing(false);
+        feedOperationRef.current = null;
       }
     }
   };
 
   const loadMorePosts = async () => {
-    if (!ownerId || loadingMore || feedStatus !== 'ready' || !pagination || pagination.page >= pagination.totalPages) return;
+    if (!ownerId || feedOperationRef.current || feedStatus !== 'ready' || !pagination || pagination.page >= pagination.totalPages) return;
     const requestOwner = ownerId;
     const generation = feedGenerationRef.current;
+    const screenGeneration = mountedGenerationRef.current;
+    const mutationVersion = feedMutationVersionRef.current;
+    const operation = {};
+    feedOperationRef.current = operation;
     setLoadingMore(true);
     try {
       const result = await listCommunityPosts({ page: pagination.page + 1, limit: PAGE_SIZE });
-      if (generation !== feedGenerationRef.current || ownerRef.current !== requestOwner) return;
+      if (operation !== feedOperationRef.current || generation !== feedGenerationRef.current
+        || screenGeneration !== mountedGenerationRef.current || ownerRef.current !== requestOwner
+        || mutationVersion !== feedMutationVersionRef.current) return;
       setPosts((current) => appendUnique(current, result.posts));
       setPagination(result.pagination);
     } catch (error) {
-      if (generation === feedGenerationRef.current && ownerRef.current === requestOwner) {
+      if (operation === feedOperationRef.current && generation === feedGenerationRef.current
+        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner
+        && mutationVersion === feedMutationVersionRef.current) {
         notify('Couldn’t load more posts', getCommunityErrorMessage(error));
       }
     } finally {
-      if (generation === feedGenerationRef.current && ownerRef.current === requestOwner) setLoadingMore(false);
+      if (operation === feedOperationRef.current && generation === feedGenerationRef.current
+        && screenGeneration === mountedGenerationRef.current && ownerRef.current === requestOwner) {
+        setLoadingMore(false);
+        feedOperationRef.current = null;
+      }
     }
   };
 
@@ -212,12 +317,17 @@ export default function CommunityScreen() {
 
   const submitPost = async () => {
     const trimmed = caption.trim();
-    if (!trimmed || posting || !ownerId) return;
+    if (!trimmed || postCreateOperationRef.current || !ownerId) return;
     const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
+    const operation = {};
+    postCreateOperationRef.current = operation;
     setPosting(true);
     try {
       const post = await createCommunityPost({ caption: trimmed, recipeId: selectedRecipe?.id });
-      if (ownerRef.current !== requestOwner) return;
+      if (postCreateOperationRef.current !== operation || ownerRef.current !== requestOwner
+        || screenGeneration !== mountedGenerationRef.current) return;
+      feedMutationVersionRef.current += 1;
       setPosts((current) => [post, ...current.filter((item) => item.id !== post.id)]);
       setPagination((current) => current ? {
         ...current,
@@ -228,9 +338,13 @@ export default function CommunityScreen() {
       setCaption('');
       setSelectedRecipe(null);
     } catch (error) {
-      if (ownerRef.current === requestOwner) notify('Couldn’t publish post', getCommunityErrorMessage(error));
+      if (postCreateOperationRef.current === operation && ownerRef.current === requestOwner
+        && screenGeneration === mountedGenerationRef.current) notify('Couldn’t publish post', getCommunityErrorMessage(error));
     } finally {
-      if (ownerRef.current === requestOwner) setPosting(false);
+      if (postCreateOperationRef.current === operation) {
+        postCreateOperationRef.current = null;
+        if (ownerRef.current === requestOwner && screenGeneration === mountedGenerationRef.current) setPosting(false);
+      }
     }
   };
 
@@ -239,21 +353,25 @@ export default function CommunityScreen() {
   const toggleLike = async (post) => {
     if (!ownerId || pendingLikesRef.current.has(post.id)) return;
     const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
     const operation = {};
     pendingLikesRef.current.set(post.id, operation);
     forcePendingRender((value) => value + 1);
     try {
       const state = await setCommunityPostLiked(post.id, !post.likedByCurrentUser);
-      if (ownerRef.current !== requestOwner) return;
+      if (pendingLikesRef.current.get(post.id) !== operation || ownerRef.current !== requestOwner
+        || screenGeneration !== mountedGenerationRef.current) return;
+      feedMutationVersionRef.current += 1;
       setPosts((current) => current.map((item) => item.id === post.id
         ? { ...item, likedByCurrentUser: state.liked, likeCount: state.likeCount }
         : item));
     } catch (error) {
-      if (ownerRef.current === requestOwner) notify('Couldn’t update like', getCommunityErrorMessage(error));
+      if (pendingLikesRef.current.get(post.id) === operation && ownerRef.current === requestOwner
+        && screenGeneration === mountedGenerationRef.current) notify('Couldn’t update like', getCommunityErrorMessage(error));
     } finally {
       if (pendingLikesRef.current.get(post.id) === operation) {
         pendingLikesRef.current.delete(post.id);
-        if (ownerRef.current === requestOwner) forcePendingRender((value) => value + 1);
+        if (ownerRef.current === requestOwner && screenGeneration === mountedGenerationRef.current) forcePendingRender((value) => value + 1);
       }
     }
   };
@@ -261,24 +379,191 @@ export default function CommunityScreen() {
   const removePost = async (postId) => {
     if (!ownerId || pendingDeletesRef.current.has(postId)) return;
     const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
     const operation = {};
     pendingDeletesRef.current.set(postId, operation);
     forcePendingRender((value) => value + 1);
     try {
       await deleteCommunityPost(postId);
-      if (ownerRef.current !== requestOwner) return;
+      if (pendingDeletesRef.current.get(postId) !== operation || ownerRef.current !== requestOwner
+        || screenGeneration !== mountedGenerationRef.current) return;
+      feedMutationVersionRef.current += 1;
       setPosts((current) => current.filter((post) => post.id !== postId));
       setPagination((current) => current ? {
         ...current,
         total: Math.max(0, current.total - 1),
         totalPages: Math.ceil(Math.max(0, current.total - 1) / current.limit),
       } : current);
+      if (activePostRef.current === postId) clearCommentPanel();
     } catch (error) {
-      if (ownerRef.current === requestOwner) notify('Couldn’t delete post', getCommunityErrorMessage(error));
+      if (pendingDeletesRef.current.get(postId) === operation && ownerRef.current === requestOwner
+        && screenGeneration === mountedGenerationRef.current) notify('Couldn’t delete post', getCommunityErrorMessage(error));
     } finally {
       if (pendingDeletesRef.current.get(postId) === operation) {
         pendingDeletesRef.current.delete(postId);
-        if (ownerRef.current === requestOwner) forcePendingRender((value) => value + 1);
+        if (ownerRef.current === requestOwner && screenGeneration === mountedGenerationRef.current) forcePendingRender((value) => value + 1);
+      }
+    }
+  };
+
+  const replacePostCommentCount = (postId, commentCount) => {
+    feedMutationVersionRef.current += 1;
+    setPosts((current) => current.map((post) =>
+      post.id === postId ? { ...post, commentCount } : post));
+  };
+
+  const loadCommentPage = async (postId, page, replace) => {
+    if (!ownerId || activePostRef.current !== postId || commentReadOperationRef.current) return;
+    const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
+    const generation = commentGenerationRef.current;
+    const mutationVersion = commentMutationVersionRef.current;
+    const operation = {};
+    commentReadOperationRef.current = operation;
+    setCommentActionError('');
+    if (replace) {
+      setCommentStatus('loading');
+      setCommentError('');
+    } else {
+      setLoadingMoreComments(true);
+    }
+    try {
+      const result = await listCommunityComments(postId, { page, limit: PAGE_SIZE });
+      if (commentReadOperationRef.current !== operation
+        || activePostRef.current !== postId
+        || generation !== commentGenerationRef.current
+        || screenGeneration !== mountedGenerationRef.current
+        || ownerRef.current !== requestOwner
+        || mutationVersion !== commentMutationVersionRef.current) return;
+      setComments((current) => replace ? result.comments : appendUnique(current, result.comments));
+      setCommentPagination(result.pagination);
+      setCommentError('');
+      setCommentStatus('ready');
+      replacePostCommentCount(postId, result.commentCount);
+    } catch (error) {
+      if (commentReadOperationRef.current !== operation
+        || activePostRef.current !== postId
+        || generation !== commentGenerationRef.current
+        || screenGeneration !== mountedGenerationRef.current
+        || ownerRef.current !== requestOwner) return;
+      const message = getCommunityErrorMessage(error);
+      if (replace) {
+        setCommentError(message);
+        setCommentStatus('error');
+      } else {
+        setCommentActionError(`Couldn’t load more comments. ${message}`);
+      }
+    } finally {
+      if (commentReadOperationRef.current === operation) {
+        commentReadOperationRef.current = null;
+        if (activePostRef.current === postId
+          && generation === commentGenerationRef.current
+          && screenGeneration === mountedGenerationRef.current
+          && ownerRef.current === requestOwner) setLoadingMoreComments(false);
+      }
+    }
+  };
+
+  const toggleComments = (postId) => {
+    if (activePostRef.current === postId) {
+      clearCommentPanel();
+      return;
+    }
+    clearCommentPanel();
+    activePostRef.current = postId;
+    setActivePostId(postId);
+    setCommentStatus('loading');
+    loadCommentPage(postId, 1, true);
+  };
+
+  const submitComment = async (postId) => {
+    const trimmedDraft = commentDraft.trim();
+    if (!trimmedDraft || !ownerId || activePostRef.current !== postId
+      || commentCreateOperationRef.current) return;
+    const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
+    const generation = commentGenerationRef.current;
+    const mutationSequence = ++commentMutationSequenceRef.current;
+    const operation = {};
+    commentCreateOperationRef.current = operation;
+    setCommentSubmitting(true);
+    setCommentActionError('');
+    try {
+      const result = await createCommunityComment(postId, trimmedDraft);
+      if (commentCreateOperationRef.current !== operation
+        || activePostRef.current !== postId
+        || generation !== commentGenerationRef.current
+        || screenGeneration !== mountedGenerationRef.current
+        || ownerRef.current !== requestOwner) return;
+      commentMutationVersionRef.current += 1;
+      setComments((current) => [
+        result.comment,
+        ...current.filter((comment) => comment.id !== result.comment.id),
+      ]);
+      if (mutationSequence >= commentAppliedMutationRef.current) {
+        commentAppliedMutationRef.current = mutationSequence;
+        replacePostCommentCount(postId, result.commentCount);
+      }
+      setCommentDraft('');
+      setCommentStatus('ready');
+    } catch (error) {
+      if (commentCreateOperationRef.current === operation
+        && activePostRef.current === postId
+        && generation === commentGenerationRef.current
+        && screenGeneration === mountedGenerationRef.current
+        && ownerRef.current === requestOwner) {
+        setCommentActionError(`Couldn’t add comment. ${getCommunityErrorMessage(error)}`);
+      }
+    } finally {
+      if (commentCreateOperationRef.current === operation) {
+        commentCreateOperationRef.current = null;
+        if (activePostRef.current === postId
+          && generation === commentGenerationRef.current
+          && screenGeneration === mountedGenerationRef.current
+          && ownerRef.current === requestOwner) setCommentSubmitting(false);
+      }
+    }
+  };
+
+  const removeComment = async (postId, commentId) => {
+    if (!ownerId || activePostRef.current !== postId
+      || pendingCommentDeletesRef.current.has(commentId)) return;
+    const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
+    const generation = commentGenerationRef.current;
+    const mutationSequence = ++commentMutationSequenceRef.current;
+    const operation = {};
+    pendingCommentDeletesRef.current.set(commentId, operation);
+    setCommentActionError('');
+    forcePendingRender((value) => value + 1);
+    try {
+      const result = await deleteCommunityComment(commentId);
+      if (pendingCommentDeletesRef.current.get(commentId) !== operation
+        || activePostRef.current !== postId
+        || generation !== commentGenerationRef.current
+        || screenGeneration !== mountedGenerationRef.current
+        || ownerRef.current !== requestOwner) return;
+      commentMutationVersionRef.current += 1;
+      setComments((current) => current.filter((comment) => comment.id !== commentId));
+      if (mutationSequence >= commentAppliedMutationRef.current) {
+        commentAppliedMutationRef.current = mutationSequence;
+        replacePostCommentCount(postId, result.commentCount);
+      }
+    } catch (error) {
+      if (pendingCommentDeletesRef.current.get(commentId) === operation
+        && activePostRef.current === postId
+        && generation === commentGenerationRef.current
+        && screenGeneration === mountedGenerationRef.current
+        && ownerRef.current === requestOwner) {
+        setCommentActionError(`Couldn’t delete comment. ${getCommunityErrorMessage(error)}`);
+      }
+    } finally {
+      if (pendingCommentDeletesRef.current.get(commentId) === operation) {
+        pendingCommentDeletesRef.current.delete(commentId);
+        if (activePostRef.current === postId
+          && generation === commentGenerationRef.current
+          && screenGeneration === mountedGenerationRef.current
+          && ownerRef.current === requestOwner) forcePendingRender((value) => value + 1);
       }
     }
   };
@@ -291,7 +576,7 @@ export default function CommunityScreen() {
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshFeed} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshFeed} accessibilityLabel="Refresh Community" />}
       >
         <Text style={styles.subtitle}>See what other home cooks are making.</Text>
 
@@ -421,10 +706,110 @@ export default function CommunityScreen() {
                     <Ionicons name={post.likedByCurrentUser ? 'heart' : 'heart-outline'} size={18} color={post.likedByCurrentUser ? colors.error : colors.inkSoft} />
                     <Text style={styles.actionText}>{post.likeCount}</Text>
                   </Pressable>
-                  <View style={styles.actionBtn} accessibilityLabel={`${post.commentCount} comments`}>
+                  <Pressable
+                    style={styles.actionBtn}
+                    onPress={() => toggleComments(post.id)}
+                    accessibilityLabel={`${post.commentCount} comments`}
+                    accessibilityState={{ expanded: activePostId === post.id }}
+                  >
                     <Ionicons name="chatbubble-outline" size={17} color={colors.inkSoft} /><Text style={styles.actionText}>{post.commentCount}</Text>
-                  </View>
+                  </Pressable>
                 </View>
+                {activePostId === post.id && (
+                  <View style={styles.commentPanel} accessibilityLabel="Comments panel">
+                    {commentStatus === 'loading' && (
+                      <View style={styles.commentState}>
+                        <ActivityIndicator size="small" color={colors.sageDeep} />
+                        <Text style={styles.commentHint}>Loading comments…</Text>
+                      </View>
+                    )}
+                    {commentStatus === 'error' && (
+                      <View style={styles.commentState}>
+                        <Text style={styles.commentHint}>{commentError}</Text>
+                        <Pressable
+                          style={styles.retryBtn}
+                          onPress={() => loadCommentPage(post.id, 1, true)}
+                          accessibilityLabel="Retry comments"
+                        >
+                          <Text style={styles.retryText}>Retry</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                    {commentStatus === 'ready' && comments.length === 0 && (
+                      <Text style={styles.commentHint}>No comments yet. Start the conversation.</Text>
+                    )}
+                    {commentStatus === 'ready' && comments.map((comment) => {
+                      const commentAuthor = comment.author?.name || 'Community member';
+                      const commentDeletePending = pendingCommentDeletesRef.current.has(comment.id);
+                      return (
+                        <View key={comment.id} style={styles.commentRow}>
+                          <View style={styles.commentAvatar}>
+                            <Text style={styles.commentAvatarText}>{initialFor(commentAuthor)}</Text>
+                          </View>
+                          <View style={styles.commentContent}>
+                            <View style={styles.commentHeader}>
+                              <Text style={styles.commentAuthor}>{commentAuthor}</Text>
+                              <Text style={styles.commentTime}>{formatCommunityTime(comment.createdAt)}</Text>
+                              {comment.isOwner && (
+                                <Pressable
+                                  onPress={() => removeComment(post.id, comment.id)}
+                                  disabled={commentDeletePending}
+                                  accessibilityLabel={`Delete comment by ${commentAuthor}`}
+                                >
+                                  {commentDeletePending
+                                    ? <ActivityIndicator size="small" color={colors.inkFaint} />
+                                    : <Ionicons name="trash-outline" size={15} color={colors.inkFaint} />}
+                                </Pressable>
+                              )}
+                            </View>
+                            <Text style={styles.commentBody}>{comment.body}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                    {commentStatus === 'ready' && commentPagination
+                      && commentPagination.page < commentPagination.totalPages && (
+                      <Pressable
+                        style={styles.commentMore}
+                        onPress={() => loadCommentPage(post.id, commentPagination.page + 1, false)}
+                        disabled={loadingMoreComments}
+                        accessibilityLabel="Load more comments"
+                      >
+                        {loadingMoreComments
+                          ? <ActivityIndicator size="small" color={colors.sageDeep} />
+                          : <Text style={styles.retryText}>Load more comments</Text>}
+                      </Pressable>
+                    )}
+                    {!!commentActionError && <Text style={styles.commentError}>{commentActionError}</Text>}
+                    <View style={styles.commentComposer}>
+                      <TextInput
+                        style={styles.commentInput}
+                        value={commentDraft}
+                        onChangeText={setCommentDraft}
+                        placeholder="Add a comment…"
+                        placeholderTextColor={colors.inkFaint}
+                        multiline
+                        maxLength={MAX_COMMENT_LENGTH}
+                        editable={!commentSubmitting}
+                        accessibilityLabel="Comment"
+                      />
+                      <View style={styles.commentComposerFooter}>
+                        <Text style={styles.commentCount}>{commentDraft.length}/{MAX_COMMENT_LENGTH}</Text>
+                        <Pressable
+                          style={[styles.commentSubmit, (!commentDraft.trim() || commentSubmitting) && styles.postBtnDisabled]}
+                          onPress={() => submitComment(post.id)}
+                          disabled={!commentDraft.trim() || commentSubmitting}
+                          accessibilityLabel="Post comment"
+                          accessibilityState={{ disabled: !commentDraft.trim() || commentSubmitting, busy: commentSubmitting }}
+                        >
+                          {commentSubmitting
+                            ? <ActivityIndicator size="small" color={colors.onAccent} />
+                            : <Text style={styles.commentSubmitText}>Comment</Text>}
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                )}
               </View>
             </View>
           );
@@ -484,6 +869,25 @@ function makeStyles(colors, shadow) {
     actionRow: { flexDirection: 'row', gap: spacing.lg },
     actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     actionText: { fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.inkSoft },
+    commentPanel: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.hairline, gap: spacing.sm },
+    commentState: { alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.sm },
+    commentHint: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, color: colors.inkFaint, textAlign: 'center' },
+    commentRow: { flexDirection: 'row', gap: spacing.sm, paddingVertical: spacing.xs },
+    commentAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
+    commentAvatarText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.xs, color: colors.sageDeep },
+    commentContent: { flex: 1 },
+    commentHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    commentAuthor: { flex: 1, fontFamily: typography.body.semibold, fontSize: typography.sizes.xs, color: colors.ink },
+    commentTime: { fontFamily: typography.body.fontFamily, fontSize: 10, color: colors.inkFaint },
+    commentBody: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.ink, lineHeight: 19, marginTop: 2 },
+    commentMore: { alignItems: 'center', paddingVertical: spacing.xs },
+    commentError: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, color: colors.error },
+    commentComposer: { borderWidth: 1, borderColor: colors.hairline, borderRadius: radius.md, padding: spacing.sm },
+    commentInput: { minHeight: 42, fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.ink, outlineStyle: 'none', paddingTop: 4 },
+    commentComposerFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
+    commentCount: { fontFamily: typography.body.fontFamily, fontSize: 10, color: colors.inkFaint },
+    commentSubmit: { minHeight: 32, borderRadius: radius.pill, backgroundColor: colors.sageDeep, paddingHorizontal: spacing.md, alignItems: 'center', justifyContent: 'center' },
+    commentSubmitText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.xs, color: colors.onAccent },
     stateCard: { backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.hairline, padding: spacing.xxl, alignItems: 'center', gap: spacing.sm, ...shadow.soft },
     stateTitle: { fontFamily: typography.display.fontFamily, fontSize: typography.sizes.md, color: colors.ink },
     stateText: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, lineHeight: 19, color: colors.inkSoft, textAlign: 'center' },

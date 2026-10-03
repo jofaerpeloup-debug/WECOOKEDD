@@ -38,7 +38,7 @@ describe('Community M10A real integration', () => {
     expect(SCREEN).toMatch(/MAX_CAPTION_LENGTH = 2000/);
     expect(SCREEN).toMatch(/maxLength=\{MAX_CAPTION_LENGTH\}/);
     expect(SCREEN).toMatch(/const trimmed = caption\.trim\(\)/);
-    expect(SCREEN).toMatch(/if \(!trimmed \|\| posting \|\| !ownerId\) return/);
+    expect(SCREEN).toMatch(/if \(!trimmed \|\| postCreateOperationRef\.current \|\| !ownerId\) return/);
     expect(SCREEN).toMatch(/current\?\.id === recipe\.id \? null : recipe/);
     expect(SCREEN).toMatch(/recipeId: selectedRecipe\?\.id/);
     expect(SCREEN).not.toMatch(/cuisine|vibe/);
@@ -54,16 +54,40 @@ describe('Community M10A real integration', () => {
     expect(SCREEN.slice(catchBlock, SCREEN.indexOf('finally', catchBlock))).not.toMatch(/setCaption|setSelectedRecipe/);
   });
 
-  it('renders safe author initials, server createdAt, real recipe state, and honest comments', () => {
+  it('renders safe author initials, server createdAt, real recipe state, and real comments', () => {
     expect(SCREEN).toMatch(/post\.author\?\.name/);
     expect(SCREEN).toMatch(/initialFor\(authorName\)/);
     expect(SCREEN).toMatch(/formatCommunityTime\(post\.createdAt\)/);
     expect(SCREEN).toMatch(/attachment\?\.isAvailable/);
     expect(SCREEN).toMatch(/Recipe unavailable/);
     expect(SCREEN).toMatch(/post\.commentCount/);
-    expect(SCREEN).toMatch(/<View style=\{styles\.actionBtn\} accessibilityLabel=\{`\$\{post\.commentCount\} comments`\}>/);
-    expect(SERVICE).not.toMatch(/comment/i);
+    expect(SCREEN).toMatch(/accessibilityLabel=\{`\$\{post\.commentCount\} comments`\}/);
+    expect(SCREEN).toMatch(/listCommunityComments/);
+    expect(SCREEN).toMatch(/createCommunityComment/);
+    expect(SCREEN).toMatch(/deleteCommunityComment/);
+    expect(SERVICE).toMatch(/\/community\/posts\/\$\{encodeURIComponent\(postId\)\}\/comments/);
     expect(SCREEN).not.toMatch(/avatar\.uri|author\.email|author\.role/);
+  });
+
+  it('keeps comments lazy, server-counted, bounded, pessimistic, and generation guarded', () => {
+    expect(SCREEN).toMatch(/activePostId === post\.id/);
+    expect(SCREEN).toMatch(/MAX_COMMENT_LENGTH = 1000/);
+    expect(SCREEN).toMatch(/maxLength=\{MAX_COMMENT_LENGTH\}/);
+    expect(SCREEN).toMatch(/const trimmedDraft = commentDraft\.trim\(\)/);
+    expect(SCREEN).toMatch(/replacePostCommentCount\(postId, result\.commentCount\)/);
+    expect(SCREEN).not.toMatch(/commentCount\s*[+-]\s*1/);
+    expect(SCREEN).toMatch(/commentGenerationRef/);
+    expect(SCREEN).toMatch(/mountedGenerationRef/);
+    expect(SCREEN).toMatch(/commentCreateOperationRef/);
+    expect(SCREEN).toMatch(/pendingCommentDeletesRef = useRef\(new Map\(\)\)/);
+  });
+
+  it('owns feed finalizers and rejects responses predating accepted mutations', () => {
+    expect(SCREEN).toMatch(/feedOperationRef/);
+    expect(SCREEN).toMatch(/feedMutationVersionRef/);
+    expect(SCREEN).toMatch(/operation !== feedOperationRef\.current/);
+    expect(SCREEN).toMatch(/mutationVersion !== feedMutationVersionRef\.current/);
+    expect(SCREEN).toMatch(/postCreateOperationRef\.current === operation/);
   });
 
   it('uses single-flight pessimistic likes and server-returned state/count', () => {
@@ -96,7 +120,7 @@ describe('Community M10A real integration', () => {
     expect(SCREEN).toMatch(/recipeGenerationRef/);
     expect(SCREEN).toMatch(/pendingLikesRef\.current\.clear\(\)/);
     expect(SCREEN).toMatch(/pendingDeletesRef\.current\.clear\(\)/);
-    expect(SCREEN).toMatch(/generation !== feedGenerationRef\.current \|\| ownerRef\.current !== ownerId/);
+    expect(SCREEN).toMatch(/generation !== feedGenerationRef\.current[\s\S]*ownerRef\.current !== ownerId/);
     expect(SCREEN).not.toMatch(/ImagePicker|launchCamera|base64|Firebase|Follow|Report|Share\.share|share-social|bookmark/);
     expect(SCREEN).not.toMatch(/FavoritesContext|CollectionsContext|ReviewsContext|CookHistoryContext|MealPlanContext|ShoppingListContext/);
   });
@@ -113,7 +137,7 @@ describe('Community M10A real integration', () => {
     expect(SCREEN.slice(refreshStart, loadMoreStart)).toMatch(/Couldn’t refresh Community/);
     expect(SCREEN.slice(submitStart, likeStart).match(/setPosts/g)).toHaveLength(1);
     expect(SCREEN.slice(likeStart, deleteStart).match(/setPosts/g)).toHaveLength(1);
-    expect(SCREEN.slice(deleteStart, SCREEN.indexOf('const canPost')).match(/setPosts/g)).toHaveLength(1);
+    expect(SCREEN.slice(deleteStart, SCREEN.indexOf('const replacePostCommentCount')).match(/setPosts/g)).toHaveLength(1);
     expect(SCREEN.slice(loadMoreStart, recipeMoreStart).match(/setPosts/g)).toHaveLength(1);
     expect(SCREEN.slice(loadMoreStart, recipeMoreStart)).toMatch(/Couldn’t load more posts/);
   });

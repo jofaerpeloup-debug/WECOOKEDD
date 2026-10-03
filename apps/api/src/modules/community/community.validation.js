@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { objectIdSchema } = require('../../shared/validation/object-id');
 const { CAPTION_MAX_LENGTH } = require('./community-post.model');
+const { COMMENT_MAX_LENGTH } = require('./community-comment.model');
 
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(20);
@@ -23,8 +24,31 @@ const communityPostParamsSchema = z.object({
   params: z.object({ postId: objectIdSchema }).strict(),
 });
 
+const commentBodySchema = z
+  .string('Comment is required.')
+  .trim()
+  .min(1, 'Comment is required.')
+  .max(COMMENT_MAX_LENGTH, `Comment must be ${COMMENT_MAX_LENGTH} characters or fewer.`);
+
+const listCommunityCommentsSchema = z.object({
+  params: z.object({ postId: objectIdSchema }).strict(),
+  query: z.object({ page: pageSchema, limit: limitSchema }).strict(),
+});
+
+const createCommunityCommentSchema = z.object({
+  params: z.object({ postId: objectIdSchema }).strict(),
+  body: z.object({ body: commentBodySchema }).strict(),
+});
+
+const communityCommentParamsSchema = z.object({
+  params: z.object({ commentId: objectIdSchema }).strict(),
+});
+
 module.exports = {
   listCommunityPostsSchema,
   createCommunityPostSchema,
   communityPostParamsSchema,
+  listCommunityCommentsSchema,
+  createCommunityCommentSchema,
+  communityCommentParamsSchema,
 };

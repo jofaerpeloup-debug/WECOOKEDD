@@ -10,6 +10,7 @@ function toPublicCommunityPost({
   recipeAttachment,
   likeCount,
   likedByCurrentUser,
+  commentCount,
   isOwner,
 }) {
   return {
@@ -29,9 +30,23 @@ function toPublicCommunityPost({
           },
     likeCount,
     likedByCurrentUser,
-    commentCount: 0,
+    commentCount,
     isOwner,
   };
 }
 
-module.exports = { toPublicCommunityPost, toCommunityRecipeSummary };
+function toPublicCommunityComment({ comment, author, isOwner }) {
+  return {
+    id: String(comment._id),
+    body: comment.body,
+    author: author ? { id: author.id, name: author.name } : null,
+    createdAt: comment.createdAt,
+    isOwner,
+  };
+}
+
+module.exports = {
+  toPublicCommunityPost,
+  toPublicCommunityComment,
+  toCommunityRecipeSummary,
+};

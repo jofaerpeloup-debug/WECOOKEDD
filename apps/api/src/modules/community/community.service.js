@@ -1,5 +1,6 @@
 const communityRepository = require('./community.repository');
 const communityLikeRepository = require('./community-like.repository');
+const communityCommentRepository = require('./community-comment.repository');
 const recipeService = require('../recipes/recipe.service');
 const userService = require('../users/user.service');
 const { AppError } = require('../../shared/errors/app-error');
@@ -17,13 +18,20 @@ function recipeNotFoundError() {
   return new AppError('Recipe not found.', { statusCode: 404, code: 'RECIPE_NOT_FOUND' });
 }
 
+function commentNotFoundError() {
+  return new AppError('Community comment not found.', {
+    statusCode: 404,
+    code: 'COMMUNITY_COMMENT_NOT_FOUND',
+  });
+}
+
 async function resolvePage(posts, viewerId) {
   const authorIds = [...new Set(posts.map((post) => String(post.authorId)))];
   const recipeIds = [
     ...new Set(posts.filter((post) => post.recipeId).map((post) => String(post.recipeId))),
   ];
 
-  const [authors, recipes, likeMetadata] = await Promise.all([
+  const [authors, recipes, likeMetadata, commentCounts] = await Promise.all([
     userService.getPublicUsersByIds(authorIds),
     Promise.all(
       recipeIds.map(async (recipeId) => ({
@@ -35,6 +43,7 @@ async function resolvePage(posts, viewerId) {
       posts.map((post) => post._id),
       viewerId
     ),
+    communityCommentRepository.getCountsForPosts(posts.map((post) => post._id)),
   ]);
 
   const authorsById = new Map(authors.map((author) => [author.id, author]));
@@ -47,6 +56,9 @@ async function resolvePage(posts, viewerId) {
         likedByCurrentUser: entry.likedByCurrentUser === true,
       },
     ])
+  );
+  const commentsByPostId = new Map(
+    commentCounts.map((entry) => [String(entry._id), entry.commentCount])
   );
 
   return posts.map((post) => {
@@ -63,6 +75,7 @@ async function resolvePage(posts, viewerId) {
       recipeAttachment:
         recipeId === null ? null : { isAvailable: recipe !== null, recipe },
       ...likes,
+      commentCount: commentsByPostId.get(String(post._id)) || 0,
       isOwner: String(post.authorId) === String(viewerId),
     };
   });
@@ -97,6 +110,7 @@ async function createPost(authorId, { caption, recipeId }) {
     recipeAttachment: recipeId ? { isAvailable: true, recipe } : null,
     likeCount: 0,
     likedByCurrentUser: false,
+    commentCount: 0,
     isOwner: true,
   };
 }
@@ -104,7 +118,10 @@ async function createPost(authorId, { caption, recipeId }) {
 async function deletePost(authorId, postId) {
   const deleted = await communityRepository.deleteOwnedById(postId, authorId);
   if (!deleted) throw postNotFoundError();
-  await communityLikeRepository.deleteByPostId(deleted._id);
+  await Promise.all([
+    communityLikeRepository.deleteByPostId(deleted._id),
+    communityCommentRepository.deleteByPostId(deleted._id),
+  ]);
   return deleted;
 }
 
@@ -139,4 +156,64 @@ async function unlikePost(userId, postId) {
   return { liked: false, likeCount: await communityLikeRepository.countByPost(postId) };
 }
 
-module.exports = { listPosts, createPost, deletePost, likePost, unlikePost, resolvePage };
+
+async function resolveComments(comments, viewerId) {
+  const authorIds = [...new Set(comments.map((comment) => String(comment.authorId)))];
+  const authors = await userService.getPublicUsersByIds(authorIds);
+  const authorsById = new Map(authors.map((author) => [author.id, author]));
+  return comments.map((comment) => ({
+    comment,
+    author: authorsById.get(String(comment.authorId)) || null,
+    isOwner: String(comment.authorId) === String(viewerId),
+  }));
+}
+
+async function listComments({ viewerId, postId, page, limit }) {
+  await assertPostExists(postId);
+  const skip = (page - 1) * limit;
+  const [comments, total] = await Promise.all([
+    communityCommentRepository.findManyByPostId(postId, { skip, limit }),
+    communityCommentRepository.countByPostId(postId),
+  ]);
+  return { items: await resolveComments(comments, viewerId), total, page, limit };
+}
+
+async function createComment(authorId, postId, { body }) {
+  await assertPostExists(postId);
+  const comment = await communityCommentRepository.createComment({ postId, authorId, body });
+  const stillExists = await communityRepository.findById(postId);
+  if (!stillExists) {
+    await communityCommentRepository.deleteById(comment._id);
+    throw postNotFoundError();
+  }
+  const [author, commentCount] = await Promise.all([
+    userService.getPublicUsersByIds([authorId]).then((authors) => authors[0] || null),
+    communityCommentRepository.countByPostId(postId),
+  ]);
+  return {
+    item: { comment, author, isOwner: true },
+    commentCount,
+  };
+}
+
+async function deleteComment(authorId, commentId) {
+  const deleted = await communityCommentRepository.deleteOwnedById(commentId, authorId);
+  if (!deleted) throw commentNotFoundError();
+  return {
+    deleted: true,
+    commentCount: await communityCommentRepository.countByPostId(deleted.postId),
+  };
+}
+
+module.exports = {
+  listPosts,
+  createPost,
+  deletePost,
+  likePost,
+  unlikePost,
+  listComments,
+  createComment,
+  deleteComment,
+  resolvePage,
+  resolveComments,
+};

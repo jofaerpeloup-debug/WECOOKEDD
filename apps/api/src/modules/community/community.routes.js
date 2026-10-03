@@ -6,6 +6,9 @@ const {
   listCommunityPostsSchema,
   createCommunityPostSchema,
   communityPostParamsSchema,
+  listCommunityCommentsSchema,
+  createCommunityCommentSchema,
+  communityCommentParamsSchema,
 } = require('./community.validation');
 
 const router = Router();
@@ -29,6 +32,24 @@ router.delete(
   authenticate,
   validate(communityPostParamsSchema),
   communityController.unlikePost
+);
+router.get(
+  '/posts/:postId/comments',
+  authenticate,
+  validate(listCommunityCommentsSchema),
+  communityController.listComments
+);
+router.post(
+  '/posts/:postId/comments',
+  authenticate,
+  validate(createCommunityCommentSchema),
+  communityController.createComment
+);
+router.delete(
+  '/comments/:commentId',
+  authenticate,
+  validate(communityCommentParamsSchema),
+  communityController.deleteComment
 );
 
 module.exports = router;

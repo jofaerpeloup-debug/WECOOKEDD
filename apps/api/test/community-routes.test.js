@@ -15,6 +15,7 @@ const sessionRepository = require('../src/modules/sessions/session.repository');
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const communityRepository = require('../src/modules/community/community.repository');
 const communityLikeRepository = require('../src/modules/community/community-like.repository');
+const communityCommentRepository = require('../src/modules/community/community-comment.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -32,6 +33,9 @@ const POST_D = '507f1f77bcf86cd799439014';
 const POST_E = '507f1f77bcf86cd799439015';
 const RECIPE_ID = '507f1f77bcf86cd799439021';
 const INGREDIENT_ID = '507f1f77bcf86cd799439022';
+const COMMENT_A = '507f1f77bcf86cd799439031';
+const COMMENT_B = '507f1f77bcf86cd799439032';
+const COMMENT_C = '507f1f77bcf86cd799439033';
 const CREATED_AT = new Date('2026-09-13T08:00:00.000Z');
 
 function tokenFor({ id, sessionId, role = 'user' }) {
@@ -92,12 +96,24 @@ function fakeRecipe(overrides = {}) {
   };
 }
 
+function fakeComment(overrides = {}) {
+  return {
+    _id: COMMENT_A,
+    postId: POST_A,
+    authorId: USER_A,
+    body: 'Looks delicious.',
+    createdAt: CREATED_AT,
+    ...overrides,
+  };
+}
+
 function mockPublicAuthors(t, authors = [{ _id: USER_A, name: 'User A' }]) {
   t.mock.method(userRepository, 'findPublicByIds', async () => authors);
 }
 
 function mockEmptyLikeMetadata(t) {
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
 }
 
 function mockAuthDirectory(t) {
@@ -128,19 +144,11 @@ test('all Community routes reject unauthenticated requests', async () => {
     request(app).delete(`/api/v1/community/posts/${POST_A}`),
     request(app).post(`/api/v1/community/posts/${POST_A}/likes`),
     request(app).delete(`/api/v1/community/posts/${POST_A}/likes`),
+    request(app).get(`/api/v1/community/posts/${POST_A}/comments`),
+    request(app).post(`/api/v1/community/posts/${POST_A}/comments`).send({ body: 'Hello' }),
+    request(app).delete(`/api/v1/community/comments/${COMMENT_A}`),
   ]);
   responses.forEach((response) => assert.equal(response.status, 401));
-});
-
-test('M10A exposes no comment API', async (t) => {
-  const auth = mockAuth(t);
-  const response = await request(app)
-    .post(`/api/v1/community/posts/${POST_A}/comments`)
-    .set('Authorization', auth)
-    .send({ body: 'Not implemented' });
-
-  assert.equal(response.status, 404);
-  assert.equal(response.body.error.code, 'ROUTE_NOT_FOUND');
 });
 
 test('authenticated text-only create trims edges, preserves line breaks, and derives author', async (t) => {
@@ -290,6 +298,9 @@ test('global feed paginates, preserves repository order, and returns safe author
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => [
     { _id: POST_A, likeCount: 3, likedByCurrentUser: true },
   ]);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => [
+    { _id: POST_A, commentCount: 7 },
+  ]);
 
   const response = await request(app)
     .get('/api/v1/community/posts?page=2&limit=2')
@@ -305,6 +316,7 @@ test('global feed paginates, preserves repository order, and returns safe author
   assert.equal(JSON.stringify(response.body).includes('role'), false);
   assert.equal(response.body.data.posts[0].likeCount, 3);
   assert.equal(response.body.data.posts[0].likedByCurrentUser, true);
+  assert.equal(response.body.data.posts[0].commentCount, 7);
   assert.equal(response.body.data.posts[1].likeCount, 0);
   assert.equal(response.body.data.posts[1].commentCount, 0);
   assert.equal(response.body.data.posts[1].isOwner, false);
@@ -322,6 +334,7 @@ test('the same global feed derives ownership and liked state independently for U
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async (_ids, viewerId) => [
     { _id: POST_A, likeCount: 1, likedByCurrentUser: String(viewerId) === USER_A },
   ]);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
 
   const asA = await request(app).get('/api/v1/community/posts').set('Authorization', auth[USER_A]);
   const asB = await request(app).get('/api/v1/community/posts').set('Authorization', auth[USER_B]);
@@ -458,12 +471,14 @@ test('a post with an unavailable recipe remains likeable and owner-deletable wit
   mockPublicAuthors(t);
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => fakeRecipe({ isActive: false }));
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
   t.mock.method(communityLikeRepository, 'createLike', async (relation) => relation);
   t.mock.method(communityLikeRepository, 'countByPost', async () => 1);
   t.mock.method(communityLikeRepository, 'deleteByPostId', async () => {
     likesDeleted = true;
     return { deletedCount: 1 };
   });
+  t.mock.method(communityCommentRepository, 'deleteByPostId', async () => ({ deletedCount: 0 }));
 
   const feed = await request(app).get('/api/v1/community/posts').set('Authorization', auth);
   const like = await request(app).post(`/api/v1/community/posts/${POST_A}/likes`).set('Authorization', auth);
@@ -500,6 +515,11 @@ test('owner delete scopes ownership and removes likes without touching recipe', 
     cleanupId = String(id);
     return { deletedCount: 2 };
   });
+  let commentCleanupId;
+  t.mock.method(communityCommentRepository, 'deleteByPostId', async (id) => {
+    commentCleanupId = String(id);
+    return { deletedCount: 3 };
+  });
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => {
     recipeLookup = true;
     return null;
@@ -511,6 +531,7 @@ test('owner delete scopes ownership and removes likes without touching recipe', 
   assert.equal(response.status, 200);
   assert.deepEqual(deleteArgs, [POST_A, USER_A]);
   assert.equal(cleanupId, POST_A);
+  assert.equal(commentCleanupId, POST_A);
   assert.equal(recipeLookup, false);
 });
 
@@ -552,6 +573,17 @@ test('delete preserves unrelated posts and gives a non-owner the same result as 
     }
     return { deletedCount };
   });
+  const comments = new Set([`${POST_A}:${COMMENT_A}`, `${POST_B}:${COMMENT_B}`]);
+  t.mock.method(communityCommentRepository, 'deleteByPostId', async (postId) => {
+    let deletedCount = 0;
+    for (const key of [...comments]) {
+      if (key.startsWith(`${postId}:`)) {
+        comments.delete(key);
+        deletedCount += 1;
+      }
+    }
+    return { deletedCount };
+  });
 
   const forbidden = await request(app).delete(`/api/v1/community/posts/${POST_A}`).set('Authorization', auth[USER_B]);
   const missing = await request(app).delete(`/api/v1/community/posts/${POST_C}`).set('Authorization', auth[USER_B]);
@@ -564,6 +596,7 @@ test('delete preserves unrelated posts and gives a non-owner the same result as 
   assert.equal(posts.has(POST_A), false);
   assert.equal(posts.has(POST_B), true);
   assert.deepEqual([...likes], [`${POST_B}:${USER_B}`]);
+  assert.deepEqual([...comments], [`${POST_B}:${COMMENT_B}`]);
 });
 
 test('delete and like routes reject malformed post ids before repository access', async (t) => {
@@ -644,6 +677,7 @@ test('two users like and unlike independently without duplicate or negative coun
     likeCount: likes.size,
     likedByCurrentUser: likes.has(`${POST_A}:${viewerId}`),
   }]);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
 
   const mutate = (method, userId) => request(app)[method](`/api/v1/community/posts/${POST_A}/likes`)
     .set('Authorization', auth[userId]);
@@ -717,4 +751,145 @@ test('like and unlike return controlled not-found for a missing post', async (t)
   assert.equal(like.status, 404);
   assert.equal(unlike.status, 404);
   assert.equal(like.body.error.code, 'COMMUNITY_POST_NOT_FOUND');
+});
+
+test('comment list is lazy-page shaped, newest-first from repository, safe, and server-counted', async (t) => {
+  const auth = mockAuth(t);
+  t.mock.method(communityRepository, 'findById', async () => fakePost());
+  let paginationArgs;
+  t.mock.method(communityCommentRepository, 'findManyByPostId', async (postId, args) => {
+    assert.equal(postId, POST_A);
+    paginationArgs = args;
+    return [
+      fakeComment({ _id: COMMENT_C, authorId: USER_B }),
+      fakeComment({ _id: COMMENT_B, authorId: USER_A }),
+    ];
+  });
+  t.mock.method(communityCommentRepository, 'countByPostId', async () => 5);
+  mockPublicAuthors(t, [
+    { _id: USER_A, name: 'User A', email: 'private-a@example.com', role: 'admin' },
+  ]);
+
+  const response = await request(app)
+    .get(`/api/v1/community/posts/${POST_A}/comments?page=2&limit=2`)
+    .set('Authorization', auth);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(paginationArgs, { skip: 2, limit: 2 });
+  assert.equal(response.body.data.commentCount, 5);
+  assert.deepEqual(response.body.data.pagination, { page: 2, limit: 2, total: 5, totalPages: 3 });
+  assert.deepEqual(response.body.data.comments.map((comment) => comment.id), [COMMENT_C, COMMENT_B]);
+  assert.equal(response.body.data.comments[0].author, null);
+  assert.equal(response.body.data.comments[0].isOwner, false);
+  assert.deepEqual(response.body.data.comments[1].author, { id: USER_A, name: 'User A' });
+  assert.equal(response.body.data.comments[1].isOwner, true);
+  assert.deepEqual(Object.keys(response.body.data.comments[1]).sort(), ['author', 'body', 'createdAt', 'id', 'isOwner']);
+  assert.equal(JSON.stringify(response.body).includes('private-a@example.com'), false);
+});
+
+test('comment list returns an empty page and controlled missing-post response', async (t) => {
+  const auth = mockAuth(t);
+  t.mock.method(communityRepository, 'findById', async (postId) =>
+    String(postId) === POST_A ? fakePost() : null);
+  t.mock.method(communityCommentRepository, 'findManyByPostId', async () => []);
+  t.mock.method(communityCommentRepository, 'countByPostId', async () => 0);
+  mockPublicAuthors(t, []);
+
+  const empty = await request(app)
+    .get(`/api/v1/community/posts/${POST_A}/comments?page=3&limit=20`)
+    .set('Authorization', auth);
+  const missing = await request(app)
+    .get(`/api/v1/community/posts/${POST_B}/comments`)
+    .set('Authorization', auth);
+  assert.deepEqual(empty.body.data, {
+    comments: [],
+    commentCount: 0,
+    pagination: { page: 3, limit: 20, total: 0, totalPages: 0 },
+  });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, 'COMMUNITY_POST_NOT_FOUND');
+});
+
+test('comment create derives identity and post, trims body, and returns authoritative count', async (t) => {
+  const auth = mockAuth(t);
+  t.mock.method(communityRepository, 'findById', async () => fakePost());
+  let created;
+  t.mock.method(communityCommentRepository, 'createComment', async (doc) => {
+    created = doc;
+    return fakeComment(doc);
+  });
+  t.mock.method(communityCommentRepository, 'countByPostId', async () => 4);
+  mockPublicAuthors(t);
+
+  const response = await request(app)
+    .post(`/api/v1/community/posts/${POST_A}/comments`)
+    .set('Authorization', auth)
+    .send({ body: '  Line one\nLine two  ' });
+  assert.equal(response.status, 201);
+  assert.deepEqual(created, { postId: POST_A, authorId: USER_A, body: 'Line one\nLine two' });
+  assert.equal(response.body.data.comment.body, 'Line one\nLine two');
+  assert.equal(response.body.data.comment.isOwner, true);
+  assert.equal(response.body.data.commentCount, 4);
+});
+
+test('comment create removes the just-created row if post deletion wins the race', async (t) => {
+  const auth = mockAuth(t);
+  let reads = 0;
+  t.mock.method(communityRepository, 'findById', async () => {
+    reads += 1;
+    return reads === 1 ? fakePost() : null;
+  });
+  t.mock.method(communityCommentRepository, 'createComment', async (doc) => fakeComment(doc));
+  let cleanupId;
+  t.mock.method(communityCommentRepository, 'deleteById', async (commentId) => {
+    cleanupId = String(commentId);
+    return fakeComment();
+  });
+
+  const response = await request(app)
+    .post(`/api/v1/community/posts/${POST_A}/comments`)
+    .set('Authorization', auth)
+    .send({ body: 'Racing comment' });
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error.code, 'COMMUNITY_POST_NOT_FOUND');
+  assert.equal(cleanupId, COMMENT_A);
+});
+
+test('comment delete is opaque and owner-only, including for an admin', async (t) => {
+  const auth = mockAuthDirectory(t);
+  t.mock.method(communityCommentRepository, 'deleteOwnedById', async (commentId, authorId) =>
+    String(commentId) === COMMENT_A && String(authorId) === USER_A ? fakeComment() : null);
+  t.mock.method(communityCommentRepository, 'countByPostId', async (postId) => {
+    assert.equal(String(postId), POST_A);
+    return 2;
+  });
+
+  const nonOwner = await request(app).delete(`/api/v1/community/comments/${COMMENT_A}`).set('Authorization', auth[USER_B]);
+  const admin = await request(app).delete(`/api/v1/community/comments/${COMMENT_A}`).set('Authorization', auth[ADMIN]);
+  const missing = await request(app).delete(`/api/v1/community/comments/${COMMENT_B}`).set('Authorization', auth[USER_B]);
+  const owner = await request(app).delete(`/api/v1/community/comments/${COMMENT_A}`).set('Authorization', auth[USER_A]);
+  assert.equal(nonOwner.status, 404);
+  assert.equal(admin.status, 404);
+  assert.deepEqual(nonOwner.body.error, missing.body.error);
+  assert.equal(nonOwner.body.error.code, 'COMMUNITY_COMMENT_NOT_FOUND');
+  assert.deepEqual(owner.body.data, { deleted: true, commentCount: 2 });
+});
+
+test('comment routes strictly validate ids, page bounds, and body fields', async (t) => {
+  const auth = mockAuth(t);
+  const operations = [
+    request(app).get('/api/v1/community/posts/not-an-id/comments'),
+    request(app).get(`/api/v1/community/posts/${POST_A}/comments?page=0`),
+    request(app).get(`/api/v1/community/posts/${POST_A}/comments?limit=101`),
+    request(app).get(`/api/v1/community/posts/${POST_A}/comments?sort=oldest`),
+    request(app).post(`/api/v1/community/posts/${POST_A}/comments`).send({ body: ' ' }),
+    request(app).post(`/api/v1/community/posts/${POST_A}/comments`).send({ body: 'x'.repeat(1001) }),
+    request(app).post(`/api/v1/community/posts/${POST_A}/comments`).send({ body: 'Okay', authorId: USER_B }),
+    request(app).delete('/api/v1/community/comments/not-an-id'),
+  ];
+  for (const operation of operations) {
+    const response = await operation.set('Authorization', auth);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
 });
