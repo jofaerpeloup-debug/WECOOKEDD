@@ -20,6 +20,27 @@ const listPosts = asyncHandler(async (req, res) => {
   });
 });
 
+const listFollowingPosts = asyncHandler(async (req, res) => {
+  const { page, limit } = req.validated.query;
+  const result = await communityService.listFollowingPosts({
+    viewerId: req.auth.userId,
+    page,
+    limit,
+  });
+  sendSuccess(res, {
+    posts: result.items.map(toPublicCommunityPost),
+    pagination: toPagination({ page, limit, total: result.total }),
+  });
+});
+
+const followUser = asyncHandler(async (req, res) => {
+  sendSuccess(res, await communityService.followUser(req.auth.userId, req.params.userId));
+});
+
+const unfollowUser = asyncHandler(async (req, res) => {
+  sendSuccess(res, await communityService.unfollowUser(req.auth.userId, req.params.userId));
+});
+
 const createPost = asyncHandler(async (req, res) => {
   const result = await communityService.createPost(req.auth.userId, req.validated.body);
   sendSuccess(res, { post: toPublicCommunityPost(result) }, 201);
@@ -74,6 +95,9 @@ const deleteComment = asyncHandler(async (req, res) => {
 
 module.exports = {
   listPosts,
+  listFollowingPosts,
+  followUser,
+  unfollowUser,
   createPost,
   deletePost,
   likePost,

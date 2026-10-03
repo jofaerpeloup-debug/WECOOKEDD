@@ -1,3 +1,18 @@
+let mockStateUpdateObserver = null;
+jest.mock('react', () => {
+  const actual = jest.requireActual('react');
+  return {
+    ...actual,
+    useState: (initial) => {
+      const [value, setValue] = actual.useState(initial);
+      return [value, (update) => {
+        if (mockStateUpdateObserver) mockStateUpdateObserver(update);
+        return setValue(update);
+      }];
+    },
+  };
+});
+
 const React = require('react');
 
 jest.mock('react-native', () => {
@@ -43,7 +58,9 @@ jest.mock('../src/api/communityService', () => ({
   deleteCommunityComment: jest.fn(),
   deleteCommunityPost: jest.fn(),
   listCommunityComments: jest.fn(),
+  listFollowingCommunityPosts: jest.fn(),
   listCommunityPosts: jest.fn(),
+  setCommunityAuthorFollowed: jest.fn(),
   setCommunityPostLiked: jest.fn(),
 }));
 jest.mock('../src/api/communityErrors', () => ({
@@ -79,6 +96,7 @@ function post(id, commentCount = 0, overrides = {}) {
     likedByCurrentUser: false,
     commentCount,
     isOwner: true,
+    isFollowingAuthor: false,
     ...overrides,
   };
 }
@@ -114,9 +132,11 @@ beforeEach(() => {
   mockAuth = { user: { id: 'user-a', name: 'User A' } };
   listRecipes.mockResolvedValue({ recipes: [], pagination: { page: 1, totalPages: 1 } });
   communityService.listCommunityPosts.mockResolvedValue(feed());
+  communityService.listFollowingCommunityPosts.mockResolvedValue(feed([], 1, 0));
   communityService.createCommunityPost.mockResolvedValue(post('created'));
   communityService.deleteCommunityPost.mockResolvedValue(true);
   communityService.setCommunityPostLiked.mockResolvedValue({ liked: true, likeCount: 1 });
+  communityService.setCommunityAuthorFollowed.mockResolvedValue({ following: true });
 });
 
 afterEach(() => cleanup());
@@ -519,4 +539,264 @@ it('ignores a late comment continuation after unmount', async () => {
 
   await settle(lateCreate, 'resolve', { comment: comment('late', 'Late create'), commentCount: 2 });
   expect(notify).not.toHaveBeenCalled();
+});
+
+it('switches All/Following with fresh page one and rejects the late prior-mode payload', async () => {
+  const lateAll = deferred();
+  communityService.listCommunityPosts.mockReset().mockReturnValueOnce(lateAll.promise);
+  communityService.listFollowingCommunityPosts.mockResolvedValueOnce(feed([
+    post('following', 0, {
+      author: { id: 'user-b', name: 'User B', avatarUrl: null },
+      isOwner: false,
+      isFollowingAuthor: true,
+    }),
+  ], 1, 1));
+  const view = render(<CommunityScreen />);
+  fireEvent.press(view.getByLabelText('Following Community posts'));
+  await waitFor(() => expect(view.getByText('Post following')).toBeOnTheScreen());
+  expect(communityService.listFollowingCommunityPosts).toHaveBeenCalledWith({ page: 1, limit: 20 });
+
+  await settle(lateAll, 'resolve', feed([post('corrupt-all')], 1, 1));
+  expect(view.queryByText('Post corrupt-all')).toBeNull();
+  expect(view.getByText('Post following')).toBeOnTheScreen();
+});
+
+it('keeps follow pessimistic and single-flight per author, then reconciles every matching card', async () => {
+  const mutation = deferred();
+  const author = { id: 'user-b', name: 'User B', avatarUrl: null };
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('b1', 0, { author, isOwner: false }),
+    post('b2', 0, { author, isOwner: false }),
+  ], 1, 1));
+  communityService.setCommunityAuthorFollowed.mockReturnValueOnce(mutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getAllByLabelText('Follow User B')).toHaveLength(2));
+  fireEvent.press(view.getAllByLabelText('Follow User B')[0]);
+  fireEvent.press(view.getAllByLabelText('Follow User B')[1]);
+  expect(communityService.setCommunityAuthorFollowed).toHaveBeenCalledTimes(1);
+  expect(view.queryByLabelText('Unfollow User B')).toBeNull();
+
+  await settle(mutation, 'resolve', { following: true });
+  expect(view.getAllByLabelText('Unfollow User B')).toHaveLength(2);
+});
+
+it.each([
+  {
+    label: 'follow',
+    startingFollowing: false,
+    settledFollowing: true,
+    initialLabel: 'Follow User B',
+    settledLabel: 'Unfollow User B',
+  },
+  {
+    label: 'unfollow',
+    startingFollowing: true,
+    settledFollowing: false,
+    initialLabel: 'Unfollow User B',
+    settledLabel: 'Follow User B',
+  },
+])('completes $label from All after switching to Following and authoritatively reloads page one', async ({
+  startingFollowing, settledFollowing, initialLabel, settledLabel,
+}) => {
+  const mutation = deferred();
+  const author = { id: 'user-b', name: 'User B', avatarUrl: null };
+  const allBefore = post('all-before', 0, {
+    author, isOwner: false, isFollowingAuthor: startingFollowing,
+  });
+  const followingBefore = post('following-before', 0, {
+    author, isOwner: false, isFollowingAuthor: startingFollowing,
+  });
+  const followingAfter = post('following-after', 0, {
+    author, isOwner: false, isFollowingAuthor: settledFollowing,
+  });
+  communityService.listCommunityPosts.mockResolvedValue(feed([allBefore], 1, 1));
+  communityService.listFollowingCommunityPosts
+    .mockResolvedValueOnce(feed([followingBefore], 1, 1))
+    .mockResolvedValueOnce(feed(settledFollowing ? [followingAfter] : [], 1, settledFollowing ? 1 : 0));
+  communityService.setCommunityAuthorFollowed
+    .mockReturnValueOnce(mutation.promise)
+    .mockReturnValueOnce(new Promise(() => {}));
+
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText(initialLabel)).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText(initialLabel));
+  fireEvent.press(view.getByLabelText('Following Community posts'));
+  await waitFor(() => expect(view.getByText('Post following-before')).toBeOnTheScreen());
+  expect(view.getByLabelText(initialLabel).props.accessibilityState.busy).toBe(true);
+
+  await settle(mutation, 'resolve', { following: settledFollowing });
+  await waitFor(() => expect(communityService.listFollowingCommunityPosts).toHaveBeenCalledTimes(2));
+  if (settledFollowing) {
+    await waitFor(() => expect(view.getByText('Post following-after')).toBeOnTheScreen());
+    expect(view.getByLabelText(settledLabel)).toBeOnTheScreen();
+  } else {
+    await waitFor(() => expect(view.getByText('Not following anyone yet')).toBeOnTheScreen());
+    communityService.listCommunityPosts.mockResolvedValueOnce(feed([
+      post('all-after', 0, { author, isOwner: false, isFollowingAuthor: false }),
+    ], 1, 1));
+    fireEvent.press(view.getByLabelText('All Community posts'));
+    await waitFor(() => expect(view.getByLabelText(settledLabel)).toBeOnTheScreen());
+  }
+
+  expect(view.getByLabelText(settledLabel).props.accessibilityState.busy).toBe(false);
+  fireEvent.press(view.getByLabelText(settledLabel));
+  expect(communityService.setCommunityAuthorFollowed).toHaveBeenCalledTimes(2);
+});
+
+it('preserves the new mode and clears pending when a cross-mode follow fails', async () => {
+  const mutation = deferred();
+  const author = { id: 'user-b', name: 'User B', avatarUrl: null };
+  const followedPost = post('following', 0, {
+    author, isOwner: false, isFollowingAuthor: true,
+  });
+  communityService.listCommunityPosts.mockResolvedValue(feed([followedPost], 1, 1));
+  communityService.listFollowingCommunityPosts.mockResolvedValue(feed([followedPost], 1, 1));
+  communityService.setCommunityAuthorFollowed
+    .mockReturnValueOnce(mutation.promise)
+    .mockReturnValueOnce(new Promise(() => {}));
+
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Unfollow User B')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Unfollow User B'));
+  fireEvent.press(view.getByLabelText('Following Community posts'));
+  await waitFor(() => expect(view.getByText('Post following')).toBeOnTheScreen());
+
+  await settle(mutation, 'reject', new Error('offline'));
+  expect(notify).toHaveBeenCalledWith('Couldn’t update follow', 'offline');
+  expect(view.getByText('Post following')).toBeOnTheScreen();
+  expect(view.getByLabelText('Unfollow User B')).toBeOnTheScreen();
+  expect(view.getByLabelText('Unfollow User B').props.accessibilityState.busy).toBe(false);
+  fireEvent.press(view.getByLabelText('Unfollow User B'));
+  expect(communityService.setCommunityAuthorFollowed).toHaveBeenCalledTimes(2);
+});
+
+it('does not let a feed read begun before a follow mutation restore stale rows or follow state', async () => {
+  const staleRefresh = deferred();
+  const followMutation = deferred();
+  const author = { id: 'user-b', name: 'User B', avatarUrl: null };
+  communityService.listCommunityPosts.mockResolvedValueOnce(feed([
+    post('current', 0, { author, isOwner: false, isFollowingAuthor: false }),
+  ], 1, 1));
+  communityService.setCommunityAuthorFollowed.mockReturnValueOnce(followMutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Follow User B')).toBeOnTheScreen());
+  communityService.listCommunityPosts.mockReturnValueOnce(staleRefresh.promise);
+  act(() => { refreshProps(view).onRefresh(); });
+  fireEvent.press(view.getByLabelText('Follow User B'));
+  await settle(followMutation, 'resolve', { following: true });
+  expect(view.getByLabelText('Unfollow User B')).toBeOnTheScreen();
+
+  await settle(staleRefresh, 'resolve', feed([
+    post('corrupt-stale', 0, { author, isOwner: false, isFollowingAuthor: false }),
+  ], 1, 1));
+  expect(view.queryByText('Post corrupt-stale')).toBeNull();
+  expect(view.getByText('Post current')).toBeOnTheScreen();
+  expect(view.getByLabelText('Unfollow User B')).toBeOnTheScreen();
+});
+
+it('preserves cards on follow failure and guardedly reloads page one after Following unfollow', async () => {
+  const author = { id: 'user-b', name: 'User B', avatarUrl: null };
+  const followedPost = post('b1', 0, { author, isOwner: false, isFollowingAuthor: true });
+  communityService.listCommunityPosts.mockResolvedValue(feed([followedPost], 1, 1));
+  communityService.listFollowingCommunityPosts
+    .mockResolvedValueOnce(feed([followedPost], 1, 1))
+    .mockResolvedValueOnce(feed([], 1, 0));
+  communityService.setCommunityAuthorFollowed
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValueOnce({ following: false });
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Unfollow User B')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Unfollow User B'));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith('Couldn’t update follow', 'offline'));
+  expect(view.getByText('Post b1')).toBeOnTheScreen();
+  expect(view.getByLabelText('Unfollow User B')).toBeOnTheScreen();
+
+  fireEvent.press(view.getByLabelText('Following Community posts'));
+  await waitFor(() => expect(communityService.listFollowingCommunityPosts).toHaveBeenCalledTimes(1));
+  fireEvent.press(view.getByLabelText('Unfollow User B'));
+  await waitFor(() => expect(communityService.listFollowingCommunityPosts).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(view.getByText('Not following anyone yet')).toBeOnTheScreen());
+  expect(view.getByText("Tap Follow on a post's author to see their cooking here.")).toBeOnTheScreen();
+});
+
+it('does not insert the viewer own newly-created post into Following', async () => {
+  communityService.listFollowingCommunityPosts.mockResolvedValue(feed([], 1, 0));
+  communityService.createCommunityPost.mockResolvedValue(post('own-new'));
+  const view = render(<CommunityScreen />);
+  fireEvent.press(view.getByLabelText('Following Community posts'));
+  await waitFor(() => expect(view.getByText('Not following anyone yet')).toBeOnTheScreen());
+  fireEvent.changeText(view.getByPlaceholderText("Share what you're cooking..."), 'Own new');
+  fireEvent.press(view.getByText('Post'));
+  await waitFor(() => expect(communityService.createCommunityPost).toHaveBeenCalledTimes(1));
+  expect(view.queryByText('Post own-new')).toBeNull();
+  expect(view.getByText('Not following anyone yet')).toBeOnTheScreen();
+});
+
+it('does not let an old-account same-author follow continuation update or clear the new token', async () => {
+  const oldMutation = deferred();
+  const newMutation = deferred();
+  const author = { id: 'shared-author', name: 'Shared Author', avatarUrl: null };
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('shared', 0, { author, isOwner: false }),
+  ], 1, 1));
+  communityService.setCommunityAuthorFollowed
+    .mockReturnValueOnce(oldMutation.promise)
+    .mockReturnValueOnce(newMutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Follow Shared Author')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Follow Shared Author'));
+
+  mockAuth = { user: { id: 'user-b', name: 'User B' } };
+  view.rerender(<CommunityScreen />);
+  await waitFor(() => expect(communityService.listCommunityPosts).toHaveBeenCalledTimes(2));
+  fireEvent.press(view.getByLabelText('Follow Shared Author'));
+  expect(communityService.setCommunityAuthorFollowed).toHaveBeenCalledTimes(2);
+  await settle(oldMutation, 'reject', new Error('old account failure'));
+  expect(notify).not.toHaveBeenCalled();
+  fireEvent.press(view.getByLabelText('Follow Shared Author'));
+  expect(communityService.setCommunityAuthorFollowed).toHaveBeenCalledTimes(2);
+
+  await settle(newMutation, 'resolve', { following: true });
+  expect(view.getByLabelText('Unfollow Shared Author')).toBeOnTheScreen();
+});
+
+it.each([
+  ['follow', false, true],
+  ['unfollow', true, false],
+])('installs no late continuation when successful %s resolves after unmount', async (_label, initialFollowing, settledFollowing) => {
+  const late = deferred();
+  const stateUpdateObserver = jest.fn();
+  mockStateUpdateObserver = stateUpdateObserver;
+  const mapDeleteSpy = jest.spyOn(Map.prototype, 'delete');
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('b1', 0, {
+      author: { id: 'user-b', name: 'User B', avatarUrl: null },
+      isOwner: false,
+      isFollowingAuthor: initialFollowing,
+    }),
+  ], 1, 1));
+  communityService.setCommunityAuthorFollowed.mockReturnValueOnce(late.promise);
+  try {
+    const view = render(<CommunityScreen />);
+    const actionLabel = initialFollowing ? 'Unfollow User B' : 'Follow User B';
+    await waitFor(() => expect(view.getByLabelText(actionLabel)).toBeOnTheScreen());
+    fireEvent.press(view.getByLabelText(actionLabel));
+    expect(stateUpdateObserver).toHaveBeenCalled();
+    view.unmount();
+    stateUpdateObserver.mockClear();
+    mapDeleteSpy.mockClear();
+    const feedCallsAtUnmount = communityService.listCommunityPosts.mock.calls.length
+      + communityService.listFollowingCommunityPosts.mock.calls.length;
+
+    await settle(late, 'resolve', { following: settledFollowing });
+
+    expect(stateUpdateObserver).not.toHaveBeenCalled();
+    expect(mapDeleteSpy).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(communityService.listCommunityPosts.mock.calls.length
+      + communityService.listFollowingCommunityPosts.mock.calls.length).toBe(feedCallsAtUnmount);
+  } finally {
+    mockStateUpdateObserver = null;
+    mapDeleteSpy.mockRestore();
+  }
 });

@@ -16,6 +16,7 @@ const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const communityRepository = require('../src/modules/community/community.repository');
 const communityLikeRepository = require('../src/modules/community/community-like.repository');
 const communityCommentRepository = require('../src/modules/community/community-comment.repository');
+const communityFollowRepository = require('../src/modules/community/community-follow.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -114,9 +115,14 @@ function mockPublicAuthors(t, authors = [{ _id: USER_A, name: 'User A' }]) {
 function mockEmptyLikeMetadata(t) {
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
   t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
+  t.mock.method(communityFollowRepository, 'findFollowedUserIdsAmong', async () => []);
 }
 
-function mockAuthDirectory(t) {
+function mockNoFollowMetadata(t) {
+  t.mock.method(communityFollowRepository, 'findFollowedUserIdsAmong', async () => []);
+}
+
+function mockAuthDirectory(t, resolveUser) {
   const identities = [
     { id: USER_A, sessionId: SESSION_A, role: 'user', name: 'User A' },
     { id: USER_B, sessionId: SESSION_B, role: 'user', name: 'User B' },
@@ -127,6 +133,10 @@ function mockAuthDirectory(t) {
     return identity ? { _id: identity.sessionId, userId: identity.id, revokedAt: null } : null;
   });
   t.mock.method(userRepository, 'findById', async (userId) => {
+    if (resolveUser) {
+      const resolved = resolveUser(String(userId));
+      if (resolved !== undefined) return resolved;
+    }
     const identity = identities.find((entry) => entry.id === String(userId));
     return identity
       ? { _id: identity.id, name: identity.name, email: 'private@example.com', role: identity.role, status: 'active' }
@@ -147,6 +157,9 @@ test('all Community routes reject unauthenticated requests', async () => {
     request(app).get(`/api/v1/community/posts/${POST_A}/comments`),
     request(app).post(`/api/v1/community/posts/${POST_A}/comments`).send({ body: 'Hello' }),
     request(app).delete(`/api/v1/community/comments/${COMMENT_A}`),
+    request(app).get('/api/v1/community/posts/following'),
+    request(app).post(`/api/v1/community/users/${USER_B}/follow`),
+    request(app).delete(`/api/v1/community/users/${USER_B}/follow`),
   ]);
   responses.forEach((response) => assert.equal(response.status, 401));
 });
@@ -280,6 +293,7 @@ test('create rejects every forbidden ownership/media/aggregate field', async (t)
 });
 
 test('global feed paginates, preserves repository order, and returns safe authors/viewer likes', async (t) => {
+  mockNoFollowMetadata(t);
   const auth = mockAuth(t);
   const posts = [
     fakePost(),
@@ -323,6 +337,7 @@ test('global feed paginates, preserves repository order, and returns safe author
 });
 
 test('the same global feed derives ownership and liked state independently for Users A and B', async (t) => {
+  mockNoFollowMetadata(t);
   const auth = mockAuthDirectory(t);
   const posts = [fakePost(), fakePost({ _id: POST_B, authorId: USER_B })];
   t.mock.method(communityRepository, 'findMany', async () => posts);
@@ -461,6 +476,7 @@ test('feed reports later-archived recipe attachment unavailable without dropping
 });
 
 test('a post with an unavailable recipe remains likeable and owner-deletable without recipe snapshots', async (t) => {
+  mockNoFollowMetadata(t);
   const auth = mockAuth(t);
   const post = fakePost({ recipeId: RECIPE_ID });
   let likesDeleted = false;
@@ -500,6 +516,154 @@ test('feed validates page/limit and rejects client-controlled query fields', asy
       .set('Authorization', auth);
     assert.equal(response.status, 400, query);
   }
+});
+
+test('follow routes derive the actor, are idempotent, and return authoritative Booleans', async (t) => {
+  const auth = mockAuthDirectory(t);
+  const pairs = new Set();
+  const created = [];
+  t.mock.method(communityFollowRepository, 'createFollow', async (doc) => {
+    created.push(doc);
+    const key = `${doc.followerId}:${doc.followedUserId}`;
+    if (pairs.has(key)) {
+      const error = new Error('private duplicate detail');
+      error.code = 11000;
+      throw error;
+    }
+    pairs.add(key);
+    return doc;
+  });
+  t.mock.method(communityFollowRepository, 'deleteFollow', async (followerId, followedUserId) => {
+    pairs.delete(`${followerId}:${followedUserId}`);
+    return null;
+  });
+
+  const followed = await request(app).post(`/api/v1/community/users/${USER_B}/follow`)
+    .set('Authorization', auth[USER_A]);
+  const repeated = await request(app).post(`/api/v1/community/users/${USER_B}/follow`)
+    .set('Authorization', auth[USER_A]);
+  const unfollowed = await request(app).delete(`/api/v1/community/users/${USER_B}/follow`)
+    .set('Authorization', auth[USER_A]);
+  const repeatedDelete = await request(app).delete(`/api/v1/community/users/${USER_B}/follow`)
+    .set('Authorization', auth[USER_A]);
+
+  assert.deepEqual(followed.body.data, { following: true });
+  assert.deepEqual(repeated.body.data, { following: true });
+  assert.deepEqual(unfollowed.body.data, { following: false });
+  assert.deepEqual(repeatedDelete.body.data, { following: false });
+  assert.deepEqual(created[0], { followerId: USER_A, followedUserId: USER_B });
+  assert.equal(JSON.stringify(repeated.body).includes('private duplicate detail'), false);
+});
+
+test('follow routes reject self, malformed ids, and every body/query field after authentication', async (t) => {
+  const auth = mockAuth(t);
+  const operations = [
+    request(app).post(`/api/v1/community/users/${USER_A.toUpperCase()}/follow`),
+    request(app).delete(`/api/v1/community/users/${USER_A}/follow`),
+    request(app).post('/api/v1/community/users/not-an-id/follow'),
+    request(app).post(`/api/v1/community/users/${USER_B}/follow?actor=${USER_A}`),
+    request(app).post(`/api/v1/community/users/${USER_B}/follow`).send({ followerId: USER_A }),
+    request(app).delete(`/api/v1/community/users/${USER_B}/follow`).send({ following: false }),
+  ];
+  const responses = [];
+  for (const operation of operations) responses.push(await operation.set('Authorization', auth));
+  assert.equal(responses[0].status, 400);
+  assert.equal(responses[0].body.error.code, 'COMMUNITY_SELF_FOLLOW_NOT_ALLOWED');
+  assert.equal(responses[1].body.error.code, 'COMMUNITY_SELF_FOLLOW_NOT_ALLOWED');
+  for (const response of responses.slice(2)) {
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
+});
+
+test('follow returns one safe not-found result and cleans a relation when target deletion wins', async (t) => {
+  let targetReads = 0;
+  const auth = mockAuthDirectory(t, (id) => {
+    if (id !== USER_B) return undefined;
+    targetReads += 1;
+    return targetReads === 1 ? { _id: USER_B, status: 'active' } : null;
+  });
+  t.mock.method(communityFollowRepository, 'createFollow', async (doc) => doc);
+  let cleanup;
+  t.mock.method(communityFollowRepository, 'deleteFollow', async (...args) => { cleanup = args.map(String); });
+
+  const missing = await request(app).post(`/api/v1/community/users/${POST_E}/follow`)
+    .set('Authorization', auth[USER_A]);
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.error.code, 'COMMUNITY_FOLLOW_TARGET_NOT_FOUND');
+
+  const raced = await request(app).post(`/api/v1/community/users/${USER_B}/follow`)
+    .set('Authorization', auth[USER_A]);
+  assert.equal(raced.status, 404);
+  assert.equal(raced.body.error.code, 'COMMUNITY_FOLLOW_TARGET_NOT_FOUND');
+  assert.deepEqual(cleanup, [USER_A, USER_B]);
+});
+
+test('Following feed intersects existing targets, paginates exactly, and bulk-resolves follow metadata', async (t) => {
+  const auth = mockAuth(t);
+  t.mock.method(communityFollowRepository, 'findFollowedUserIds', async (viewerId) => {
+    assert.equal(String(viewerId), USER_A);
+    return [USER_B, POST_E];
+  });
+  let metadataCalls = 0;
+  t.mock.method(communityFollowRepository, 'findFollowedUserIdsAmong', async (viewerId, ids) => {
+    metadataCalls += 1;
+    assert.equal(String(viewerId), USER_A);
+    assert.deepEqual(ids, [USER_B]);
+    return [USER_B];
+  });
+  t.mock.method(userRepository, 'findPublicByIds', async (ids) => ids.map(String).includes(USER_B) ? [{
+    _id: USER_B,
+    name: 'User B',
+    avatar: { url: 'https://example.com/b.jpg', publicId: 'private' },
+    email: 'private@example.com',
+    bio: 'private',
+    role: 'admin',
+    status: 'suspended',
+    authIdentities: ['private'],
+  }] : []);
+  let queryArgs;
+  t.mock.method(communityRepository, 'findManyByAuthorIds', async (ids, args) => {
+    queryArgs = { ids, args };
+    return [fakePost({ _id: POST_B, authorId: USER_B })];
+  });
+  t.mock.method(communityRepository, 'countPostsByAuthorIds', async () => 3);
+  t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
+
+  const response = await request(app).get('/api/v1/community/posts/following?page=2&limit=2')
+    .set('Authorization', auth);
+  assert.equal(response.status, 200);
+  assert.deepEqual(queryArgs, { ids: [USER_B], args: { skip: 2, limit: 2 } });
+  assert.deepEqual(response.body.data.pagination, { page: 2, limit: 2, total: 3, totalPages: 2 });
+  assert.equal(metadataCalls, 1);
+  assert.equal(response.body.data.posts[0].isFollowingAuthor, true);
+  assert.deepEqual(response.body.data.posts[0].author, {
+    id: USER_B, name: 'User B', avatarUrl: 'https://example.com/b.jpg',
+  });
+  assert.deepEqual(Object.keys(response.body.data.posts[0]).sort(), [
+    'author', 'caption', 'commentCount', 'createdAt', 'id', 'isFollowingAuthor',
+    'isOwner', 'likeCount', 'likedByCurrentUser', 'recipeAttachment',
+  ].sort());
+  assert.equal(JSON.stringify(response.body).includes('private@example.com'), false);
+  assert.equal(JSON.stringify(response.body).includes('publicId'), false);
+  assert.equal(JSON.stringify(response.body).includes('followedUserId'), false);
+});
+
+test('Following feed returns an exact empty page without querying posts for empty or deleted targets', async (t) => {
+  const auth = mockAuth(t);
+  t.mock.method(communityFollowRepository, 'findFollowedUserIds', async () => [USER_B]);
+  mockPublicAuthors(t, []);
+  let postQuery = false;
+  t.mock.method(communityRepository, 'findManyByAuthorIds', async () => { postQuery = true; return []; });
+  t.mock.method(communityRepository, 'countPostsByAuthorIds', async () => { postQuery = true; return 0; });
+  const response = await request(app).get('/api/v1/community/posts/following')
+    .set('Authorization', auth);
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data, {
+    posts: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+  });
+  assert.equal(postQuery, false);
 });
 
 test('owner delete scopes ownership and removes likes without touching recipe', async (t) => {
@@ -648,6 +812,7 @@ test('duplicate-key like race is idempotent success, never a raw 500', async (t)
 });
 
 test('two users like and unlike independently without duplicate or negative counts', async (t) => {
+  mockNoFollowMetadata(t);
   const auth = mockAuthDirectory(t);
   const likes = new Set();
   t.mock.method(communityRepository, 'findById', async () => fakePost());

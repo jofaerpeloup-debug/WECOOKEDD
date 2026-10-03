@@ -1,6 +1,8 @@
+const mongoose = require('mongoose');
 const communityRepository = require('./community.repository');
 const communityLikeRepository = require('./community-like.repository');
 const communityCommentRepository = require('./community-comment.repository');
+const communityFollowRepository = require('./community-follow.repository');
 const recipeService = require('../recipes/recipe.service');
 const userService = require('../users/user.service');
 const { AppError } = require('../../shared/errors/app-error');
@@ -25,13 +27,31 @@ function commentNotFoundError() {
   });
 }
 
+function followTargetNotFoundError() {
+  return new AppError('Community follow target not found.', {
+    statusCode: 404,
+    code: 'COMMUNITY_FOLLOW_TARGET_NOT_FOUND',
+  });
+}
+
+function selfFollowError() {
+  return new AppError('You cannot follow yourself.', {
+    statusCode: 400,
+    code: 'COMMUNITY_SELF_FOLLOW_NOT_ALLOWED',
+  });
+}
+
+function canonicalId(value) {
+  return new mongoose.Types.ObjectId(value).toString();
+}
+
 async function resolvePage(posts, viewerId) {
   const authorIds = [...new Set(posts.map((post) => String(post.authorId)))];
   const recipeIds = [
     ...new Set(posts.filter((post) => post.recipeId).map((post) => String(post.recipeId))),
   ];
 
-  const [authors, recipes, likeMetadata, commentCounts] = await Promise.all([
+  const [authors, recipes, likeMetadata, commentCounts, followedAuthorIds] = await Promise.all([
     userService.getPublicUsersByIds(authorIds),
     Promise.all(
       recipeIds.map(async (recipeId) => ({
@@ -44,6 +64,7 @@ async function resolvePage(posts, viewerId) {
       viewerId
     ),
     communityCommentRepository.getCountsForPosts(posts.map((post) => post._id)),
+    communityFollowRepository.findFollowedUserIdsAmong(viewerId, authorIds),
   ]);
 
   const authorsById = new Map(authors.map((author) => [author.id, author]));
@@ -60,6 +81,7 @@ async function resolvePage(posts, viewerId) {
   const commentsByPostId = new Map(
     commentCounts.map((entry) => [String(entry._id), entry.commentCount])
   );
+  const followedAuthorIdSet = new Set(followedAuthorIds.map(String));
 
   return posts.map((post) => {
     const recipeId = post.recipeId ? String(post.recipeId) : null;
@@ -77,6 +99,8 @@ async function resolvePage(posts, viewerId) {
       ...likes,
       commentCount: commentsByPostId.get(String(post._id)) || 0,
       isOwner: String(post.authorId) === String(viewerId),
+      isFollowingAuthor: String(post.authorId) !== String(viewerId)
+        && followedAuthorIdSet.has(String(post.authorId)),
     };
   });
 }
@@ -86,6 +110,19 @@ async function listPosts({ viewerId, page, limit }) {
   const [posts, total] = await Promise.all([
     communityRepository.findMany({ skip, limit }),
     communityRepository.countPosts(),
+  ]);
+  return { items: await resolvePage(posts, viewerId), total, page, limit };
+}
+
+async function listFollowingPosts({ viewerId, page, limit }) {
+  const followedIds = await communityFollowRepository.findFollowedUserIds(viewerId);
+  const existingAuthors = await userService.getPublicUsersByIds(followedIds);
+  const authorIds = existingAuthors.map((author) => author.id);
+  if (authorIds.length === 0) return { items: [], total: 0, page, limit };
+  const skip = (page - 1) * limit;
+  const [posts, total] = await Promise.all([
+    communityRepository.findManyByAuthorIds(authorIds, { skip, limit }),
+    communityRepository.countPostsByAuthorIds(authorIds),
   ]);
   return { items: await resolvePage(posts, viewerId), total, page, limit };
 }
@@ -112,7 +149,33 @@ async function createPost(authorId, { caption, recipeId }) {
     likedByCurrentUser: false,
     commentCount: 0,
     isOwner: true,
+    isFollowingAuthor: false,
   };
+}
+
+async function followUser(followerId, followedUserId) {
+  const follower = canonicalId(followerId);
+  const target = canonicalId(followedUserId);
+  if (follower === target) throw selfFollowError();
+  if (!await userService.getUserById(target)) throw followTargetNotFoundError();
+  try {
+    await communityFollowRepository.createFollow({ followerId: follower, followedUserId: target });
+  } catch (error) {
+    if (!error || error.code !== DUPLICATE_KEY_ERROR_CODE) throw error;
+  }
+  if (!await userService.getUserById(target)) {
+    await communityFollowRepository.deleteFollow(follower, target);
+    throw followTargetNotFoundError();
+  }
+  return { following: true };
+}
+
+async function unfollowUser(followerId, followedUserId) {
+  const follower = canonicalId(followerId);
+  const target = canonicalId(followedUserId);
+  if (follower === target) throw selfFollowError();
+  await communityFollowRepository.deleteFollow(follower, target);
+  return { following: false };
 }
 
 async function deletePost(authorId, postId) {
@@ -207,6 +270,9 @@ async function deleteComment(authorId, commentId) {
 
 module.exports = {
   listPosts,
+  listFollowingPosts,
+  followUser,
+  unfollowUser,
   createPost,
   deletePost,
   likePost,

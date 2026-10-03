@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const CommunityPost = require('../src/modules/community/community-post.model');
 const CommunityPostLike = require('../src/modules/community/community-post-like.model');
 const CommunityComment = require('../src/modules/community/community-comment.model');
+const CommunityFollow = require('../src/modules/community/community-follow.model');
 
 const USER_ID = '507f1f77bcf86cd799439001';
 const POST_ID = '507f1f77bcf86cd799439002';
@@ -45,6 +46,29 @@ test('CommunityPost has the deterministic newest-first feed index', () => {
     .indexes()
     .find(([spec]) => spec.createdAt === -1 && spec._id === -1);
   assert.ok(index);
+});
+
+test('CommunityPost has the Following author/newest-first access index', () => {
+  const index = CommunityPost.schema.indexes().find(([spec]) =>
+    spec.authorId === 1 && spec.createdAt === -1 && spec._id === -1);
+  assert.ok(index);
+});
+
+test('CommunityFollow has exact required refs, createdAt only, self validation, and unique pair index', async () => {
+  assert.equal(CommunityFollow.schema.path('followerId').options.required, true);
+  assert.equal(CommunityFollow.schema.path('followerId').options.ref, 'User');
+  assert.equal(CommunityFollow.schema.path('followedUserId').options.required, true);
+  assert.equal(CommunityFollow.schema.path('followedUserId').options.ref, 'User');
+  assert.deepEqual(
+    Object.keys(CommunityFollow.schema.paths).filter((path) => !['_id', '__v'].includes(path)).sort(),
+    ['createdAt', 'followedUserId', 'followerId'].sort()
+  );
+  await assert.rejects(() => new CommunityFollow({ followerId: USER_ID, followedUserId: USER_ID }).validate());
+  await assert.doesNotReject(() => new CommunityFollow({ followerId: USER_ID, followedUserId: POST_ID }).validate());
+  const index = CommunityFollow.schema.indexes().find(([spec]) =>
+    spec.followerId === 1 && spec.followedUserId === 1);
+  assert.ok(index);
+  assert.equal(index[1].unique, true);
 });
 
 test('CommunityPostLike has required refs, createdAt only, and no aggregate fields', () => {

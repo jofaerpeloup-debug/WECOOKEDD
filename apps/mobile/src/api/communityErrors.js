@@ -11,6 +11,10 @@ export function getCommunityErrorMessage(err, fallback = FALLBACK) {
       return 'This post is no longer available.';
     case 'COMMUNITY_COMMENT_NOT_FOUND':
       return 'This comment is no longer available.';
+    case 'COMMUNITY_FOLLOW_TARGET_NOT_FOUND':
+      return 'This cook is no longer available.';
+    case 'COMMUNITY_SELF_FOLLOW_NOT_ALLOWED':
+      return 'You cannot follow yourself.';
     case 'RECIPE_NOT_FOUND':
       return 'That recipe is no longer available.';
     case 'VALIDATION_ERROR':

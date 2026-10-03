@@ -16,6 +16,12 @@ const listCommunityPostsSchema = z.object({
   query: z.object({ page: pageSchema, limit: limitSchema }).strict(),
 });
 
+const communityFollowSchema = z.object({
+  params: z.object({ userId: objectIdSchema }).strict(),
+  body: z.object({}).strict().default({}),
+  query: z.object({}).strict(),
+});
+
 const createCommunityPostSchema = z.object({
   body: z.object({ caption: captionSchema, recipeId: objectIdSchema.optional() }).strict(),
 });
@@ -46,6 +52,7 @@ const communityCommentParamsSchema = z.object({
 
 module.exports = {
   listCommunityPostsSchema,
+  communityFollowSchema,
   createCommunityPostSchema,
   communityPostParamsSchema,
   listCommunityCommentsSchema,
