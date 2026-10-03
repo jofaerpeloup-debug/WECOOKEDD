@@ -122,7 +122,11 @@ function getUserById(id) {
 async function getPublicUsersByIds(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return [];
   const users = await userRepository.findPublicByIds([...new Set(ids.map(String))]);
-  return users.map((user) => ({ id: String(user._id), name: user.name }));
+  return users.map((user) => ({
+    id: String(user._id),
+    name: user.name,
+    avatarUrl: user.avatar?.url ?? null,
+  }));
 }
 
 function getUserByAuthIdentity(provider, subject) {
@@ -349,6 +353,8 @@ async function updateOwnProfile({ userId, patch }) {
   if (patch.name !== undefined) {
     update.name = patch.name;
   }
+  if (patch.bio !== undefined) update.bio = patch.bio;
+  if (patch.cookingLevel !== undefined) update.cookingLevel = patch.cookingLevel;
 
   const { preferences } = patch;
   if (preferences) {
@@ -368,6 +374,24 @@ async function updateOwnProfile({ userId, patch }) {
     throw sessionInvalidError();
   }
   return updated;
+}
+
+function avatarConflictError() {
+  return new AppError('Avatar changed while this request was in progress. Please try again.', {
+    statusCode: 409,
+    code: 'AVATAR_UPDATE_CONFLICT',
+  });
+}
+
+async function persistAvatarIfCurrent({ userId, observedRevision, avatar }) {
+  const updated = await userRepository.replaceAvatarIfRevision(
+    userId,
+    observedRevision,
+    avatar
+  );
+  if (updated) return updated;
+  if (!(await userRepository.findById(userId))) throw sessionInvalidError();
+  throw avatarConflictError();
 }
 
 /**
@@ -560,6 +584,7 @@ module.exports = {
   listUsers,
   adminUpdateUser,
   updateOwnProfile,
+  persistAvatarIfCurrent,
   changePassword,
   preparePasswordReset,
   resetPasswordWithToken,

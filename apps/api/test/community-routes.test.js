@@ -168,7 +168,7 @@ test('authenticated text-only create trims edges, preserves line breaks, and der
   assert.equal(response.status, 201);
   assert.deepEqual(created, { authorId: USER_A, caption: 'Line one\nLine two' });
   assert.equal(response.body.data.post.caption, 'Line one\nLine two');
-  assert.deepEqual(response.body.data.post.author, { id: USER_A, name: 'User A' });
+  assert.deepEqual(response.body.data.post.author, { id: USER_A, name: 'User A', avatarUrl: null });
   assert.equal(response.body.data.post.recipeAttachment, null);
   assert.equal(response.body.data.post.commentCount, 0);
   assert.equal(response.body.data.post.likeCount, 0);
@@ -310,7 +310,7 @@ test('global feed paginates, preserves repository order, and returns safe author
   assert.deepEqual(paginationArgs, { skip: 2, limit: 2 });
   assert.deepEqual(response.body.data.pagination, { page: 2, limit: 2, total: 22, totalPages: 11 });
   assert.deepEqual(response.body.data.posts.map((post) => post.id), [POST_A, POST_B]);
-  assert.deepEqual(response.body.data.posts[0].author, { id: USER_A, name: 'User A' });
+  assert.deepEqual(response.body.data.posts[0].author, { id: USER_A, name: 'User A', avatarUrl: null });
   assert.equal(JSON.stringify(response.body).includes('secret-a@example.com'), false);
   assert.equal(JSON.stringify(response.body).includes('authIdentities'), false);
   assert.equal(JSON.stringify(response.body).includes('role'), false);
@@ -349,7 +349,7 @@ test('the same global feed derives ownership and liked state independently for U
   assert.equal(asB.body.data.posts[0].likedByCurrentUser, false);
   for (const response of [asA, asB]) {
     for (const post of response.body.data.posts) {
-      assert.deepEqual(Object.keys(post.author).sort(), ['id', 'name']);
+      assert.deepEqual(Object.keys(post.author).sort(), ['avatarUrl', 'id', 'name']);
     }
   }
 });
@@ -401,7 +401,7 @@ test('User A creates, User B creates later, and both posts appear globally newes
     'A cooked first',
   ]);
   assert.deepEqual(viewedByB.body.data.posts.map((post) => post.isOwner), [true, false]);
-  assert.deepEqual(Object.keys(viewedByB.body.data.posts[1].author).sort(), ['id', 'name']);
+  assert.deepEqual(Object.keys(viewedByB.body.data.posts[1].author).sort(), ['avatarUrl', 'id', 'name']);
 });
 
 test('feed safely preserves a post whose author can no longer be hydrated', async (t) => {
@@ -781,7 +781,7 @@ test('comment list is lazy-page shaped, newest-first from repository, safe, and 
   assert.deepEqual(response.body.data.comments.map((comment) => comment.id), [COMMENT_C, COMMENT_B]);
   assert.equal(response.body.data.comments[0].author, null);
   assert.equal(response.body.data.comments[0].isOwner, false);
-  assert.deepEqual(response.body.data.comments[1].author, { id: USER_A, name: 'User A' });
+  assert.deepEqual(response.body.data.comments[1].author, { id: USER_A, name: 'User A', avatarUrl: null });
   assert.equal(response.body.data.comments[1].isOwner, true);
   assert.deepEqual(Object.keys(response.body.data.comments[1]).sort(), ['author', 'body', 'createdAt', 'id', 'isOwner']);
   assert.equal(JSON.stringify(response.body).includes('private-a@example.com'), false);

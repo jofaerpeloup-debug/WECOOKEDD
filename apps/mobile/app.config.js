@@ -59,6 +59,10 @@ module.exports = () => {
   const plugins = [
     ...(base.plugins || []),
     [
+      'expo-image-picker',
+      { photosPermission: 'Allow WeCooked to select a profile photo.' },
+    ],
+    [
       'expo-build-properties',
       {
         ios: {

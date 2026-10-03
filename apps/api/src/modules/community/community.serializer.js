@@ -17,7 +17,9 @@ function toPublicCommunityPost({
     id: String(post._id),
     caption: post.caption,
     createdAt: post.createdAt,
-    author: author ? { id: author.id, name: author.name } : null,
+    author: author
+      ? { id: author.id, name: author.name, avatarUrl: author.avatarUrl ?? null }
+      : null,
     recipeAttachment:
       recipeAttachment === null
         ? null
@@ -39,7 +41,9 @@ function toPublicCommunityComment({ comment, author, isOwner }) {
   return {
     id: String(comment._id),
     body: comment.body,
-    author: author ? { id: author.id, name: author.name } : null,
+    author: author
+      ? { id: author.id, name: author.name, avatarUrl: author.avatarUrl ?? null }
+      : null,
     createdAt: comment.createdAt,
     isOwner,
   };

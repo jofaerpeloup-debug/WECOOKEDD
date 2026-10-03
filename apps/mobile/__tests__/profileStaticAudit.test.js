@@ -37,6 +37,8 @@ function auditProfileRenderBindings(source) {
     '<Text style={styles.avatarInitial}>{initial}</Text>',
     "<Text style={styles.name}>{user?.name || 'WeCooked account'}</Text>",
     "<Text style={styles.email}>{user?.email || 'Email unavailable'}</Text>",
+    '<Text style={styles.cookingLevel}>{cookingLevel}</Text>',
+    "<Text style={styles.bio}>{user?.bio ?? ''}</Text>",
     '<Text style={styles.editText}>Edit profile</Text>',
   ]);
   expect(identity).not.toMatch(/\srole\s*=|\b(role|status)\s*:\s*['"]/i);
@@ -57,7 +59,7 @@ function auditProfileRenderBindings(source) {
   const preferences = extractUniqueRegion(
     source,
     '<View style={styles.prefList}>',
-    '<Pressable\n          style={styles.logout}'
+    'style={styles.logout}'
   );
   const preferenceRows = [...preferences.matchAll(/<PreferenceRow\b[\s\S]*?\/>/g)]
     .map((match) => normalizeJsx(match[0]));
@@ -234,8 +236,11 @@ describe('Profile omits unsupported teammate semantics', () => {
     expect(code).not.toMatch(/<Stat\s+n=\{?\d+/);
   });
 
-  it('does not render avatar upload, bio, cooking level, followers, badges, or rankings', () => {
-    expect(code).not.toMatch(/avatarUri|uploadAvatar|\bbio\b|Cooking Level|followers?|following|badge|ranking|streak/i);
+  it('renders only the frozen profile identity fields and no future social metrics', () => {
+    expect(code).toMatch(/user\?\.avatarUrl/);
+    expect(code).toMatch(/user\?\.bio \?\? ''/);
+    expect(code).toMatch(/COOKING_LEVEL_LABELS\[user\?\.cookingLevel\]/);
+    expect(code).not.toMatch(/followers?|following|badge|ranking|streak/i);
   });
 
   it('does not fabricate social, engagement, nutrition, recommendation, or AI metrics', () => {

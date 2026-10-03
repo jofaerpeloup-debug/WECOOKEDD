@@ -56,6 +56,30 @@ function uploadImage({ buffer }) {
   });
 }
 
+function uploadAvatarImage({ buffer }) {
+  const config = configureClient();
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: 'image',
+        folder: config.avatarFolder,
+        public_id: randomUUID(),
+        use_filename: false,
+        unique_filename: false,
+        overwrite: false,
+        format: 'webp',
+        allowed_formats: ['webp'],
+        timeout: UPLOAD_TIMEOUT_MS,
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+    stream.end(buffer);
+  });
+}
+
 // Cloudinary immutable asset IDs are deliberately not treated as public IDs.
 // This Admin API is the provider-supported deletion path for asset_id values.
 async function deleteByAssetId(assetId) {
@@ -66,4 +90,4 @@ async function deleteByAssetId(assetId) {
   });
 }
 
-module.exports = { isConfigured, uploadImage, deleteByAssetId };
+module.exports = { isConfigured, uploadImage, uploadAvatarImage, deleteByAssetId };

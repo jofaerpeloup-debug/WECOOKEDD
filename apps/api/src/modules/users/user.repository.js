@@ -47,7 +47,7 @@ function findById(id) {
 // prevents email/role/status/preferences/auth identities from reaching the
 // caller even accidentally.
 function findPublicByIds(ids) {
-  return User.find({ _id: { $in: ids } }).select('_id name');
+  return User.find({ _id: { $in: ids } }).select('_id name avatar.url');
 }
 
 function findByEmail(email) {
@@ -219,6 +219,17 @@ function updateById(id, update) {
   return User.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 }
 
+function replaceAvatarIfRevision(id, observedRevision, avatar) {
+  const revisionPredicate = observedRevision === 0
+    ? { $or: [{ avatarRevision: 0 }, { avatarRevision: { $exists: false } }] }
+    : { avatarRevision: observedRevision };
+  return User.findOneAndUpdate(
+    { _id: id, ...revisionPredicate },
+    { $set: { avatar }, $inc: { avatarRevision: 1 } },
+    { returnDocument: 'after', runValidators: true }
+  );
+}
+
 // Atomic compare-and-set for the Admin status mutation. Matching both the id
 // and the status observed by the service means a returned document proves this
 // caller owned the write. A null result is a lost race, never evidence of a
@@ -257,6 +268,7 @@ module.exports = {
   findMany,
   countByFilter,
   updateById,
+  replaceAvatarIfRevision,
   updateStatusIfCurrent,
   replacePasswordById,
   setPasswordResetTokenForEligibleUser,

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -36,6 +37,17 @@ const MAX_COMMENT_LENGTH = 1000;
 
 function initialFor(name) {
   return (name || 'C').trim().charAt(0).toUpperCase() || 'C';
+}
+
+function AuthorAvatar({ author, style, textStyle }) {
+  const name = author?.name || 'Community member';
+  return author?.avatarUrl ? (
+    <Image source={{ uri: author.avatarUrl }} style={style} accessibilityLabel={`${name} avatar`} />
+  ) : (
+    <View style={style} accessible accessibilityLabel={`${name} initial`}>
+      <Text style={textStyle}>{initialFor(name)}</Text>
+    </View>
+  );
 }
 
 function appendUnique(existing, incoming) {
@@ -582,7 +594,7 @@ export default function CommunityScreen() {
 
         <View style={styles.composeCard}>
           <View style={styles.composeHeader}>
-            <View style={styles.avatar}><Text style={styles.avatarInitial}>{initialFor(user?.name)}</Text></View>
+            <AuthorAvatar author={user} style={styles.avatar} textStyle={styles.avatarInitial} />
             <TextInput
               style={styles.composeInput}
               placeholder="Share what you're cooking..."
@@ -674,7 +686,7 @@ export default function CommunityScreen() {
           return (
             <View key={post.id} style={styles.card}>
               <View style={styles.postHeader}>
-                <View style={styles.avatar}><Text style={styles.avatarInitial}>{initialFor(authorName)}</Text></View>
+                <AuthorAvatar author={post.author} style={styles.avatar} textStyle={styles.avatarInitial} />
                 <View style={styles.headerText}>
                   <Text style={styles.authorName}>{authorName}</Text>
                   <Text style={styles.time}>{formatCommunityTime(post.createdAt)}</Text>
@@ -743,9 +755,7 @@ export default function CommunityScreen() {
                       const commentDeletePending = pendingCommentDeletesRef.current.has(comment.id);
                       return (
                         <View key={comment.id} style={styles.commentRow}>
-                          <View style={styles.commentAvatar}>
-                            <Text style={styles.commentAvatarText}>{initialFor(commentAuthor)}</Text>
-                          </View>
+                          <AuthorAvatar author={comment.author} style={styles.commentAvatar} textStyle={styles.commentAvatarText} />
                           <View style={styles.commentContent}>
                             <View style={styles.commentHeader}>
                               <Text style={styles.commentAuthor}>{commentAuthor}</Text>

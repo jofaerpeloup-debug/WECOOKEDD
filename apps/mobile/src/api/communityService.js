@@ -15,6 +15,10 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isAvatarUrl(value) {
+  return value === null || (isNonEmptyString(value) && /^https:\/\//i.test(value));
+}
+
 function isPublicComment(comment) {
   if (!isRecord(comment)
     || !isNonEmptyString(comment.id)
@@ -25,7 +29,8 @@ function isPublicComment(comment) {
     || typeof comment.isOwner !== 'boolean') return false;
   return comment.author === null || (isRecord(comment.author)
     && isNonEmptyString(comment.author.id)
-    && isNonEmptyString(comment.author.name));
+    && isNonEmptyString(comment.author.name)
+    && isAvatarUrl(comment.author.avatarUrl));
 }
 
 function isPagination(pagination, commentCount) {

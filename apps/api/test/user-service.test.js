@@ -1098,6 +1098,13 @@ test('updateOwnProfile combined patch emits every supplied dot-path and nothing 
   });
 });
 
+test('updateOwnProfile maps bio and cooking level as explicit leaves', async (t) => {
+  let update;
+  t.mock.method(userRepository, 'updateById', async (id, value) => { update = value; return { _id: id }; });
+  await userService.updateOwnProfile({ userId: 'u1', patch: { bio: 'Cook', cookingLevel: 'advanced' } });
+  assert.deepEqual(update, { $set: { bio: 'Cook', cookingLevel: 'advanced' } });
+});
+
 test('updateOwnProfile keeps duplicate preference entries (no dedupe at the service layer)', async (t) => {
   let capturedUpdate;
   t.mock.method(userRepository, 'updateById', async (id, update) => {

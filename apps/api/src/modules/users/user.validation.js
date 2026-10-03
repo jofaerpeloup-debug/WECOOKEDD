@@ -1,6 +1,6 @@
 const { z } = require('zod');
 const { objectIdSchema } = require('../../shared/validation/object-id');
-const { ROLES, STATUSES } = require('./user.model');
+const { ROLES, STATUSES, COOKING_LEVELS } = require('./user.model');
 
 // Explicit allow-list of list sort keys. Never a raw Mongo sort string — the
 // service maps each value to a fixed sort object with a deterministic `_id`
@@ -56,6 +56,7 @@ const updateUserSchema = z.object({
 const MAX_PREFERENCE_ENTRIES = 20;
 const MAX_PREFERENCE_ENTRY_LENGTH = 50;
 const MAX_SELF_NAME_LENGTH = 100;
+const MAX_BIO_LENGTH = 500;
 
 // Registration-compatible name semantics (see auth.validation.js): trim, 1..100.
 // No internal-whitespace collapsing, no Unicode normalization — neither the
@@ -115,6 +116,8 @@ const updateCurrentUserSchema = z.object({
   body: z
     .object({
       name: selfNameSchema.optional(),
+      bio: z.string().trim().max(MAX_BIO_LENGTH, `Bio must be ${MAX_BIO_LENGTH} characters or fewer.`).optional(),
+      cookingLevel: z.enum(COOKING_LEVELS, 'Invalid cooking level.').optional(),
       preferences: preferencesPatchSchema.optional(),
     })
     .strict()
@@ -130,4 +133,5 @@ module.exports = {
   SORT_VALUES,
   MAX_PREFERENCE_ENTRIES,
   MAX_PREFERENCE_ENTRY_LENGTH,
+  MAX_BIO_LENGTH,
 };

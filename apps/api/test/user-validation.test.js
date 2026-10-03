@@ -175,6 +175,19 @@ test('updateCurrentUserSchema accepts a name-only body and trims it', () => {
   assert.deepEqual(result.data.body, { name: 'Ada Lovelace' });
 });
 
+test('updateCurrentUserSchema enforces trimmed 500-character bio and exact cooking levels', () => {
+  assert.equal(updateCurrentUserSchema.parse({ body: { bio: '  hello  ' } }).body.bio, 'hello');
+  assert.equal(updateCurrentUserSchema.safeParse({ body: { bio: 'x'.repeat(500) } }).success, true);
+  assert.equal(updateCurrentUserSchema.safeParse({ body: { bio: 'x'.repeat(501) } }).success, false);
+  for (const cookingLevel of ['beginner', 'intermediate', 'advanced']) {
+    assert.equal(updateCurrentUserSchema.safeParse({ body: { cookingLevel } }).success, true);
+  }
+  assert.equal(updateCurrentUserSchema.safeParse({ body: { cookingLevel: 'expert' } }).success, false);
+  for (const key of ['avatar', 'avatarUrl', 'assetId', 'avatarRevision']) {
+    assert.equal(updateCurrentUserSchema.safeParse({ body: { [key]: 'forbidden' } }).success, false);
+  }
+});
+
 test('updateCurrentUserSchema preserves internal whitespace in name', () => {
   const result = parseSelf({ name: 'Mary  Jane' });
   assert.equal(result.success, true);

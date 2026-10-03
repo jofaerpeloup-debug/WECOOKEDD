@@ -6,6 +6,7 @@ process.env.CLOUDINARY_CLOUD_NAME = 'test-cloud';
 process.env.CLOUDINARY_API_KEY = 'test-key';
 process.env.CLOUDINARY_API_SECRET = 'test-secret';
 process.env.CLOUDINARY_RECIPE_FOLDER = 'test/recipes';
+process.env.CLOUDINARY_AVATAR_FOLDER = 'test/avatars';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -61,4 +62,21 @@ test('deletion uses Cloudinary immutable asset IDs rather than public IDs', asyn
     ['immutable-asset-id'],
     { resource_type: 'image', type: 'upload' },
   ]);
+});
+
+test('avatar upload sends only a fresh server-owned WebP to the avatar folder', async (t) => {
+  let options;
+  let receivedBuffer;
+  t.mock.method(cloudinary.uploader, 'upload_stream', (uploadOptions, callback) => {
+    options = uploadOptions;
+    return { end: (buffer) => { receivedBuffer = buffer; callback(null, { secure_url: 'https://cdn/avatar.webp', asset_id: 'a1', format: 'webp' }); } };
+  });
+  const sanitized = Buffer.from('sanitized WebP bytes');
+  await provider.uploadAvatarImage({ buffer: sanitized });
+  assert.equal(receivedBuffer, sanitized);
+  assert.equal(options.folder, 'test/avatars');
+  assert.equal(options.format, 'webp');
+  assert.deepEqual(options.allowed_formats, ['webp']);
+  assert.match(options.public_id, /^[0-9a-f-]{36}$/i);
+  assert.equal(options.transformation, undefined);
 });

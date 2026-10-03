@@ -46,6 +46,7 @@ test('parseEnv applies defaults for NODE_ENV, PORT, and CORS_ORIGINS', () => {
     apiKey: '',
     apiSecret: '',
     recipeFolder: 'wecooked/recipes',
+    avatarFolder: 'wecooked/avatars',
   });
 });
 
@@ -64,6 +65,7 @@ test('parseEnv accepts optional Cloudinary recipe-upload configuration', () => {
     apiKey: 'key',
     apiSecret: 'secret',
     recipeFolder: 'custom/recipes',
+    avatarFolder: 'wecooked/avatars',
   });
 });
 

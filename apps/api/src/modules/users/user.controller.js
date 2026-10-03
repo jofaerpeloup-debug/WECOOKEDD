@@ -3,6 +3,7 @@ const { toPublicUser, toAdminUserSummary } = require('./user.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
 const { AppError } = require('../../shared/errors/app-error');
+const avatarImageService = require('../uploads/avatar-image.service');
 
 function toPagination({ page, limit, total }) {
   return { page, limit, total, totalPages: Math.ceil(total / limit) };
@@ -52,4 +53,21 @@ const updateCurrentUser = asyncHandler(async (req, res) => {
   sendSuccess(res, { user: toPublicUser(updated) });
 });
 
-module.exports = { getCurrentUser, listUsers, updateUser, updateCurrentUser };
+const uploadAvatar = asyncHandler(async (req, res) => {
+  const updated = await avatarImageService.uploadAvatar(req.auth.userId, req.file);
+  sendSuccess(res, { user: toPublicUser(updated) });
+});
+
+const resetAvatar = asyncHandler(async (req, res) => {
+  const updated = await avatarImageService.resetAvatar(req.auth.userId);
+  sendSuccess(res, { user: toPublicUser(updated) });
+});
+
+module.exports = {
+  getCurrentUser,
+  listUsers,
+  updateUser,
+  updateCurrentUser,
+  uploadAvatar,
+  resetAvatar,
+};

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
@@ -10,6 +10,11 @@ import { useCollections } from '../context/CollectionsContext';
 import { useCookHistory } from '../context/CookHistoryContext';
 
 const UNAVAILABLE_STAT = '—';
+const COOKING_LEVEL_LABELS = {
+  beginner: 'Beginner',
+  intermediate: 'Intermediate',
+  advanced: 'Advanced',
+};
 
 export default function ProfileScreen({ navigation }) {
   const { colors } = useTheme();
@@ -42,6 +47,7 @@ export default function ProfileScreen({ navigation }) {
   const initial = (user?.name || 'A').trim().charAt(0).toUpperCase();
   const dietaryPreferences = user?.preferences?.dietaryPreferences || [];
   const allergies = user?.preferences?.allergies || [];
+  const cookingLevel = COOKING_LEVEL_LABELS[user?.cookingLevel] || COOKING_LEVEL_LABELS.beginner;
 
   const handleLogout = () => {
     Alert.alert('Log Out', 'Are you sure you want to log out?', [
@@ -80,15 +86,17 @@ export default function ProfileScreen({ navigation }) {
         </View>
 
         <View style={styles.identity}>
-          <View
-            style={styles.avatar}
-            accessible
-            accessibilityLabel={`${user?.name || 'Account'} initial`}
-          >
-            <Text style={styles.avatarInitial}>{initial}</Text>
-          </View>
+          {user?.avatarUrl ? (
+            <Image source={{ uri: user.avatarUrl }} style={styles.avatar} accessible accessibilityLabel={`${user?.name || 'Account'} avatar`} />
+          ) : (
+            <View style={styles.avatar} accessible accessibilityLabel={`${user?.name || 'Account'} initial`}>
+              <Text style={styles.avatarInitial}>{initial}</Text>
+            </View>
+          )}
           <Text style={styles.name}>{user?.name || 'WeCooked account'}</Text>
           <Text style={styles.email}>{user?.email || 'Email unavailable'}</Text>
+          <Text style={styles.cookingLevel}>{cookingLevel}</Text>
+          <Text style={styles.bio}>{user?.bio ?? ''}</Text>
           <Pressable
             style={styles.editBtn}
             onPress={() => navigation.navigate('AccountDetails')}
@@ -206,6 +214,8 @@ function makeStyles(colors) {
     avatarInitial: { fontFamily: typography.display.fontFamily, fontSize: 28, color: colors.onAccent },
     name: { fontFamily: typography.display.fontFamily, fontSize: 19, color: colors.ink, marginTop: 12 },
     email: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkSoft, marginTop: 3 },
+    cookingLevel: { fontFamily: typography.body.semibold, fontSize: 12, color: colors.sageDeep, marginTop: 6 },
+    bio: { fontFamily: typography.body.fontFamily, fontSize: 13, lineHeight: 19, color: colors.inkSoft, marginTop: 8, textAlign: 'center' },
     editBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10,
       minHeight: 40, paddingHorizontal: 14, borderRadius: radius.pill,
