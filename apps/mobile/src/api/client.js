@@ -59,6 +59,28 @@ export function setAuthAdapter(adapter) {
   authAdapter = { ...authAdapter, ...adapter };
 }
 
+function sessionBinding(token) {
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3 || typeof globalThis.atob !== 'function') throw new Error('opaque token');
+    const encoded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(globalThis.atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=')));
+    if (payload?.sub && payload?.sessionId) return `${payload.sub}:${payload.sessionId}`;
+  } catch {
+    // Tests and development adapters may use opaque access tokens. Binding to
+    // the whole value still fails closed if another session replaces it.
+  }
+  return `opaque:${token}`;
+}
+
+function staleSessionError() {
+  return new ApiError('The authenticated session changed while the request was in progress.', {
+    code: 'AUTH_SESSION_CHANGED',
+    status: 401,
+  });
+}
+
 function buildUrl(path, query) {
   const url = `${API_BASE_URL}${path}`;
   if (!query) return url;
@@ -87,12 +109,18 @@ async function parseBody(res) {
  * @param {object} [opts.query]  querystring params
  * @param {boolean} [opts.auth=true]  attach the bearer token + allow refresh+retry
  */
-async function request(path, { method = 'GET', body, query, auth = true, _retried = false } = {}) {
+async function request(path, {
+  method = 'GET', body, query, auth = true, _retried = false, _sessionBinding,
+} = {}) {
   const headers = { Accept: 'application/json' };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const isMultipart = typeof FormData !== 'undefined' && body instanceof FormData;
+  if (body !== undefined && !isMultipart) headers['Content-Type'] = 'application/json';
+  let requestToken = null;
+  let initiatingSession = _sessionBinding;
   if (auth) {
-    const token = authAdapter.getAccessToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
+    requestToken = authAdapter.getAccessToken();
+    if (initiatingSession === undefined) initiatingSession = sessionBinding(requestToken);
+    if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   }
 
   let res;
@@ -100,7 +128,7 @@ async function request(path, { method = 'GET', body, query, auth = true, _retrie
     res = await fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : (isMultipart ? body : JSON.stringify(body)),
     });
   } catch {
     throw new ApiError('Unable to reach WeCooked. Check your connection and try again.', {
@@ -119,6 +147,17 @@ async function request(path, { method = 'GET', body, query, auth = true, _retrie
   // can never recurse back into here. If refresh fails, fall through to the
   // normal error path below — never loop.
   if (res.status === 401 && auth && !_retried) {
+    const currentToken = authAdapter.getAccessToken();
+    if (sessionBinding(currentToken) !== initiatingSession) throw staleSessionError();
+
+    // Another request may already have refreshed this same session while this
+    // response was in flight. Use its token once without rotating again.
+    if (currentToken !== requestToken) {
+      return request(path, {
+        method, body, query, auth, _retried: true, _sessionBinding: initiatingSession,
+      });
+    }
+
     let refreshed = false;
     try {
       refreshed = await authAdapter.refreshAccessToken();
@@ -126,7 +165,10 @@ async function request(path, { method = 'GET', body, query, auth = true, _retrie
       refreshed = false;
     }
     if (refreshed) {
-      return request(path, { method, body, query, auth, _retried: true });
+      if (sessionBinding(authAdapter.getAccessToken()) !== initiatingSession) throw staleSessionError();
+      return request(path, {
+        method, body, query, auth, _retried: true, _sessionBinding: initiatingSession,
+      });
     }
   }
 

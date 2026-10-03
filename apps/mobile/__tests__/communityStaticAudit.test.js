@@ -56,7 +56,9 @@ describe('Community M10A real integration', () => {
 
   it('renders safe author initials, server createdAt, real recipe state, and real comments', () => {
     expect(SCREEN).toMatch(/post\.author\?\.name/);
-    expect(SCREEN).toMatch(/initialFor\(authorName\)/);
+    expect(SCREEN).toMatch(/AuthorAvatar author=\{post\.author\}/);
+    expect(SCREEN).toMatch(/AuthorAvatar author=\{comment\.author\}/);
+    expect(SCREEN).toMatch(/author\?\.avatarUrl/);
     expect(SCREEN).toMatch(/formatCommunityTime\(post\.createdAt\)/);
     expect(SCREEN).toMatch(/attachment\?\.isAvailable/);
     expect(SCREEN).toMatch(/Recipe unavailable/);

@@ -17,7 +17,7 @@ function publicComment(overrides = {}) {
   return {
     id: 'c1',
     body: 'Hello',
-    author: { id: 'u1', name: 'User One' },
+    author: { id: 'u1', name: 'User One', avatarUrl: null },
     createdAt: '2026-10-03T00:00:00.000Z',
     isOwner: true,
     ...overrides,

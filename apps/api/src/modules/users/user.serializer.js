@@ -31,6 +31,9 @@ function toPublicUser(user) {
     id: String(user._id),
     name: user.name,
     email: user.email,
+    avatarUrl: user.avatar?.url ?? null,
+    bio: user.bio ?? '',
+    cookingLevel: user.cookingLevel ?? 'beginner',
     role: user.role,
     status: user.status,
     preferences: {

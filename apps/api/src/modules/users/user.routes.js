@@ -4,6 +4,9 @@ const { requireCapability } = require('../../middleware/require-capability.middl
 const { validate } = require('../../middleware/validate.middleware');
 const { noStore } = require('../../middleware/no-store.middleware');
 const { CAPABILITIES } = require('../../shared/security/capabilities');
+const { avatarUploadRateLimiter } = require('../../middleware/rate-limiter');
+const { parseAvatarImage } = require('../uploads/upload.middleware');
+const { AppError } = require('../../shared/errors/app-error');
 const userController = require('./user.controller');
 const {
   listUsersSchema,
@@ -13,6 +16,19 @@ const {
 
 const router = Router();
 const userManager = requireCapability(CAPABILITIES.USERS_MANAGE);
+
+function rejectAvatarResetInput(req, res, next) {
+  if (Object.keys(req.query || {}).length > 0
+    || (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0')
+    || req.headers['transfer-encoding'] !== undefined
+    || req.is('multipart/form-data')) {
+    return next(new AppError('Avatar reset does not accept request data.', {
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+    }));
+  }
+  next();
+}
 
 // Declared first so it can never be shadowed by /:userId.
 router.get('/me', authenticate, noStore, userController.getCurrentUser);
@@ -27,6 +43,21 @@ router.patch(
   authenticate,
   validate(updateCurrentUserSchema),
   userController.updateCurrentUser
+);
+
+router.post(
+  '/me/avatar',
+  authenticate,
+  avatarUploadRateLimiter,
+  parseAvatarImage,
+  userController.uploadAvatar
+);
+
+router.delete(
+  '/me/avatar',
+  authenticate,
+  rejectAvatarResetInput,
+  userController.resetAvatar
 );
 
 // User management is capability-gated. In the locked role map only Admin has

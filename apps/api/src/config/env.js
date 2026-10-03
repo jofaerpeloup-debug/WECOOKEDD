@@ -119,6 +119,7 @@ const envSchema = z
     CLOUDINARY_API_KEY: z.string().trim().optional().default(''),
     CLOUDINARY_API_SECRET: z.string().trim().optional().default(''),
     CLOUDINARY_RECIPE_FOLDER: z.string().trim().max(255).optional().default('wecooked/recipes'),
+    CLOUDINARY_AVATAR_FOLDER: z.string().trim().max(255).optional().default('wecooked/avatars'),
     OPENAI_API_KEY: z.string().trim().optional().default(''),
     OPENAI_MODEL: z.string().trim().optional().default(''),
   })
@@ -210,6 +211,7 @@ function parseEnv(source) {
       apiKey: parsed.CLOUDINARY_API_KEY,
       apiSecret: parsed.CLOUDINARY_API_SECRET,
       recipeFolder: parsed.CLOUDINARY_RECIPE_FOLDER || 'wecooked/recipes',
+      avatarFolder: parsed.CLOUDINARY_AVATAR_FOLDER || 'wecooked/avatars',
     },
     openai: {
       apiKey: parsed.OPENAI_API_KEY,

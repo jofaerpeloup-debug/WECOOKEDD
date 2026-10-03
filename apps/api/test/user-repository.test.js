@@ -289,6 +289,16 @@ test('updateStatusIfCurrent atomically matches id and expected status', async (t
   });
 });
 
+test('avatar CAS treats missing revision as zero and increments exactly once', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => { captured = { filter, update, options }; return Promise.resolve({ _id: 'u1' }); });
+  const avatar = { url: 'https://cdn/a.webp', assetId: 'a' };
+  await userRepository.replaceAvatarIfRevision('u1', 0, avatar);
+  assert.deepEqual(captured.filter, { _id: 'u1', $or: [{ avatarRevision: 0 }, { avatarRevision: { $exists: false } }] });
+  assert.deepEqual(captured.update, { $set: { avatar }, $inc: { avatarRevision: 1 } });
+  assert.deepEqual(captured.options, { returnDocument: 'after', runValidators: true });
+});
+
 test('updateStatusIfCurrent clears reset credentials in the winning suspension write', async (t) => {
   let captured;
   t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {

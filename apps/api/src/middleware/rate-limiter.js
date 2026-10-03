@@ -61,6 +61,11 @@ const ASSISTANT_RATE_LIMITS = Object.freeze({
   ip: Object.freeze({ windowMs: 15 * 60 * 1000, limit: 20 }),
 });
 
+const AVATAR_UPLOAD_RATE_LIMIT = Object.freeze({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+});
+
 const socialChallengeRateLimiter = createRateLimiter({
   ...SOCIAL_RATE_LIMITS.challenge,
 });
@@ -107,6 +112,15 @@ function createIngredientResolutionRateLimiter() {
 
 const ingredientResolutionRateLimiter = createIngredientResolutionRateLimiter();
 
+function createAvatarUploadRateLimiter() {
+  return createRateLimiter({
+    ...AVATAR_UPLOAD_RATE_LIMIT,
+    keyGenerator: authenticatedUserKey,
+  });
+}
+
+const avatarUploadRateLimiter = createAvatarUploadRateLimiter();
+
 function createAssistantRateLimiters() {
   return {
     user: createRateLimiter({
@@ -129,6 +143,7 @@ module.exports = {
   RECIPE_IMPORT_RATE_LIMITS,
   INGREDIENT_RESOLUTION_RATE_LIMIT,
   ASSISTANT_RATE_LIMITS,
+  AVATAR_UPLOAD_RATE_LIMIT,
   createRecipeImportRateLimiters,
   socialChallengeRateLimiter,
   socialGoogleLoginRateLimiter,
@@ -139,6 +154,8 @@ module.exports = {
   recipeImportUserRateLimiter,
   createIngredientResolutionRateLimiter,
   ingredientResolutionRateLimiter,
+  createAvatarUploadRateLimiter,
+  avatarUploadRateLimiter,
   createAssistantRateLimiters,
   assistantUserRateLimiter,
   assistantIpRateLimiter,

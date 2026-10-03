@@ -94,6 +94,79 @@ function tokenFor(doc, sessionId, roleOverride) {
 const adminToken = () => tokenFor(adminDoc(), ADMIN_SESSION_ID);
 const userToken = () => tokenFor(userDoc({ id: USER_ID }), USER_SESSION_ID);
 
+test('POST /api/v1/users/me/avatar authenticates before consuming malformed multipart data', async () => {
+  const res = await request(app)
+    .post('/api/v1/users/me/avatar')
+    .field('userId', USER_ID);
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error.code, 'AUTH_TOKEN_MISSING');
+});
+
+test('POST /api/v1/users/me/avatar enforces the exact multipart shape and 5 MiB cap', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID }) });
+  const authorization = `Bearer ${userToken()}`;
+  const missing = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization);
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.error.code, 'AVATAR_FILE_REQUIRED');
+
+  const field = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization).field('userId', USER_ID);
+  assert.equal(field.status, 400);
+  assert.equal(field.body.error.code, 'AVATAR_FILE_INVALID');
+
+  const multiple = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization)
+    .attach('image', Buffer.from('one'), 'one.jpg').attach('image', Buffer.from('two'), 'two.jpg');
+  assert.equal(multiple.status, 400);
+  assert.equal(multiple.body.error.code, 'AVATAR_FILE_MULTIPLE');
+
+  const oversized = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization)
+    .attach('image', Buffer.alloc(5 * 1024 * 1024 + 1), 'large.jpg');
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.body.error.code, 'AVATAR_FILE_TOO_LARGE');
+});
+
+test('DELETE /api/v1/users/me/avatar accepts an explicit Content-Length: 0', async (t) => {
+  const caller = userDoc({ id: USER_ID });
+  caller.avatar = null;
+  caller.avatarRevision = 0;
+  mockContext(t, { caller });
+  t.mock.method(userRepository, 'replaceAvatarIfRevision', async () => caller);
+
+  const res = await request(app)
+    .delete('/api/v1/users/me/avatar')
+    .set('Authorization', `Bearer ${userToken()}`)
+    .set('Content-Length', '0');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.data.user.avatarUrl, null);
+});
+
+test('DELETE /api/v1/users/me/avatar accepts no Content-Length and rejects a non-empty body', async (t) => {
+  const caller = userDoc({ id: USER_ID });
+  caller.avatar = null;
+  caller.avatarRevision = 0;
+  mockContext(t, { caller });
+  let resets = 0;
+  t.mock.method(userRepository, 'replaceAvatarIfRevision', async () => {
+    resets += 1;
+    return caller;
+  });
+
+  const empty = await request(app)
+    .delete('/api/v1/users/me/avatar')
+    .set('Authorization', `Bearer ${userToken()}`)
+    .unset('Content-Length');
+  assert.equal(empty.status, 200);
+
+  const nonEmpty = await request(app)
+    .delete('/api/v1/users/me/avatar')
+    .set('Authorization', `Bearer ${userToken()}`)
+    .send({ avatar: 'payload' });
+  assert.equal(nonEmpty.status, 400);
+  assert.equal(nonEmpty.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(resets, 1);
+});
+
 // ===========================================================================
 // GET /api/v1/users
 // ===========================================================================

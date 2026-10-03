@@ -263,6 +263,39 @@ test('preferences default to empty arrays with notifications enabled', () => {
   assert.equal(user.preferences.notifications.enabled, true);
 });
 
+test('profile fields have frozen defaults and reject partial or insecure avatar state', async () => {
+  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
+  assert.equal(user.bio, '');
+  assert.equal(user.cookingLevel, 'beginner');
+  assert.equal(user.avatar, null);
+  assert.equal(user.avatarRevision, 0);
+  user.avatarRevision = 1.5;
+  await assert.rejects(() => user.validate());
+  for (const avatar of [
+    { url: 'https://cdn/a.webp' },
+    { assetId: 'a' },
+    { url: 'http://cdn/a.webp', assetId: 'a' },
+  ]) {
+    const invalid = new User({ name: 'Ada', email: 'invalid@example.com', passwordHash: 'hash', avatar });
+    await assert.rejects(() => invalid.validate());
+  }
+});
+
+test('owner serializer exposes only derived profile fields while admin summary omits them', () => {
+  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash', bio: 'Cook', cookingLevel: 'advanced', avatar: { url: 'https://cdn/a.webp', assetId: 'secret' }, avatarRevision: 7 });
+  const owner = toPublicUser(user);
+  assert.equal(owner.avatarUrl, 'https://cdn/a.webp');
+  assert.equal(owner.bio, 'Cook');
+  assert.equal(owner.cookingLevel, 'advanced');
+  assert.equal('avatar' in owner, false);
+  assert.equal('assetId' in owner, false);
+  assert.equal('avatarRevision' in owner, false);
+  const admin = toAdminUserSummary(user);
+  assert.equal('avatarUrl' in admin, false);
+  assert.equal('bio' in admin, false);
+  assert.equal('cookingLevel' in admin, false);
+});
+
 test('emailVerified defaults to false', () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
   assert.equal(user.emailVerified, false);

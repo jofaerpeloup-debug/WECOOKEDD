@@ -6,6 +6,7 @@ jest.mock('react-native', () => {
     React.createElement(name, { ...props, ref }, children));
   return {
     ActivityIndicator: host('ActivityIndicator'),
+    Image: host('Image'),
     Pressable: host('Pressable'),
     RefreshControl: host('RefreshControl'),
     ScrollView: host('ScrollView'),
@@ -72,7 +73,7 @@ function post(id, commentCount = 0, overrides = {}) {
     id,
     caption: `Post ${id}`,
     createdAt: '2026-10-01T00:00:00.000Z',
-    author: { id: 'user-a', name: 'User A' },
+    author: { id: 'user-a', name: 'User A', avatarUrl: null },
     recipeAttachment: null,
     likeCount: 0,
     likedByCurrentUser: false,
@@ -87,7 +88,7 @@ function comment(id, body = `Comment ${id}`, overrides = {}) {
     id,
     body,
     createdAt: '2026-10-01T00:00:00.000Z',
-    author: { id: 'user-a', name: 'User A' },
+    author: { id: 'user-a', name: 'User A', avatarUrl: null },
     isOwner: true,
     ...overrides,
   };
@@ -119,6 +120,21 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+it('renders server-projected post and comment avatars with initial fallback only for null', async () => {
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('p1', 1, { author: { id: 'user-a', name: 'User A', avatarUrl: 'https://cdn/post.webp' } }),
+  ], 1, 1));
+  communityService.listCommunityComments.mockResolvedValue({
+    comments: [comment('c1', 'Avatar comment', { author: { id: 'user-b', name: 'User B', avatarUrl: 'https://cdn/comment.webp' } })],
+    commentCount: 1,
+    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+  });
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('User A avatar').props.source.uri).toBe('https://cdn/post.webp'));
+  fireEvent.press(view.getByLabelText('1 comments'));
+  await waitFor(() => expect(view.getByLabelText('User B avatar').props.source.uri).toBe('https://cdn/comment.webp'));
+});
 
 it('loads comments only when opened and appends a missing page once without duplicates', async () => {
   const page2 = deferred();

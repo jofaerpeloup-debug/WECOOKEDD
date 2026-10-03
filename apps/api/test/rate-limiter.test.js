@@ -17,6 +17,8 @@ const {
   createIngredientResolutionRateLimiter,
   ASSISTANT_RATE_LIMITS,
   createAssistantRateLimiters,
+  AVATAR_UPLOAD_RATE_LIMIT,
+  createAvatarUploadRateLimiter,
 } = require('../src/middleware/rate-limiter');
 const { errorMiddleware } = require('../src/middleware/error.middleware');
 const { createApp, configureProxyTrust } = require('../src/app');
@@ -95,6 +97,21 @@ test('social authentication limiter definitions match the locked budgets', () =>
     googleLinkUser: { windowMs: 15 * 60 * 1000, limit: 10 },
     linkChallengeUser: { windowMs: 15 * 60 * 1000, limit: 10 },
   });
+});
+
+test('avatar limiter has an isolated 10-per-15-minute counter keyed only by authenticated user', async () => {
+  assert.deepEqual(AVATAR_UPLOAD_RATE_LIMIT, { windowMs: 15 * 60 * 1000, limit: 10 });
+  const app = express();
+  app.use((req, res, next) => { req.auth = { userId: req.get('X-Test-User') }; next(); });
+  app.post('/avatar', createAvatarUploadRateLimiter(), (req, res) => res.json({ success: true }));
+  app.post('/other-budget', createAvatarUploadRateLimiter(), (req, res) => res.json({ success: true }));
+  app.use(errorMiddleware);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    assert.equal((await request(app).post('/avatar').set('X-Test-User', 'user-a')).status, 200);
+  }
+  assert.equal((await request(app).post('/avatar').set('X-Test-User', 'user-a')).status, 429);
+  assert.equal((await request(app).post('/avatar').set('X-Test-User', 'user-b')).status, 200);
+  assert.equal((await request(app).post('/other-budget').set('X-Test-User', 'user-a')).status, 200);
 });
 
 test('authenticated social-link rate limiting keys by required user identity', () => {

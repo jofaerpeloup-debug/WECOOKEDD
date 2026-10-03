@@ -36,5 +36,34 @@ import { api } from './client';
  *   unwraps the `{ success, data }` envelope, so this reads `data.user`.
  */
 export function updateProfile(patch) {
-  return api.patch('/users/me', { body: patch }).then((data) => data.user);
+  const body = {};
+  if (patch.name !== undefined) body.name = patch.name;
+  if (patch.bio !== undefined) body.bio = patch.bio;
+  if (patch.cookingLevel !== undefined) body.cookingLevel = patch.cookingLevel;
+  if (patch.preferences !== undefined) {
+    const preferences = {};
+    if (patch.preferences.dietaryPreferences !== undefined) {
+      preferences.dietaryPreferences = patch.preferences.dietaryPreferences;
+    }
+    if (patch.preferences.allergies !== undefined) preferences.allergies = patch.preferences.allergies;
+    if (patch.preferences.notifications !== undefined) {
+      preferences.notifications = { enabled: patch.preferences.notifications.enabled };
+    }
+    body.preferences = preferences;
+  }
+  return api.patch('/users/me', { body }).then((data) => data.user);
+}
+
+export function uploadAvatar(asset) {
+  const body = new FormData();
+  body.append('image', {
+    uri: asset.uri,
+    name: asset.fileName || `avatar.${asset.mimeType === 'image/png' ? 'png' : asset.mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
+    type: asset.mimeType || 'image/jpeg',
+  });
+  return api.post('/users/me/avatar', { body }).then((data) => data.user);
+}
+
+export function resetAvatar() {
+  return api.del('/users/me/avatar').then((data) => data.user);
 }

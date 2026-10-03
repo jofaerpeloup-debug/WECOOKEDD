@@ -4,6 +4,28 @@ const { EMAIL_MAX_CHARS } = require('@wecooked/contracts');
 const SOCIAL_AUTH_PROVIDERS = ['google', 'apple', 'facebook'];
 const ROLES = Object.freeze(['user', 'moderator', 'admin']);
 const STATUSES = ['active', 'suspended'];
+const COOKING_LEVELS = ['beginner', 'intermediate', 'advanced'];
+
+const avatarSchema = new mongoose.Schema(
+  {
+    url: {
+      type: String,
+      required: true,
+      validate: {
+        validator(value) {
+          try {
+            return new URL(value).protocol === 'https:';
+          } catch {
+            return false;
+          }
+        },
+        message: 'Avatar URL must use HTTPS.',
+      },
+    },
+    assetId: { type: String, required: true, trim: true, minlength: 1 },
+  },
+  { _id: false }
+);
 
 const authIdentitySchema = new mongoose.Schema(
   {
@@ -117,6 +139,15 @@ const userSchema = new mongoose.Schema(
       type: preferencesSchema,
       default: () => ({}),
     },
+    bio: { type: String, trim: true, maxlength: 500, default: '' },
+    cookingLevel: { type: String, enum: COOKING_LEVELS, default: 'beginner' },
+    avatar: { type: avatarSchema, default: null },
+    avatarRevision: {
+      type: Number,
+      min: 0,
+      default: 0,
+      validate: { validator: Number.isInteger, message: 'Avatar revision must be an integer.' },
+    },
     emailVerified: {
       type: Boolean,
       default: false,
@@ -145,3 +176,4 @@ module.exports = User;
 module.exports.SOCIAL_AUTH_PROVIDERS = SOCIAL_AUTH_PROVIDERS;
 module.exports.ROLES = ROLES;
 module.exports.STATUSES = STATUSES;
+module.exports.COOKING_LEVELS = COOKING_LEVELS;
