@@ -1,8 +1,99 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
-const SCREEN = fs.readFileSync(path.join(__dirname, '../src/screens/CommunityScreen.js'), 'utf8');
-const SERVICE = fs.readFileSync(path.join(__dirname, '../src/api/communityService.js'), 'utf8');
+const SOURCE_ROOT = path.join(__dirname, '../src');
+const REPO_ROOT = path.join(__dirname, '../../..');
+const COMM6_BASELINE = '715ad26317246389dd1084b98f134f6af65eb2ac';
+const COMM6_PRODUCTION_FILE = 'apps/mobile/src/screens/CommunityScreen.js';
+const COMM6_ALLOWLIST = new Set([
+  COMM6_PRODUCTION_FILE,
+  'apps/mobile/__tests__/communityInteraction.test.js',
+  'apps/mobile/__tests__/communityStaticAudit.test.js',
+  'apps/mobile/__tests__/recipeDetailStaticAudit.test.js',
+  'docs/milestones/MOBILE-COMM6-recipe-cta-final-community-cards.md',
+]);
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(SOURCE_ROOT, relativePath), 'utf8');
+}
+
+function pathsFromNameStatus(output) {
+  return output.trim().split(/\r?\n/).filter(Boolean)
+    .flatMap((line) => line.split('\t').slice(1))
+    .map((file) => file.replace(/\\/g, '/'));
+}
+
+function assertComm6Scope(paths) {
+  const normalized = [...new Set(paths.map((file) => file.replace(/\\/g, '/')))];
+  const outsideAllowlist = normalized.filter((file) => !COMM6_ALLOWLIST.has(file));
+  if (outsideAllowlist.length > 0) {
+    throw new Error(`COMM6 diff scope drift: ${outsideAllowlist.join(', ')}`);
+  }
+  if (!normalized.includes(COMM6_PRODUCTION_FILE)) {
+    throw new Error(`COMM6 production diff missing: ${COMM6_PRODUCTION_FILE}`);
+  }
+}
+
+function addedLinesFromPatch(patch) {
+  return patch.split(/\r?\n/)
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1))
+    .join('\n');
+}
+
+function importedApiBindings(source) {
+  return [...source.matchAll(/import\s+([^;]+?)\s+from\s+['"]([^'"]+)['"];?/g)]
+    .filter((match) => /(?:api|service|client)/i.test(match[2]))
+    .flatMap((match) => match[1].match(/[A-Za-z_$][\w$]*/g) || [])
+    .filter((name) => name !== 'as');
+}
+
+function assertComm6PatchBoundaries(additions, apiBindings) {
+  const navigationCalls = [...additions.matchAll(/\bnavigation\s*(?:\.\s*|\[\s*['"])(navigate|push|replace|reset|dispatch|goBack)\b/g)];
+  const exactRecipeDetailCall = /navigation\.navigate\(\s*['"]RecipeDetail['"]\s*,\s*\{\s*recipeSource:\s*['"]api['"]\s*,\s*recipeId:\s*attachment\.recipe\.id\s*,?\s*\}\s*\)/g;
+  if (navigationCalls.length !== 1 || navigationCalls[0][1] !== 'navigate'
+      || [...additions.matchAll(exactRecipeDetailCall)].length !== 1) {
+    throw new Error('COMM6 navigation drift');
+  }
+  const importsScreen = [...additions.matchAll(/import\s+([^;]+?)\s+from\s+['"][^'"]+['"];?/g)]
+    .some((match) => /\b\w*Screen\b/.test(match[1]));
+  if (importsScreen || /(?:Stack|Tab|Drawer)\.Screen|create\w*Navigator|component\s*:\s*\w*Screen\b|\b(?:function|class)\s+(?!CommunityScreen\b)\w*Screen\b|\bconst\s+(?!CommunityScreen\b)\w*Screen\s*=/.test(additions)) {
+    throw new Error('COMM6 route or screen registration drift');
+  }
+
+  const escapedBindings = apiBindings.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const callsExistingApi = escapedBindings.length > 0
+    && new RegExp(`\\b(?:${escapedBindings.join('|')})\\s*\\(`).test(additions);
+  const addsApiImport = /(?:import|require)[^\n]*['"][^'"]*(?:api|service|client)[^'"]*['"]/i.test(additions);
+  const addsNetworkPrimitive = /\b(?:fetch|axios|XMLHttpRequest|WebSocket|EventSource)\b|\b\w*(?:api|http|service|client)\w*\s*\.\s*(?:get|post|put|patch|delete|request)\s*\(/i.test(additions);
+  const addsEndpointLiteral = /['"`]\s*(?:https?:\/\/|\/(?![/*]))/.test(additions);
+  if (callsExistingApi || addsApiImport || addsNetworkPrimitive || addsEndpointLiteral) {
+    throw new Error('COMM6 API or endpoint drift');
+  }
+
+  if (/\b(?:mock|fixture|sample|dummy|seed)(?:Recipe|Data)?\b|\b(?:AsyncStorage|SecureStore|localStorage|sessionStorage|persist\w*|cache\w*)\b/i.test(additions)
+      || /\b(?:initialRecipe|fullRecipe)\s*:|\brecipe\s*:\s*(?:\{|attachment\b)|\.\.\.\s*attachment(?:\.recipe)?\b/i.test(additions)
+      || /attachment(?:\.recipe)?[^\n]*ingredients|ingredients[^\n]*attachment(?:\.recipe)?/i.test(additions)) {
+    throw new Error('COMM6 local recipe authority or reconstruction drift');
+  }
+
+  if (/\b(?:bookmark(?:s|ed)?|Saved|Trending|For You|PublicProfile|UserProfile)\b|navigate\s*\([^)]*Profile/i.test(additions)) {
+    throw new Error('COMM6 deferred feature drift');
+  }
+}
+
+const SCREEN = read('screens/CommunityScreen.js');
+const SERVICE = read('api/communityService.js');
+const COMM6_CHANGED_PATHS = pathsFromNameStatus(execFileSync(
+  'git', ['diff', '--name-status', '--find-renames', COMM6_BASELINE, '--'],
+  { cwd: REPO_ROOT, encoding: 'utf8' }
+));
+const COMM6_ADDITIONS = addedLinesFromPatch(execFileSync(
+  'git', ['diff', '--no-ext-diff', '--unified=0', COMM6_BASELINE, '--', COMM6_PRODUCTION_FILE],
+  { cwd: REPO_ROOT, encoding: 'utf8' }
+));
+const API_BINDINGS = importedApiBindings(SCREEN);
 
 describe('Community M10A real integration', () => {
   it('keeps the teammate shell and unchanged tab navigation contract', () => {
@@ -69,6 +160,73 @@ describe('Community M10A real integration', () => {
     expect(SCREEN).toMatch(/deleteCommunityComment/);
     expect(SERVICE).toMatch(/\/community\/posts\/\$\{encodeURIComponent\(postId\)\}\/comments/);
     expect(SCREEN).not.toMatch(/avatar\.uri|author\.email|author\.role/);
+  });
+
+  it('renders the final Community card in the frozen visible order', () => {
+    const card = SCREEN.slice(
+      SCREEN.indexOf('<View key={post.id} style={styles.card}>'),
+      SCREEN.indexOf("{feedStatus === 'ready' && pagination")
+    );
+    const positions = [
+      card.indexOf('styles.postHeader'),
+      card.indexOf('AuthorAvatar author={post.author}'),
+      card.indexOf('formatCommunityTime(post.createdAt)'),
+      card.indexOf('styles.followButton'),
+      card.indexOf('{post.isOwner && ('),
+      card.indexOf('attachment?.isAvailable && attachment.recipe && <RecipeImage'),
+      card.indexOf('styles.unavailableRecipe'),
+      card.indexOf('styles.tagRow'),
+      card.indexOf('<Text style={styles.caption}>{post.caption}</Text>'),
+      card.indexOf('accessibilityLabel="View Recipe"'),
+      card.indexOf('styles.actionRow'),
+      card.indexOf('activePostId === post.id'),
+    ];
+
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  it('guards View Recipe with exact availability and a valid non-empty recipe id', () => {
+    expect(SCREEN).toMatch(/const canViewRecipe = attachment\?\.isAvailable === true\s*&& typeof attachment\.recipe\?\.id === 'string'\s*&& attachment\.recipe\.id\.trim\(\)\.length > 0/);
+    expect(SCREEN).toMatch(/\{canViewRecipe && \([\s\S]*accessibilityRole="button"[\s\S]*accessibilityLabel="View Recipe"/);
+    expect(SCREEN).toMatch(/navigation\.navigate\('RecipeDetail', \{\s*recipeSource: 'api',\s*recipeId: attachment\.recipe\.id,\s*\}\)/);
+  });
+
+  it('confines the baseline diff to the exact COMM6 production and evidence files', () => {
+    expect(() => assertComm6Scope(COMM6_CHANGED_PATHS)).not.toThrow();
+
+    for (const mutant of [
+      'apps/mobile/src/screens/AnotherScreen.js',
+      'apps/mobile/src/navigation/Routes.js',
+      'apps/mobile/src/api/transport.js',
+      'apps/mobile/src/utils/recipeBridge.js',
+      'apps/mobile/package.json',
+      'config/mobile-runtime.js',
+    ]) {
+      expect(() => assertComm6Scope([...COMM6_CHANGED_PATHS, mutant]))
+        .toThrow(`COMM6 diff scope drift: ${mutant}`);
+    }
+  });
+
+  it('allows only the frozen RecipeDetail CTA in the COMM6 production additions', () => {
+    expect(() => assertComm6PatchBoundaries(COMM6_ADDITIONS, API_BINDINGS)).not.toThrow();
+  });
+
+  it('rejects navigation, endpoint, local-authority, reconstruction, and deferred-feature mutants', () => {
+    const mutants = [
+      "navigation.navigate('ChefDashboard')",
+      "fetch('/totally-new-endpoint')",
+      'listRecipes({ page: 1 })',
+      'const recipe = { ...attachment.recipe }',
+      'const ingredients = attachment.recipe.ingredients',
+      "AsyncStorage.setItem('cta', attachment.recipe.id)",
+      "const feedMode = 'Saved'",
+      "navigation.navigate('PublicProfile')",
+    ];
+
+    for (const mutant of mutants) {
+      expect(() => assertComm6PatchBoundaries(`${COMM6_ADDITIONS}\n${mutant}`, API_BINDINGS)).toThrow();
+    }
   });
 
   it('keeps comments lazy, server-counted, bounded, pessimistic, and generation guarded', () => {

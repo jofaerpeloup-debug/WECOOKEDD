@@ -65,7 +65,7 @@ function readFeed(mode, params) {
     : listCommunityPosts(params);
 }
 
-export default function CommunityScreen() {
+export default function CommunityScreen({ navigation }) {
   const { colors, shadow } = useTheme();
   const { user } = useAuth();
   const styles = makeStyles(colors, shadow);
@@ -780,6 +780,9 @@ export default function CommunityScreen() {
         {feedStatus === 'ready' && posts.map((post) => {
           const authorName = post.author?.name || 'Community member';
           const attachment = post.recipeAttachment;
+          const canViewRecipe = attachment?.isAvailable === true
+            && typeof attachment.recipe?.id === 'string'
+            && attachment.recipe.id.trim().length > 0;
           const likePending = pendingLikesRef.current.has(post.id);
           const deletePending = pendingDeletesRef.current.has(post.id);
           const followPending = post.author ? pendingFollowsRef.current.has(post.author.id) : false;
@@ -820,6 +823,19 @@ export default function CommunityScreen() {
                   <View style={styles.tagRow}><Ionicons name="restaurant-outline" size={12} color={colors.sageDeep} /><Text style={styles.tagText} numberOfLines={1}>{attachment.recipe.title}</Text></View>
                 )}
                 <Text style={styles.caption}>{post.caption}</Text>
+                {canViewRecipe && (
+                  <Pressable
+                    style={styles.viewRecipeButton}
+                    onPress={() => navigation.navigate('RecipeDetail', {
+                      recipeSource: 'api',
+                      recipeId: attachment.recipe.id,
+                    })}
+                    accessibilityRole="button"
+                    accessibilityLabel="View Recipe"
+                  >
+                    <Text style={styles.viewRecipeText}>View Recipe</Text>
+                  </Pressable>
+                )}
                 <View style={styles.actionRow}>
                   <Pressable
                     style={styles.actionBtn}
@@ -996,6 +1012,8 @@ function makeStyles(colors, shadow) {
     tagRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: spacing.xs },
     tagText: { fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.sageDeep, flexShrink: 1 },
     caption: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.ink, lineHeight: 19, marginBottom: spacing.sm },
+    viewRecipeButton: { alignSelf: 'flex-start', minHeight: 34, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.sageDeep, marginBottom: spacing.sm },
+    viewRecipeText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.sageDeep },
     actionRow: { flexDirection: 'row', gap: spacing.lg },
     actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     actionText: { fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.inkSoft },
