@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const CommunityPost = require('../src/modules/community/community-post.model');
 const CommunityPostLike = require('../src/modules/community/community-post-like.model');
+const CommunityComment = require('../src/modules/community/community-comment.model');
 
 const USER_ID = '507f1f77bcf86cd799439001';
 const POST_ID = '507f1f77bcf86cd799439002';
@@ -68,4 +69,26 @@ test('CommunityPostLike validates ids and uniquely indexes postId/userId', async
     .find(([spec]) => spec.postId === 1 && spec.userId === 1);
   assert.ok(index);
   assert.equal(index[1].unique, true);
+});
+
+test('CommunityComment has only bounded body, required refs, createdAt, and deterministic index', async () => {
+  assert.equal(CommunityComment.schema.path('postId').options.required, true);
+  assert.equal(CommunityComment.schema.path('postId').options.ref, 'CommunityPost');
+  assert.equal(CommunityComment.schema.path('authorId').options.required, true);
+  assert.equal(CommunityComment.schema.path('authorId').options.ref, 'User');
+  assert.equal(CommunityComment.schema.path('body').options.trim, true);
+  assert.equal(CommunityComment.schema.path('body').options.minlength, 1);
+  assert.equal(CommunityComment.schema.path('body').options.maxlength, 1000);
+  assert.deepEqual(
+    Object.keys(CommunityComment.schema.paths)
+      .filter((path) => !['_id', '__v'].includes(path))
+      .sort(),
+    ['authorId', 'body', 'createdAt', 'postId'].sort()
+  );
+  await assert.rejects(() => new CommunityComment({ postId: POST_ID, authorId: USER_ID, body: ' ' }).validate());
+  await assert.rejects(() => new CommunityComment({ postId: POST_ID, authorId: USER_ID, body: 'x'.repeat(1001) }).validate());
+  await assert.doesNotReject(() => new CommunityComment({ postId: POST_ID, authorId: USER_ID, body: 'Line one\nLine two' }).validate());
+  const index = CommunityComment.schema.indexes().find(([spec]) =>
+    spec.postId === 1 && spec.createdAt === -1 && spec._id === -1);
+  assert.ok(index);
 });

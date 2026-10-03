@@ -1,5 +1,5 @@
 const communityService = require('./community.service');
-const { toPublicCommunityPost } = require('./community.serializer');
+const { toPublicCommunityPost, toPublicCommunityComment } = require('./community.serializer');
 const { sendSuccess } = require('../../shared/http/response');
 const { asyncHandler } = require('../../shared/http/async-handler');
 
@@ -40,4 +40,45 @@ const unlikePost = asyncHandler(async (req, res) => {
   sendSuccess(res, state);
 });
 
-module.exports = { listPosts, createPost, deletePost, likePost, unlikePost };
+const listComments = asyncHandler(async (req, res) => {
+  const { page, limit } = req.validated.query;
+  const result = await communityService.listComments({
+    viewerId: req.auth.userId,
+    postId: req.params.postId,
+    page,
+    limit,
+  });
+  sendSuccess(res, {
+    comments: result.items.map(toPublicCommunityComment),
+    commentCount: result.total,
+    pagination: toPagination({ page, limit, total: result.total }),
+  });
+});
+
+const createComment = asyncHandler(async (req, res) => {
+  const result = await communityService.createComment(
+    req.auth.userId,
+    req.params.postId,
+    req.validated.body
+  );
+  sendSuccess(res, {
+    comment: toPublicCommunityComment(result.item),
+    commentCount: result.commentCount,
+  }, 201);
+});
+
+const deleteComment = asyncHandler(async (req, res) => {
+  const result = await communityService.deleteComment(req.auth.userId, req.params.commentId);
+  sendSuccess(res, result);
+});
+
+module.exports = {
+  listPosts,
+  createPost,
+  deletePost,
+  likePost,
+  unlikePost,
+  listComments,
+  createComment,
+  deleteComment,
+};
