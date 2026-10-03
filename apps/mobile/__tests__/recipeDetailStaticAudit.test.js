@@ -450,6 +450,7 @@ describe('RecipeDetail rejects legacy/mock route payloads', () => {
       'screens/DashboardScreen.js',
       'screens/DiscoverScreen.js',
       'screens/MealPlanScreen.js',
+      'screens/CommunityScreen.js',
       // Saved itself no longer opens RecipeDetail directly — it only
       // navigates into CollectionDetail, which owns the real recipe rows.
       'screens/CollectionDetailScreen.js',
@@ -461,5 +462,20 @@ describe('RecipeDetail rejects legacy/mock route payloads', () => {
         expect(args).toMatch(/recipeSource:\s*'api'/);
       }
     }
+  });
+
+  it('Community uses only the frozen two-field RecipeDetail navigation payload', () => {
+    const community = read('screens/CommunityScreen.js');
+    const calls = [...community.matchAll(/navigation\.navigate\(\s*'RecipeDetail',\s*\{([\s\S]{0,200}?)\}\s*\)/g)];
+    expect(calls).toHaveLength(1);
+    const fields = calls[0][1]
+      .split(',')
+      .map((field) => field.trim())
+      .filter(Boolean);
+    expect(fields).toEqual([
+      "recipeSource: 'api'",
+      'recipeId: attachment.recipe.id',
+    ]);
+    expect(calls[0][1]).not.toMatch(/initialRecipe|\brecipe\s*:|ingredients|attachment\s*:/);
   });
 });

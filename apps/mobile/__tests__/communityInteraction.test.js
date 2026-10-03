@@ -141,6 +141,55 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+it('opens an available attached recipe with the exact authoritative RecipeDetail contract', async () => {
+  const navigation = { navigate: jest.fn() };
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('p1', 0, {
+      recipeAttachment: {
+        isAvailable: true,
+        recipe: { id: 'recipe-1', title: 'Server Recipe', imageUrl: 'https://cdn/recipe.webp' },
+      },
+    }),
+  ], 1, 1));
+
+  const view = render(<CommunityScreen navigation={navigation} />);
+  const cta = await view.findByLabelText('View Recipe');
+  expect(cta.props.accessibilityRole).toBe('button');
+  fireEvent.press(cta);
+
+  expect(navigation.navigate).toHaveBeenCalledTimes(1);
+  expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', {
+    recipeSource: 'api',
+    recipeId: 'recipe-1',
+  });
+  expect(navigation.navigate.mock.calls[0][1]).toEqual({
+    recipeSource: 'api',
+    recipeId: 'recipe-1',
+  });
+});
+
+it.each([
+  ['unavailable attachment', { isAvailable: false, recipe: { id: 'recipe-1', title: 'Unavailable' } }],
+  ['null attachment', null],
+  ['missing recipe', { isAvailable: true, recipe: null }],
+  ['missing recipe id', { isAvailable: true, recipe: { title: 'Missing id' } }],
+  ['blank recipe id', { isAvailable: true, recipe: { id: '   ', title: 'Blank id' } }],
+])('does not expose recipe navigation for %s', async (label, recipeAttachment) => {
+  const navigation = { navigate: jest.fn() };
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('p1', 0, { recipeAttachment }),
+  ], 1, 1));
+
+  const view = render(<CommunityScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByText('Post p1')).toBeOnTheScreen());
+
+  expect(view.queryByLabelText('View Recipe')).toBeNull();
+  if (label === 'unavailable attachment') {
+    expect(view.getByText('Recipe unavailable')).toBeOnTheScreen();
+  }
+  expect(navigation.navigate).not.toHaveBeenCalled();
+});
+
 it('renders server-projected post and comment avatars with initial fallback only for null', async () => {
   communityService.listCommunityPosts.mockResolvedValue(feed([
     post('p1', 1, { author: { id: 'user-a', name: 'User A', avatarUrl: 'https://cdn/post.webp' } }),
@@ -543,22 +592,51 @@ it('ignores a late comment continuation after unmount', async () => {
 
 it('switches All/Following with fresh page one and rejects the late prior-mode payload', async () => {
   const lateAll = deferred();
+  const navigation = { navigate: jest.fn() };
+  const staleRecipeId = 'recipe-stale-all';
+  const currentRecipeId = 'recipe-current-following';
   communityService.listCommunityPosts.mockReset().mockReturnValueOnce(lateAll.promise);
   communityService.listFollowingCommunityPosts.mockResolvedValueOnce(feed([
     post('following', 0, {
       author: { id: 'user-b', name: 'User B', avatarUrl: null },
       isOwner: false,
       isFollowingAuthor: true,
+      recipeAttachment: {
+        isAvailable: true,
+        recipe: { id: currentRecipeId, title: 'Current Following Recipe', imageUrl: null },
+      },
     }),
   ], 1, 1));
-  const view = render(<CommunityScreen />);
+  const view = render(<CommunityScreen navigation={navigation} />);
   fireEvent.press(view.getByLabelText('Following Community posts'));
   await waitFor(() => expect(view.getByText('Post following')).toBeOnTheScreen());
   expect(communityService.listFollowingCommunityPosts).toHaveBeenCalledWith({ page: 1, limit: 20 });
 
-  await settle(lateAll, 'resolve', feed([post('corrupt-all')], 1, 1));
+  await settle(lateAll, 'resolve', feed([
+    post('corrupt-all', 0, {
+      recipeAttachment: {
+        isAvailable: true,
+        recipe: { id: staleRecipeId, title: 'Stale All Recipe', imageUrl: null },
+      },
+    }),
+  ], 1, 1));
   expect(view.queryByText('Post corrupt-all')).toBeNull();
+  expect(view.queryByText('Stale All Recipe')).toBeNull();
   expect(view.getByText('Post following')).toBeOnTheScreen();
+  expect(view.getByText('Current Following Recipe')).toBeOnTheScreen();
+
+  const ctas = view.getAllByLabelText('View Recipe');
+  expect(ctas).toHaveLength(1);
+  fireEvent.press(ctas[0]);
+  expect(navigation.navigate).toHaveBeenCalledTimes(1);
+  expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', {
+    recipeSource: 'api',
+    recipeId: currentRecipeId,
+  });
+  expect(navigation.navigate.mock.calls).not.toContainEqual([
+    'RecipeDetail',
+    { recipeSource: 'api', recipeId: staleRecipeId },
+  ]);
 });
 
 it('keeps follow pessimistic and single-flight per author, then reconciles every matching card', async () => {
