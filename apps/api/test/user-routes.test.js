@@ -912,7 +912,7 @@ test('PATCH /api/v1/users/me updates only the supplied preference leaf and retur
   ]);
 });
 
-test('PATCH /api/v1/users/me accepts notifications.enabled:false (present value, not "missing")', async (t) => {
+test('PATCH /api/v1/users/me accepts legacy enabled:false and writes the canonical push mirror', async (t) => {
   mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
   let capturedSet;
   t.mock.method(userRepository, 'updateById', async (id, update) => {
@@ -923,7 +923,29 @@ test('PATCH /api/v1/users/me accepts notifications.enabled:false (present value,
   const res = await selfPatch(userToken(), { preferences: { notifications: { enabled: false } } });
 
   assert.equal(res.status, 200);
-  assert.deepEqual(capturedSet, { 'preferences.notifications.enabled': false });
+  assert.deepEqual(capturedSet, {
+    'preferences.notifications.push': false,
+    'preferences.notifications.enabled': false,
+  });
+});
+
+test('PATCH /api/v1/users/me accepts strict canonical partial notification leaves', async (t) => {
+  mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
+  let capturedSet;
+  t.mock.method(userRepository, 'updateById', async (id, update) => {
+    capturedSet = update.$set;
+    return userDoc({ id: String(id) });
+  });
+  const res = await selfPatch(userToken(), {
+    preferences: { notifications: { push: false, email: false, digest: true } },
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(capturedSet, {
+    'preferences.notifications.push': false,
+    'preferences.notifications.enabled': false,
+    'preferences.notifications.email': false,
+    'preferences.notifications.digest': true,
+  });
 });
 
 test('PATCH /api/v1/users/me accepts an empty allergies array (clear)', async (t) => {

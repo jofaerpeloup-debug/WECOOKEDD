@@ -59,6 +59,17 @@ describe('production-reachable deferred features remain honest', () => {
     expect(app).not.toMatch(/SavedRecipesProvider|CommunityProvider/);
   });
 
+  it('keeps NOTIF2, MEAL4, and NOTIF3 deferred without fake inbox authority', () => {
+    const files = [
+      read('api/notificationService.js'),
+      read('context/NotificationsContext.js'),
+      read('components/NotificationsDropdown.js'),
+      read('screens/NotificationsScreen.js'),
+    ].join('\n');
+    expect(files).not.toMatch(/AsyncStorage|mockData|expo-notifications|pushToken|deviceToken|requestPermissions|scheduleNotification|setInterval/i);
+    expect(files).not.toMatch(/createNotification|seedNotification|fakeNotification/i);
+  });
+
   it('Help Center makes no unsupported AI, offline, subscription, or support-address claim', () => {
     const help = read('screens/HelpCenterScreen.js');
     expect(help).not.toMatch(/data\/mockData|Chef AI|subscription|support@wecooked\.app/);

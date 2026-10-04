@@ -40,7 +40,18 @@ function toPublicUser(user) {
       dietaryPreferences: user.preferences?.dietaryPreferences ?? [],
       allergies: user.preferences?.allergies ?? [],
       notifications: {
-        enabled: user.preferences?.notifications?.enabled ?? true,
+        enabled:
+          user.preferences?.notifications?.push ??
+          user.preferences?.notifications?.enabled ??
+          true,
+        push:
+          user.preferences?.notifications?.push ??
+          user.preferences?.notifications?.enabled ??
+          true,
+        email: user.preferences?.notifications?.email ?? true,
+        suggestions: user.preferences?.notifications?.suggestions ?? true,
+        digest: user.preferences?.notifications?.digest ?? false,
+        reminders: user.preferences?.notifications?.reminders ?? true,
       },
     },
     authIdentities: toPublicAuthIdentities(user.authIdentities),

@@ -29,6 +29,7 @@ import { CollectionsProvider } from './src/context/CollectionsContext';
 import { ShoppingListProvider } from './src/context/ShoppingListContext';
 import { CookHistoryProvider } from './src/context/CookHistoryContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { NotificationsProvider } from './src/context/NotificationsContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -72,15 +73,17 @@ export default function App() {
     <SafeAreaProvider>
       <ThemeProvider>
         <AuthProvider>
-          <FavoritesProvider>
-            <CollectionsProvider>
-              <ShoppingListProvider>
-                <CookHistoryProvider>
-                  <AppGate fontsLoaded={fontsLoaded} />
-                </CookHistoryProvider>
-              </ShoppingListProvider>
-            </CollectionsProvider>
-          </FavoritesProvider>
+          <NotificationsProvider>
+            <FavoritesProvider>
+              <CollectionsProvider>
+                <ShoppingListProvider>
+                  <CookHistoryProvider>
+                    <AppGate fontsLoaded={fontsLoaded} />
+                  </CookHistoryProvider>
+                </ShoppingListProvider>
+              </CollectionsProvider>
+            </FavoritesProvider>
+          </NotificationsProvider>
         </AuthProvider>
       </ThemeProvider>
     </SafeAreaProvider>

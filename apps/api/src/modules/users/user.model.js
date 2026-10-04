@@ -55,6 +55,11 @@ const preferencesSchema = new mongoose.Schema(
     allergies: { type: [String], default: [] },
     notifications: {
       enabled: { type: Boolean, default: true },
+      push: { type: Boolean, default: true },
+      email: { type: Boolean, default: true },
+      suggestions: { type: Boolean, default: true },
+      digest: { type: Boolean, default: false },
+      reminders: { type: Boolean, default: true },
     },
   },
   { _id: false }

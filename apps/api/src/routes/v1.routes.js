@@ -16,6 +16,7 @@ const uploadRoutes = require('../modules/uploads/upload.routes');
 const staffRoutes = require('../modules/moderator-applications/moderator-application.routes');
 const auditRoutes = require('../modules/audit/audit.routes');
 const assistantRoutes = require('../modules/assistant/assistant.routes');
+const notificationRoutes = require('../modules/notifications/notification.routes');
 
 const router = Router();
 
@@ -38,5 +39,6 @@ router.use('/admin/uploads', uploadRoutes);
 router.use('/staff', staffRoutes);
 router.use('/admin/audit-logs', auditRoutes);
 router.use('/assistant', assistantRoutes);
+router.use('/notifications', notificationRoutes);
 
 module.exports = router;

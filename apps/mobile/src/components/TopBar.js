@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, Modal, Animated, Dimensions } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { typography, spacing, radius } from '../theme/theme';
+import { typography, spacing } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-
-const DROPDOWN_WIDTH = Math.min(280, Dimensions.get('window').width * 0.78);
+import { useNotifications } from '../context/NotificationsContext';
+import NotificationsDropdown from './NotificationsDropdown';
 
 function Wordmark({ style }) {
   const { colors } = useTheme();
@@ -14,43 +15,6 @@ function Wordmark({ style }) {
       <Text style={{ color: colors.sageDeep }}>We</Text>
       <Text style={{ color: colors.ink }}>Cooked</Text>
     </Text>
-  );
-}
-
-function NotificationDropdown({ visible, onClose, topOffset }) {
-  const { colors, shadow } = useTheme();
-  const styles = makeDropdownStyles(colors, shadow);
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(anim, {
-      toValue: visible ? 1 : 0,
-      duration: 180,
-      useNativeDriver: true,
-    }).start();
-  }, [visible]);
-
-  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
-  const opacity = anim;
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <Animated.View
-        style={[
-          styles.panel,
-          { top: topOffset, opacity, transform: [{ scale }] },
-        ]}
-      >
-        <View style={styles.caret} />
-        <View style={styles.header}>
-          <Text style={styles.headerText}>Notifications</Text>
-        </View>
-        <View style={styles.emptyRow}>
-          <Text style={styles.emptyText}>The notifications feed isn&apos;t available yet.</Text>
-        </View>
-      </Animated.View>
-    </Modal>
   );
 }
 
@@ -71,12 +35,13 @@ export default function TopBar({
   onSavedPress,
   rightIcon,
   onRightPress,
-  showBellDot = false,
   transparent = false,
 }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
+  const { unreadCount } = useNotifications();
   const [notifVisible, setNotifVisible] = useState(false);
 
   const pressBell = () => {
@@ -114,19 +79,20 @@ export default function TopBar({
               onPress={pressBell}
               hitSlop={10}
               accessibilityRole="button"
-              accessibilityLabel="Notifications"
+              accessibilityLabel={`Notifications, ${unreadCount} unread`}
             >
               <View>
                 <Ionicons name="notifications-outline" size={22} color={colors.ink} />
-                {showBellDot && <View style={styles.bellDot} />}
+                {unreadCount > 0 && <View style={styles.bellDot} />}
               </View>
             </Pressable>
           </View>
 
-          <NotificationDropdown
+          <NotificationsDropdown
             visible={notifVisible}
             onClose={() => setNotifVisible(false)}
             topOffset={insets.top + spacing.sm + 40}
+            navigation={navigation}
           />
         </>
       ) : (
@@ -204,54 +170,6 @@ function makeStyles(colors) {
       color: colors.ink,
       flex: 1,
       textAlign: 'center',
-    },
-  });
-}
-
-function makeDropdownStyles(colors, shadow) {
-  return StyleSheet.create({
-    backdrop: { ...StyleSheet.absoluteFill, backgroundColor: colors.overlay },
-    panel: {
-      position: 'absolute',
-      right: spacing.lg,
-      width: DROPDOWN_WIDTH,
-      backgroundColor: colors.paper,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      overflow: 'hidden',
-      ...shadow.card,
-    },
-    caret: {
-      position: 'absolute',
-      top: -6,
-      right: 16,
-      width: 12,
-      height: 12,
-      backgroundColor: colors.paper,
-      borderTopWidth: 1,
-      borderLeftWidth: 1,
-      borderColor: colors.hairline,
-      transform: [{ rotate: '45deg' }],
-    },
-    header: {
-      paddingHorizontal: spacing.md,
-      paddingTop: spacing.md,
-      paddingBottom: spacing.sm,
-    },
-    headerText: {
-      fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.md,
-      color: colors.ink,
-    },
-    emptyRow: {
-      paddingHorizontal: spacing.md,
-      paddingBottom: spacing.md,
-    },
-    emptyText: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkFaint,
     },
   });
 }
