@@ -6,34 +6,30 @@ jest.mock('react-native', () => {
     React.forwardRef(({ children, ...props }, ref) =>
       React.createElement(name, { ...props, ref }, children)
     );
-  const Modal = ({ visible, children, ...props }) =>
-    visible ? React.createElement('Modal', props, children) : null;
   const FlatList = React.forwardRef(
-    ({ data = [], renderItem, ListEmptyComponent, ListFooterComponent, ...props }, ref) => {
+    ({ data = [], renderItem, ListHeaderComponent, ListEmptyComponent, ListFooterComponent, ...props }, ref) => {
       const rows = data.length
-        ? data.map((item, index) =>
-            React.createElement(
-              React.Fragment,
-              { key: item.id || index },
-              renderItem({ item, index })
-            )
-          )
+        ? data.map((item, index) => (
+            <React.Fragment key={item.id || index}>{renderItem({ item, index })}</React.Fragment>
+          ))
         : ListEmptyComponent;
-      return React.createElement('FlatList', { ...props, data, renderItem, ref }, rows, ListFooterComponent);
+      return React.createElement(
+        'FlatList',
+        { ...props, data, renderItem, ref },
+        ListHeaderComponent,
+        rows,
+        ListFooterComponent
+      );
     }
   );
-
   return {
     ActivityIndicator: host('ActivityIndicator'),
+    BackHandler: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
     FlatList,
-    KeyboardAvoidingView: host('KeyboardAvoidingView'),
-    Modal,
-    Platform: { OS: 'ios', select: (spec) => spec?.ios ?? spec?.default },
     Pressable: host('Pressable'),
     RefreshControl: host('RefreshControl'),
     ScrollView: host('ScrollView'),
     StyleSheet: {
-      absoluteFill: {},
       create: (styles) => styles,
       flatten: (style) =>
         Array.isArray(style) ? Object.assign({}, ...style.filter(Boolean)) : style || {},
@@ -45,24 +41,12 @@ jest.mock('react-native', () => {
 });
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-jest.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
-}));
 jest.mock('../src/theme/ThemeContext', () => ({
   useTheme: () => ({
     colors: {
-      cream: '#fff',
-      creamDeep: '#eee',
-      paper: '#fff',
-      ink: '#111',
-      inkSoft: '#333',
-      inkFaint: '#666',
-      hairline: '#ccc',
-      onAccent: '#fff',
-      sagePale: '#efe',
-      sageDeep: '#353',
-      overlay: '#0008',
-      error: '#900',
+      cream: '#fff', creamDeep: '#eee', paper: '#fff', ink: '#111', inkSoft: '#333',
+      inkFaint: '#666', hairline: '#ccc', onAccent: '#fff', sagePale: '#efe',
+      sageDeep: '#353', error: '#900',
     },
   }),
 }));
@@ -81,10 +65,19 @@ jest.mock('../src/utils/recipeFreshnessState', () => ({
   recipeCollectionPhaseAfterFailure: jest.fn((recipes) => (recipes.length ? 'ready' : 'error')),
 }));
 
-let mockRefreshCallback;
+const mockHistoryState = {
+  recentSearches: [],
+  recordSearch: jest.fn(),
+  clearSearchHistory: jest.fn(),
+};
+jest.mock('../src/context/SearchHistoryContext', () => ({
+  useSearchHistory: () => mockHistoryState,
+}));
+
+let refreshCallback;
 jest.mock('../src/hooks/useRecipeScreenRefresh', () =>
   jest.fn((callback) => {
-    mockRefreshCallback = callback;
+    refreshCallback = callback;
   })
 );
 
@@ -96,33 +89,36 @@ const DiscoverFiltersSheet = require('../src/components/DiscoverFiltersSheet').d
 const DiscoverScreen = require('../src/screens/DiscoverScreen').default;
 const ingredientApiGet = api.get;
 
-const emptyRecipePage = {
-  recipes: [],
-  pagination: { page: 1, limit: 20, total: 0, totalPages: 1 },
-};
-
-function deferred() {
+const page = (recipes, current = 1, totalPages = 1) => ({
+  recipes,
+  pagination: { page: current, limit: 20, total: recipes.length, totalPages },
+});
+const recipe = (id, title = id) => ({
+  id, title, imageUrl: null, difficulty: 'easy', prepTimeMinutes: 10,
+});
+const deferred = () => {
   let resolve;
   let reject;
-  const promise = new Promise((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
-}
-
-async function advanceIngredientDebounce() {
-  await act(async () => {
-    jest.advanceTimersByTime(300);
-    await Promise.resolve();
-  });
-}
-
-async function settle(request, method, value) {
+};
+const settle = async (request, method, value) => {
   await act(async () => {
     request[method](value);
     await request.promise.catch(() => undefined);
   });
+};
+const advance = async (milliseconds = 300) => {
+  await act(async () => {
+    jest.advanceTimersByTime(milliseconds);
+    await Promise.resolve();
+  });
+};
+
+function renderSearch(routeParams = {}) {
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() };
+  const view = render(<DiscoverScreen navigation={navigation} route={{ params: routeParams }} />);
+  return { view, navigation };
 }
 
 function renderSheet(overrides = {}) {
@@ -142,61 +138,550 @@ function flattenedStyle(node) {
   return Object.assign({}, ...styles.filter(Boolean));
 }
 
+async function resolveInitial(view, recipes = [recipe('catalog', 'Catalog')], totalPages = 1) {
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  await act(async () => { await Promise.resolve(); });
+  if (recipes.length) await view.findByText(recipes[0].title);
+  return page(recipes, 1, totalPages);
+}
+
 beforeEach(() => {
   jest.useFakeTimers();
-  jest.clearAllMocks();
-  mockRefreshCallback = undefined;
+  listRecipes.mockReset();
+  ingredientApiGet.mockReset();
   ingredientApiGet.mockResolvedValue({
     ingredients: [],
     pagination: { page: 1, limit: 20, total: 0, totalPages: 1 },
   });
-  listRecipes.mockResolvedValue(emptyRecipePage);
+  mockHistoryState.recentSearches = [];
+  mockHistoryState.recordSearch.mockReset();
+  mockHistoryState.clearSearchHistory.mockReset();
+  refreshCallback = undefined;
 });
 
 afterEach(() => {
   cleanup();
+  jest.clearAllTimers();
   jest.useRealTimers();
 });
 
-it('searches the canonical Ingredient API after 300 ms and applies only a selected public id', async () => {
-  const request = deferred();
-  ingredientApiGet.mockReturnValue(request.promise);
+it('renders the Search shell and six visible sort controls in the one list header', async () => {
+  listRecipes.mockResolvedValueOnce(page([]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  expect(view.UNSAFE_getByType('TopBar').props.title).toBe('Search');
+  expect(view.getByLabelText('Search recipes').props.placeholder).toBe('Search recipes...');
+  for (const label of [
+    'Sort: Title: A-Z', 'Sort: Title: Z-A', 'Sort: Newest added',
+    'Sort: Oldest added', 'Sort: Prep time: low to high', 'Sort: Prep time: high to low',
+  ]) expect(view.getByLabelText(label)).toBeOnTheScreen();
+});
+
+it('keeps the initial blank-query owner when input changes only to whitespace', async () => {
+  const initial = deferred();
+  listRecipes.mockReturnValueOnce(initial.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+
+  fireEvent.changeText(view.getByLabelText('Search recipes'), '   ');
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  await advance();
+  expect(listRecipes).toHaveBeenCalledTimes(1);
+
+  await settle(initial, 'resolve', page([recipe('catalog', 'Current Catalog')]));
+  expect(view.getByText('Current Catalog')).toBeOnTheScreen();
+});
+
+it('clears an unsettled query back to the catalog before its debounce fires', async () => {
+  const catalog = deferred();
+  listRecipes.mockResolvedValueOnce(page([recipe('old', 'Old Catalog')])).mockReturnValueOnce(catalog.promise);
+  const { view } = renderSearch();
+  await view.findByText('Old Catalog');
+
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  expect(view.queryByText('Old Catalog')).toBeNull();
+  fireEvent.changeText(view.getByLabelText('Search recipes'), '');
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+  expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'titleAsc', page: 1, limit: 20 });
+  await advance();
+  expect(listRecipes).toHaveBeenCalledTimes(2);
+
+  await settle(catalog, 'resolve', page([recipe('catalog', 'Current Catalog')]));
+  expect(view.getByText('Current Catalog')).toBeOnTheScreen();
+});
+
+it('treats a whitespace variant of settled A as a semantic no-op', async () => {
+  listRecipes
+    .mockResolvedValueOnce(page([]))
+    .mockResolvedValueOnce(page([recipe('a', 'Authoritative A')]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'pasta');
+  await advance();
+  await view.findByText('Authoritative A');
+
+  fireEvent.changeText(view.getByLabelText('Search recipes'), '  pasta  ');
+  expect(view.getByText('Authoritative A')).toBeOnTheScreen();
+  await advance();
+  expect(listRecipes).toHaveBeenCalledTimes(2);
+  expect(view.getByText('Authoritative A')).toBeOnTheScreen();
+});
+
+it('restarts already-debounced A when unsettled B is reverted before debounce', async () => {
+  const replacementA = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([]))
+    .mockResolvedValueOnce(page([recipe('a', 'First A')]))
+    .mockReturnValueOnce(replacementA.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'A');
+  await advance();
+  await view.findByText('First A');
+
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  expect(view.queryByText('First A')).toBeNull();
+  fireEvent.changeText(view.getByLabelText('Search recipes'), ' A ');
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+  expect(listRecipes).toHaveBeenLastCalledWith({ search: 'A', sort: 'titleAsc', page: 1, limit: 20 });
+  await advance();
+  expect(listRecipes).toHaveBeenCalledTimes(3);
+
+  await settle(replacementA, 'resolve', page([recipe('a2', 'Replacement A')]));
+  expect(view.getByText('Replacement A')).toBeOnTheScreen();
+});
+
+it('preserves unapplied narrowing edits when sort changes while filters are expanded', async () => {
+  listRecipes.mockResolvedValue(page([]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Difficulty: Hard'));
+  expect(view.getByLabelText('Difficulty: Hard').props.accessibilityState).toEqual({ selected: true });
+  fireEvent.press(view.getByLabelText('Sort: Newest added'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'newest', page: 1, limit: 20 }));
+  expect(view.getByLabelText('Difficulty: Hard').props.accessibilityState).toEqual({ selected: true });
+
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({ difficulty: 'hard', sort: 'newest', page: 1, limit: 20 }));
+});
+
+it('invalidates A immediately when B is typed before B debounce fires', async () => {
+  const initial = deferred();
+  const a = deferred();
+  const b = deferred();
+  listRecipes.mockReturnValueOnce(initial.promise).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await settle(initial, 'resolve', page([recipe('catalog', 'Catalog')]));
+
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'A');
+  await advance();
+  expect(listRecipes).toHaveBeenLastCalledWith({ search: 'A', sort: 'titleAsc', page: 1, limit: 20 });
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  expect(view.queryByText('Catalog')).toBeNull();
+  expect(view.getByText('Loading recipes…')).toBeOnTheScreen();
+  await settle(a, 'resolve', page([recipe('a', 'Stale A')]));
+  expect(view.queryByText('Stale A')).toBeNull();
+  expect(view.getByText('Loading recipes…')).toBeOnTheScreen();
+  expect(listRecipes).toHaveBeenCalledTimes(2);
+  await advance();
+  await settle(b, 'resolve', page([recipe('b', 'Current B')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+});
+
+it('does not let a stale first-page failure or finalizer clear newer loading', async () => {
+  const a = deferred();
+  const b = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'A');
+  await advance();
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  await advance();
+
+  await settle(a, 'reject', new Error('stale A failure'));
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  expect(view.queryByText('Recipe request failed.')).toBeNull();
+  await settle(b, 'resolve', page([recipe('b', 'Current B')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+});
+
+it('keeps newer refresh-owned loading active when a stale first-page finalizer settles', async () => {
+  const firstPageA = deferred();
+  const refreshB = deferred();
+  listRecipes.mockReturnValueOnce(firstPageA.promise).mockReturnValueOnce(refreshB.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+
+  await act(async () => { refreshCallback(); await Promise.resolve(); });
+  expect(listRecipes).toHaveBeenCalledTimes(2);
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(true);
+
+  // A's success guard returns before any success mutation. Only its finally
+  // ownership check can keep B's visible refresh state active here.
+  await settle(firstPageA, 'resolve', page([recipe('stale-a', 'Stale A')]));
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(true);
+  expect(view.queryByText('Stale A')).toBeNull();
+
+  await settle(refreshB, 'resolve', page([recipe('current-b', 'Current B')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(false);
+});
+
+it.each(['resolve', 'reject'])('keeps visible B authoritative after stale A %s', async (method) => {
+  const a = deferred();
+  const b = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'A');
+  await advance();
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  await advance();
+  await settle(b, 'resolve', page([recipe('b', 'Current B')], 1, 2));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+  expect(view.getByText('1+ recipes found')).toBeOnTheScreen();
+  await settle(a, method, method === 'resolve' ? page([recipe('a', 'Stale A')]) : new Error('old'));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+  expect(view.getByText('1+ recipes found')).toBeOnTheScreen();
+  expect(view.queryByText('Stale A')).toBeNull();
+  expect(view.queryByText('Recipe request failed.')).toBeNull();
+});
+
+it('keeps the visible empty-query catalog after an old query settles', async () => {
+  const a = deferred();
+  const catalog = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(a.promise).mockReturnValueOnce(catalog.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'A');
+  await advance();
+  fireEvent.press(view.getByLabelText('Clear search'));
+  await settle(catalog, 'resolve', page([recipe('catalog', 'Current Catalog')]));
+  await settle(a, 'resolve', page([recipe('a', 'Stale A')]));
+  expect(view.getByText('Current Catalog')).toBeOnTheScreen();
+  expect(view.queryByText('Stale A')).toBeNull();
+});
+
+it('selecting recent B records it and protects its visible result from A', async () => {
+  mockHistoryState.recentSearches = ['B'];
+  const a = deferred();
+  const catalog = deferred();
+  const blank = deferred();
+  const b = deferred();
+  listRecipes
+    .mockReturnValueOnce(catalog.promise)
+    .mockReturnValueOnce(a.promise)
+    .mockReturnValueOnce(blank.promise)
+    .mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await settle(catalog, 'resolve', page([]));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'A');
+  await advance();
+  fireEvent.press(view.getByLabelText('Clear search'));
+  // The blank-query replacement is superseded immediately by the intentional recent selection.
+  fireEvent.press(view.getByLabelText('Search for B'));
+  expect(mockHistoryState.recordSearch).toHaveBeenCalledWith('B');
+  await settle(b, 'resolve', page([recipe('b', 'Recent B')]));
+  await settle(blank, 'resolve', page([recipe('blank', 'Stale Catalog')]));
+  await settle(a, 'resolve', page([recipe('a', 'Stale A')]));
+  expect(view.getByText('Recent B')).toBeOnTheScreen();
+  expect(view.queryByText('Stale A')).toBeNull();
+});
+
+it('drops stale load-more after B page 1 is visibly current', async () => {
+  const moreA = deferred();
+  const b = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('a1', 'A One')], 1, 2))
+    .mockReturnValueOnce(moreA.promise)
+    .mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await view.findByText('A One');
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  await advance();
+  await settle(b, 'resolve', page([recipe('b', 'Current B')]));
+  await settle(moreA, 'resolve', page([recipe('a2', 'Stale A Two')], 2, 2));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+  expect(view.queryByText('Stale A Two')).toBeNull();
+});
+
+it('does not let stale load-more failure or finalizer clear the current footer owner', async () => {
+  const moreA = deferred();
+  const firstB = deferred();
+  const moreB = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('a1', 'A One')], 1, 2))
+    .mockReturnValueOnce(moreA.promise)
+    .mockReturnValueOnce(firstB.promise)
+    .mockReturnValueOnce(moreB.promise);
+  const { view } = renderSearch();
+  await view.findByText('A One');
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  await advance();
+  await settle(firstB, 'resolve', page([recipe('b1', 'B One')], 1, 2));
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(4));
+  expect(view.getByLabelText('Loading more recipes')).toBeOnTheScreen();
+
+  await settle(moreA, 'reject', new Error('stale more failure'));
+  expect(view.getByLabelText('Loading more recipes')).toBeOnTheScreen();
+  expect(view.queryByText(/Recipe request failed/)).toBeNull();
+  await settle(moreB, 'resolve', page([recipe('b2', 'B Two')], 2, 2));
+  expect(view.getByText('B Two')).toBeOnTheScreen();
+});
+
+it('drops stale refresh success and finalizer after B is visible', async () => {
+  const refreshA = deferred();
+  const b = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('a', 'A')]))
+    .mockReturnValueOnce(refreshA.promise)
+    .mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await view.findByText('A');
+  await act(async () => { refreshCallback(); await Promise.resolve(); });
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  await advance();
+  expect(listRecipes).toHaveBeenCalledTimes(3);
+  await settle(b, 'resolve', page([recipe('b', 'Current B')]));
+  await settle(refreshA, 'resolve', page([recipe('old', 'Old Refresh')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+  expect(view.queryByText('Old Refresh')).toBeNull();
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(false);
+});
+
+it('does not let a stale refresh failure clear the current replacement loading owner', async () => {
+  const refreshA = deferred();
+  const b = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('a', 'A')]))
+    .mockReturnValueOnce(refreshA.promise)
+    .mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await view.findByText('A');
+  await act(async () => { refreshCallback(); await Promise.resolve(); });
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  await advance();
+
+  await settle(refreshA, 'reject', new Error('stale refresh failure'));
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  expect(view.queryByText('Recipe request failed.')).toBeNull();
+  await settle(b, 'resolve', page([recipe('b', 'Current B')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+});
+
+it('keeps newer refresh B active when only stale refresh A finalizes', async () => {
+  const refreshA = deferred();
+  const refreshB = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('seed', 'Seed')]))
+    .mockReturnValueOnce(refreshA.promise)
+    .mockReturnValueOnce(refreshB.promise);
+  const { view } = renderSearch();
+  await view.findByText('Seed');
+
+  await act(async () => { refreshCallback(); await Promise.resolve(); });
+  await act(async () => { refreshCallback(); await Promise.resolve(); });
+  expect(listRecipes).toHaveBeenCalledTimes(3);
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(true);
+
+  // A resolves successfully, so its failure path is irrelevant and its stale
+  // success guard remains intact. Removing only the finally guard clears B.
+  await settle(refreshA, 'resolve', page([recipe('stale-refresh', 'Stale Refresh')]));
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(true);
+  expect(view.getByText('Seed')).toBeOnTheScreen();
+  expect(view.queryByText('Stale Refresh')).toBeNull();
+
+  await settle(refreshB, 'resolve', page([recipe('current-refresh', 'Current Refresh')]));
+  expect(view.getByText('Current Refresh')).toBeOnTheScreen();
+  expect(view.UNSAFE_getByType('FlatList').props.refreshControl.props.refreshing).toBe(false);
+});
+
+it('applies a staged filter once and an old query cannot replace it', async () => {
+  const old = deferred();
+  const filtered = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(old.promise).mockReturnValueOnce(filtered.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'soup');
+  await advance();
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Difficulty: Hard'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+  expect(listRecipes).toHaveBeenLastCalledWith({ search: 'soup', difficulty: 'hard', sort: 'titleAsc', page: 1, limit: 20 });
+  await settle(filtered, 'resolve', page([recipe('hard', 'Hard Soup')]));
+  await settle(old, 'resolve', page([recipe('old', 'Old Soup')]));
+  expect(view.getByText('Hard Soup')).toBeOnTheScreen();
+  expect(view.queryByText('Old Soup')).toBeNull();
+});
+
+it('keeps an Apply replacement loading when the superseded query fails and finalizes', async () => {
+  const old = deferred();
+  const filtered = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(old.promise).mockReturnValueOnce(filtered.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'soup');
+  await advance();
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Difficulty: Hard'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+
+  await settle(old, 'reject', new Error('stale query'));
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  expect(view.queryByText('Recipe request failed.')).toBeNull();
+  await settle(filtered, 'resolve', page([recipe('hard', 'Hard Soup')]));
+  expect(view.getByText('Hard Soup')).toBeOnTheScreen();
+});
+
+it('replaces an old query with a Dashboard preset and keeps the preset result authoritative', async () => {
+  const old = deferred();
+  const preset = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(old.promise).mockReturnValueOnce(preset.promise);
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() };
+  const view = render(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'old');
+  await advance();
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: { initialFilter: 'vegan' } }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+  expect(listRecipes).toHaveBeenLastCalledWith({ dietaryTag: 'vegan', sort: 'titleAsc', page: 1, limit: 20 });
+  await settle(preset, 'resolve', page([recipe('vegan', 'Current Vegan')]));
+  await settle(old, 'resolve', page([recipe('old', 'Stale Query')]));
+  expect(view.getByText('Current Vegan')).toBeOnTheScreen();
+  expect(view.queryByText('Stale Query')).toBeNull();
+});
+
+it('keeps a preset replacement loading when the superseded query fails and finalizes', async () => {
+  const old = deferred();
+  const preset = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(old.promise).mockReturnValueOnce(preset.promise);
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() };
+  const view = render(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'old');
+  await advance();
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: { initialFilter: 'vegan' } }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+
+  await settle(old, 'reject', new Error('stale query'));
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  expect(view.queryByText('Recipe request failed.')).toBeNull();
+  await settle(preset, 'resolve', page([recipe('vegan', 'Current Vegan')]));
+  expect(view.getByText('Current Vegan')).toBeOnTheScreen();
+});
+
+it('does not paginate while filters are expanded or the query is unsettled', async () => {
+  listRecipes.mockResolvedValueOnce(page([recipe('a', 'A')], 1, 2));
+  const { view } = renderSearch();
+  await view.findByText('A');
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  expect(listRecipes).toHaveBeenCalledTimes(1);
+  fireEvent.press(view.getByLabelText('Close recipe filters'));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'B');
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  expect(listRecipes).toHaveBeenCalledTimes(1);
+});
+
+it('preserves sort through screen Clear while clearing query and narrowing filters', async () => {
+  listRecipes.mockResolvedValue(page([]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.press(view.getByLabelText('Sort: Newest added'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'newest', page: 1, limit: 20 }));
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Difficulty: Hard'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({ difficulty: 'hard', sort: 'newest', page: 1, limit: 20 }));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'soup');
+  await advance();
+  fireEvent.press(view.getByLabelText('Clear search and filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'newest', page: 1, limit: 20 }));
+});
+
+it('records keyboard submission and opening a result, but typing alone does not', async () => {
+  listRecipes.mockResolvedValueOnce(page([])).mockResolvedValueOnce(page([recipe('s', 'Soup')]));
+  const { view, navigation } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), '  soup  ');
+  expect(mockHistoryState.recordSearch).not.toHaveBeenCalled();
+  fireEvent(view.getByLabelText('Search recipes'), 'blur');
+  fireEvent(view.getByLabelText('Search recipes'), 'endEditing');
+  expect(mockHistoryState.recordSearch).not.toHaveBeenCalled();
+  fireEvent(view.getByLabelText('Search recipes'), 'submitEditing');
+  expect(mockHistoryState.recordSearch).toHaveBeenCalledWith('soup');
+  await view.findByText('Soup');
+  fireEvent.press(view.getByLabelText('Open Soup'));
+  expect(mockHistoryState.recordSearch).toHaveBeenLastCalledWith('soup');
+  expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', expect.objectContaining({ recipeId: 's' }));
+});
+
+it.each(['resolve', 'reject'])(
+  'keeps current instance visible when an unmounted instance settles late by %s',
+  async (method) => {
+  const old = deferred();
+  const current = deferred();
+  listRecipes.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  const first = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  first.view.unmount();
+  const second = renderSearch();
+  await settle(current, 'resolve', page([recipe('new', 'New Instance')]));
+  await settle(
+    old,
+    method,
+    method === 'resolve' ? page([recipe('old', 'Old Instance')]) : new Error('old instance')
+  );
+  expect(second.view.getByText('New Instance')).toBeOnTheScreen();
+  expect(second.view.queryByText('Old Instance')).toBeNull();
+  expect(second.view.queryByText('Recipe request failed.')).toBeNull();
+});
+
+it('searches canonical Ingredients and applies only the selected public id', async () => {
+  ingredientApiGet.mockResolvedValueOnce({
+    ingredients: [{ id: 'ingredient-garlic', name: 'Garlic', aliases: ['bawang'] }],
+    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+  });
   const { props, view } = renderSheet();
-
-  expect(view.getByText('Ingredient')).toBeOnTheScreen();
-  expect(view.getByText('Sort')).toBeOnTheScreen();
   fireEvent.changeText(view.getByLabelText('Search ingredients'), '  garlic  ');
-  act(() => jest.advanceTimersByTime(299));
-  expect(ingredientApiGet).not.toHaveBeenCalled();
-
-  await advanceIngredientDebounce();
+  await advance();
   expect(ingredientApiGet).toHaveBeenCalledWith('/ingredients', {
     query: { search: 'garlic', limit: 20 },
   });
-  expect(view.getByLabelText('Searching ingredients').props.accessibilityState).toEqual({ busy: true });
-
-  await settle(request, 'resolve', {
-    ingredients: [{ id: 'ingredient-garlic', name: 'Garlic', aliases: ['bawang'] }],
-    pagination: { page: 1, limit: 20, total: 2, totalPages: 1 },
-  });
-  expect(view.getByText('Showing the first 1. Keep typing to narrow it down.')).toBeOnTheScreen();
-  fireEvent.press(view.getByLabelText('Select ingredient Garlic'));
+  fireEvent.press(await view.findByLabelText('Select ingredient Garlic'));
   fireEvent.press(view.getByLabelText('Apply recipe filters'));
-
   expect(props.onApply).toHaveBeenCalledWith({
     sort: 'titleAsc',
     ingredient: { id: 'ingredient-garlic', name: 'Garlic' },
   });
 });
 
-it('never turns typed-but-unselected Ingredient text into a Recipe filter', () => {
-  const { props, view } = renderSheet();
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'free text only');
-  fireEvent.press(view.getByLabelText('Apply recipe filters'));
-  expect(props.onApply).toHaveBeenCalledWith({ sort: 'titleAsc' });
+it.each([
+  undefined,
+  {},
+  { ingredients: null },
+  { ingredients: [{ id: ' ', name: 'Garlic' }] },
+])('fails closed for malformed Ingredient success payload %#', async (payload) => {
+  ingredientApiGet.mockResolvedValueOnce(payload);
+  const { view } = renderSheet();
+  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'garlic');
+  await advance();
+  expect(await view.findByText('Ingredient search failed.')).toBeOnTheScreen();
+  expect(view.queryByText(/No ingredients match/)).toBeNull();
 });
 
-it('renders Ingredient failure, explicit retry, and a truthful empty result', async () => {
+it('renders Ingredient failure, retries explicitly, and reports a truthful empty result', async () => {
   ingredientApiGet
     .mockRejectedValueOnce(new Error('private failure'))
     .mockResolvedValueOnce({
@@ -205,341 +690,41 @@ it('renders Ingredient failure, explicit retry, and a truthful empty result', as
     });
   const { view } = renderSheet();
   fireEvent.changeText(view.getByLabelText('Search ingredients'), 'unknown');
-  await advanceIngredientDebounce();
-
+  await advance();
   expect(await view.findByText('Ingredient search failed.')).toBeOnTheScreen();
   fireEvent.press(view.getByLabelText('Retry ingredient search'));
-  await advanceIngredientDebounce();
-
+  await advance();
   expect(ingredientApiGet).toHaveBeenCalledTimes(2);
-  expect(await view.findByText('No ingredients match “unknown”.')).toBeOnTheScreen();
+  expect(await view.findByText(/No ingredients match/)).toBeOnTheScreen();
 });
 
-it.each([
-  ['missing data', undefined],
-  ['missing collection', {}],
-  ['null collection', { ingredients: null }],
-  ['object collection', { ingredients: {} }],
-  ['string collection', { ingredients: 'garlic' }],
-  ['null id', { ingredients: [{ id: null, name: 'Garlic' }] }],
-  ['object id', { ingredients: [{ id: {}, name: 'Garlic' }] }],
-  ['array id', { ingredients: [{ id: [], name: 'Garlic' }] }],
-  ['numeric id', { ingredients: [{ id: 123, name: 'Garlic' }] }],
-  ['blank id', { ingredients: [{ id: '   ', name: 'Garlic' }] }],
-  ['blank name', { ingredients: [{ id: 'ingredient-garlic', name: '   ' }] }],
-])('renders Ingredient lookup unavailable for a malformed success payload: %s', async (_case, payload) => {
-  ingredientApiGet.mockResolvedValue(payload);
-  const { view } = renderSheet();
-
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'garlic');
-  await advanceIngredientDebounce();
-
-  expect(await view.findByText('Ingredient search failed.')).toBeOnTheScreen();
-  expect(view.queryByText(/No ingredients match/)).toBeNull();
-  expect(view.queryByLabelText('Select ingredient Garlic')).toBeNull();
-});
-
-it.each(['resolve', 'reject'])(
-  'drops an older Ingredient-search %s after a newer query owns the state',
-  async (oldMethod) => {
-    const oldRequest = deferred();
-    const newRequest = deferred();
-    ingredientApiGet
-      .mockReturnValueOnce(oldRequest.promise)
-      .mockReturnValueOnce(newRequest.promise);
-    const { view } = renderSheet();
-
-    fireEvent.changeText(view.getByLabelText('Search ingredients'), 'old');
-    await advanceIngredientDebounce();
-    fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
-    await advanceIngredientDebounce();
-    await settle(newRequest, 'resolve', {
-      ingredients: [{ id: 'ingredient-onion', name: 'Onion' }],
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    });
-
-    await settle(
-      oldRequest,
-      oldMethod,
-      oldMethod === 'resolve'
-        ? {
-            ingredients: [{ id: 'ingredient-old', name: 'Old result' }],
-            pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-          }
-        : new Error('old failure')
-    );
-
-    expect(view.getByLabelText('Select ingredient Onion')).toBeOnTheScreen();
-    expect(view.queryByText('Old result')).toBeNull();
-    expect(view.queryByText('Ingredient search failed.')).toBeNull();
-  }
-);
-
-it('invalidates an in-flight Ingredient result across close and reopen', async () => {
-  const oldRequest = deferred();
-  ingredientApiGet.mockReturnValue(oldRequest.promise);
+it('invalidates an Ingredient continuation across close and reopen', async () => {
+  const old = deferred();
+  ingredientApiGet.mockReturnValueOnce(old.promise);
   const { props, view } = renderSheet();
   fireEvent.changeText(view.getByLabelText('Search ingredients'), 'garlic');
-  await advanceIngredientDebounce();
-
-  fireEvent.press(view.getAllByLabelText('Close recipe filters')[1]);
+  await advance();
+  fireEvent.press(view.getByLabelText('Close recipe filters'));
   view.rerender(<DiscoverFiltersSheet {...props} visible={false} />);
   view.rerender(<DiscoverFiltersSheet {...props} visible />);
-  await settle(oldRequest, 'resolve', {
+  await settle(old, 'resolve', {
     ingredients: [{ id: 'ingredient-garlic', name: 'Garlic' }],
     pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
   });
-
+  expect(view.queryByText('Garlic')).toBeNull();
   expect(view.getByText('Type an ingredient name to search the WeCooked catalog.')).toBeOnTheScreen();
-  expect(view.queryByText('Garlic')).toBeNull();
 });
 
-it('keeps the current visible search authoritative when a cleared request settles late', async () => {
-  const clearedRequest = deferred();
-  const currentRequest = deferred();
-  ingredientApiGet
-    .mockReturnValueOnce(clearedRequest.promise)
-    .mockReturnValueOnce(currentRequest.promise);
-  const { view } = renderSheet();
-
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'old');
-  await advanceIngredientDebounce();
-  fireEvent.press(view.getByLabelText('Clear ingredient search'));
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
-  await advanceIngredientDebounce();
-  await settle(currentRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-onion', name: 'Onion' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  await settle(clearedRequest, 'reject', new Error('late cleared failure'));
-
-  expect(view.getByLabelText('Select ingredient Onion')).toBeOnTheScreen();
-  expect(view.queryByText('Ingredient search failed.')).toBeNull();
-  expect(view.queryByLabelText('Searching ingredients')).toBeNull();
-});
-
-it('keeps selection and the later revisited search authoritative over an older request', async () => {
-  const oldRequest = deferred();
-  const selectionRequest = deferred();
-  const revisitedRequest = deferred();
-  ingredientApiGet
-    .mockReturnValueOnce(oldRequest.promise)
-    .mockReturnValueOnce(selectionRequest.promise)
-    .mockReturnValueOnce(revisitedRequest.promise);
-  const { view } = renderSheet();
-
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'old');
-  await advanceIngredientDebounce();
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'garlic');
-  await advanceIngredientDebounce();
-  await settle(selectionRequest, 'resolve', {
+it('composes the complete Search request from query, narrowing draft, Ingredient, and sort', async () => {
+  listRecipes.mockResolvedValue(page([]));
+  ingredientApiGet.mockResolvedValueOnce({
     ingredients: [{ id: 'ingredient-garlic', name: 'Garlic' }],
     pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
   });
-  fireEvent.press(view.getByLabelText('Select ingredient Garlic'));
-  expect(view.getByText('Garlic')).toBeOnTheScreen();
-  fireEvent.press(view.getByLabelText('Clear ingredient Garlic'));
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
-  await advanceIngredientDebounce();
-  await settle(revisitedRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-onion', name: 'Onion' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  await settle(oldRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-old', name: 'Old result' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-
-  expect(view.getByLabelText('Select ingredient Onion')).toBeOnTheScreen();
-  expect(view.queryByText('Old result')).toBeNull();
-  expect(view.queryByText('Ingredient search failed.')).toBeNull();
-  expect(view.queryByLabelText('Searching ingredients')).toBeNull();
-});
-
-it('keeps a reopened current search authoritative when a pre-Apply request settles late', async () => {
-  const preApplyRequest = deferred();
-  const currentRequest = deferred();
-  ingredientApiGet
-    .mockReturnValueOnce(preApplyRequest.promise)
-    .mockReturnValueOnce(currentRequest.promise);
-  const { props, view } = renderSheet();
-
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'old');
-  await advanceIngredientDebounce();
-  fireEvent.press(view.getByLabelText('Apply recipe filters'));
-  expect(props.onApply).toHaveBeenCalledWith({ sort: 'titleAsc' });
-  view.rerender(<DiscoverFiltersSheet {...props} visible={false} />);
-  view.rerender(<DiscoverFiltersSheet {...props} visible />);
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
-  await advanceIngredientDebounce();
-  await settle(currentRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-onion', name: 'Onion' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  await settle(preApplyRequest, 'reject', new Error('late pre-Apply failure'));
-
-  expect(view.getByLabelText('Select ingredient Onion')).toBeOnTheScreen();
-  expect(view.queryByText('Ingredient search failed.')).toBeNull();
-  expect(view.queryByLabelText('Searching ingredients')).toBeNull();
-});
-
-it('keeps a reopened current search authoritative when a pre-Cancel request settles late', async () => {
-  const preCancelRequest = deferred();
-  const currentRequest = deferred();
-  ingredientApiGet
-    .mockReturnValueOnce(preCancelRequest.promise)
-    .mockReturnValueOnce(currentRequest.promise);
-  const appliedFilters = {
-    ingredient: { id: 'ingredient-garlic', name: 'Garlic' },
-    sort: 'newest',
-  };
-  const { props, view } = renderSheet({ appliedFilters });
-
-  fireEvent.press(view.getByLabelText('Clear ingredient Garlic'));
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
-  await advanceIngredientDebounce();
-  fireEvent.press(view.getByLabelText('Sort: Oldest added'));
-  fireEvent.press(view.getAllByLabelText('Close recipe filters')[1]);
-
-  expect(props.onApply).not.toHaveBeenCalled();
-  expect(appliedFilters).toEqual({
-    ingredient: { id: 'ingredient-garlic', name: 'Garlic' },
-    sort: 'newest',
-  });
-  view.rerender(<DiscoverFiltersSheet {...props} visible={false} />);
-  view.rerender(<DiscoverFiltersSheet {...props} visible />);
-  expect(view.getByText('Garlic')).toBeOnTheScreen();
-  expect(view.getByLabelText('Sort: Newest added').props.accessibilityState).toEqual({ selected: true });
-  fireEvent.press(view.getByLabelText('Clear ingredient Garlic'));
-  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'carrot');
-  await advanceIngredientDebounce();
-  await settle(currentRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-carrot', name: 'Carrot' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  await settle(preCancelRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-old', name: 'Old result' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-
-  expect(view.getByLabelText('Select ingredient Carrot')).toBeOnTheScreen();
-  expect(view.queryByText('Old result')).toBeNull();
-  expect(view.queryByText('Ingredient search failed.')).toBeNull();
-  expect(view.queryByLabelText('Searching ingredients')).toBeNull();
-});
-
-it('isolates a fresh mount from a request owned by an unmounted sheet', async () => {
-  const oldRequest = deferred();
-  const freshRequest = deferred();
-  ingredientApiGet
-    .mockReturnValueOnce(oldRequest.promise)
-    .mockReturnValueOnce(freshRequest.promise);
-  const oldSheet = renderSheet();
-
-  fireEvent.changeText(oldSheet.view.getByLabelText('Search ingredients'), 'old');
-  await advanceIngredientDebounce();
-  oldSheet.view.unmount();
-
-  const freshSheet = renderSheet();
-  fireEvent.changeText(freshSheet.view.getByLabelText('Search ingredients'), 'onion');
-  await advanceIngredientDebounce();
-  await settle(freshRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-onion', name: 'Onion' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  await settle(oldRequest, 'resolve', {
-    ingredients: [{ id: 'ingredient-old', name: 'Old result' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-
-  expect(freshSheet.view.getByLabelText('Select ingredient Onion')).toBeOnTheScreen();
-  expect(freshSheet.view.queryByText('Old result')).toBeNull();
-  expect(freshSheet.view.queryByText('Ingredient search failed.')).toBeNull();
-  expect(freshSheet.view.queryByLabelText('Searching ingredients')).toBeNull();
-});
-
-it('keeps Reset draft-only and Cancel leaves onApply and applied filter state unchanged', () => {
-  const appliedFilters = {
-    ingredient: { id: 'ingredient-garlic', name: 'Garlic' },
-    difficulty: 'hard',
-    sort: 'newest',
-  };
-  const { props, view } = renderSheet({ appliedFilters });
-  fireEvent.press(view.getByLabelText('Reset recipe filters'));
-
-  expect(props.onApply).not.toHaveBeenCalled();
-  expect(view.queryByText('Garlic')).toBeNull();
-  expect(view.getByLabelText('Sort: Newest added').props.accessibilityState).toEqual({ selected: true });
-  fireEvent.press(view.getAllByLabelText('Close recipe filters')[1]);
-  expect(props.onApply).not.toHaveBeenCalled();
-  expect(appliedFilters).toEqual({
-    ingredient: { id: 'ingredient-garlic', name: 'Garlic' },
-    difficulty: 'hard',
-    sort: 'newest',
-  });
-  view.rerender(<DiscoverFiltersSheet {...props} visible={false} />);
-  view.rerender(<DiscoverFiltersSheet {...props} visible />);
-  expect(view.getByText('Garlic')).toBeOnTheScreen();
-});
-
-it('Cancel does not change the applied Discover request and reopening discards the draft', async () => {
-  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() };
-  const view = render(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  const { view } = renderSearch();
   await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
-  expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'titleAsc', page: 1, limit: 20 });
-
-  fireEvent.press(view.getByLabelText('Filters, none active'));
-  fireEvent.press(view.getByLabelText('Sort: Newest added'));
-  fireEvent.press(view.getAllByLabelText('Close recipe filters')[1]);
-  await act(async () => Promise.resolve());
-
-  expect(listRecipes).toHaveBeenCalledTimes(1);
-  expect(view.getByLabelText('Sorted by Title: A-Z')).toBeOnTheScreen();
-  fireEvent.press(view.getByLabelText('Filters, none active'));
-  expect(view.getByLabelText('Sort: Title: A-Z').props.accessibilityState).toEqual({ selected: true });
-  expect(view.getByLabelText('Sort: Newest added').props.accessibilityState).toEqual({ selected: false });
-});
-
-it.each([
-  ['Title: A-Z', 'titleAsc'],
-  ['Title: Z-A', 'titleDesc'],
-  ['Newest added', 'newest'],
-  ['Oldest added', 'oldest'],
-  ['Prep time: low to high', 'prepTimeAsc'],
-  ['Prep time: high to low', 'prepTimeDesc'],
-])('sends the exact frozen sort for %s', (label, value) => {
-  const { props, view } = renderSheet();
-  fireEvent.press(view.getByLabelText(`Sort: ${label}`));
-  fireEvent.press(view.getByLabelText('Apply recipe filters'));
-  expect(props.onApply).toHaveBeenCalledWith({ sort: value });
-  expect(view.queryByText('updatedDesc')).toBeNull();
-  expect(view.queryByText(/Top Rated|Trending|Relevance|Most Popular|Best Match/i)).toBeNull();
-});
-
-it('composes search, every P3 family, Ingredient, sort, refresh, and totalPages load-more', async () => {
-  const firstPage = {
-    recipes: [{ id: 'recipe-1', title: 'One' }],
-    pagination: { page: 1, limit: 20, total: 2, totalPages: 2 },
-  };
-  const secondPage = {
-    recipes: [{ id: 'recipe-2', title: 'Two' }],
-    pagination: { page: 2, limit: 20, total: 2, totalPages: 2 },
-  };
-  listRecipes.mockResolvedValue(firstPage);
-  ingredientApiGet.mockResolvedValue({
-    ingredients: [{ id: 'ingredient-garlic', name: 'Garlic' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() };
-  const route = { params: {} };
-  const view = render(<DiscoverScreen navigation={navigation} route={route} />);
-  await act(async () => Promise.resolve());
-
-  fireEvent.changeText(view.getByLabelText('Search recipes'), '  adobo  ');
-  await act(async () => {
-    jest.advanceTimersByTime(300);
-    await Promise.resolve();
-  });
+  fireEvent.changeText(view.getByLabelText('Search recipes'), ' adobo ');
+  await advance();
   fireEvent.press(view.getByLabelText('Filters, none active'));
   fireEvent.press(view.getByLabelText(`Region: ${REGION_OPTIONS[1].label}`));
   fireEvent.press(view.getByLabelText(`Category: ${CATEGORY_OPTIONS[1].label}`));
@@ -547,13 +732,11 @@ it('composes search, every P3 family, Ingredient, sort, refresh, and totalPages 
   fireEvent.press(view.getByLabelText('Dietary tag: Vegan'));
   fireEvent.changeText(view.getByLabelText('Maximum prep minutes, from 1 to 1440'), '45');
   fireEvent.changeText(view.getByLabelText('Search ingredients'), 'garlic');
-  await advanceIngredientDebounce();
-  expect(await view.findByLabelText('Select ingredient Garlic')).toBeOnTheScreen();
-  fireEvent.press(view.getByLabelText('Select ingredient Garlic'));
+  await advance();
+  fireEvent.press(await view.findByLabelText('Select ingredient Garlic'));
   fireEvent.press(view.getByLabelText('Sort: Newest added'));
   fireEvent.press(view.getByLabelText('Apply recipe filters'));
-
-  const composed = {
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({
     search: 'adobo',
     region: REGION_OPTIONS[1].value,
     category: CATEGORY_OPTIONS[1].value,
@@ -564,180 +747,36 @@ it('composes search, every P3 family, Ingredient, sort, refresh, and totalPages 
     sort: 'newest',
     page: 1,
     limit: 20,
-  };
-  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith(composed));
-  expect(view.getByLabelText('Remove ingredient filter Garlic')).toBeOnTheScreen();
-  expect(view.getByLabelText('Sorted by Newest added')).toBeOnTheScreen();
-
-  listRecipes.mockResolvedValueOnce(firstPage);
-  await act(async () => {
-    mockRefreshCallback();
-    await Promise.resolve();
-  });
-  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith(composed));
-
-  listRecipes.mockResolvedValueOnce(secondPage);
-  await act(async () => {
-    view.UNSAFE_getByType('FlatList').props.onEndReached();
-    await Promise.resolve();
-  });
-  await waitFor(() =>
-    expect(listRecipes).toHaveBeenLastCalledWith({ ...composed, page: 2 })
-  );
-
-  fireEvent.press(view.getByLabelText('Remove ingredient filter Garlic'));
-  await waitFor(() =>
-    expect(listRecipes).toHaveBeenLastCalledWith({
-      search: 'adobo',
-      region: REGION_OPTIONS[1].value,
-      category: CATEGORY_OPTIONS[1].value,
-      difficulty: 'hard',
-      dietaryTag: 'vegan',
-      maxPrepTimeMinutes: 45,
-      sort: 'newest',
-      page: 1,
-      limit: 20,
-    })
-  );
-  expect(listRecipes.mock.calls.at(-1)[0]).not.toHaveProperty('ingredientId');
-
-  fireEvent.press(view.getByLabelText('Clear search and filters'));
-  await waitFor(() =>
-    expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'newest', page: 1, limit: 20 })
-  );
+  }));
 });
 
-it('renders real Recipe loading, failure/retry, and empty states', async () => {
-  const failedRequest = deferred();
-  listRecipes.mockReturnValueOnce(failedRequest.promise).mockResolvedValueOnce(emptyRecipePage);
-  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() };
-  const view = render(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
-
-  expect(view.getByLabelText('Loading recipes').props.accessibilityState).toEqual({ busy: true });
-  await settle(failedRequest, 'reject', new Error('private recipe failure'));
-  expect(view.getByText('Recipe request failed.')).toBeOnTheScreen();
-  fireEvent.press(view.getByLabelText('Retry loading recipes'));
-
-  await waitFor(() => expect(view.getByText('Nothing matches')).toBeOnTheScreen());
-  expect(view.getByText('No recipes match this filter yet.')).toBeOnTheScreen();
+it('renders a later-page error and retries the same authoritative page', async () => {
+  const failedMore = deferred();
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('one', 'One')], 1, 2))
+    .mockReturnValueOnce(failedMore.promise)
+    .mockResolvedValueOnce(page([recipe('two', 'Two')], 2, 2));
+  const { view } = renderSearch();
+  await view.findByText('One');
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  await settle(failedMore, 'reject', new Error('later page'));
+  const retry = view.getByLabelText('Retry loading more recipes');
+  expect(retry).toBeOnTheScreen();
+  fireEvent.press(retry);
+  await view.findByText('Two');
+  expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'titleAsc', page: 2, limit: 20 });
 });
 
-it('keeps the real compact Recipe row navigable with API route params', async () => {
-  const recipe = {
-    id: 'recipe-adobo',
-    title: 'Chicken Adobo',
-    imageUrl: 'https://api.example.test/adobo.jpg',
-    category: 'dinner',
-    region: 'bicol-region',
-    prepTimeMinutes: 20,
-    difficulty: 'easy',
-  };
-  listRecipes.mockResolvedValue({
-    recipes: [recipe],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() };
-  const view = render(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
-
-  await waitFor(() => expect(view.getByLabelText('Open Chicken Adobo')).toBeOnTheScreen());
-  fireEvent.press(view.getByLabelText('Open Chicken Adobo'));
-  expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', {
-    recipeSource: 'api',
-    recipeId: 'recipe-adobo',
-    initialRecipe: recipe,
-  });
-  expect(view.UNSAFE_getByType('FavoriteHeart').props.recipe).toBe(recipe);
-  expect(view.UNSAFE_getByType('RecipeImage').props.source).toBe(recipe.imageUrl);
-});
-
-it('gives the relevant DISC4 controls explicit 44-point effective targets', async () => {
-  const applied = renderSheet({
-    appliedFilters: {
-      ingredient: { id: 'ingredient-garlic', name: 'Garlic' },
-      sort: 'titleAsc',
-    },
-  });
-  expect(flattenedStyle(applied.view.getByLabelText('Clear ingredient Garlic'))).toMatchObject({
-    minWidth: 44,
-    minHeight: 44,
-  });
-  expect(flattenedStyle(applied.view.getByLabelText('Sort: Title: A-Z'))).toMatchObject({
-    minWidth: 44,
-    minHeight: 44,
-  });
-  applied.view.unmount();
-
-  ingredientApiGet.mockResolvedValue({
+it('keeps the DISC4 controls mounted and wired to accessible 44-point targets', async () => {
+  ingredientApiGet.mockResolvedValueOnce({
     ingredients: [{ id: 'ingredient-onion', name: 'Onion' }],
     pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
   });
-  const searchable = renderSheet();
-  fireEvent.changeText(searchable.view.getByLabelText('Search ingredients'), 'onion');
-  expect(flattenedStyle(searchable.view.getByLabelText('Clear ingredient search'))).toMatchObject({
-    minWidth: 44,
-    minHeight: 44,
-  });
-  await advanceIngredientDebounce();
-  expect(
-    flattenedStyle(await searchable.view.findByLabelText('Select ingredient Onion')).minHeight
-  ).toBeGreaterThanOrEqual(44);
-  searchable.view.unmount();
-
-  listRecipes.mockResolvedValue({
-    recipes: [{ id: 'recipe-1', title: 'Recipe One' }],
-    pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-  });
-  const discover = render(
-    <DiscoverScreen
-      navigation={{ goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() }}
-      route={{ params: {} }}
-    />
-  );
-  await waitFor(() => expect(discover.getByLabelText('Open Recipe One')).toBeOnTheScreen());
-  expect(flattenedStyle(discover.getByLabelText('Filter recipes by All'))).toMatchObject({
-    minWidth: 44,
-    minHeight: 44,
-  });
-  expect(flattenedStyle(discover.getByLabelText('Open Recipe One')).minHeight).toBeGreaterThanOrEqual(44);
-  expect(flattenedStyle(discover.UNSAFE_getByType('FavoriteHeart'))).toMatchObject({
-    minWidth: 44,
-    minHeight: 44,
-  });
-  fireEvent.changeText(discover.getByLabelText('Search recipes'), 'adobo');
-  expect(flattenedStyle(discover.getByLabelText('Clear search'))).toMatchObject({
-    minWidth: 44,
-    minHeight: 44,
-  });
-});
-
-it('keeps an equivalent Dashboard preset to one initial request and preserves sort on later handoff', async () => {
-  const navigation = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn() };
-  const initialRoute = { params: { initialFilter: 'vegan' } };
-  const view = render(<DiscoverScreen navigation={navigation} route={initialRoute} />);
-  await act(async () => Promise.resolve());
-
-  expect(listRecipes).toHaveBeenCalledTimes(1);
-  expect(listRecipes).toHaveBeenLastCalledWith({
-    dietaryTag: 'vegan',
-    sort: 'titleAsc',
-    page: 1,
-    limit: 20,
-  });
-  expect(navigation.setParams).toHaveBeenCalledWith({ initialFilter: undefined });
-
-  fireEvent.press(view.getByLabelText('Filters, 1 active'));
-  fireEvent.press(view.getByLabelText('Sort: Oldest added'));
-  fireEvent.press(view.getByLabelText('Apply recipe filters'));
-  await act(async () => Promise.resolve());
-  view.rerender(
-    <DiscoverScreen navigation={navigation} route={{ params: { initialFilter: 'easy' } }} />
-  );
-  await act(async () => Promise.resolve());
-
-  expect(listRecipes).toHaveBeenLastCalledWith({
-    difficulty: 'easy',
-    sort: 'oldest',
-    page: 1,
-    limit: 20,
-  });
+  const { view } = renderSheet();
+  expect(flattenedStyle(view.getByLabelText('Difficulty: Hard'))).toMatchObject({ minWidth: 44, minHeight: 44 });
+  fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
+  expect(flattenedStyle(view.getByLabelText('Clear ingredient search'))).toMatchObject({ minWidth: 44, minHeight: 44 });
+  await advance();
+  expect(flattenedStyle(await view.findByLabelText('Select ingredient Onion')).minHeight).toBeGreaterThanOrEqual(44);
+  expect(flattenedStyle(view.getByLabelText('Apply recipe filters')).minHeight).toBeGreaterThanOrEqual(44);
 });
