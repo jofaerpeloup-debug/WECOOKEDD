@@ -3,6 +3,7 @@ const communityRepository = require('./community.repository');
 const communityLikeRepository = require('./community-like.repository');
 const communityCommentRepository = require('./community-comment.repository');
 const communityFollowRepository = require('./community-follow.repository');
+const communityBookmarkRepository = require('./community-bookmark.repository');
 const recipeService = require('../recipes/recipe.service');
 const userService = require('../users/user.service');
 const { AppError } = require('../../shared/errors/app-error');
@@ -51,7 +52,8 @@ async function resolvePage(posts, viewerId) {
     ...new Set(posts.filter((post) => post.recipeId).map((post) => String(post.recipeId))),
   ];
 
-  const [authors, recipes, likeMetadata, commentCounts, followedAuthorIds] = await Promise.all([
+  const postIds = posts.map((post) => post._id);
+  const [authors, recipes, likeMetadata, commentCounts, followedAuthorIds, bookmarkedPostIds] = await Promise.all([
     userService.getPublicUsersByIds(authorIds),
     Promise.all(
       recipeIds.map(async (recipeId) => ({
@@ -60,11 +62,12 @@ async function resolvePage(posts, viewerId) {
       }))
     ),
     communityLikeRepository.getMetadataForPosts(
-      posts.map((post) => post._id),
+      postIds,
       viewerId
     ),
-    communityCommentRepository.getCountsForPosts(posts.map((post) => post._id)),
+    communityCommentRepository.getCountsForPosts(postIds),
     communityFollowRepository.findFollowedUserIdsAmong(viewerId, authorIds),
+    communityBookmarkRepository.findBookmarkedPostIdsAmong(viewerId, postIds),
   ]);
 
   const authorsById = new Map(authors.map((author) => [author.id, author]));
@@ -82,6 +85,7 @@ async function resolvePage(posts, viewerId) {
     commentCounts.map((entry) => [String(entry._id), entry.commentCount])
   );
   const followedAuthorIdSet = new Set(followedAuthorIds.map(String));
+  const bookmarkedPostIdSet = new Set(bookmarkedPostIds.map(String));
 
   return posts.map((post) => {
     const recipeId = post.recipeId ? String(post.recipeId) : null;
@@ -101,6 +105,7 @@ async function resolvePage(posts, viewerId) {
       isOwner: String(post.authorId) === String(viewerId),
       isFollowingAuthor: String(post.authorId) !== String(viewerId)
         && followedAuthorIdSet.has(String(post.authorId)),
+      bookmarkedByCurrentUser: bookmarkedPostIdSet.has(String(post._id)),
     };
   });
 }
@@ -127,6 +132,12 @@ async function listFollowingPosts({ viewerId, page, limit }) {
   return { items: await resolvePage(posts, viewerId), total, page, limit };
 }
 
+async function listSavedPosts({ viewerId, page, limit }) {
+  const skip = (page - 1) * limit;
+  const { posts, total } = await communityBookmarkRepository.findSavedPosts(viewerId, { skip, limit });
+  return { items: await resolvePage(posts, viewerId), total, page, limit };
+}
+
 async function createPost(authorId, { caption, recipeId }) {
   let recipe = null;
   if (recipeId) {
@@ -150,6 +161,7 @@ async function createPost(authorId, { caption, recipeId }) {
     commentCount: 0,
     isOwner: true,
     isFollowingAuthor: false,
+    bookmarkedByCurrentUser: false,
   };
 }
 
@@ -184,6 +196,7 @@ async function deletePost(authorId, postId) {
   await Promise.all([
     communityLikeRepository.deleteByPostId(deleted._id),
     communityCommentRepository.deleteByPostId(deleted._id),
+    communityBookmarkRepository.deleteByPostId(deleted._id),
   ]);
   return deleted;
 }
@@ -217,6 +230,26 @@ async function unlikePost(userId, postId) {
   await assertPostExists(postId);
   await communityLikeRepository.deleteByPostAndUser(postId, userId);
   return { liked: false, likeCount: await communityLikeRepository.countByPost(postId) };
+}
+
+async function bookmarkPost(userId, postId) {
+  await assertPostExists(postId);
+  try {
+    await communityBookmarkRepository.createBookmark({ postId, userId });
+  } catch (error) {
+    if (!error || error.code !== DUPLICATE_KEY_ERROR_CODE) throw error;
+  }
+  const stillExists = await communityRepository.findById(postId);
+  if (!stillExists) {
+    await communityBookmarkRepository.deleteByPostAndUser(postId, userId);
+    throw postNotFoundError();
+  }
+  return { bookmarked: true };
+}
+
+async function unbookmarkPost(userId, postId) {
+  await communityBookmarkRepository.deleteByPostAndUser(postId, userId);
+  return { bookmarked: false };
 }
 
 
@@ -271,12 +304,15 @@ async function deleteComment(authorId, commentId) {
 module.exports = {
   listPosts,
   listFollowingPosts,
+  listSavedPosts,
   followUser,
   unfollowUser,
   createPost,
   deletePost,
   likePost,
   unlikePost,
+  bookmarkPost,
+  unbookmarkPost,
   listComments,
   createComment,
   deleteComment,

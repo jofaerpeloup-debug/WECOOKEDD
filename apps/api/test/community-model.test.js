@@ -5,6 +5,7 @@ const CommunityPost = require('../src/modules/community/community-post.model');
 const CommunityPostLike = require('../src/modules/community/community-post-like.model');
 const CommunityComment = require('../src/modules/community/community-comment.model');
 const CommunityFollow = require('../src/modules/community/community-follow.model');
+const CommunityPostBookmark = require('../src/modules/community/community-post-bookmark.model');
 
 const USER_ID = '507f1f77bcf86cd799439001';
 const POST_ID = '507f1f77bcf86cd799439002';
@@ -93,6 +94,27 @@ test('CommunityPostLike validates ids and uniquely indexes postId/userId', async
     .find(([spec]) => spec.postId === 1 && spec.userId === 1);
   assert.ok(index);
   assert.equal(index[1].unique, true);
+});
+
+test('CommunityPostBookmark has exact refs, createdAt only, and both required indexes', async () => {
+  assert.equal(CommunityPostBookmark.schema.path('userId').options.required, true);
+  assert.equal(CommunityPostBookmark.schema.path('userId').options.ref, 'User');
+  assert.equal(CommunityPostBookmark.schema.path('postId').options.required, true);
+  assert.equal(CommunityPostBookmark.schema.path('postId').options.ref, 'CommunityPost');
+  assert.deepEqual(
+    Object.keys(CommunityPostBookmark.schema.paths)
+      .filter((path) => !['_id', '__v'].includes(path))
+      .sort(),
+    ['createdAt', 'postId', 'userId'].sort()
+  );
+  await assert.rejects(() => new CommunityPostBookmark({}).validate());
+  await assert.doesNotReject(() => new CommunityPostBookmark({ userId: USER_ID, postId: POST_ID }).validate());
+  const indexes = CommunityPostBookmark.schema.indexes();
+  const ownership = indexes.find(([spec]) => spec.userId === 1 && spec.postId === 1);
+  const cleanup = indexes.find(([spec]) => Object.keys(spec).length === 1 && spec.postId === 1);
+  assert.ok(ownership);
+  assert.equal(ownership[1].unique, true);
+  assert.ok(cleanup);
 });
 
 test('CommunityComment has only bounded body, required refs, createdAt, and deterministic index', async () => {

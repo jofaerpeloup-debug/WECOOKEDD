@@ -25,7 +25,9 @@ import {
   listCommunityComments,
   listFollowingCommunityPosts,
   listCommunityPosts,
+  listSavedCommunityPosts,
   setCommunityAuthorFollowed,
+  setCommunityPostBookmarked,
   setCommunityPostLiked,
 } from '../api/communityService';
 import { getCommunityErrorMessage } from '../api/communityErrors';
@@ -38,6 +40,7 @@ const MAX_CAPTION_LENGTH = 2000;
 const MAX_COMMENT_LENGTH = 1000;
 const FEED_ALL = 'all';
 const FEED_FOLLOWING = 'following';
+const FEED_SAVED = 'saved';
 
 function initialFor(name) {
   return (name || 'C').trim().charAt(0).toUpperCase() || 'C';
@@ -60,6 +63,7 @@ function appendUnique(existing, incoming) {
 }
 
 function readFeed(mode, params) {
+  if (mode === FEED_SAVED) return listSavedCommunityPosts(params);
   return mode === FEED_FOLLOWING
     ? listFollowingCommunityPosts(params)
     : listCommunityPosts(params);
@@ -109,6 +113,7 @@ export default function CommunityScreen({ navigation }) {
   const pendingLikesRef = useRef(new Map());
   const pendingDeletesRef = useRef(new Map());
   const pendingFollowsRef = useRef(new Map());
+  const pendingBookmarksRef = useRef(new Map());
   const activePostRef = useRef(null);
   const commentGenerationRef = useRef(0);
   const commentMutationVersionRef = useRef(0);
@@ -149,6 +154,7 @@ export default function CommunityScreen({ navigation }) {
       pendingLikesRef.current.clear();
       pendingDeletesRef.current.clear();
       pendingFollowsRef.current.clear();
+      pendingBookmarksRef.current.clear();
       pendingCommentDeletesRef.current.clear();
     };
   }, []);
@@ -158,6 +164,7 @@ export default function CommunityScreen({ navigation }) {
     pendingLikesRef.current.clear();
     pendingDeletesRef.current.clear();
     pendingFollowsRef.current.clear();
+    pendingBookmarksRef.current.clear();
     feedOperationRef.current = null;
     postCreateOperationRef.current = null;
     feedGenerationRef.current += 1;
@@ -430,6 +437,49 @@ export default function CommunityScreen({ navigation }) {
     setFeedMode(mode);
   };
 
+  const reloadSavedFeed = () => {
+    feedOperationRef.current = null;
+    feedGenerationRef.current += 1;
+    clearCommentPanel();
+    setFeedReloadKey((key) => key + 1);
+  };
+
+  const toggleBookmark = async (post) => {
+    if (!ownerId || pendingBookmarksRef.current.has(post.id)) return;
+    const requestOwner = ownerId;
+    const screenGeneration = mountedGenerationRef.current;
+    const desiredBookmarked = !post.bookmarkedByCurrentUser;
+    const operation = {};
+    pendingBookmarksRef.current.set(post.id, operation);
+    forcePendingRender((value) => value + 1);
+    try {
+      const state = await setCommunityPostBookmarked(post.id, desiredBookmarked);
+      if (pendingBookmarksRef.current.get(post.id) !== operation
+        || ownerRef.current !== requestOwner
+        || screenGeneration !== mountedGenerationRef.current) return;
+      feedMutationVersionRef.current += 1;
+      if (feedModeRef.current === FEED_SAVED) {
+        reloadSavedFeed();
+      } else {
+        setPosts((current) => current.map((item) => item.id === post.id
+          ? { ...item, bookmarkedByCurrentUser: state.bookmarked }
+          : item));
+      }
+    } catch (error) {
+      if (pendingBookmarksRef.current.get(post.id) === operation
+        && ownerRef.current === requestOwner
+        && screenGeneration === mountedGenerationRef.current) {
+        notify('Couldn’t update bookmark', getCommunityErrorMessage(error));
+      }
+    } finally {
+      if (pendingBookmarksRef.current.get(post.id) === operation) {
+        pendingBookmarksRef.current.delete(post.id);
+        if (ownerRef.current === requestOwner
+          && screenGeneration === mountedGenerationRef.current) forcePendingRender((value) => value + 1);
+      }
+    }
+  };
+
   const toggleFollow = async (post) => {
     const authorId = post.author?.id;
     if (!ownerId || !authorId || authorId === ownerId || pendingFollowsRef.current.has(authorId)) return;
@@ -675,7 +725,7 @@ export default function CommunityScreen({ navigation }) {
         <Text style={styles.subtitle}>See what other home cooks are making.</Text>
 
         <View style={styles.modeRow} accessibilityRole="tablist">
-          {[[FEED_ALL, 'All'], [FEED_FOLLOWING, 'Following']].map(([mode, label]) => (
+          {[[FEED_ALL, 'All'], [FEED_FOLLOWING, 'Following'], [FEED_SAVED, 'Saved']].map(([mode, label]) => (
             <Pressable
               key={mode}
               style={[styles.modeButton, feedMode === mode && styles.modeButtonActive]}
@@ -769,11 +819,15 @@ export default function CommunityScreen({ navigation }) {
         )}
         {feedStatus === 'ready' && posts.length === 0 && (
           <View style={styles.stateCard}>
-            <Ionicons name="people-outline" size={24} color={colors.sageDeep} />
-            <Text style={styles.stateTitle}>{feedMode === FEED_FOLLOWING ? 'Not following anyone yet' : 'No posts yet'}</Text>
-            <Text style={styles.stateText}>{feedMode === FEED_FOLLOWING
-              ? "Tap Follow on a post's author to see their cooking here."
-              : 'Share what you’re cooking to start the Community feed.'}</Text>
+            <Ionicons name={feedMode === FEED_SAVED ? 'bookmark-outline' : 'people-outline'} size={24} color={colors.sageDeep} />
+            <Text style={styles.stateTitle}>{feedMode === FEED_SAVED
+              ? 'No saved posts yet'
+              : feedMode === FEED_FOLLOWING ? 'Not following anyone yet' : 'No posts yet'}</Text>
+            <Text style={styles.stateText}>{feedMode === FEED_SAVED
+              ? 'Tap the bookmark icon on a post to find it here later.'
+              : feedMode === FEED_FOLLOWING
+                ? "Tap Follow on a post's author to see their cooking here."
+                : 'Share what you’re cooking to start the Community feed.'}</Text>
           </View>
         )}
 
@@ -786,6 +840,7 @@ export default function CommunityScreen({ navigation }) {
           const likePending = pendingLikesRef.current.has(post.id);
           const deletePending = pendingDeletesRef.current.has(post.id);
           const followPending = post.author ? pendingFollowsRef.current.has(post.author.id) : false;
+          const bookmarkPending = pendingBookmarksRef.current.has(post.id);
           return (
             <View key={post.id} style={styles.card}>
               <View style={styles.postHeader}>
@@ -854,6 +909,19 @@ export default function CommunityScreen({ navigation }) {
                     accessibilityState={{ expanded: activePostId === post.id }}
                   >
                     <Ionicons name="chatbubble-outline" size={17} color={colors.inkSoft} /><Text style={styles.actionText}>{post.commentCount}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.actionBtn, styles.bookmarkBtn]}
+                    hitSlop={8}
+                    onPress={() => toggleBookmark(post)}
+                    disabled={bookmarkPending}
+                    accessibilityRole="button"
+                    accessibilityLabel={post.bookmarkedByCurrentUser ? 'Remove bookmark' : 'Bookmark post'}
+                    accessibilityState={{ selected: post.bookmarkedByCurrentUser, disabled: bookmarkPending, busy: bookmarkPending }}
+                  >
+                    {bookmarkPending
+                      ? <ActivityIndicator size="small" color={colors.inkSoft} />
+                      : <Ionicons name={post.bookmarkedByCurrentUser ? 'bookmark' : 'bookmark-outline'} size={18} color={colors.inkSoft} />}
                   </Pressable>
                 </View>
                 {activePostId === post.id && (
@@ -1016,6 +1084,7 @@ function makeStyles(colors, shadow) {
     viewRecipeText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.sageDeep },
     actionRow: { flexDirection: 'row', gap: spacing.lg },
     actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    bookmarkBtn: { marginLeft: 'auto' },
     actionText: { fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.inkSoft },
     commentPanel: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.hairline, gap: spacing.sm },
     commentState: { alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.sm },

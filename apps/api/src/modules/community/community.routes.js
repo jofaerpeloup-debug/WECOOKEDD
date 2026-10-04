@@ -10,6 +10,7 @@ const {
   createCommunityCommentSchema,
   communityCommentParamsSchema,
   communityFollowSchema,
+  communityBookmarkSchema,
 } = require('./community.validation');
 
 const router = Router();
@@ -20,6 +21,12 @@ router.get(
   authenticate,
   validate(listCommunityPostsSchema),
   communityController.listFollowingPosts
+);
+router.get(
+  '/posts/saved',
+  authenticate,
+  validate(listCommunityPostsSchema),
+  communityController.listSavedPosts
 );
 router.post(
   '/users/:userId/follow',
@@ -51,6 +58,18 @@ router.delete(
   authenticate,
   validate(communityPostParamsSchema),
   communityController.unlikePost
+);
+router.post(
+  '/posts/:postId/bookmarks',
+  authenticate,
+  validate(communityBookmarkSchema),
+  communityController.bookmarkPost
+);
+router.delete(
+  '/posts/:postId/bookmarks',
+  authenticate,
+  validate(communityBookmarkSchema),
+  communityController.unbookmarkPost
 );
 router.get(
   '/posts/:postId/comments',

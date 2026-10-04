@@ -59,8 +59,10 @@ jest.mock('../src/api/communityService', () => ({
   deleteCommunityPost: jest.fn(),
   listCommunityComments: jest.fn(),
   listFollowingCommunityPosts: jest.fn(),
+  listSavedCommunityPosts: jest.fn(),
   listCommunityPosts: jest.fn(),
   setCommunityAuthorFollowed: jest.fn(),
+  setCommunityPostBookmarked: jest.fn(),
   setCommunityPostLiked: jest.fn(),
 }));
 jest.mock('../src/api/communityErrors', () => ({
@@ -97,6 +99,7 @@ function post(id, commentCount = 0, overrides = {}) {
     commentCount,
     isOwner: true,
     isFollowingAuthor: false,
+    bookmarkedByCurrentUser: false,
     ...overrides,
   };
 }
@@ -133,10 +136,12 @@ beforeEach(() => {
   listRecipes.mockResolvedValue({ recipes: [], pagination: { page: 1, totalPages: 1 } });
   communityService.listCommunityPosts.mockResolvedValue(feed());
   communityService.listFollowingCommunityPosts.mockResolvedValue(feed([], 1, 0));
+  communityService.listSavedCommunityPosts.mockResolvedValue(feed([], 1, 0));
   communityService.createCommunityPost.mockResolvedValue(post('created'));
   communityService.deleteCommunityPost.mockResolvedValue(true);
   communityService.setCommunityPostLiked.mockResolvedValue({ liked: true, likeCount: 1 });
   communityService.setCommunityAuthorFollowed.mockResolvedValue({ following: true });
+  communityService.setCommunityPostBookmarked.mockResolvedValue({ bookmarked: true });
 });
 
 afterEach(() => cleanup());
@@ -808,6 +813,267 @@ it('does not insert the viewer own newly-created post into Following', async () 
   await waitFor(() => expect(communityService.createCommunityPost).toHaveBeenCalledTimes(1));
   expect(view.queryByText('Post own-new')).toBeNull();
   expect(view.getByText('Not following anyone yet')).toBeOnTheScreen();
+});
+
+it('switches to Saved, renders its exact empty state, and requests fresh page one', async () => {
+  communityService.listSavedCommunityPosts.mockResolvedValue(feed([], 1, 0));
+  const view = render(<CommunityScreen />);
+  fireEvent.press(view.getByLabelText('Saved Community posts'));
+  await waitFor(() => expect(view.getByText('No saved posts yet')).toBeOnTheScreen());
+  expect(view.getByText('Tap the bookmark icon on a post to find it here later.')).toBeOnTheScreen();
+  expect(communityService.listSavedCommunityPosts).toHaveBeenCalledWith({ page: 1, limit: 20 });
+  expect(view.getByPlaceholderText("Share what you're cooking...")).toBeOnTheScreen();
+});
+
+it('keeps bookmark mutation pessimistic and single-flight, then applies the server Boolean', async () => {
+  const mutation = deferred();
+  communityService.listCommunityPosts.mockResolvedValue(feed([post('p1')], 1, 1));
+  communityService.setCommunityPostBookmarked.mockReturnValueOnce(mutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Bookmark post')).toBeOnTheScreen());
+  const control = view.getByLabelText('Bookmark post');
+  expect(control.props.accessibilityState.selected).toBe(false);
+  fireEvent.press(control);
+  fireEvent.press(control);
+  expect(communityService.setCommunityPostBookmarked).toHaveBeenCalledTimes(1);
+  expect(view.getByLabelText('Bookmark post').props.accessibilityState.busy).toBe(true);
+  await settle(mutation, 'resolve', { bookmarked: true });
+  await waitFor(() => expect(view.getByLabelText('Remove bookmark')).toBeOnTheScreen());
+  expect(view.getByLabelText('Remove bookmark').props.accessibilityState.selected).toBe(true);
+});
+
+it('keeps concurrent bookmark mutations independent per post until each one settles', async () => {
+  const firstMutation = deferred();
+  const secondMutation = deferred();
+  communityService.listCommunityPosts.mockResolvedValue(feed([post('p1'), post('p2')], 1, 1));
+  communityService.setCommunityPostBookmarked
+    .mockReturnValueOnce(firstMutation.promise)
+    .mockReturnValueOnce(secondMutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getAllByLabelText('Bookmark post')).toHaveLength(2));
+
+  const [firstControl, secondControl] = view.getAllByLabelText('Bookmark post');
+  fireEvent.press(firstControl);
+  fireEvent.press(secondControl);
+  expect(communityService.setCommunityPostBookmarked.mock.calls).toEqual([
+    ['p1', true],
+    ['p2', true],
+  ]);
+  expect(view.getAllByLabelText('Bookmark post').map((control) => control.props.accessibilityState.busy))
+    .toEqual([true, true]);
+
+  await settle(firstMutation, 'resolve', { bookmarked: true });
+  expect(view.getByText('Post p1')).toBeOnTheScreen();
+  expect(view.getByLabelText('Remove bookmark').props.accessibilityState.busy).toBe(false);
+  expect(view.getByLabelText('Bookmark post').props.accessibilityState.busy).toBe(true);
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  expect(communityService.setCommunityPostBookmarked).toHaveBeenCalledTimes(2);
+
+  await settle(secondMutation, 'resolve', { bookmarked: true });
+  await waitFor(() => expect(view.getAllByLabelText('Remove bookmark')).toHaveLength(2));
+  expect(view.getAllByLabelText('Remove bookmark').map((control) => control.props.accessibilityState.busy))
+    .toEqual([false, false]);
+});
+
+it('does not let a feed read begun before bookmark success restore stale state or pagination', async () => {
+  const staleRefresh = deferred();
+  const mutation = deferred();
+  communityService.listCommunityPosts
+    .mockResolvedValueOnce(feed([post('p1')], 1, 1))
+    .mockReturnValueOnce(staleRefresh.promise);
+  communityService.setCommunityPostBookmarked.mockReturnValueOnce(mutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Bookmark post')).toBeOnTheScreen());
+  await act(async () => { refreshProps(view).onRefresh(); });
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  await settle(mutation, 'resolve', { bookmarked: true });
+  expect(view.getByLabelText('Remove bookmark')).toBeOnTheScreen();
+  await settle(staleRefresh, 'resolve', {
+    posts: [post('corrupt', 0, { bookmarkedByCurrentUser: false })],
+    pagination: { page: 7, limit: 20, total: 999, totalPages: 50 },
+  });
+  expect(view.queryByText('Post corrupt')).toBeNull();
+  expect(view.getByText('Post p1')).toBeOnTheScreen();
+  expect(view.getByLabelText('Remove bookmark')).toBeOnTheScreen();
+});
+
+it('preserves the card on bookmark failure and allows retry', async () => {
+  communityService.listCommunityPosts.mockResolvedValue(feed([post('p1')], 1, 1));
+  communityService.setCommunityPostBookmarked
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValueOnce({ bookmarked: true });
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Bookmark post')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith('Couldn’t update bookmark', 'offline'));
+  expect(view.getByText('Post p1')).toBeOnTheScreen();
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  await waitFor(() => expect(view.getByLabelText('Remove bookmark')).toBeOnTheScreen());
+});
+
+it('authoritatively reloads Saved page one after confirmed unbookmark', async () => {
+  const mutation = deferred();
+  communityService.listSavedCommunityPosts
+    .mockResolvedValueOnce(feed([post('saved', 0, { bookmarkedByCurrentUser: true })], 1, 1))
+    .mockResolvedValueOnce(feed([post('replacement', 0, { bookmarkedByCurrentUser: true })], 1, 1));
+  communityService.setCommunityPostBookmarked.mockReturnValueOnce(mutation.promise);
+  const view = render(<CommunityScreen />);
+  fireEvent.press(view.getByLabelText('Saved Community posts'));
+  await waitFor(() => expect(view.getByText('Post saved')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Remove bookmark'));
+  expect(view.getByText('Post saved')).toBeOnTheScreen();
+  await settle(mutation, 'resolve', { bookmarked: false });
+  await waitFor(() => expect(view.getByText('Post replacement')).toBeOnTheScreen());
+  expect(view.queryByText('Post saved')).toBeNull();
+  expect(communityService.listSavedCommunityPosts).toHaveBeenCalledTimes(2);
+});
+
+it('reloads current Saved when a save begun in All resolves after the mode switch', async () => {
+  const mutation = deferred();
+  communityService.listCommunityPosts.mockResolvedValue(feed([post('p1')], 1, 1));
+  communityService.listSavedCommunityPosts
+    .mockResolvedValueOnce(feed([], 1, 0))
+    .mockResolvedValueOnce(feed([post('p1', 0, { bookmarkedByCurrentUser: true })], 1, 1));
+  communityService.setCommunityPostBookmarked.mockReturnValueOnce(mutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Bookmark post')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  fireEvent.press(view.getByLabelText('Saved Community posts'));
+  await waitFor(() => expect(view.getByText('No saved posts yet')).toBeOnTheScreen());
+  await settle(mutation, 'resolve', { bookmarked: true });
+  await waitFor(() => expect(view.getByText('Post p1')).toBeOnTheScreen());
+  expect(communityService.listSavedCommunityPosts).toHaveBeenCalledTimes(2);
+});
+
+it('does not insert a newly-created unbookmarked post while Saved is active', async () => {
+  communityService.listSavedCommunityPosts.mockResolvedValue(feed([], 1, 0));
+  communityService.createCommunityPost.mockResolvedValue(post('own-new'));
+  const view = render(<CommunityScreen />);
+  fireEvent.press(view.getByLabelText('Saved Community posts'));
+  await waitFor(() => expect(view.getByText('No saved posts yet')).toBeOnTheScreen());
+  fireEvent.changeText(view.getByPlaceholderText("Share what you're cooking..."), 'Own new');
+  fireEvent.press(view.getByText('Post'));
+  await waitFor(() => expect(communityService.createCommunityPost).toHaveBeenCalledTimes(1));
+  expect(view.queryByText('Post own-new')).toBeNull();
+  expect(view.getByText('No saved posts yet')).toBeOnTheScreen();
+});
+
+it.each([
+  ['All', 'Saved'],
+  ['Following', 'Saved'],
+  ['Saved', 'All'],
+  ['Saved', 'Following'],
+])('rejects a corrupt stale %s response after switching to %s', async (priorMode, currentMode) => {
+  const staleRead = deferred();
+  const currentPost = post(`current-${currentMode.toLowerCase()}`, 0, {
+    bookmarkedByCurrentUser: currentMode === 'Saved',
+  });
+  const corruptPost = post(`corrupt-${priorMode.toLowerCase()}`, 0, {
+    bookmarkedByCurrentUser: priorMode === 'Saved',
+    recipeAttachment: {
+      isAvailable: true,
+      recipe: { id: 'stale-recipe', title: `Stale ${priorMode} Recipe`, imageUrl: null },
+    },
+  });
+  const services = {
+    All: communityService.listCommunityPosts,
+    Following: communityService.listFollowingCommunityPosts,
+    Saved: communityService.listSavedCommunityPosts,
+  };
+
+  communityService.listCommunityPosts.mockReset();
+  if (priorMode === 'All') {
+    communityService.listCommunityPosts.mockReturnValueOnce(staleRead.promise);
+  } else {
+    communityService.listCommunityPosts.mockResolvedValueOnce(feed([post('initial-all')], 1, 1));
+    services[priorMode].mockReset().mockReturnValueOnce(staleRead.promise);
+  }
+  if (currentMode === 'All') {
+    communityService.listCommunityPosts.mockResolvedValueOnce(feed([currentPost], 1, 1));
+  } else {
+    services[currentMode].mockReset().mockResolvedValueOnce(feed([currentPost], 1, 1));
+  }
+
+  const view = render(<CommunityScreen />);
+  if (priorMode !== 'All') {
+    await waitFor(() => expect(view.getByText('Post initial-all')).toBeOnTheScreen());
+    fireEvent.press(view.getByLabelText(`${priorMode} Community posts`));
+    await waitFor(() => expect(services[priorMode]).toHaveBeenCalledTimes(1));
+  }
+  fireEvent.press(view.getByLabelText(`${currentMode} Community posts`));
+  await waitFor(() => expect(view.getByText(`Post current-${currentMode.toLowerCase()}`)).toBeOnTheScreen());
+
+  await settle(staleRead, 'resolve', {
+    posts: [corruptPost],
+    pagination: { page: 91, limit: 20, total: 999, totalPages: 50 },
+  });
+  expect(view.queryByText(`Post corrupt-${priorMode.toLowerCase()}`)).toBeNull();
+  expect(view.queryByText(`Stale ${priorMode} Recipe`)).toBeNull();
+  expect(view.getByText(`Post current-${currentMode.toLowerCase()}`)).toBeOnTheScreen();
+});
+
+it('does not let an old-account successful bookmark update, alert, reload, or clear the new token', async () => {
+  const oldMutation = deferred();
+  const newMutation = deferred();
+  communityService.listCommunityPosts.mockResolvedValue(feed([post('shared')], 1, 1));
+  communityService.listSavedCommunityPosts
+    .mockResolvedValueOnce(feed([post('shared')], 1, 1))
+    .mockResolvedValueOnce(feed([post('shared', 0, { bookmarkedByCurrentUser: true })], 1, 1));
+  communityService.setCommunityPostBookmarked
+    .mockReturnValueOnce(oldMutation.promise)
+    .mockReturnValueOnce(newMutation.promise);
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('Bookmark post')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  mockAuth = { user: { id: 'user-b', name: 'User B' } };
+  view.rerender(<CommunityScreen />);
+  await waitFor(() => expect(communityService.listCommunityPosts).toHaveBeenCalledTimes(2));
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  expect(communityService.setCommunityPostBookmarked).toHaveBeenCalledTimes(2);
+  fireEvent.press(view.getByLabelText('Saved Community posts'));
+  await waitFor(() => expect(communityService.listSavedCommunityPosts).toHaveBeenCalledTimes(1));
+  expect(view.getByLabelText('Bookmark post').props.accessibilityState.busy).toBe(true);
+
+  await settle(oldMutation, 'resolve', { bookmarked: true });
+  expect(view.getByLabelText('Bookmark post').props.accessibilityState.busy).toBe(true);
+  expect(notify).not.toHaveBeenCalled();
+  expect(communityService.listSavedCommunityPosts).toHaveBeenCalledTimes(1);
+  fireEvent.press(view.getByLabelText('Bookmark post'));
+  expect(communityService.setCommunityPostBookmarked).toHaveBeenCalledTimes(2);
+
+  await settle(newMutation, 'resolve', { bookmarked: true });
+  await waitFor(() => expect(communityService.listSavedCommunityPosts).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(view.getByLabelText('Remove bookmark')).toBeOnTheScreen());
+});
+
+it('installs no bookmark failure continuation after unmount', async () => {
+  const late = deferred();
+  const stateUpdateObserver = jest.fn();
+  mockStateUpdateObserver = stateUpdateObserver;
+  const mapDeleteSpy = jest.spyOn(Map.prototype, 'delete');
+  communityService.listCommunityPosts.mockResolvedValue(feed([post('p1')], 1, 1));
+  communityService.setCommunityPostBookmarked.mockReturnValueOnce(late.promise);
+  try {
+    const view = render(<CommunityScreen />);
+    await waitFor(() => expect(view.getByLabelText('Bookmark post')).toBeOnTheScreen());
+    fireEvent.press(view.getByLabelText('Bookmark post'));
+    view.unmount();
+    stateUpdateObserver.mockClear();
+    mapDeleteSpy.mockClear();
+    const feedCallsAtUnmount = communityService.listCommunityPosts.mock.calls.length
+      + communityService.listFollowingCommunityPosts.mock.calls.length
+      + communityService.listSavedCommunityPosts.mock.calls.length;
+    await settle(late, 'reject', new Error('late bookmark failure'));
+    expect(stateUpdateObserver).not.toHaveBeenCalled();
+    expect(mapDeleteSpy).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(communityService.listCommunityPosts.mock.calls.length
+      + communityService.listFollowingCommunityPosts.mock.calls.length
+      + communityService.listSavedCommunityPosts.mock.calls.length).toBe(feedCallsAtUnmount);
+  } finally {
+    mockStateUpdateObserver = null;
+    mapDeleteSpy.mockRestore();
+  }
 });
 
 it('does not let an old-account same-author follow continuation update or clear the new token', async () => {

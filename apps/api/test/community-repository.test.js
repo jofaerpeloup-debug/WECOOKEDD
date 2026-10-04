@@ -9,6 +9,48 @@ const CommunityComment = require('../src/modules/community/community-comment.mod
 const communityCommentRepository = require('../src/modules/community/community-comment.repository');
 const CommunityFollow = require('../src/modules/community/community-follow.model');
 const communityFollowRepository = require('../src/modules/community/community-follow.repository');
+const CommunityPostBookmark = require('../src/modules/community/community-post-bookmark.model');
+const communityBookmarkRepository = require('../src/modules/community/community-bookmark.repository');
+
+function runSavedPipeline(pipeline, bookmarkRows, postRows) {
+  let rows = bookmarkRows.map((row) => ({ ...row }));
+  for (const stage of pipeline) {
+    if (stage.$match) {
+      rows = rows.filter((row) => Object.entries(stage.$match)
+        .every(([key, value]) => String(row[key]) === String(value)));
+    } else if (stage.$lookup) {
+      rows = rows.map((row) => ({
+        ...row,
+        [stage.$lookup.as]: postRows.filter((postRow) =>
+          String(postRow[stage.$lookup.foreignField]) === String(row[stage.$lookup.localField])),
+      }));
+    } else if (stage.$unwind) {
+      const key = stage.$unwind.slice(1);
+      rows = rows.flatMap((row) => row[key].map((value) => ({ ...row, [key]: value })));
+    } else if (stage.$replaceRoot) {
+      const key = stage.$replaceRoot.newRoot.slice(1);
+      rows = rows.map((row) => row[key]);
+    } else if (stage.$sort) {
+      const entries = Object.entries(stage.$sort);
+      rows.sort((left, right) => {
+        for (const [key, direction] of entries) {
+          const leftValue = left[key] instanceof Date ? left[key].getTime() : String(left[key]);
+          const rightValue = right[key] instanceof Date ? right[key].getTime() : String(right[key]);
+          if (leftValue < rightValue) return -1 * direction;
+          if (leftValue > rightValue) return direction;
+        }
+        return 0;
+      });
+    } else if (stage.$facet) {
+      const items = rows.slice(stage.$facet.items[0].$skip,
+        stage.$facet.items[0].$skip + stage.$facet.items[1].$limit);
+      rows = [{ items, metadata: rows.length ? [{ total: rows.length }] : [] }];
+    } else {
+      assert.fail(`Unsupported Saved-pipeline stage in behavioral fixture: ${JSON.stringify(stage)}`);
+    }
+  }
+  return rows;
+}
 
 test('create repository delegates the allowlisted post document to Mongoose', async (t) => {
   const document = { authorId: 'author', caption: 'Persist me', recipeId: 'recipe' };
@@ -121,6 +163,79 @@ test('like repository scopes viewer mutations and post cleanup', (t) => {
     ['post', { postId: 'post' }],
     ['count', { postId: 'post' }],
   ]);
+});
+
+test('bookmark repository scopes pair mutations, cleanup, and bulk metadata', async (t) => {
+  const calls = [];
+  t.mock.method(CommunityPostBookmark, 'create', async (doc) => { calls.push(['create', doc]); return doc; });
+  t.mock.method(CommunityPostBookmark, 'findOneAndDelete', (filter) => { calls.push(['one', filter]); return null; });
+  t.mock.method(CommunityPostBookmark, 'deleteMany', (filter) => { calls.push(['many', filter]); return null; });
+  t.mock.method(CommunityPostBookmark, 'find', (filter) => ({
+    select(projection) { calls.push(['find', filter, projection]); return Promise.resolve([{ postId: 'post' }]); },
+  }));
+  await communityBookmarkRepository.createBookmark({ postId: 'post', userId: 'user' });
+  communityBookmarkRepository.deleteByPostAndUser('post', 'user');
+  communityBookmarkRepository.deleteByPostId('post');
+  assert.deepEqual(await communityBookmarkRepository.findBookmarkedPostIdsAmong('user', ['post']), ['post']);
+  assert.deepEqual(await communityBookmarkRepository.findBookmarkedPostIdsAmong('user', []), []);
+  assert.deepEqual(calls, [
+    ['create', { postId: 'post', userId: 'user' }],
+    ['one', { postId: 'post', userId: 'user' }],
+    ['many', { postId: 'post' }],
+    ['find', { userId: 'user', postId: { $in: ['post'] } }, 'postId'],
+  ]);
+});
+
+test('Saved repository joins existing posts, sorts by post chronology, then paginates and totals', async (t) => {
+  let pipeline;
+  t.mock.method(CommunityPostBookmark, 'aggregate', async (value) => {
+    pipeline = value;
+    return [{ items: [{ _id: 'post' }], metadata: [{ total: 3 }] }];
+  });
+  const result = await communityBookmarkRepository.findSavedPosts(
+    '507f1f77bcf86cd799439001', { skip: 2, limit: 1 }
+  );
+  assert.deepEqual(result, { posts: [{ _id: 'post' }], total: 3 });
+  assert.equal(String(pipeline[0].$match.userId), '507f1f77bcf86cd799439001');
+  assert.equal(pipeline[1].$lookup.localField, 'postId');
+  assert.equal(pipeline[1].$lookup.foreignField, '_id');
+  assert.deepEqual(pipeline[3], { $replaceRoot: { newRoot: '$post' } });
+  assert.deepEqual(pipeline[4], { $sort: { createdAt: -1, _id: -1 } });
+  assert.equal(JSON.stringify(pipeline[4]).includes('bookmark'), false);
+  assert.deepEqual(pipeline[5], {
+    $facet: { items: [{ $skip: 2 }, { $limit: 1 }], metadata: [{ $count: 'total' }] },
+  });
+});
+
+test('Saved chronology follows post creation even when the older post was bookmarked later', async (t) => {
+  const viewerId = '507f1f77bcf86cd799439001';
+  const newerPostId = '507f1f77bcf86cd799439012';
+  const olderPostId = '507f1f77bcf86cd799439011';
+  const posts = [
+    { _id: newerPostId, createdAt: new Date('2026-10-03T00:00:00.000Z') },
+    { _id: olderPostId, createdAt: new Date('2026-10-01T00:00:00.000Z') },
+  ];
+  const bookmarks = [
+    {
+      userId: viewerId,
+      postId: newerPostId,
+      createdAt: new Date('2026-10-02T00:00:00.000Z'),
+    },
+    {
+      userId: viewerId,
+      postId: olderPostId,
+      createdAt: new Date('2026-10-04T00:00:00.000Z'),
+    },
+  ];
+  t.mock.method(CommunityPostBookmark, 'aggregate', async (pipeline) =>
+    runSavedPipeline(pipeline, bookmarks, posts));
+
+  const result = await communityBookmarkRepository.findSavedPosts(viewerId, { skip: 0, limit: 20 });
+
+  assert.deepEqual(result.posts.map((savedPost) => String(savedPost._id)), [newerPostId, olderPostId]);
+  assert.equal(result.total, 2);
+  assert.equal(Object.hasOwn(result.posts[0], 'bookmarkCreatedAt'), false);
+  assert.equal(Object.hasOwn(result.posts[0], 'postId'), false);
 });
 
 test('comment repository delegates bounded creation and deterministic post pagination', async (t) => {

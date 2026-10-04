@@ -30,6 +30,12 @@ const communityPostParamsSchema = z.object({
   params: z.object({ postId: objectIdSchema }).strict(),
 });
 
+const communityBookmarkSchema = z.object({
+  params: z.object({ postId: objectIdSchema }).strict(),
+  body: z.object({}).strict().default({}),
+  query: z.object({}).strict(),
+});
+
 const commentBodySchema = z
   .string('Comment is required.')
   .trim()
@@ -55,6 +61,7 @@ module.exports = {
   communityFollowSchema,
   createCommunityPostSchema,
   communityPostParamsSchema,
+  communityBookmarkSchema,
   listCommunityCommentsSchema,
   createCommunityCommentSchema,
   communityCommentParamsSchema,
