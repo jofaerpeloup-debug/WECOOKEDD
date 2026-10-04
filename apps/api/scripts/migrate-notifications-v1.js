@@ -116,7 +116,9 @@ function reportFor(scan, apply) {
   const malformed = scan.users.filter(({ analysis }) => analysis.malformed).length;
   const canonical = scan.users.filter(({ analysis }) => analysis.canonical).length;
   const candidates = scan.users.length - malformed - canonical;
-  const missingIndexes = scan.indexes.states.filter(({ exists }) => !exists).length;
+  const missingIndexNames = scan.indexes.states
+    .filter(({ exists }) => !exists)
+    .map(({ required }) => required.name);
   return {
     mode: apply ? 'apply' : 'dry-run',
     scanned: scan.users.length,
@@ -128,11 +130,13 @@ function reportFor(scan, apply) {
     changed: 0,
     conflicts: 0,
     indexesCreated: 0,
-    pending: candidates + missingIndexes,
+    pending: candidates + missingIndexNames.length,
     indexes: {
-      exact: NOTIFICATION_REQUIRED_INDEXES.length - missingIndexes - scan.indexes.blockers.length,
-      missing: missingIndexes,
+      exact: NOTIFICATION_REQUIRED_INDEXES.length - missingIndexNames.length - scan.indexes.blockers.length,
+      missing: missingIndexNames.length,
+      missingNames: missingIndexNames,
       drifted: scan.indexes.blockers.length,
+      driftedNames: [...scan.indexes.blockers],
     },
   };
 }
@@ -204,15 +208,26 @@ async function migrateCollections({ userCollection, notificationCollection, appl
     throw Object.assign(new Error('Notification migration final postcondition failed.'), { report });
   }
   report.pending = 0;
-  report.indexes = { exact: NOTIFICATION_REQUIRED_INDEXES.length, missing: 0, drifted: 0 };
+  report.indexes = {
+    exact: NOTIFICATION_REQUIRED_INDEXES.length,
+    missing: 0,
+    missingNames: [],
+    drifted: 0,
+    driftedNames: [],
+  };
   logger.log(`[notifications-v1] ${JSON.stringify(report)}`);
   return report;
 }
 
-function parseApplyFlag(argv) {
-  if (argv.length === 0) return false;
-  if (argv.length === 1 && argv[0] === '--apply') return true;
-  throw new Error('Usage: npm run migrate:notifications-v1 -- [--apply]');
+function parseCommandFlags(argv) {
+  const allowed = new Set(['--apply', '--allow-shared-dev']);
+  if (argv.some((argument) => !allowed.has(argument)) || new Set(argv).size !== argv.length) {
+    throw new Error('Usage: npm run migrate:notifications-v1 -- [--apply] [--allow-shared-dev]');
+  }
+  return {
+    apply: argv.includes('--apply'),
+    allowSharedDev: argv.includes('--allow-shared-dev'),
+  };
 }
 
 function databaseName(uri) {
@@ -220,16 +235,26 @@ function databaseName(uri) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-function assertApplyTarget(env) {
+function assertCommandTarget(env, { apply = false, allowSharedDev = false } = {}) {
   const name = databaseName(env.mongodbUri);
+  const productionIdentity = /prod/i;
   const sharedIdentity = /(?:^|[-_])(?:prod|production|dev|development)(?:[-_]|$)/i;
   const isolatedNotif1Test = /^wecooked[-_]notif1[-_](?:test|isolated)(?:[-_][a-z0-9]+)*$/i;
-  if (
-    env.nodeEnv === 'production'
-    || !name
-    || sharedIdentity.test(name)
-    || !isolatedNotif1Test.test(name)
-  ) {
+
+  // Production is forbidden before connection for every command mode and flag
+  // combination. Keep this check ahead of all shared-development exceptions.
+  if (env.nodeEnv === 'production' || productionIdentity.test(name)) {
+    throw new Error('Refusing notification migration access to a production identity.');
+  }
+  if (!name) {
+    throw new Error('Refusing notification migration without an explicit database binding.');
+  }
+  if (allowSharedDev && (env.nodeEnv !== 'development' || name !== 'wecooked-dev')) {
+    throw new Error('Refusing shared-development acknowledgement outside exact development database wecooked-dev.');
+  }
+  if (!apply) return;
+  if (allowSharedDev) return;
+  if (sharedIdentity.test(name) || !isolatedNotif1Test.test(name)) {
     throw new Error('Refusing notification migration apply without an isolated non-production database binding.');
   }
 }
@@ -245,14 +270,14 @@ async function runMigrationCommand({
   }),
   logger = console,
 } = {}) {
-  const apply = parseApplyFlag(argv);
+  const flags = parseCommandFlags(argv);
   const env = loadEnvironment();
-  if (apply) assertApplyTarget(env);
+  assertCommandTarget(env, flags);
   let connected = false;
   try {
     await connect(env.mongodbUri, env.nodeEnv);
     connected = true;
-    return await migrateCollections({ ...getCollections(), apply, logger });
+    return await migrateCollections({ ...getCollections(), apply: flags.apply, logger });
   } finally {
     if (connected) await disconnect();
   }
@@ -275,8 +300,8 @@ module.exports = {
   analyzeIndexes,
   preflight,
   migrateCollections,
-  parseApplyFlag,
+  parseCommandFlags,
   databaseName,
-  assertApplyTarget,
+  assertCommandTarget,
   runMigrationCommand,
 };

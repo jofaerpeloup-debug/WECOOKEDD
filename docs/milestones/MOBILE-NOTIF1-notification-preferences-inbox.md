@@ -1,16 +1,16 @@
 # MOBILE-NOTIF1 — Server-Authoritative Notification Preferences and In-App Inbox
 
-**Phase:** CODE FINALIZATION
+**Phase:** PRE-MERGE SHARED-DEV ALIGNMENT
 
-**Status:** IMPLEMENTATION COMPLETE — CLOSURE PASS — PRE-MERGE BLOCKED
+**Status:** IMPLEMENTATION COMPLETE — CLOSURE PASS — DEV DB ALIGNED — FINAL REVIEW REQUIRED
 
 **Baseline:** `main @ 605e51b87afadfa6f8fa650b769b5e8edb23b6c5`
 
 **Roadmap authority:** `docs/milestones/MOBILE-PARITY-AUDIT2-final-product-parity-audit.md`
 
-**Verdict:** `MOBILE-NOTIF1 CODE FINALIZED — PR MAY OPEN — MERGE BLOCKED BY DEV DB ALIGNMENT`
+**Verdict:** `MOBILE-NOTIF1 DEV DB ALIGNMENT PASS — READY FOR FINAL REVIEW`
 
-The frozen MOBILE-NOTIF1 implementation is complete, all independent-review findings are fixed, and closure is PASS. The implementation preserves the existing `Route → authentication/validation → controller → service → repository → Mongoose → MongoDB` boundaries and remains inside the exact allowlists below.
+The frozen MOBILE-NOTIF1 implementation is complete, all independent-review findings are fixed, closure is PASS, and the shared-development database alignment is complete. The implementation preserves the existing `Route → authentication/validation → controller → service → repository → Mongoose → MongoDB` boundaries and remains inside the exact allowlists below.
 
 ## 1. Milestone path
 
@@ -275,6 +275,16 @@ The canonical stored preference leaves remain under `User.preferences.notificati
 
 ## 9. Migration contract
 
+### Pre-merge shared-development alignment amendment (2026-10-04)
+
+- Normal `npm run migrate:notifications-v1` behavior remains dry-run/read-only.
+- Normal `--apply` remains limited to an isolated NOTIF1 test database.
+- Shared-development apply is permitted only with both explicit `--apply` and the additional explicit `--allow-shared-dev` acknowledgement.
+- That acknowledgement is valid only for the exact resolved shared-development database name `wecooked-dev`; it grants no access to arbitrary database names.
+- Every production environment or production database identity remains forbidden regardless of flags, including production-like names carrying development/test suffixes.
+- There is no automatic startup migration. The required-index startup verifier remains read-only and may not create, repair, or drop indexes or invoke this migration.
+- The four required indexes must be created only through this audited migration path, never manually in Atlas.
+
 - Add `migrate-notifications-v1`; it defaults to dry-run and applies only with the exact explicit apply flag and approved environment/database binding.
 - The migration handles only `User.preferences.notifications` normalization and creation/verification of the four Notification indexes. It does not create Notification rows.
 - Preflight scans the complete target User population and the complete Notification index catalogue before the first write.
@@ -403,11 +413,14 @@ Automated tests alone do not establish device accessibility or physical Mongo be
 - Isolated live Mongo: **1/1 PASS**, including physical index verification and exact anchored race evidence.
 - TTL monitor expiry timing: **NOT RUN — NOT CLAIMED AS PASS**.
 - Device/accessibility runtime: **NOT RUN — NOT CLAIMED AS PASS**.
-- Pre-merge operational blocker: shared development database `wecooked-dev` currently lacks the required NOTIF1 indexes, and the frozen migration correctly refuses shared-development apply. The startup verifier must remain fail-closed; do not bypass migration safety, create Atlas indexes manually, mutate `wecooked-dev`, or mutate production in this phase.
+- Shared-development alignment completed on 2026-10-04 through the explicit audited migration path. The initial `wecooked-dev` dry-run scanned 39 users, found 39 preference candidates, four missing named indexes, zero malformed states, zero drift, and zero blockers/conflicts.
+- Explicit shared-development apply changed 39/39 candidates, created the exact four required indexes, and reported `pending=0`. Separate read-only physical inspection found only `_id_` plus the four required application indexes, including unique `uniq_notification_recipient_event` and `notification_expiry_ttl` with `expireAfterSeconds: 0`.
+- The second `wecooked-dev` dry-run found 39 canonical users, four exact indexes, and `pending=0`. Normal API startup connected to `wecooked-dev`, verified all required indexes read-only, and passed health/auth-boundary smoke checks without a required-index startup failure.
+- No production database was accessed. No manual Atlas index creation occurred. The required-index verifier remains fail-closed and read-only.
 - Pre-existing unrelated DISC5/ING2 work and untracked files remain outside this milestone and must remain untouched.
 - The protected Cook Mode stash remains present and must not be inspected, applied, dropped, or modified.
-- The milestone is not merged and must not be described as merged or fully complete until the development-database alignment blocker is resolved.
+- The milestone is not merged and must not be described as merged. Device/accessibility and TTL-monitor timing gates remain not run and are not claimed as pass.
 
 ## 15. Verdict
 
-**MOBILE-NOTIF1 CODE FINALIZED — PR MAY OPEN — MERGE BLOCKED BY DEV DB ALIGNMENT**
+**MOBILE-NOTIF1 DEV DB ALIGNMENT PASS — READY FOR FINAL REVIEW**

@@ -9,8 +9,8 @@ const {
   analyzePreference,
   observedPredicate,
   migrateCollections,
-  parseApplyFlag,
-  assertApplyTarget,
+  parseCommandFlags,
+  assertCommandTarget,
   runMigrationCommand,
 } = require('../scripts/migrate-notifications-v1');
 const { NOTIFICATION_REQUIRED_INDEXES } = require('../src/config/required-indexes');
@@ -129,6 +129,7 @@ test('dry-run scans all users/indexes and performs zero writes', async () => {
   assert.deepEqual({ scanned: report.scanned, canonical: report.canonical, candidates: report.candidates, pending: report.pending }, {
     scanned: 2, canonical: 1, candidates: 1, pending: 5,
   });
+  assert.deepEqual(report.indexes.missingNames, NOTIFICATION_REQUIRED_INDEXES.map((index) => index.name));
   assert.equal(users.calls.updates.length, 0);
   assert.equal(notifications.calls.creates.length, 0);
 });
@@ -205,27 +206,105 @@ test('lost predicate is accepted only when reread proves exact canonical target 
   assert.equal(report.pending, 0);
 });
 
-test('CLI is dry-run by default, exact about --apply, and refuses production/shared-dev apply', async () => {
-  assert.equal(parseApplyFlag([]), false);
-  assert.equal(parseApplyFlag(['--apply']), true);
-  assert.throws(() => parseApplyFlag(['--force']));
-  for (const env of [
-    { nodeEnv: 'production', mongodbUri: 'mongodb://x/wecooked-notif-test' },
-    { nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked-production' },
-    { nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked-production-notif-test' },
-    { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-dev' },
-    { nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked-dev-isolated' },
-    { nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked' },
-    { nodeEnv: 'test', mongodbUri: 'mongodb://x/other-notif1-test' },
-  ]) assert.throws(() => assertApplyTarget(env), /Refusing/);
-  assert.doesNotThrow(() => assertApplyTarget({ nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked-notif1-test' }));
-  assert.doesNotThrow(() => assertApplyTarget({ nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked_notif1_isolated_local' }));
+test('CLI flags are exact and acknowledgement alone remains dry-run', () => {
+  assert.deepEqual(parseCommandFlags([]), { apply: false, allowSharedDev: false });
+  assert.deepEqual(parseCommandFlags(['--apply']), { apply: true, allowSharedDev: false });
+  assert.deepEqual(parseCommandFlags(['--allow-shared-dev']), { apply: false, allowSharedDev: true });
+  assert.deepEqual(parseCommandFlags(['--allow-shared-dev', '--apply']), { apply: true, allowSharedDev: true });
+  assert.throws(() => parseCommandFlags(['--force']));
+  assert.throws(() => parseCommandFlags(['--apply', '--apply']));
+});
 
-  let connected = false;
+test('default apply rejects wecooked-dev while explicit shared-dev acknowledgement applies', async () => {
+  const env = { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-dev' };
+  assert.throws(() => assertCommandTarget(env, { apply: true }), /Refusing/);
+  assert.doesNotThrow(() => assertCommandTarget(env, { apply: true, allowSharedDev: true }));
+
+  let rejectedConnection = false;
   await assert.rejects(() => runMigrationCommand({
     argv: ['--apply'],
-    loadEnvironment: () => ({ nodeEnv: 'production', mongodbUri: 'mongodb://x/wecooked-production' }),
-    connect: async () => { connected = true; },
+    loadEnvironment: () => env,
+    connect: async () => { rejectedConnection = true; },
   }), /Refusing/);
-  assert.equal(connected, false);
+  assert.equal(rejectedConnection, false);
+
+  const users = userCollection([{ _id: ID_A }]);
+  const notifications = notificationCollection([]);
+  const applied = await runMigrationCommand({
+    argv: ['--apply', '--allow-shared-dev'],
+    loadEnvironment: () => env,
+    connect: async () => {},
+    disconnect: async () => {},
+    getCollections: () => ({ userCollection: users, notificationCollection: notifications }),
+    logger: silentLogger,
+  });
+  assert.equal(applied.mode, 'apply');
+  assert.equal(applied.changed, 1);
+  assert.equal(applied.indexesCreated, 4);
+});
+
+test('shared-dev acknowledgement never grants production-like or arbitrary database access', () => {
+  for (const env of [
+    { nodeEnv: 'production', mongodbUri: 'mongodb://x/wecooked-dev' },
+    { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-production' },
+    { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-production-notif-test' },
+    { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-prod' },
+    { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-dev-production-test' },
+    { nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-dev-isolated' },
+    { nodeEnv: 'development', mongodbUri: 'mongodb://x/arbitrary' },
+    { nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked-dev' },
+  ]) {
+    assert.throws(
+      () => assertCommandTarget(env, { apply: true, allowSharedDev: true }),
+      /Refusing/
+    );
+  }
+});
+
+test('production identity is rejected before connection regardless of flags', async () => {
+  for (const argv of [[], ['--allow-shared-dev'], ['--apply'], ['--apply', '--allow-shared-dev']]) {
+    let connected = false;
+    await assert.rejects(() => runMigrationCommand({
+      argv,
+      loadEnvironment: () => ({ nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-production-notif-test' }),
+      connect: async () => { connected = true; },
+    }), /production identity/);
+    assert.equal(connected, false);
+  }
+});
+
+test('acknowledgement without apply scans shared dev without mutation', async () => {
+  const users = userCollection([{ _id: ID_A }]);
+  const notifications = notificationCollection([]);
+  const report = await runMigrationCommand({
+    argv: ['--allow-shared-dev'],
+    loadEnvironment: () => ({ nodeEnv: 'development', mongodbUri: 'mongodb://x/wecooked-dev' }),
+    connect: async () => {},
+    disconnect: async () => {},
+    getCollections: () => ({ userCollection: users, notificationCollection: notifications }),
+    logger: silentLogger,
+  });
+  assert.equal(report.mode, 'dry-run');
+  assert.equal(users.calls.updates.length, 0);
+  assert.equal(notifications.calls.creates.length, 0);
+});
+
+test('existing isolated NOTIF1 apply command remains allowed and idempotent', async () => {
+  const users = userCollection([{ _id: ID_A }]);
+  const notifications = notificationCollection([]);
+  const command = () => runMigrationCommand({
+    argv: ['--apply'],
+    loadEnvironment: () => ({ nodeEnv: 'test', mongodbUri: 'mongodb://x/wecooked-notif1-test' }),
+    connect: async () => {},
+    disconnect: async () => {},
+    getCollections: () => ({ userCollection: users, notificationCollection: notifications }),
+    logger: silentLogger,
+  });
+  const applied = await command();
+  const repeated = await command();
+  assert.equal(applied.changed, 1);
+  assert.equal(applied.indexesCreated, 4);
+  assert.equal(repeated.pending, 0);
+  assert.equal(repeated.changed, 0);
+  assert.equal(repeated.indexesCreated, 0);
 });
