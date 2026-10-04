@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   REQUIRED_INDEXES,
   MODERATOR_APPLICATION_REQUIRED_INDEXES,
+  NOTIFICATION_REQUIRED_INDEXES,
   verifyRequiredIndexes,
 } = require('../src/config/required-indexes');
 const {
@@ -31,12 +32,12 @@ function validIndex() {
 
 // A read-only stub: every write entry point throws, so a verifier that tried to
 // create or repair an index would fail the test rather than pass it silently.
-function fakeCollection(indexes, { onListIndexes } = {}) {
+function fakeCollection(indexes, { onListIndexes, collectionName = 'users' } = {}) {
   const forbidden = (name) => () => {
     throw new Error(`verifier must never call ${name}`);
   };
   return {
-    collectionName: 'users',
+    collectionName,
     listIndexes() {
       if (onListIndexes) onListIndexes();
       return { toArray: async () => indexes };
@@ -48,6 +49,44 @@ function fakeCollection(indexes, { onListIndexes } = {}) {
     ensureIndex: forbidden('ensureIndex'),
   };
 }
+
+function validNotificationIndexes() {
+  return NOTIFICATION_REQUIRED_INDEXES.map((required) => ({
+    name: required.name,
+    key: Object.fromEntries(required.key),
+    ...(required.unique ? { unique: true } : {}),
+    ...(required.expireAfterSeconds !== null ? { expireAfterSeconds: required.expireAfterSeconds } : {}),
+  }));
+}
+
+test('startup verifies the exact four migration-owned Notification indexes read-only', async () => {
+  const notificationCollection = fakeCollection(validNotificationIndexes(), { collectionName: 'notifications' });
+  await verifyRequiredIndexes({
+    collection: fakeCollection([{ name: '_id_', key: { _id: 1 } }, validIndex()]),
+    notificationCollection,
+    logger: silentLogger,
+  });
+  assert.equal(NOTIFICATION_REQUIRED_INDEXES.length, 4);
+});
+
+test('startup rejects Notification key order, uniqueness, TTL, partial, and sparse drift', async () => {
+  const mutations = [
+    (indexes) => { indexes[0].key = { archivedAt: 1, recipientId: 1, createdAt: -1, _id: -1 }; },
+    (indexes) => { indexes[2].unique = false; },
+    (indexes) => { indexes[3].expireAfterSeconds = 60; },
+    (indexes) => { indexes[1].partialFilterExpression = { readAt: null }; },
+    (indexes) => { indexes[0].sparse = true; },
+  ];
+  for (const mutate of mutations) {
+    const indexes = validNotificationIndexes();
+    mutate(indexes);
+    await assert.rejects(() => verifyRequiredIndexes({
+      collection: fakeCollection([{ name: '_id_', key: { _id: 1 } }, validIndex()]),
+      notificationCollection: fakeCollection(indexes, { collectionName: 'notifications' }),
+      logger: silentLogger,
+    }), /Required index/);
+  }
+});
 
 function verify(indexes, options) {
   return verifyRequiredIndexes({

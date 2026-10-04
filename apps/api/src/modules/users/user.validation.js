@@ -90,7 +90,23 @@ const preferenceListSchema = z
 // `enabled` is REQUIRED when `notifications` is present, so `{ notifications: {} }`
 // is rejected natively. Presence is by key, never truthiness — `enabled: false`
 // is a valid update.
-const notificationsPatchSchema = z.object({ enabled: z.boolean() }).strict();
+const notificationsPatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    push: z.boolean().optional(),
+    email: z.boolean().optional(),
+    suggestions: z.boolean().optional(),
+    digest: z.boolean().optional(),
+    reminders: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'notifications must include at least one supported field.',
+  })
+  .refine(
+    (value) => value.enabled === undefined || value.push === undefined || value.enabled === value.push,
+    { message: 'enabled and push must match when both are supplied.' }
+  );
 
 // .strict() rejects any unknown preference key. .refine() rejects a
 // structurally-empty `{ preferences: {} }` no-op.

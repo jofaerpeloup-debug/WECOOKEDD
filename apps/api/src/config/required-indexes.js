@@ -1,5 +1,6 @@
 const User = require('../modules/users/user.model');
 const ModeratorApplication = require('../modules/moderator-applications/moderator-application.model');
+const Notification = require('../modules/notifications/notification.model');
 
 /**
  * Read-only startup verification of the security-relevant database indexes the
@@ -64,6 +65,49 @@ const MODERATOR_APPLICATION_REQUIRED_INDEXES = Object.freeze([
   }),
 ]);
 
+const NOTIFICATION_REQUIRED_INDEXES = Object.freeze([
+  Object.freeze({
+    name: 'notification_inbox_page',
+    key: Object.freeze([
+      Object.freeze(['recipientId', 1]),
+      Object.freeze(['archivedAt', 1]),
+      Object.freeze(['createdAt', -1]),
+      Object.freeze(['_id', -1]),
+    ]),
+    unique: false,
+    partialFilterExpression: null,
+    expireAfterSeconds: null,
+  }),
+  Object.freeze({
+    name: 'notification_unread_count',
+    key: Object.freeze([
+      Object.freeze(['recipientId', 1]),
+      Object.freeze(['archivedAt', 1]),
+      Object.freeze(['readAt', 1]),
+    ]),
+    unique: false,
+    partialFilterExpression: null,
+    expireAfterSeconds: null,
+  }),
+  Object.freeze({
+    name: 'uniq_notification_recipient_event',
+    key: Object.freeze([
+      Object.freeze(['recipientId', 1]),
+      Object.freeze(['eventKey', 1]),
+    ]),
+    unique: true,
+    partialFilterExpression: null,
+    expireAfterSeconds: null,
+  }),
+  Object.freeze({
+    name: 'notification_expiry_ttl',
+    key: Object.freeze([Object.freeze(['expiresAt', 1])]),
+    unique: false,
+    partialFilterExpression: null,
+    expireAfterSeconds: 0,
+  }),
+]);
+
 // Key order is meaningful for an index key specification but NOT for the
 // partial filter expression, so filters are compared through a recursively
 // key-sorted canonical form.
@@ -96,6 +140,13 @@ function indexVerificationError(collectionName, name, reason) {
       `Required index "${name}" on collection "${collectionName}" ${reason}. ` +
         'Provision the schema-declared ModeratorApplication indexes before restarting. ' +
         'This verifier never creates, repairs, or drops indexes.'
+    );
+  }
+  if (collectionName === Notification.collection.collectionName) {
+    return new Error(
+      `Required index "${name}" on collection "${collectionName}" ${reason}. ` +
+        'Run "npm run migrate:notifications-v1" and then the explicit --apply form ' +
+        'against an approved non-production database. This verifier never creates, repairs, or drops indexes.'
     );
   }
   return new Error(
@@ -153,6 +204,20 @@ function assertIndex(collectionName, required, existing) {
         `${JSON.stringify(actualFilter)}`
     );
   }
+
+  const actualExpiry = actual.expireAfterSeconds ?? null;
+  const requiredExpiry = required.expireAfterSeconds ?? null;
+  if (actualExpiry !== requiredExpiry) {
+    throw indexVerificationError(
+      collectionName,
+      required.name,
+      `must carry expireAfterSeconds: ${requiredExpiry}, found: ${actualExpiry}`
+    );
+  }
+
+  if (actual.sparse === true) {
+    throw indexVerificationError(collectionName, required.name, 'must not be sparse');
+  }
 }
 
 /**
@@ -191,6 +256,9 @@ async function verifyRequiredIndexes(options = {}) {
   const moderatorApplicationCollection =
     options.moderatorApplicationCollection ??
     (Object.hasOwn(options, 'collection') ? null : ModeratorApplication.collection);
+  const notificationCollection =
+    options.notificationCollection ??
+    (Object.hasOwn(options, 'collection') ? null : Notification.collection);
 
   let verified = await verifyCollectionIndexes(collection, REQUIRED_INDEXES);
   if (moderatorApplicationCollection) {
@@ -199,9 +267,12 @@ async function verifyRequiredIndexes(options = {}) {
       MODERATOR_APPLICATION_REQUIRED_INDEXES
     );
   }
+  if (notificationCollection) {
+    verified += await verifyCollectionIndexes(notificationCollection, NOTIFICATION_REQUIRED_INDEXES);
+  }
 
   logger.log(
-    moderatorApplicationCollection
+    moderatorApplicationCollection || notificationCollection
       ? `[database] verified ${verified} required index(es) across security-critical collections`
       : `[database] verified ${verified} required index(es) on "${collection.collectionName}"`
   );
@@ -210,5 +281,7 @@ async function verifyRequiredIndexes(options = {}) {
 module.exports = {
   REQUIRED_INDEXES,
   MODERATOR_APPLICATION_REQUIRED_INDEXES,
+  NOTIFICATION_REQUIRED_INDEXES,
+  verifyCollectionIndexes,
   verifyRequiredIndexes,
 };

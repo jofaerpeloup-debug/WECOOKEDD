@@ -271,10 +271,16 @@ test('updateCurrentUserSchema rejects structural no-op bodies', () => {
   assert.equal(parseSelf({ preferences: { notifications: {} } }).success, false);
 });
 
-test('updateCurrentUserSchema requires notifications.enabled to be a boolean when present', () => {
+test('updateCurrentUserSchema requires notification leaves to be Boolean and nonempty', () => {
   assert.equal(parseSelf({ preferences: { notifications: {} } }).success, false);
   assert.equal(parseSelf({ preferences: { notifications: { enabled: 'yes' } } }).success, false);
   assert.equal(parseSelf({ preferences: { notifications: { enabled: 1 } } }).success, false);
+  for (const key of ['push', 'email', 'suggestions', 'digest', 'reminders']) {
+    assert.equal(parseSelf({ preferences: { notifications: { [key]: true } } }).success, true);
+    assert.equal(parseSelf({ preferences: { notifications: { [key]: 'yes' } } }).success, false);
+  }
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: false, push: false } } }).success, true);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: false, push: true } } }).success, false);
 });
 
 test('updateCurrentUserSchema rejects every non-allowed / admin-managed field', () => {
@@ -301,7 +307,7 @@ test('updateCurrentUserSchema rejects every non-allowed / admin-managed field', 
 test('updateCurrentUserSchema rejects unknown nested preference / notifications keys', () => {
   assert.equal(parseSelf({ preferences: { theme: 'dark' } }).success, false);
   assert.equal(parseSelf({ preferences: { dietaryPreferences: ['x'], foo: 1 } }).success, false);
-  assert.equal(parseSelf({ preferences: { notifications: { enabled: true, push: true } } }).success, false);
+  assert.equal(parseSelf({ preferences: { notifications: { enabled: true, sms: true } } }).success, false);
 });
 
 test('updateCurrentUserSchema rejects Mongo-operator and prototype-pollution shapes', () => {

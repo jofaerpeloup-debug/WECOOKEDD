@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +8,8 @@ import { useAuth } from '../context/AuthContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCollections } from '../context/CollectionsContext';
 import { useCookHistory } from '../context/CookHistoryContext';
+import { useNotifications } from '../context/NotificationsContext';
+import NotificationsDropdown from '../components/NotificationsDropdown';
 
 const UNAVAILABLE_STAT = '—';
 const COOKING_LEVEL_LABELS = {
@@ -21,6 +23,8 @@ export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
   const { user, signOut } = useAuth();
+  const { unreadCount } = useNotifications();
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
   const {
     favoriteIds,
     isInitializing: favoritesInitializing,
@@ -78,10 +82,11 @@ export default function ProfileScreen({ navigation }) {
             style={styles.iconBtn}
             hitSlop={6}
             accessibilityRole="button"
-            accessibilityLabel="Notifications"
-            onPress={() => navigation.navigate('Notifications')}
+            accessibilityLabel={`Notifications, ${unreadCount} unread`}
+            onPress={() => setNotificationsVisible(true)}
           >
             <Ionicons name="notifications-outline" size={16} color={colors.ink} />
+            {unreadCount > 0 ? <View style={styles.bellDot} /> : null}
           </Pressable>
         </View>
 
@@ -161,6 +166,12 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.logoutText}>Log out</Text>
         </Pressable>
       </ScrollView>
+      <NotificationsDropdown
+        visible={notificationsVisible}
+        onClose={() => setNotificationsVisible(false)}
+        topOffset={insets.top + spacing.xl + 40}
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -203,7 +214,12 @@ function makeStyles(colors) {
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     iconBtn: {
       width: 36, height: 36, borderRadius: 18, backgroundColor: colors.creamDeep,
-      alignItems: 'center', justifyContent: 'center',
+      alignItems: 'center', justifyContent: 'center', position: 'relative',
+    },
+    bellDot: {
+      position: 'absolute', top: 7, right: 7, width: 7, height: 7,
+      borderRadius: 4, backgroundColor: colors.sageDeep,
+      borderWidth: 1, borderColor: colors.creamDeep,
     },
     headerTitle: { fontFamily: typography.display.fontFamilyItalic, fontSize: 18, color: colors.ink },
     identity: { alignItems: 'center', marginTop: spacing.lg },

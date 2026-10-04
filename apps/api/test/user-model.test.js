@@ -256,11 +256,29 @@ test('status defaults to "active"', () => {
   assert.equal(user.status, 'active');
 });
 
-test('preferences default to empty arrays with notifications enabled', () => {
+test('preferences default to the exact canonical notification controls and legacy mirror', () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
   assert.deepEqual(user.preferences.dietaryPreferences, []);
   assert.deepEqual(user.preferences.allergies, []);
-  assert.equal(user.preferences.notifications.enabled, true);
+  assert.deepEqual(user.preferences.notifications.toObject(), {
+    enabled: true,
+    push: true,
+    email: true,
+    suggestions: true,
+    digest: false,
+    reminders: true,
+  });
+});
+
+test('owner serializer emits full canonical notification preferences while admin summary omits them', () => {
+  const user = new User({
+    name: 'Ada', email: 'ada@example.com', passwordHash: 'hash',
+    preferences: { notifications: { enabled: false, push: false, email: false, suggestions: true, digest: true, reminders: false } },
+  });
+  assert.deepEqual(toPublicUser(user).preferences.notifications, {
+    enabled: false, push: false, email: false, suggestions: true, digest: true, reminders: false,
+  });
+  assert.equal('preferences' in toAdminUserSummary(user), false);
 });
 
 test('profile fields have frozen defaults and reject partial or insecure avatar state', async () => {

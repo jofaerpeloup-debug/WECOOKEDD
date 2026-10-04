@@ -364,8 +364,18 @@ async function updateOwnProfile({ userId, patch }) {
     if (preferences.allergies !== undefined) {
       update['preferences.allergies'] = preferences.allergies;
     }
-    if (preferences.notifications && preferences.notifications.enabled !== undefined) {
-      update['preferences.notifications.enabled'] = preferences.notifications.enabled;
+    if (preferences.notifications) {
+      const notifications = preferences.notifications;
+      const push = notifications.push ?? notifications.enabled;
+      if (push !== undefined) {
+        update['preferences.notifications.push'] = push;
+        update['preferences.notifications.enabled'] = push;
+      }
+      for (const key of ['email', 'suggestions', 'digest', 'reminders']) {
+        if (notifications[key] !== undefined) {
+          update[`preferences.notifications.${key}`] = notifications[key];
+        }
+      }
     }
   }
 

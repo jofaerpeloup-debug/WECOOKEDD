@@ -1039,7 +1039,7 @@ test('updateOwnProfile dietaryPreferences-only patch sets ONLY preferences.dieta
   });
 });
 
-test('updateOwnProfile notifications-only patch sets ONLY preferences.notifications.enabled (false preserved)', async (t) => {
+test('updateOwnProfile legacy enabled patch keeps canonical push mirror equal', async (t) => {
   let capturedUpdate;
   t.mock.method(userRepository, 'updateById', async (id, update) => {
     capturedUpdate = update;
@@ -1051,7 +1051,10 @@ test('updateOwnProfile notifications-only patch sets ONLY preferences.notificati
     patch: { preferences: { notifications: { enabled: false } } },
   });
 
-  assert.deepEqual(capturedUpdate, { $set: { 'preferences.notifications.enabled': false } });
+  assert.deepEqual(capturedUpdate, { $set: {
+    'preferences.notifications.push': false,
+    'preferences.notifications.enabled': false,
+  } });
 });
 
 test('updateOwnProfile passes an empty allergies array through as [] (clear)', async (t) => {
@@ -1094,8 +1097,26 @@ test('updateOwnProfile combined patch emits every supplied dot-path and nothing 
       'preferences.dietaryPreferences': ['Halal'],
       'preferences.allergies': ['Soy'],
       'preferences.notifications.enabled': true,
+      'preferences.notifications.push': true,
     },
   });
+});
+
+test('updateOwnProfile canonical notification patch updates only supplied leaves plus push mirror', async (t) => {
+  let capturedUpdate;
+  t.mock.method(userRepository, 'updateById', async (_id, update) => {
+    capturedUpdate = update;
+    return { _id: SELF_ID };
+  });
+  await userService.updateOwnProfile({
+    userId: SELF_ID,
+    patch: { preferences: { notifications: { push: false, digest: true } } },
+  });
+  assert.deepEqual(capturedUpdate, { $set: {
+    'preferences.notifications.push': false,
+    'preferences.notifications.enabled': false,
+    'preferences.notifications.digest': true,
+  } });
 });
 
 test('updateOwnProfile maps bio and cooking level as explicit leaves', async (t) => {
