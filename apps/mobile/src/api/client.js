@@ -106,15 +106,17 @@ async function parseBody(res) {
  * @param {object} [opts]
  * @param {string} [opts.method="GET"]
  * @param {object} [opts.body]   JSON body (omit for none)
+ * @param {Function} [opts.bodyFactory] builds a fresh request body for each attempt
  * @param {object} [opts.query]  querystring params
  * @param {boolean} [opts.auth=true]  attach the bearer token + allow refresh+retry
  */
 async function request(path, {
-  method = 'GET', body, query, auth = true, _retried = false, _sessionBinding,
+  method = 'GET', body, bodyFactory, query, auth = true, _retried = false, _sessionBinding,
 } = {}) {
+  const requestBody = bodyFactory ? bodyFactory() : body;
   const headers = { Accept: 'application/json' };
-  const isMultipart = typeof FormData !== 'undefined' && body instanceof FormData;
-  if (body !== undefined && !isMultipart) headers['Content-Type'] = 'application/json';
+  const isMultipart = typeof FormData !== 'undefined' && requestBody instanceof FormData;
+  if (requestBody !== undefined && !isMultipart) headers['Content-Type'] = 'application/json';
   let requestToken = null;
   let initiatingSession = _sessionBinding;
   if (auth) {
@@ -128,9 +130,16 @@ async function request(path, {
     res = await fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body === undefined ? undefined : (isMultipart ? body : JSON.stringify(body)),
+      body: requestBody === undefined ? undefined : (isMultipart ? requestBody : JSON.stringify(requestBody)),
     });
-  } catch {
+  } catch (error) {
+    if (error?.message === 'Unsupported FormDataPart implementation') {
+      throw new ApiError('The selected file could not be prepared for upload.', {
+        kind: 'local',
+        code: 'MULTIPART_BODY_UNSUPPORTED',
+        status: 0,
+      });
+    }
     throw new ApiError('Unable to reach WeCooked. Check your connection and try again.', {
       kind: 'network',
       code: 'NETWORK_ERROR',
@@ -154,7 +163,7 @@ async function request(path, {
     // response was in flight. Use its token once without rotating again.
     if (currentToken !== requestToken) {
       return request(path, {
-        method, body, query, auth, _retried: true, _sessionBinding: initiatingSession,
+        method, body, bodyFactory, query, auth, _retried: true, _sessionBinding: initiatingSession,
       });
     }
 
@@ -167,7 +176,7 @@ async function request(path, {
     if (refreshed) {
       if (sessionBinding(authAdapter.getAccessToken()) !== initiatingSession) throw staleSessionError();
       return request(path, {
-        method, body, query, auth, _retried: true, _sessionBinding: initiatingSession,
+        method, body, bodyFactory, query, auth, _retried: true, _sessionBinding: initiatingSession,
       });
     }
   }

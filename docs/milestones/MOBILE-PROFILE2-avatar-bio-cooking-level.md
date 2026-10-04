@@ -405,3 +405,28 @@ Provider, authenticated device, and database runtime remain deferred. They were
 not run and are not claimed as passing.
 
 **MOBILE-PROFILE2 FINALIZED — READY TO MERGE (RUNTIME DEFERRED)**
+
+## 15. Avatar runtime-fix closure
+
+Physical iPhone verification identified two runtime-only multipart failures:
+
+- React Native's legacy `{ uri, name, type }` FormData part was rejected on
+  iOS with `Unsupported FormDataPart implementation`.
+- Multer/Busboy `parts: 1` rejected the first valid multipart part with
+  `LIMIT_PART_COUNT`.
+
+The mobile upload now uses the `expo-file-system` `File` multipart
+representation and creates a fresh `File` and `FormData` body for every
+request or same-session retry. The server multipart sentinel is `parts: 2`,
+while `.single('image')`, `files: 1`, `fields: 0`, and the 5 MiB limit remain
+unchanged. Session-bound `sub` plus `sessionId` protection is preserved.
+
+Closure evidence:
+
+- Mobile PROFILE2: **42/42 PASS**
+- API PROFILE2: **59/59 PASS**
+- `git diff --check`: **PASS**
+- Physical iPhone: `POST /api/v1/users/me/avatar` **200**
+- Closure: **PASS**
+
+**PROFILE2 AVATAR RUNTIME FIX FINALIZED — READY TO MERGE**

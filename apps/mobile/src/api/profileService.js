@@ -17,7 +17,68 @@
 // module is write-only. Contract: docs/architecture/self-profile-backend-api.md
 // and docs/architecture/mobile-self-profile-integration.md.
 
-import { api } from './client';
+import { File } from 'expo-file-system';
+import { ApiError, api } from './client';
+
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+const AVATAR_MIME_BY_EXTENSION = {
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+};
+const AVATAR_EXTENSIONS_BY_MIME = {
+  'image/jpeg': new Set(['.jpeg', '.jpg']),
+  'image/png': new Set(['.png']),
+  'image/webp': new Set(['.webp']),
+};
+const SAFE_LOCAL_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function avatarFileError(code, message) {
+  return new ApiError(message, { code, kind: 'local' });
+}
+
+function prepareAvatarFile(asset) {
+  if (!asset || typeof asset.uri !== 'string' || !asset.uri.trim()) {
+    throw avatarFileError('AVATAR_FILE_UNREADABLE', 'Choose a readable, non-empty image and try again.');
+  }
+
+  let file;
+  try {
+    file = new File(asset.uri);
+    if (!file.exists || !Number.isFinite(file.size) || file.size <= 0) {
+      throw new Error('missing or empty file');
+    }
+  } catch {
+    throw avatarFileError('AVATAR_FILE_UNREADABLE', 'Choose a readable, non-empty image and try again.');
+  }
+
+  if (file.size > MAX_AVATAR_BYTES) {
+    throw avatarFileError('AVATAR_FILE_TOO_LARGE', 'Choose an image no larger than 5 MiB.');
+  }
+
+  const filename = typeof file.name === 'string' ? file.name : '';
+  const dot = filename.lastIndexOf('.');
+  const extension = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
+  const pickerMime = typeof asset.mimeType === 'string' ? asset.mimeType.toLowerCase() : '';
+  const fileMime = typeof file.type === 'string' ? file.type.toLowerCase() : '';
+  const extensionMime = AVATAR_MIME_BY_EXTENSION[extension];
+  const supportedPickerMime = !pickerMime || AVATAR_EXTENSIONS_BY_MIME[pickerMime];
+  const supportedFileMime = AVATAR_EXTENSIONS_BY_MIME[fileMime];
+
+  if (
+    !SAFE_LOCAL_FILENAME.test(filename)
+    || !supportedPickerMime
+    || !supportedFileMime
+    || !extensionMime
+    || !AVATAR_EXTENSIONS_BY_MIME[fileMime].has(extension)
+    || (pickerMime && pickerMime !== fileMime)
+  ) {
+    throw avatarFileError('AVATAR_FILE_UNSUPPORTED', 'Choose a JPEG, PNG, or WebP image.');
+  }
+
+  return file;
+}
 
 /**
  * PATCH /api/v1/users/me
@@ -55,13 +116,13 @@ export function updateProfile(patch) {
 }
 
 export function uploadAvatar(asset) {
-  const body = new FormData();
-  body.append('image', {
-    uri: asset.uri,
-    name: asset.fileName || `avatar.${asset.mimeType === 'image/png' ? 'png' : asset.mimeType === 'image/webp' ? 'webp' : 'jpg'}`,
-    type: asset.mimeType || 'image/jpeg',
-  });
-  return api.post('/users/me/avatar', { body }).then((data) => data.user);
+  prepareAvatarFile(asset);
+  const bodyFactory = () => {
+    const body = new FormData();
+    body.append('image', prepareAvatarFile(asset));
+    return body;
+  };
+  return api.post('/users/me/avatar', { bodyFactory }).then((data) => data.user);
 }
 
 export function resetAvatar() {
