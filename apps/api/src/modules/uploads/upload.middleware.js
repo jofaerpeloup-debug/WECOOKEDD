@@ -13,7 +13,11 @@ const parseSingleImage = multer({
 
 const parseSingleAvatar = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_IMAGE_FILE_SIZE, files: 1, fields: 0, parts: 1 },
+  // Busboy emits partsLimit as soon as the counter equals the configured
+  // value. Two is therefore the sentinel that accepts one part and rejects a
+  // second; files: 1, fields: 0, and single('image') keep the wire contract at
+  // exactly one file under the exact image field.
+  limits: { fileSize: MAX_IMAGE_FILE_SIZE, files: 1, fields: 0, parts: 2 },
 }).single('image');
 
 function multipartError(err) {

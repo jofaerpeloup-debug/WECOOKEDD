@@ -35,17 +35,40 @@ it('sends FormData directly without a manual content type while retaining bearer
   expect(options.headers.Authorization).toBe('Bearer access-token');
 });
 
-it('bounds multipart refresh to one retry and reuses the same body', async () => {
+it('bounds multipart refresh to one retry and rebuilds the body', async () => {
   const refreshAccessToken = jest.fn(async () => true);
   setAuthAdapter({ getAccessToken: () => 'token', refreshAccessToken });
   global.fetch = jest.fn()
     .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ success: false, error: { code: 'AUTH_TOKEN_INVALID' } }) })
     .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ success: false, error: { code: 'AUTH_TOKEN_INVALID' } }) });
-  const body = new TestFormData();
-  await expect(api.post('/users/me/avatar', { body })).rejects.toMatchObject({ status: 401 });
+  const bodies = [];
+  const bodyFactory = jest.fn(() => {
+    const body = new TestFormData();
+    body.append('image', { bytes: jest.fn() });
+    bodies.push(body);
+    return body;
+  });
+  await expect(api.post('/users/me/avatar', { bodyFactory })).rejects.toMatchObject({ status: 401 });
   expect(refreshAccessToken).toHaveBeenCalledTimes(1);
   expect(global.fetch).toHaveBeenCalledTimes(2);
-  expect(global.fetch.mock.calls[1][1].body).toBe(body);
+  expect(bodyFactory).toHaveBeenCalledTimes(2);
+  expect(global.fetch.mock.calls[0][1].body).toBe(bodies[0]);
+  expect(global.fetch.mock.calls[1][1].body).toBe(bodies[1]);
+  expect(bodies[1]).not.toBe(bodies[0]);
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0].parts).toHaveLength(1);
+  expect(bodies[1].parts).toHaveLength(1);
+  expect(bodies[0].parts[0][0]).toBe('image');
+  expect(bodies[1].parts[0][0]).toBe('image');
+  expect(global.fetch.mock.calls[0][1].headers['Content-Type']).toBeUndefined();
+  expect(global.fetch.mock.calls[1][1].headers['Content-Type']).toBeUndefined();
+});
+
+it('does not classify the known local multipart incompatibility as a network failure', async () => {
+  global.fetch = jest.fn(async () => { throw new Error('Unsupported FormDataPart implementation'); });
+  await expect(api.post('/users/me/avatar', { body: new TestFormData() })).rejects.toMatchObject({
+    code: 'MULTIPART_BODY_UNSUPPORTED', kind: 'local', status: 0,
+  });
 });
 
 it('retries a normal same-session 401 with the refreshed access token', async () => {

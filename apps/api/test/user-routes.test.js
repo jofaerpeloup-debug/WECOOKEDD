@@ -113,6 +113,17 @@ test('POST /api/v1/users/me/avatar enforces the exact multipart shape and 5 MiB 
   assert.equal(field.status, 400);
   assert.equal(field.body.error.code, 'AVATAR_FILE_INVALID');
 
+  const single = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization)
+    .attach('image', Buffer.from('one'), { filename: 'one.jpg', contentType: 'image/jpeg' });
+  assert.equal(single.status, 400);
+  assert.equal(single.body.error.code, 'AVATAR_FILE_INVALID');
+  assert.equal(single.body.error.message, 'The avatar contents do not match the selected file type.');
+
+  const wrongFileField = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization)
+    .attach('avatar', Buffer.from('one'), { filename: 'one.jpg', contentType: 'image/jpeg' });
+  assert.equal(wrongFileField.status, 400);
+  assert.equal(wrongFileField.body.error.code, 'AVATAR_FILE_MULTIPLE');
+
   const multiple = await request(app).post('/api/v1/users/me/avatar').set('Authorization', authorization)
     .attach('image', Buffer.from('one'), 'one.jpg').attach('image', Buffer.from('two'), 'two.jpg');
   assert.equal(multiple.status, 400);
