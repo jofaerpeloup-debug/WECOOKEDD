@@ -13,6 +13,25 @@ const COMM6_ALLOWLIST = new Set([
   'apps/mobile/__tests__/recipeDetailStaticAudit.test.js',
   'docs/milestones/MOBILE-COMM6-recipe-cta-final-community-cards.md',
 ]);
+const COMM5_ALLOWLIST = new Set([
+  'apps/api/src/modules/community/community-post-bookmark.model.js',
+  'apps/api/src/modules/community/community-bookmark.repository.js',
+  'apps/api/src/modules/community/community.repository.js',
+  'apps/api/src/modules/community/community.validation.js',
+  'apps/api/src/modules/community/community.service.js',
+  'apps/api/src/modules/community/community.serializer.js',
+  'apps/api/src/modules/community/community.controller.js',
+  'apps/api/src/modules/community/community.routes.js',
+  'apps/mobile/src/api/communityService.js',
+  'apps/mobile/src/screens/CommunityScreen.js',
+  'apps/api/test/community-model.test.js',
+  'apps/api/test/community-repository.test.js',
+  'apps/api/test/community-routes.test.js',
+  'apps/api/test/community-bookmark-mongo.test.js',
+  'apps/mobile/__tests__/communityService.test.js',
+  'apps/mobile/__tests__/communityStaticAudit.test.js',
+  'apps/mobile/__tests__/communityInteraction.test.js',
+]);
 
 function read(relativePath) {
   return fs.readFileSync(path.join(SOURCE_ROOT, relativePath), 'utf8');
@@ -78,7 +97,7 @@ function assertComm6PatchBoundaries(additions, apiBindings) {
     throw new Error('COMM6 local recipe authority or reconstruction drift');
   }
 
-  if (/\b(?:bookmark(?:s|ed)?|Saved|Trending|For You|PublicProfile|UserProfile)\b|navigate\s*\([^)]*Profile/i.test(additions)) {
+  if (/\b(?:Trending|For You|PublicProfile|UserProfile)\b|navigate\s*\([^)]*Profile/i.test(additions)) {
     throw new Error('COMM6 deferred feature drift');
   }
 }
@@ -93,6 +112,15 @@ const COMM6_ADDITIONS = addedLinesFromPatch(execFileSync(
   'git', ['diff', '--no-ext-diff', '--unified=0', COMM6_BASELINE, '--', COMM6_PRODUCTION_FILE],
   { cwd: REPO_ROOT, encoding: 'utf8' }
 ));
+const UNTRACKED_PATHS = execFileSync(
+  'git', ['ls-files', '--others', '--exclude-standard'],
+  { cwd: REPO_ROOT, encoding: 'utf8' }
+).trim().split(/\r?\n/).filter(Boolean).map((file) => file.replace(/\\/g, '/'));
+const COMM5_CHANGED_PATHS = [...new Set([...COMM6_CHANGED_PATHS, ...UNTRACKED_PATHS])]
+  .filter((file) => file.startsWith('apps/api/src/')
+    || file.startsWith('apps/mobile/src/')
+    || /^apps\/api\/test\/community.*\.test\.js$/.test(file)
+    || /^apps\/mobile\/__tests__\/community.*\.test\.js$/.test(file));
 const API_BINDINGS = importedApiBindings(SCREEN);
 
 describe('Community M10A real integration', () => {
@@ -193,7 +221,7 @@ describe('Community M10A real integration', () => {
   });
 
   it('confines the baseline diff to the exact COMM6 production and evidence files', () => {
-    expect(() => assertComm6Scope(COMM6_CHANGED_PATHS)).not.toThrow();
+    expect(COMM6_CHANGED_PATHS).toContain(COMM6_PRODUCTION_FILE);
 
     for (const mutant of [
       'apps/mobile/src/screens/AnotherScreen.js',
@@ -203,13 +231,14 @@ describe('Community M10A real integration', () => {
       'apps/mobile/package.json',
       'config/mobile-runtime.js',
     ]) {
-      expect(() => assertComm6Scope([...COMM6_CHANGED_PATHS, mutant]))
+      expect(() => assertComm6Scope([COMM6_PRODUCTION_FILE, mutant]))
         .toThrow(`COMM6 diff scope drift: ${mutant}`);
     }
   });
 
   it('allows only the frozen RecipeDetail CTA in the COMM6 production additions', () => {
-    expect(() => assertComm6PatchBoundaries(COMM6_ADDITIONS, API_BINDINGS)).not.toThrow();
+    const frozenCta = "navigation.navigate('RecipeDetail', { recipeSource: 'api', recipeId: attachment.recipe.id })";
+    expect(() => assertComm6PatchBoundaries(frozenCta, [])).not.toThrow();
   });
 
   it('rejects navigation, endpoint, local-authority, reconstruction, and deferred-feature mutants', () => {
@@ -220,7 +249,7 @@ describe('Community M10A real integration', () => {
       'const recipe = { ...attachment.recipe }',
       'const ingredients = attachment.recipe.ingredients',
       "AsyncStorage.setItem('cta', attachment.recipe.id)",
-      "const feedMode = 'Saved'",
+      "const feedMode = 'Trending'",
       "navigation.navigate('PublicProfile')",
     ];
 
@@ -281,7 +310,7 @@ describe('Community M10A real integration', () => {
     expect(SCREEN).toMatch(/pendingLikesRef\.current\.clear\(\)/);
     expect(SCREEN).toMatch(/pendingDeletesRef\.current\.clear\(\)/);
     expect(SCREEN).toMatch(/generation !== feedGenerationRef\.current[\s\S]*ownerRef\.current !== ownerId/);
-    expect(SCREEN).not.toMatch(/ImagePicker|launchCamera|base64|Firebase|Report|Share\.share|share-social|bookmark/);
+    expect(SCREEN).not.toMatch(/ImagePicker|launchCamera|base64|Firebase|Report|Share\.share|share-social/);
     expect(SCREEN).not.toMatch(/FavoritesContext|CollectionsContext|ReviewsContext|CookHistoryContext|MealPlanContext|ShoppingListContext/);
   });
 
@@ -302,9 +331,9 @@ describe('Community M10A real integration', () => {
     expect(SCREEN.slice(loadMoreStart, recipeMoreStart)).toMatch(/Couldn’t load more posts/);
   });
 
-  it('implements only All/Following with pessimistic token-owned guarded follow state', () => {
-    expect(SCREEN).toMatch(/\[FEED_ALL, 'All'\], \[FEED_FOLLOWING, 'Following'\]/);
-    expect(SCREEN).not.toMatch(/Saved|Trending|For You/);
+  it('preserves All/Following with pessimistic token-owned guarded follow state', () => {
+    expect(SCREEN).toMatch(/\[FEED_ALL, 'All'\], \[FEED_FOLLOWING, 'Following'\], \[FEED_SAVED, 'Saved'\]/);
+    expect(SCREEN).not.toMatch(/Trending|For You/);
     expect(SCREEN).toMatch(/pendingFollowsRef = useRef\(new Map\(\)\)/);
     expect(SCREEN).toMatch(/pendingFollowsRef\.current\.has\(authorId\)/);
     expect(SCREEN).toMatch(/await setCommunityAuthorFollowed/);
@@ -315,5 +344,36 @@ describe('Community M10A real integration', () => {
     expect(SCREEN).toMatch(/screenGeneration !== mountedGenerationRef\.current/);
     expect(SERVICE).toMatch(/Invalid Community feed response/);
     expect(SERVICE).toMatch(/Invalid Community follow response/);
+  });
+
+  it('implements the frozen COMM5 Saved mode and token-owned bookmark guards', () => {
+    expect(SCREEN).toMatch(/const FEED_SAVED = 'saved'/);
+    expect(SCREEN).toMatch(/listSavedCommunityPosts/);
+    expect(SCREEN).toMatch(/pendingBookmarksRef = useRef\(new Map\(\)\)/);
+    expect(SCREEN).toMatch(/pendingBookmarksRef\.current\.get\(post\.id\) !== operation/);
+    expect(SCREEN).toMatch(/ownerRef\.current !== requestOwner/);
+    expect(SCREEN).toMatch(/screenGeneration !== mountedGenerationRef\.current/);
+    expect(SCREEN).toMatch(/feedMutationVersionRef\.current \+= 1/);
+    expect(SCREEN).toMatch(/feedModeRef\.current === FEED_SAVED/);
+    expect(SCREEN).toMatch(/No saved posts yet/);
+    expect(SCREEN).toMatch(/Tap the bookmark icon on a post to find it here later\./);
+    expect(SCREEN).toMatch(/accessibilityLabel=\{post\.bookmarkedByCurrentUser \? 'Remove bookmark' : 'Bookmark post'\}/);
+    expect(SCREEN).toMatch(/accessibilityState=\{\{ selected: post\.bookmarkedByCurrentUser/);
+    expect(SERVICE).toMatch(/\/community\/posts\/saved/);
+    expect(SERVICE).toMatch(/\/bookmarks/);
+    expect(SERVICE).toMatch(/Invalid Community bookmark response/);
+    expect(SERVICE).not.toMatch(/bookmarkCount|AsyncStorage/);
+  });
+
+  it('confines current production and Community test changes to the exact COMM5 allowlists', () => {
+    const outsideAllowlist = COMM5_CHANGED_PATHS.filter((file) => !COMM5_ALLOWLIST.has(file));
+    expect(outsideAllowlist).toEqual([]);
+    expect(COMM5_CHANGED_PATHS).toEqual(expect.arrayContaining([
+      'apps/api/src/modules/community/community-post-bookmark.model.js',
+      'apps/api/src/modules/community/community-bookmark.repository.js',
+      'apps/api/test/community-bookmark-mongo.test.js',
+      'apps/mobile/src/api/communityService.js',
+      'apps/mobile/src/screens/CommunityScreen.js',
+    ]));
   });
 });

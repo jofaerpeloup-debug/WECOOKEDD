@@ -4,6 +4,7 @@ const { api } = require('../src/api/client');
 const {
   listCommunityPosts,
   listFollowingCommunityPosts,
+  listSavedCommunityPosts,
   createCommunityPost,
   createCommunityComment,
   deleteCommunityComment,
@@ -11,6 +12,7 @@ const {
   listCommunityComments,
   setCommunityPostLiked,
   setCommunityAuthorFollowed,
+  setCommunityPostBookmarked,
 } = require('../src/api/communityService');
 
 beforeEach(() => jest.clearAllMocks());
@@ -38,6 +40,7 @@ function publicPost(overrides = {}) {
     commentCount: 0,
     isOwner: false,
     isFollowingAuthor: false,
+    bookmarkedByCurrentUser: false,
     ...overrides,
   };
 }
@@ -56,6 +59,14 @@ it('uses the exact Following endpoint with the same strict page/limit allowlist'
   await expect(listFollowingCommunityPosts({ page: 1, limit: 20, actor: 'never-send' }))
     .resolves.toEqual(response);
   expect(api.get).toHaveBeenCalledWith('/community/posts/following', { query: { page: 1, limit: 20 } });
+});
+
+it('uses the exact Saved endpoint with the same strict page/limit allowlist', async () => {
+  const response = { posts: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 } };
+  api.get.mockResolvedValue(response);
+  await expect(listSavedCommunityPosts({ page: 1, limit: 20, userId: 'never-send' }))
+    .resolves.toEqual(response);
+  expect(api.get).toHaveBeenCalledWith('/community/posts/saved', { query: { page: 1, limit: 20 } });
 });
 
 it('uses encoded bodyless follow routes and requires the authoritative Boolean', async () => {
@@ -82,6 +93,8 @@ it.each([
   {},
   { posts: [], pagination: { page: 1 } },
   { posts: [publicPost({ isFollowingAuthor: undefined })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+  { posts: [publicPost({ bookmarkedByCurrentUser: undefined })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+  { posts: [publicPost({ bookmarkedByCurrentUser: 'yes' })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
   { posts: [publicPost({ author: { id: 'u1', name: 'User', avatarUrl: null, email: 'private' } })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
   { posts: [publicPost({ followerCount: 4 })], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
   { posts: [], pagination: { page: 2, limit: 20, total: 0, totalPages: 0 } },
@@ -124,6 +137,28 @@ it('uses idempotent POST-like and DELETE-unlike state routes', async () => {
   await expect(setCommunityPostLiked('p1', false)).resolves.toEqual({ liked: false, likeCount: 3 });
   expect(api.post).toHaveBeenCalledWith('/community/posts/p1/likes');
   expect(api.del).toHaveBeenCalledWith('/community/posts/p1/likes');
+});
+
+it('uses encoded bodyless bookmark routes and requires the requested authoritative Boolean', async () => {
+  api.post.mockResolvedValue({ bookmarked: true });
+  api.del.mockResolvedValue({ bookmarked: false });
+  await expect(setCommunityPostBookmarked('post/id', true)).resolves.toEqual({ bookmarked: true });
+  await expect(setCommunityPostBookmarked('post/id', false)).resolves.toEqual({ bookmarked: false });
+  expect(api.post).toHaveBeenCalledWith('/community/posts/post%2Fid/bookmarks');
+  expect(api.del).toHaveBeenCalledWith('/community/posts/post%2Fid/bookmarks');
+});
+
+it.each([
+  null,
+  {},
+  { bookmarked: 'yes' },
+  { bookmarked: false },
+  { bookmarked: true, userId: 'u1' },
+  { bookmarked: true, bookmarkCount: 1 },
+])('rejects malformed or contradictory successful bookmark responses', async (response) => {
+  api.post.mockResolvedValue(response);
+  await expect(setCommunityPostBookmarked('p1', true))
+    .rejects.toThrow('Invalid Community bookmark response.');
 });
 
 it('propagates create, like, and delete failures without fabricating success', async () => {

@@ -13,6 +13,7 @@ function toPublicCommunityPost({
   commentCount,
   isOwner,
   isFollowingAuthor,
+  bookmarkedByCurrentUser,
 }) {
   return {
     id: String(post._id),
@@ -36,6 +37,7 @@ function toPublicCommunityPost({
     commentCount,
     isOwner,
     isFollowingAuthor: isFollowingAuthor === true,
+    bookmarkedByCurrentUser: bookmarkedByCurrentUser === true,
   };
 }
 

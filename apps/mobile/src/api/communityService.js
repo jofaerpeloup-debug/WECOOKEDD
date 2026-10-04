@@ -8,6 +8,7 @@ const LIST_PARAM_KEYS = ['page', 'limit'];
 const INVALID_COMMENT_RESPONSE = 'Invalid Community comment response.';
 const INVALID_FEED_RESPONSE = 'Invalid Community feed response.';
 const INVALID_FOLLOW_RESPONSE = 'Invalid Community follow response.';
+const INVALID_BOOKMARK_RESPONSE = 'Invalid Community bookmark response.';
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -48,6 +49,7 @@ function isPublicPost(post) {
   return hasExactKeys(post, [
     'id', 'caption', 'createdAt', 'author', 'recipeAttachment', 'likeCount',
     'likedByCurrentUser', 'commentCount', 'isOwner', 'isFollowingAuthor',
+    'bookmarkedByCurrentUser',
   ])
     && isNonEmptyString(post.id)
     && isNonEmptyString(post.caption)
@@ -60,7 +62,8 @@ function isPublicPost(post) {
     && typeof post.likedByCurrentUser === 'boolean'
     && Number.isInteger(post.commentCount) && post.commentCount >= 0
     && typeof post.isOwner === 'boolean'
-    && typeof post.isFollowingAuthor === 'boolean';
+    && typeof post.isFollowingAuthor === 'boolean'
+    && typeof post.bookmarkedByCurrentUser === 'boolean';
 }
 
 function isPublicComment(comment) {
@@ -134,6 +137,10 @@ export function listFollowingCommunityPosts(params = {}) {
   return listPostsAt('/community/posts/following', params);
 }
 
+export function listSavedCommunityPosts(params = {}) {
+  return listPostsAt('/community/posts/saved', params);
+}
+
 export function setCommunityAuthorFollowed(userId, following) {
   const path = `/community/users/${encodeURIComponent(userId)}/follow`;
   const request = following ? api.post(path) : api.del(path);
@@ -172,6 +179,16 @@ export function setCommunityPostLiked(postId, liked) {
       || data.liked !== liked
       || !Number.isInteger(data.likeCount)
       || data.likeCount < 0) throw new Error(INVALID_FEED_RESPONSE);
+    return data;
+  });
+}
+
+export function setCommunityPostBookmarked(postId, bookmarked) {
+  const path = `/community/posts/${encodeURIComponent(postId)}/bookmarks`;
+  return (bookmarked ? api.post(path) : api.del(path)).then((data) => {
+    if (!hasExactKeys(data, ['bookmarked']) || data.bookmarked !== bookmarked) {
+      throw new Error(INVALID_BOOKMARK_RESPONSE);
+    }
     return data;
   });
 }

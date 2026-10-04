@@ -33,6 +33,15 @@ const listFollowingPosts = asyncHandler(async (req, res) => {
   });
 });
 
+const listSavedPosts = asyncHandler(async (req, res) => {
+  const { page, limit } = req.validated.query;
+  const result = await communityService.listSavedPosts({ viewerId: req.auth.userId, page, limit });
+  sendSuccess(res, {
+    posts: result.items.map(toPublicCommunityPost),
+    pagination: toPagination({ page, limit, total: result.total }),
+  });
+});
+
 const followUser = asyncHandler(async (req, res) => {
   sendSuccess(res, await communityService.followUser(req.auth.userId, req.params.userId));
 });
@@ -59,6 +68,14 @@ const likePost = asyncHandler(async (req, res) => {
 const unlikePost = asyncHandler(async (req, res) => {
   const state = await communityService.unlikePost(req.auth.userId, req.params.postId);
   sendSuccess(res, state);
+});
+
+const bookmarkPost = asyncHandler(async (req, res) => {
+  sendSuccess(res, await communityService.bookmarkPost(req.auth.userId, req.params.postId));
+});
+
+const unbookmarkPost = asyncHandler(async (req, res) => {
+  sendSuccess(res, await communityService.unbookmarkPost(req.auth.userId, req.params.postId));
 });
 
 const listComments = asyncHandler(async (req, res) => {
@@ -96,12 +113,15 @@ const deleteComment = asyncHandler(async (req, res) => {
 module.exports = {
   listPosts,
   listFollowingPosts,
+  listSavedPosts,
   followUser,
   unfollowUser,
   createPost,
   deletePost,
   likePost,
   unlikePost,
+  bookmarkPost,
+  unbookmarkPost,
   listComments,
   createComment,
   deleteComment,

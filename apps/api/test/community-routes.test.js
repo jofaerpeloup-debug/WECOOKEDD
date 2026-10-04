@@ -17,6 +17,7 @@ const communityRepository = require('../src/modules/community/community.reposito
 const communityLikeRepository = require('../src/modules/community/community-like.repository');
 const communityCommentRepository = require('../src/modules/community/community-comment.repository');
 const communityFollowRepository = require('../src/modules/community/community-follow.repository');
+const communityBookmarkRepository = require('../src/modules/community/community-bookmark.repository');
 const { signAccessToken } = require('../src/shared/security/access-token');
 
 const app = createApp();
@@ -116,10 +117,12 @@ function mockEmptyLikeMetadata(t) {
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
   t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
   t.mock.method(communityFollowRepository, 'findFollowedUserIdsAmong', async () => []);
+  t.mock.method(communityBookmarkRepository, 'findBookmarkedPostIdsAmong', async () => []);
 }
 
 function mockNoFollowMetadata(t) {
   t.mock.method(communityFollowRepository, 'findFollowedUserIdsAmong', async () => []);
+  t.mock.method(communityBookmarkRepository, 'findBookmarkedPostIdsAmong', async () => []);
 }
 
 function mockAuthDirectory(t, resolveUser) {
@@ -160,8 +163,20 @@ test('all Community routes reject unauthenticated requests', async () => {
     request(app).get('/api/v1/community/posts/following'),
     request(app).post(`/api/v1/community/users/${USER_B}/follow`),
     request(app).delete(`/api/v1/community/users/${USER_B}/follow`),
+    request(app).get('/api/v1/community/posts/saved'),
+    request(app).post(`/api/v1/community/posts/${POST_A}/bookmarks`),
+    request(app).delete(`/api/v1/community/posts/${POST_A}/bookmarks`),
   ]);
   responses.forEach((response) => assert.equal(response.status, 401));
+});
+
+test('bookmark authentication runs before malformed path, body, and query validation', async () => {
+  const response = await request(app)
+    .post('/api/v1/community/posts/not-an-object-id/bookmarks?actor=forbidden')
+    .send({ userId: USER_B, bookmarked: true });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_TOKEN_MISSING');
 });
 
 test('authenticated text-only create trims edges, preserves line breaks, and derives author', async (t) => {
@@ -495,6 +510,7 @@ test('a post with an unavailable recipe remains likeable and owner-deletable wit
     return { deletedCount: 1 };
   });
   t.mock.method(communityCommentRepository, 'deleteByPostId', async () => ({ deletedCount: 0 }));
+  t.mock.method(communityBookmarkRepository, 'deleteByPostId', async () => ({ deletedCount: 0 }));
 
   const feed = await request(app).get('/api/v1/community/posts').set('Authorization', auth);
   const like = await request(app).post(`/api/v1/community/posts/${POST_A}/likes`).set('Authorization', auth);
@@ -630,6 +646,7 @@ test('Following feed intersects existing targets, paginates exactly, and bulk-re
   t.mock.method(communityRepository, 'countPostsByAuthorIds', async () => 3);
   t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
   t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
+  t.mock.method(communityBookmarkRepository, 'findBookmarkedPostIdsAmong', async () => []);
 
   const response = await request(app).get('/api/v1/community/posts/following?page=2&limit=2')
     .set('Authorization', auth);
@@ -642,7 +659,7 @@ test('Following feed intersects existing targets, paginates exactly, and bulk-re
     id: USER_B, name: 'User B', avatarUrl: 'https://example.com/b.jpg',
   });
   assert.deepEqual(Object.keys(response.body.data.posts[0]).sort(), [
-    'author', 'caption', 'commentCount', 'createdAt', 'id', 'isFollowingAuthor',
+    'author', 'bookmarkedByCurrentUser', 'caption', 'commentCount', 'createdAt', 'id', 'isFollowingAuthor',
     'isOwner', 'likeCount', 'likedByCurrentUser', 'recipeAttachment',
   ].sort());
   assert.equal(JSON.stringify(response.body).includes('private@example.com'), false);
@@ -680,9 +697,14 @@ test('owner delete scopes ownership and removes likes without touching recipe', 
     return { deletedCount: 2 };
   });
   let commentCleanupId;
+  let bookmarkCleanupId;
   t.mock.method(communityCommentRepository, 'deleteByPostId', async (id) => {
     commentCleanupId = String(id);
     return { deletedCount: 3 };
+  });
+  t.mock.method(communityBookmarkRepository, 'deleteByPostId', async (id) => {
+    bookmarkCleanupId = String(id);
+    return { deletedCount: 4 };
   });
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => {
     recipeLookup = true;
@@ -696,6 +718,7 @@ test('owner delete scopes ownership and removes likes without touching recipe', 
   assert.deepEqual(deleteArgs, [POST_A, USER_A]);
   assert.equal(cleanupId, POST_A);
   assert.equal(commentCleanupId, POST_A);
+  assert.equal(bookmarkCleanupId, POST_A);
   assert.equal(recipeLookup, false);
 });
 
@@ -748,6 +771,7 @@ test('delete preserves unrelated posts and gives a non-owner the same result as 
     }
     return { deletedCount };
   });
+  t.mock.method(communityBookmarkRepository, 'deleteByPostId', async () => ({ deletedCount: 1 }));
 
   const forbidden = await request(app).delete(`/api/v1/community/posts/${POST_A}`).set('Authorization', auth[USER_B]);
   const missing = await request(app).delete(`/api/v1/community/posts/${POST_C}`).set('Authorization', auth[USER_B]);
@@ -1057,4 +1081,123 @@ test('comment routes strictly validate ids, page bounds, and body fields', async
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'VALIDATION_ERROR');
   }
+});
+
+test('bookmark and unbookmark derive the owner from authentication and are idempotent', async (t) => {
+  const auth = mockAuth(t);
+  const relations = new Set();
+  let created;
+  t.mock.method(communityRepository, 'findById', async () => fakePost());
+  t.mock.method(communityBookmarkRepository, 'createBookmark', async (relation) => {
+    created = relation;
+    const key = `${relation.userId}:${relation.postId}`;
+    if (relations.has(key)) {
+      const error = new Error('duplicate');
+      error.code = 11000;
+      throw error;
+    }
+    relations.add(key);
+    return relation;
+  });
+  t.mock.method(communityBookmarkRepository, 'deleteByPostAndUser', async (postId, userId) => {
+    relations.delete(`${userId}:${postId}`);
+  });
+
+  const save = () => request(app).post(`/api/v1/community/posts/${POST_A}/bookmarks`)
+    .set('Authorization', auth);
+  assert.deepEqual((await save()).body.data, { bookmarked: true });
+  assert.deepEqual((await save()).body.data, { bookmarked: true });
+  assert.deepEqual(created, { postId: POST_A, userId: USER_A });
+  const remove = () => request(app).delete(`/api/v1/community/posts/${POST_A}/bookmarks`)
+    .set('Authorization', auth);
+  assert.deepEqual((await remove()).body.data, { bookmarked: false });
+  assert.deepEqual((await remove()).body.data, { bookmarked: false });
+});
+
+test('unbookmark stays idempotent after the target post disappears', async (t) => {
+  const auth = mockAuth(t);
+  let deleteArgs;
+  t.mock.method(communityRepository, 'findById', async () => {
+    assert.fail('DELETE bookmark must not require the target post to exist');
+  });
+  t.mock.method(communityBookmarkRepository, 'deleteByPostAndUser', async (...args) => {
+    deleteArgs = args;
+    return null;
+  });
+
+  const response = await request(app).delete(`/api/v1/community/posts/${POST_A}/bookmarks`)
+    .set('Authorization', auth);
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data, { bookmarked: false });
+  assert.deepEqual(deleteArgs, [POST_A, USER_A]);
+});
+
+test('bookmark returns safe not-found and removes a relation when post deletion wins', async (t) => {
+  const auth = mockAuth(t);
+  let reads = 0;
+  let cleanup;
+  t.mock.method(communityRepository, 'findById', async () => (++reads === 1 ? fakePost() : null));
+  t.mock.method(communityBookmarkRepository, 'createBookmark', async (relation) => relation);
+  t.mock.method(communityBookmarkRepository, 'deleteByPostAndUser', async (...args) => { cleanup = args; });
+  const response = await request(app).post(`/api/v1/community/posts/${POST_A}/bookmarks`)
+    .set('Authorization', auth);
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error.code, 'COMMUNITY_POST_NOT_FOUND');
+  assert.deepEqual(cleanup, [POST_A, USER_A]);
+});
+
+test('bookmark routes strictly reject malformed ids and non-empty body or query', async (t) => {
+  const auth = mockAuth(t);
+  const responses = await Promise.all([
+    request(app).post('/api/v1/community/posts/not-an-id/bookmarks').set('Authorization', auth),
+    request(app).post(`/api/v1/community/posts/${POST_A}/bookmarks`).set('Authorization', auth).send({ userId: USER_B }),
+    request(app).post(`/api/v1/community/posts/${POST_A}/bookmarks?bookmarked=true`).set('Authorization', auth),
+    request(app).delete(`/api/v1/community/posts/${POST_A}/bookmarks`).set('Authorization', auth).send({ relationId: POST_B }),
+    request(app).delete(`/api/v1/community/posts/${POST_A}/bookmarks?actor=${USER_B}`).set('Authorization', auth),
+  ]);
+  responses.forEach((response) => {
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  });
+});
+
+test('Saved feed is viewer-scoped, post-ordered, exact, and bulk-resolves bookmark metadata', async (t) => {
+  const auth = mockAuth(t);
+  const posts = [
+    fakePost({ _id: POST_B, authorId: USER_B, recipeId: RECIPE_ID }),
+    fakePost({ _id: POST_A }),
+  ];
+  let savedArgs;
+  let metadataCalls = 0;
+  t.mock.method(communityBookmarkRepository, 'findSavedPosts', async (viewerId, args) => {
+    savedArgs = { viewerId: String(viewerId), args };
+    return { posts, total: 3 };
+  });
+  t.mock.method(communityBookmarkRepository, 'findBookmarkedPostIdsAmong', async (viewerId, postIds) => {
+    metadataCalls += 1;
+    assert.equal(String(viewerId), USER_A);
+    assert.deepEqual(postIds.map(String), [POST_B, POST_A]);
+    return [POST_B, POST_A];
+  });
+  mockPublicAuthors(t, [{ _id: USER_A, name: 'User A' }]);
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => null);
+  t.mock.method(communityLikeRepository, 'getMetadataForPosts', async () => []);
+  t.mock.method(communityCommentRepository, 'getCountsForPosts', async () => []);
+  t.mock.method(communityFollowRepository, 'findFollowedUserIdsAmong', async () => []);
+
+  const response = await request(app).get('/api/v1/community/posts/saved?page=2&limit=2')
+    .set('Authorization', auth);
+  assert.equal(response.status, 200);
+  assert.deepEqual(savedArgs, { viewerId: USER_A, args: { skip: 2, limit: 2 } });
+  assert.equal(metadataCalls, 1);
+  assert.deepEqual(response.body.data.pagination, { page: 2, limit: 2, total: 3, totalPages: 2 });
+  assert.deepEqual(response.body.data.posts.map((post) => post.id), [POST_B, POST_A]);
+  assert.deepEqual(response.body.data.posts.map((post) => post.bookmarkedByCurrentUser), [true, true]);
+  assert.deepEqual(response.body.data.posts[0].recipeAttachment, { isAvailable: false, recipe: null });
+  assert.deepEqual(Object.keys(response.body.data.posts[0]).sort(), [
+    'author', 'bookmarkedByCurrentUser', 'caption', 'commentCount', 'createdAt', 'id',
+    'isFollowingAuthor', 'isOwner', 'likeCount', 'likedByCurrentUser', 'recipeAttachment',
+  ].sort());
+  assert.equal(JSON.stringify(response.body).includes('bookmarkId'), false);
+  assert.equal(JSON.stringify(response.body).includes('bookmarkCount'), false);
 });
