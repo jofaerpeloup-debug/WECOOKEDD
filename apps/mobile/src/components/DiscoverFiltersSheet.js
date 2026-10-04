@@ -1,21 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
+  BackHandler,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { radius, spacing, typography } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
-import { DISCOVER_SORT_OPTIONS } from '../api/recipeOptions';
 import { searchIngredientsStrict } from '../api/ingredientService';
 import { getIngredientErrorMessage } from '../api/ingredientErrors';
 import {
@@ -60,7 +55,6 @@ function ChoiceGroup({ label, options, value, onChange, styles }) {
 export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel, onApply }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState(() => draftFromFilters(appliedFilters));
   const [prepError, setPrepError] = useState(null);
   const [ingredientQuery, setIngredientQuery] = useState('');
@@ -71,6 +65,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
   const [ingredientSearchAttempt, setIngredientSearchAttempt] = useState(0);
   const mountedRef = useRef(true);
   const ingredientSearchGenRef = useRef(0);
+  const wasVisibleRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -81,6 +76,10 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
   }, []);
 
   useEffect(() => {
+    const wasVisible = wasVisibleRef.current;
+    wasVisibleRef.current = visible;
+    if (wasVisible === visible) return;
+
     ingredientSearchGenRef.current += 1;
     setIngredientQuery('');
     setIngredientResults([]);
@@ -90,6 +89,15 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
     if (!visible) return;
     setDraft(draftFromFilters(appliedFilters));
     setPrepError(null);
+  }, [visible, appliedFilters]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      cancel();
+      return true;
+    });
+    return () => subscription.remove();
   }, [visible, appliedFilters]);
 
   const trimmedIngredientQuery = ingredientQuery.trim();
@@ -182,36 +190,19 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
     setPrepError(result.prepError);
     if (!result.filters) return;
     clearIngredientSearch();
-    onApply(result.filters);
+    onApply({ ...result.filters, sort: appliedFilters.sort });
   };
 
   const reset = () => {
     clearIngredientSearch();
-    setDraft((current) => draftFromFilters({ sort: current.sort }));
+    setDraft(draftFromFilters({ sort: appliedFilters.sort }));
     setPrepError(null);
   };
 
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={cancel}
-      statusBarTranslucent
-      accessibilityViewIsModal
-    >
-      <View style={styles.backdrop}>
-        <Pressable
-          style={styles.backdropFill}
-          onPress={cancel}
-          accessibilityRole="button"
-          accessibilityLabel="Close recipe filters"
-        />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.keyboardArea}
-        >
-          <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+          <View style={styles.panel} accessibilityLabel="Recipe filters">
             <View style={styles.header}>
               <View>
                 <Text style={styles.title} accessibilityRole="header">
@@ -230,11 +221,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
               </Pressable>
             </View>
 
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.content}
-            >
+            <View style={styles.content}>
               <ChoiceGroup
                 label="Region"
                 options={REGION_OPTIONS}
@@ -391,14 +378,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
                 )}
               </View>
 
-              <ChoiceGroup
-                label="Sort"
-                options={DISCOVER_SORT_OPTIONS}
-                value={draft.sort}
-                onChange={(sort) => setDraft((current) => ({ ...current, sort }))}
-                styles={styles}
-              />
-            </ScrollView>
+            </View>
 
             <View style={styles.actions}>
               <Pressable
@@ -419,24 +399,18 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
               </Pressable>
             </View>
           </View>
-        </KeyboardAvoidingView>
-      </View>
-    </Modal>
   );
 }
 
 function makeStyles(colors) {
   return StyleSheet.create({
-    backdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
-    backdropFill: { ...StyleSheet.absoluteFill },
-    keyboardArea: { width: '100%', maxHeight: '92%' },
-    sheet: {
-      maxHeight: '100%',
-      backgroundColor: colors.cream,
-      borderTopLeftRadius: radius.xl,
-      borderTopRightRadius: radius.xl,
-      paddingHorizontal: spacing.xl,
-      paddingTop: spacing.lg,
+    panel: {
+      marginTop: spacing.md,
+      padding: spacing.lg,
+      backgroundColor: colors.paper,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.lg,
     },
     header: {
       flexDirection: 'row',

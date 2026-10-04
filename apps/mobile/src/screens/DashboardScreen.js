@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useSearchHistory } from '../context/SearchHistoryContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
@@ -20,7 +21,6 @@ import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 import { shouldBlockRecipeFailure } from '../utils/recipeFreshnessState';
-import { loadJSON, saveJSON } from '../utils/storage';
 import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 
 // M2.1 — teammate Dashboard/Home visual port on top of our real data + routes.
@@ -61,18 +61,13 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 //   - the notifications bell stays the shared TopBar affordance (a real
 //     notifications feed is M9).
 //
-// Recent searches are device-local only (an allowed M2 decision): hydrated once
-// from the shared `utils/storage` helper and written back by a single effect on
-// every change (add / bump-to-front / clear). Never through auth/token storage.
-// The chips show whenever history exists — including while a search is active —
-// so a just-submitted query is visible immediately.
+// Recent searches come from the shared account-scoped SearchHistory provider.
+// The provider alone owns device-local hydration, normalization, persistence,
+// account switching, and clear behavior; Dashboard only expresses user intent.
 
 const SEARCH_DEBOUNCE_MS = 300;
 const LATEST_LIMIT = 8;
 const SEARCH_LIMIT = 20;
-
-const RECENT_SEARCH_KEY = 'wecooked:recentSearches';
-const RECENT_SEARCH_MAX = 6;
 
 // Each shortcut maps to an EXACT backend-supported Discover filter key
 // (see api/recipeOptions.js DISCOVER_FILTERS). No cuisine entry — `cuisine`
@@ -115,6 +110,7 @@ export default function DashboardScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const { user } = useAuth();
+  const { recentSearches: recent, recordSearch, clearSearchHistory } = useSearchHistory();
 
   const firstName = firstNameOf(user);
   const greeting = greetingForNow();
@@ -132,65 +128,17 @@ export default function DashboardScreen({ navigation }) {
   const [searchError, setSearchError] = useState(null);
   const [searchNonce, setSearchNonce] = useState(0);
 
-  const [recent, setRecent] = useState([]);
-
   // Monotonic request generations — a slower earlier response is discarded once
   // a newer request (query change / retry / unmount) supersedes it.
   const mountedRef = useRef(true);
   const latestGenRef = useRef(0);
   const searchGenRef = useRef(0);
-  // Gates the persist effect below so the initial hydrate never writes the
-  // empty seed over stored history.
-  const recentHydratedRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
-  }, []);
-
-  // Recent searches — device-local convenience only. Hydrate once from the
-  // shared storage helper; a separate effect (below) is the ONLY writer, so
-  // every mutation — add, bump, clear — persists the same way.
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const stored = await loadJSON(RECENT_SEARCH_KEY, []);
-      if (!active || !mountedRef.current) return;
-      if (Array.isArray(stored)) {
-        setRecent(stored.filter((v) => typeof v === 'string').slice(0, RECENT_SEARCH_MAX));
-      }
-      recentHydratedRef.current = true;
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Single writer. Runs after every `recent` change once hydration is done.
-  useEffect(() => {
-    if (!recentHydratedRef.current) return;
-    saveJSON(RECENT_SEARCH_KEY, recent);
-  }, [recent]);
-
-  const rememberSearch = useCallback((raw) => {
-    const value = String(raw || '').trim();
-    if (!value) return;
-    setRecent((prev) => {
-      const next = [
-        value,
-        ...prev.filter((v) => v.toLowerCase() !== value.toLowerCase()),
-      ].slice(0, RECENT_SEARCH_MAX);
-      // Same list, same order -> return the previous reference so React bails
-      // and the persist effect does not re-fire.
-      const unchanged = next.length === prev.length && next.every((v, i) => v === prev[i]);
-      return unchanged ? prev : next;
-    });
-  }, []);
-
-  const clearRecent = useCallback(() => {
-    setRecent([]);
   }, []);
 
   const loadLatest = useCallback(async () => {
@@ -257,7 +205,7 @@ export default function DashboardScreen({ navigation }) {
   const openRecipe = (recipe) => {
     // Opening a result means that query mattered — record it even if the user
     // never pressed the keyboard's search key.
-    if (searching) rememberSearch(trimmed);
+    if (searching) recordSearch(trimmed);
     navigation.navigate('RecipeDetail', {
       recipeSource: 'api',
       recipeId: recipe.id,
@@ -377,7 +325,7 @@ export default function DashboardScreen({ navigation }) {
               placeholderTextColor={colors.inkFaint}
               value={query}
               onChangeText={setQuery}
-              onSubmitEditing={() => rememberSearch(trimmed)}
+              onSubmitEditing={() => recordSearch(trimmed)}
               accessibilityLabel="Search recipes"
               autoCapitalize="none"
               autoComplete="off"
@@ -409,7 +357,12 @@ export default function DashboardScreen({ navigation }) {
           <View style={styles.recentWrap}>
             <View style={styles.recentHead}>
               <Text style={styles.eyebrow}>Recent searches</Text>
-              <Pressable hitSlop={8} onPress={clearRecent}>
+              <Pressable
+                hitSlop={8}
+                onPress={clearSearchHistory}
+                accessibilityRole="button"
+                accessibilityLabel="Clear recent searches"
+              >
                 <Text style={styles.linkText}>Clear</Text>
               </Pressable>
             </View>
@@ -420,7 +373,7 @@ export default function DashboardScreen({ navigation }) {
                   style={styles.recentChip}
                   onPress={() => {
                     setQuery(term);
-                    rememberSearch(term);
+                    recordSearch(term);
                   }}
                 >
                   <Ionicons name="time-outline" size={12} color={colors.inkFaint} />
