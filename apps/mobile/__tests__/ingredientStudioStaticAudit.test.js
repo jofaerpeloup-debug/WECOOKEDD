@@ -119,7 +119,7 @@ const extractSearchEffect = () => extractUniqueBalanced(code, {
   anchor: 'useEffect(function loadIngredientCatalog()',
   opening: '(',
   label: 'ingredient search effect',
-  expectedEnd: /,\s*\[query, searchNonce\]\)$/,
+  expectedEnd: /,\s*\[accountStateIsCurrent, authUserId, query, searchNonce\]\)$/,
   after: /^\s*;/,
 });
 
@@ -127,7 +127,7 @@ const extractSubstitutionEffect = () => extractUniqueBalanced(code, {
   anchor: 'useEffect(function loadSubstitutions()',
   opening: '(',
   label: 'substitution effect',
-  expectedEnd: /,\s*\[selected, substitutesNonce\]\)$/,
+  expectedEnd: /,\s*\[accountStateIsCurrent, authUserId, selected, substitutesNonce\]\)$/,
   after: /^\s*;/,
 });
 
@@ -245,11 +245,24 @@ describe('Ingredient Studio real catalog integration', () => {
     const effect = extractSearchEffect();
 
     expect(effect).toMatch(/const generation = \+\+searchGeneration\.current/);
-    expect(effect).toMatch(/searchIngredients\(\{\s*search: trimmed \|\| undefined,\s*limit: SEARCH_LIMIT/);
+    expect(effect).toMatch(/searchIngredientsStrict\(\{\s*search: trimmed \|\| undefined,\s*limit: SEARCH_LIMIT/);
     expect(effect).toMatch(/generation !== searchGeneration\.current/);
+    expect(effect).toMatch(/ownerId !== authOwnerRef\.current/);
     expect(effect).toMatch(/setIngredients\(result\.ingredients\)/);
+    expect(effect).toMatch(/setSelected\(result\.ingredients\[0\] \|\| null\)/);
+    expect(effect).toMatch(/setConfirmedEmptyQuery\(trimmed && result\.ingredients\.length === 0 \? trimmed : null\)/);
     expect(effect).toMatch(/setSearchError\(getIngredientErrorMessage\(err\)\)/);
     expect(effect).toMatch(/clearTimeout\(timer\)/);
+  });
+
+  it('exposes Assistant only for the current confirmed nonblank empty search', () => {
+    const component = extractComponent();
+    expect(component).toMatch(/confirmedEmptyQuery === query\.trim\(\) && query\.trim\(\)/);
+    expect(component).toMatch(/assistantHandoffRef\.current/);
+    expect(component).toMatch(/navigation\.navigate\('Assistant', \{\s*initialPrompt:/);
+    expect(component).toMatch(/searchLoading \|\|\s*searchError \|\|\s*selected/);
+    expect(component).toMatch(/setSelected\(null\)/);
+    expect(component).toMatch(/setConfirmedEmptyQuery\(null\)/);
   });
 
   it('keeps one source-tagged, freshness-guarded substitution lookup', () => {
@@ -259,6 +272,7 @@ describe('Ingredient Studio real catalog integration', () => {
     expect(effect).toMatch(/const generation = \+\+substitutesGeneration\.current/);
     expect(effect).toMatch(/getSubstitutesFor\(selected\.id\)/);
     expect(effect).toMatch(/generation === substitutesGeneration\.current/);
+    expect(effect).toMatch(/ownerId === authOwnerRef\.current/);
     expect(effect).toMatch(
       /sourceIngredientId: selected\.id,\s*substitutes: result\.substitutes,\s*loading: false,\s*error: null/
     );

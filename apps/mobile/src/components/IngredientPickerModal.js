@@ -19,6 +19,7 @@ import Button from './Button';
 import { searchIngredients } from '../api/ingredientService';
 import { getIngredientErrorMessage } from '../api/ingredientErrors';
 import { RECIPE_UNITS, unitLabel } from '../api/recipeOptions';
+import { useAuth } from '../context/AuthContext';
 
 // Manual "Add Item" to the Shopping List, using ONLY canonical backend
 // ingredients (GET /api/v1/ingredients) + the existing add-item contract.
@@ -31,6 +32,7 @@ import { RECIPE_UNITS, unitLabel } from '../api/recipeOptions';
 const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_LIMIT = 20;
 const TO_TASTE = 'toTaste';
+const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
 // Number-with-optional-decimal only. Returns a finite JS number > 0, or null.
 // The backend does NOT coerce strings, so the raw TextInput value must never
@@ -40,10 +42,18 @@ function parseQuantity(raw) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export default function IngredientPickerModal({ visible, onClose, onAdd }) {
+export default function IngredientPickerModal({
+  visible,
+  onClose: closeModal,
+  onAdd,
+  lockedIngredient = null,
+  onAdded,
+}) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
+  const { status: authStatus, user } = useAuth();
+  const authIdentity = authStatus === 'authenticated' && user?.id ? user.id : null;
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -61,6 +71,14 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
 
   const mountedRef = useRef(true);
   const searchGenRef = useRef(0);
+  const modalSessionRef = useRef(0);
+  const submitLockRef = useRef(null);
+  const onAddedRef = useRef(onAdded);
+  onAddedRef.current = onAdded;
+  const lockedId = typeof lockedIngredient?.id === 'string' ? lockedIngredient.id.trim() : '';
+  const lockedName = typeof lockedIngredient?.name === 'string' ? lockedIngredient.name.trim() : '';
+  const lockedMode = lockedIngredient != null;
+  const lockedIsValid = OBJECT_ID_RE.test(lockedId) && !!lockedName;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -72,6 +90,8 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
   // Fresh state on every open. Bumping the search generation abandons any
   // response still in flight from a previous session of the modal.
   useEffect(() => {
+    modalSessionRef.current += 1;
+    submitLockRef.current = null;
     if (!visible) return;
     searchGenRef.current += 1;
     setQuery('');
@@ -79,13 +99,13 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
     setTruncated(false);
     setSearchLoading(false);
     setSearchError(null);
-    setSelected(null);
+    setSelected(lockedIsValid ? { id: lockedId, name: lockedName } : null);
     setQty('');
     setUnit(null);
-    setFormError(null);
+    setFormError(lockedMode && !lockedIsValid ? 'This ingredient is unavailable.' : null);
     setSubmitError(null);
     setSubmitting(false);
-  }, [visible]);
+  }, [visible, authIdentity, lockedId, lockedName, lockedMode, lockedIsValid]);
 
   const trimmed = query.trim();
 
@@ -93,7 +113,7 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
   // a slower earlier response can never replace the results of a newer query
   // (or land after the modal has closed).
   useEffect(() => {
-    if (!visible || !trimmed) {
+    if (!visible || lockedMode || !trimmed) {
       searchGenRef.current += 1;
       setResults([]);
       setTruncated(false);
@@ -126,7 +146,7 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [visible, trimmed]);
+  }, [visible, trimmed, lockedMode]);
 
   const pickIngredient = useCallback((ingredient) => {
     setSelected(ingredient);
@@ -153,8 +173,13 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
   const quantityOk = unit === TO_TASTE || parseQuantity(qty) != null;
   const canSubmit = !!selected && !!unit && quantityOk && !submitting;
 
+  const onClose = useCallback(() => {
+    if (submitLockRef.current) return;
+    closeModal();
+  }, [closeModal]);
+
   const submit = useCallback(async () => {
-    if (submitting) return;
+    if (submitLockRef.current) return;
     if (!selected) {
       setFormError('Choose an ingredient first.');
       return;
@@ -176,6 +201,8 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
       quantity = parsed;
     }
 
+    const session = modalSessionRef.current;
+    submitLockRef.current = session;
     setFormError(null);
     setSubmitError(null);
     setSubmitting(true);
@@ -186,18 +213,21 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
     } catch (err) {
       result = { ok: false, error: 'Couldn’t add that item. Please try again.' };
     } finally {
-      if (mountedRef.current) setSubmitting(false);
+      if (mountedRef.current && session === modalSessionRef.current && submitLockRef.current === session) {
+        submitLockRef.current = null;
+        setSubmitting(false);
+      }
     }
 
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || session !== modalSessionRef.current) return;
 
     if (result && result.ok) {
+      onAddedRef.current?.();
       onClose();
       return;
     }
     if (result && result.superseded) {
-      // Auth identity changed mid-request — the provider already discarded it.
-      onClose();
+      setSubmitError('Your session changed before the item was added. Please try again.');
       return;
     }
     if (result && result.busy) {
@@ -218,7 +248,7 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
       statusBarTranslucent
     >
       <View style={styles.backdrop}>
-        <Pressable style={styles.backdropFill} onPress={onClose} />
+        <Pressable style={styles.backdropFill} onPress={onClose} disabled={submitting} />
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.kav}
@@ -228,10 +258,12 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
               <Text style={styles.title} accessibilityRole="header">Add Item</Text>
               <Pressable
                 onPress={onClose}
+                disabled={submitting}
                 hitSlop={10}
                 style={styles.closeBtn}
                 accessibilityRole="button"
                 accessibilityLabel="Close add item"
+                accessibilityState={{ disabled: submitting }}
               >
                 <Ionicons name="close" size={22} color={colors.inkSoft} />
               </Pressable>
@@ -249,9 +281,13 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
                     <Text style={styles.selectedLabel}>Ingredient</Text>
                     <Text style={styles.selectedName}>{selected.name}</Text>
                   </View>
-                  <Pressable onPress={clearSelection} hitSlop={8} style={styles.changeBtn}>
-                    <Text style={styles.changeBtnText}>Change</Text>
-                  </Pressable>
+                  {!lockedMode ? (
+                    <Pressable onPress={clearSelection} hitSlop={8} style={styles.changeBtn} disabled={submitting}>
+                      <Text style={styles.changeBtnText}>Change</Text>
+                    </Pressable>
+                  ) : (
+                    <Text style={styles.lockedText}>Locked catalog ingredient</Text>
+                  )}
                 </View>
               ) : (
                 <>
@@ -336,6 +372,7 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
                         <Pressable
                           key={u}
                           onPress={() => pickUnit(u)}
+                          disabled={submitting}
                           style={[styles.unitChip, active && styles.unitChipActive]}
                           accessibilityRole="button"
                           accessibilityLabel={`${unitLabel(u)} unit`}
@@ -364,6 +401,9 @@ export default function IngredientPickerModal({ visible, onClose, onAdd }) {
                         }}
                         keyboardType="decimal-pad"
                         returnKeyType="done"
+                        editable={!submitting}
+                        accessibilityLabel="Quantity"
+                        accessibilityState={{ disabled: submitting }}
                       />
                     </>
                   )}
@@ -511,6 +551,11 @@ function makeStyles(colors) {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
       color: colors.sageDeep,
+    },
+    lockedText: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.xs,
+      color: colors.inkFaint,
     },
     fieldLabel: {
       fontFamily: typography.body.medium,

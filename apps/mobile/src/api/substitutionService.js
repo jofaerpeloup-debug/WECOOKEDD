@@ -54,6 +54,10 @@ export function isCanonicalIngredientId(value) {
   return typeof value === 'string' && OBJECT_ID_RE.test(value.trim());
 }
 
+function canonicalIdentityKey(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 function missingIdError() {
   return new ApiError('A valid ingredient is required to look up substitutes.', {
     kind: 'api',
@@ -65,21 +69,53 @@ function missingIdError() {
   });
 }
 
-// Maps one raw PublicSubstitution to the minimal shape the sheet renders.
-// `ratio` is intentionally not carried through (see the header note).
-function normalizeSubstitution(raw) {
-  const r = raw || {};
-  const sub = r.substituteIngredient || null;
-  const id = sub && sub.id != null ? String(sub.id) : null;
-  const name = sub && typeof sub.name === 'string' ? sub.name : '';
+// `ratio` is intentionally not carried through (see the header note). Every
+// public identity is validated before the row is exposed to mobile callers.
+function malformedResponseError() {
+  return new ApiError('The substitution response was malformed.', {
+    kind: 'api',
+    code: 'INVALID_RESPONSE',
+    status: 502,
+  });
+}
+
+function normalizeIngredientSummary(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw malformedResponseError();
+  }
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (!isCanonicalIngredientId(id) || !name) throw malformedResponseError();
+  return { id, name };
+}
+
+function normalizeSubstitution(raw, requestedSourceId) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw malformedResponseError();
+  }
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!isCanonicalIngredientId(id) || raw.isActive !== true) {
+    throw malformedResponseError();
+  }
+  const source = normalizeIngredientSummary(raw.sourceIngredient);
+  const substitute = normalizeIngredientSummary(raw.substituteIngredient);
+  if (
+    canonicalIdentityKey(source.id) !== canonicalIdentityKey(requestedSourceId) ||
+    canonicalIdentityKey(source.id) === canonicalIdentityKey(substitute.id)
+  ) {
+    throw malformedResponseError();
+  }
+  if (!Array.isArray(raw.contexts) || raw.contexts.some((c) => typeof c !== 'string' || !c.trim())) {
+    throw malformedResponseError();
+  }
+  if (raw.notes != null && typeof raw.notes !== 'string') throw malformedResponseError();
 
   return {
-    id: r.id != null ? String(r.id) : null,
-    substitute: id && name ? { id, name } : null,
-    notes: typeof r.notes === 'string' && r.notes.trim() ? r.notes.trim() : null,
-    contexts: Array.isArray(r.contexts)
-      ? r.contexts.filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim())
-      : [],
+    id,
+    source,
+    substitute,
+    notes: typeof raw.notes === 'string' && raw.notes.trim() ? raw.notes.trim() : null,
+    contexts: raw.contexts.map((c) => c.trim()),
   };
 }
 
@@ -95,14 +131,15 @@ function normalizeSubstitution(raw) {
  *   (code VALIDATION_ERROR) and issues NO request — an unfiltered
  *   GET /api/v1/substitutions must never happen.
  * @returns {Promise<{ substitutes: Array<{
- *   id: string | null,
- *   substitute: { id: string, name: string } | null,
+ *   id: string,
+ *   source: { id: string, name: string },
+ *   substitute: { id: string, name: string },
  *   notes: string | null,
  *   contexts: string[],
  * }> }>}
- *   The backend already excludes archived substitutions and any relation whose
- *   source OR substitute ingredient is archived for a non-admin caller; this
- *   also drops any row missing a usable substitute ingredient, defensively.
+ *   The backend excludes archived substitutions and relations with archived
+ *   ingredients for a non-admin caller. Mobile additionally rejects the whole
+ *   response if the collection or any returned public row is malformed.
  */
 export function getSubstitutesFor(sourceIngredientId) {
   const trimmed = typeof sourceIngredientId === 'string' ? sourceIngredientId.trim() : '';
@@ -112,9 +149,23 @@ export function getSubstitutesFor(sourceIngredientId) {
 
   return api
     .get('/substitutions', { query: { sourceIngredientId: trimmed, limit: FETCH_LIMIT } })
-    .then((data) => ({
-      substitutes: Array.isArray(data && data.substitutions)
-        ? data.substitutions.map(normalizeSubstitution).filter((s) => s.substitute)
-        : [],
-    }));
+    .then((data) => {
+      if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.substitutions)) {
+        throw malformedResponseError();
+      }
+      const relationIds = new Set();
+      const substituteIds = new Set();
+      const substitutes = data.substitutions.map((row) => {
+        const normalized = normalizeSubstitution(row, trimmed);
+        const relationKey = canonicalIdentityKey(normalized.id);
+        const substituteKey = canonicalIdentityKey(normalized.substitute.id);
+        if (relationIds.has(relationKey) || substituteIds.has(substituteKey)) {
+          throw malformedResponseError();
+        }
+        relationIds.add(relationKey);
+        substituteIds.add(substituteKey);
+        return normalized;
+      });
+      return { substitutes };
+    });
 }
