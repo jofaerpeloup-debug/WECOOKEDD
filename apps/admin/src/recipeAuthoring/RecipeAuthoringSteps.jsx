@@ -9,7 +9,7 @@ import {
   RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_REGIONS,
   RECIPE_UNITS, TO_TASTE_UNIT,
 } from '../recipeOptions.js';
-import { blankIngredient } from './recipeAuthoringModel.js';
+import { blankIngredient, blankNutrition, NUTRIENT_FIELDS } from './recipeAuthoringModel.js';
 import { ingredientCreationPrefill, prepareIngredientResolutionRequest } from './recipeIngredientResolution.js';
 import { createRecipeIntakeHandlers, metadataSuggestionState } from './recipeIntake.js';
 import { createRecipeUrlImportHandlers, RecipeUrlImportControls } from './recipeUrlImport.js';
@@ -43,9 +43,10 @@ export function RecipeIntake({ form, change, busy, dispatch }) {
   const [preview, setPreview] = useState(null);
   const [application, setApplication] = useState(null);
   const [acceptedMetadata, setAcceptedMetadata] = useState(() => new Set());
+  const [acceptedNutrition, setAcceptedNutrition] = useState(false);
   const [url, setUrl] = useState('');
   const [urlImport, setUrlImport] = useState({ status: 'idle', sourceUrl: '', error: '' });
-  const { previewInput, applyPreview, acceptSuggestion } = createRecipeIntakeHandlers({
+  const { previewInput, applyPreview, acceptSuggestion, acceptNutrition } = createRecipeIntakeHandlers({
     input, form, preview, change, setPreview,
     setApplication,
   });
@@ -59,11 +60,15 @@ export function RecipeIntake({ form, change, busy, dispatch }) {
   const handlePreview = () => {
     const result = previewInput();
     setAcceptedMetadata(new Set());
+    setAcceptedNutrition(false);
     setUnresolvedFromPreview(result);
   };
   const handleUrlImport = async () => {
     const result = await importFromUrl();
-    if (result.preview) setAcceptedMetadata(new Set());
+    if (result.preview) {
+      setAcceptedMetadata(new Set());
+      setAcceptedNutrition(false);
+    }
     setUnresolvedFromPreview(result.preview);
   };
   const handleMetadataAcceptance = (item) => {
@@ -71,6 +76,10 @@ export function RecipeIntake({ form, change, busy, dispatch }) {
     if (outcome.changed) {
       setAcceptedMetadata((current) => new Set(current).add(metadataSuggestionKey(item)));
     }
+  };
+  const handleNutritionAcceptance = () => {
+    const outcome = acceptNutrition();
+    if (outcome.changed) setAcceptedNutrition(true);
   };
   const suggestedMetadata = preview?.metadata.filter(({ status }) => status === 'suggested') || [];
   const unsupportedMetadata = preview?.metadata.filter(({ status }) => status !== 'suggested') || [];
@@ -84,7 +93,7 @@ export function RecipeIntake({ form, change, busy, dispatch }) {
       onUrlChange={(value) => { setUrl(value); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }}
       onImport={handleUrlImport}
     />
-    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); setAcceptedMetadata(new Set()); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }} /></label>
+    <label>Recipe JSON-LD<textarea rows="6" value={input} disabled={busy} onChange={(event) => { setInput(event.target.value); setPreview(null); setApplication(null); setAcceptedMetadata(new Set()); setAcceptedNutrition(false); setUrlImport({ status: 'idle', sourceUrl: '', error: '' }); }} /></label>
     <div className="wc-recipe-intake-actions"><button type="button" className="wc-btn-secondary" disabled={busy || !input.trim()} onClick={handlePreview}>Preview</button>{preview?.ok && preview.mapped.length > 0 && <button type="button" className="wc-btn-secondary" disabled={busy} onClick={applyPreview}>Apply blank fields</button>}</div>
     {preview && !preview.ok && <div className="wc-author-field-error" role="alert">{preview.error.message}</div>}
     {preview?.ok && <div className="wc-recipe-intake-preview">
@@ -94,6 +103,15 @@ export function RecipeIntake({ form, change, busy, dispatch }) {
         key={metadataSuggestionKey(item)} item={item} form={form} busy={busy}
         accepted={acceptedMetadata.has(metadataSuggestionKey(item))} onAccept={handleMetadataAcceptance}
       />)}</ul></>}
+      {preview.nutritionSuggestion && <section className="wc-nutrition-suggestion" aria-labelledby="nutrition-suggestion-title">
+        <strong id="nutrition-suggestion-title">Nutrition suggestion</strong>
+        <p>{preview.nutritionSuggestion.reason}</p>
+        <p><strong>Source:</strong> {preview.nutritionSuggestion.source.url || preview.nutritionSuggestion.source.label}</p>
+        <p>Per serving: {preview.nutritionSuggestion.nutrition.caloriesKcal} kcal; {preview.nutritionSuggestion.nutrition.proteinGrams} g protein; {preview.nutritionSuggestion.nutrition.carbohydrateGrams} g carbohydrate; {preview.nutritionSuggestion.nutrition.fatGrams} g fat; {preview.nutritionSuggestion.nutrition.sugarGrams} g sugar; {preview.nutritionSuggestion.nutrition.fiberGrams} g fiber.</p>
+        {acceptedNutrition
+          ? <p role="status">Accepted in current form. Save the Details step to persist it.</p>
+          : <button type="button" className="wc-btn-secondary" disabled={busy} onClick={handleNutritionAcceptance}>Accept nutrition suggestion</button>}
+      </section>}
       {unsupportedMetadata.length > 0 && <><strong>Unsupported or ambiguous metadata</strong><ul>{unsupportedMetadata.map((item, index) => <li key={`${item.source}-${index}`}>
         <p><strong>Source:</strong> {item.source} {item.sourceValue}</p>
         <p><strong>{item.status === 'ambiguous' ? 'Ambiguous' : 'Unsupported'}:</strong> {item.reason}</p>
@@ -271,5 +289,20 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage, 
     <FieldError message={fieldErrors.prepTimeMinutes || fieldErrors.cookTimeMinutes || fieldErrors.servings} />
     <div className="wc-author-grid"><label>Region<select value={form.region} aria-invalid={Boolean(fieldErrors.region)} onChange={(e) => change('region', e.target.value)}><option value="">Not set</option>{RECIPE_REGIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Category<select value={form.category} aria-invalid={Boolean(fieldErrors.category)} onChange={(e) => change('category', e.target.value)}><option value="">Not set</option>{RECIPE_CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div><FieldError message={fieldErrors.region || fieldErrors.category} />
     <fieldset><legend>Dietary tags</legend><div className="wc-author-tags">{RECIPE_DIETARY_TAGS.map((tag) => <label className="wc-author-check" key={tag.value}><input type="checkbox" checked={form.dietaryTags.includes(tag.value)} onChange={(e) => change('dietaryTags', e.target.checked ? [...form.dietaryTags, tag.value] : form.dietaryTags.filter((value) => value !== tag.value))} /> {tag.label}</label>)}</div></fieldset><FieldError message={fieldErrors.dietaryTags} />
+    <fieldset className="wc-author-nutrition"><legend>Authoritative nutrition</legend>
+      <label className="wc-author-check"><input type="checkbox" checked={form.nutrition !== null} disabled={busy} onChange={(event) => {
+        change('nutrition', event.target.checked ? blankNutrition() : null);
+        if (event.target.checked) change('nutritionSource', { kind: 'manual', label: '', url: '' });
+      }} /> Nutrition is available</label>
+      <p className="wc-author-hint">Values are fixed per serving and are never estimated or scaled.</p>
+      {form.nutrition !== null && <>
+        <div className="wc-nutrition-grid">{NUTRIENT_FIELDS.map(([field, label, unit]) => <label key={field}>{label} ({unit})<input type="number" inputMode="decimal" min="0" step="any" value={form.nutrition[field]} aria-invalid={Boolean(fieldErrors[`nutrition.${field}`])} onChange={(event) => change('nutrition', { ...form.nutrition, [field]: event.target.value })} /></label>)}</div>
+        <FieldError message={err(fieldErrors, 'nutrition')} />
+        <label>Source description<input value={form.nutritionSource.label} maxLength="500" aria-invalid={Boolean(fieldErrors['nutritionSource.label'])} onChange={(event) => change('nutritionSource', { ...form.nutritionSource, label: event.target.value })} /></label>
+        <FieldError message={fieldErrors['nutritionSource.label']} />
+        <label>Source URL (optional)<input type="url" value={form.nutritionSource.url} aria-invalid={Boolean(fieldErrors['nutritionSource.url'])} onChange={(event) => change('nutritionSource', { ...form.nutritionSource, url: event.target.value })} /></label>
+        <FieldError message={fieldErrors['nutritionSource.url']} />
+      </>}
+    </fieldset>
   </div>;
 }

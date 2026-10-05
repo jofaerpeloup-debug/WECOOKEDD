@@ -33,6 +33,46 @@ const LIST_PARAM_KEYS = [
   'limit',
   'sort',
 ];
+const NUTRITION_KEYS = Object.freeze([
+  'schemaVersion', 'basis', 'caloriesKcal', 'proteinGrams',
+  'carbohydrateGrams', 'fatGrams', 'sugarGrams', 'fiberGrams',
+]);
+const NUTRIENT_KEYS = NUTRITION_KEYS.slice(2);
+
+function malformedNutritionError() {
+  const error = new Error('This recipe has malformed authoritative nutrition data.');
+  error.code = 'RECIPE_NUTRITION_MALFORMED';
+  return error;
+}
+
+export function parseRecipeNutrition(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw malformedNutritionError();
+  const expected = [...NUTRITION_KEYS].sort();
+  const actual = Object.keys(value).sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw malformedNutritionError();
+  }
+  if (value.schemaVersion !== 1 || value.basis !== 'perServing') throw malformedNutritionError();
+  if (NUTRIENT_KEYS.some((key) => (
+    typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0
+  ))) throw malformedNutritionError();
+  return {
+    schemaVersion: 1,
+    basis: 'perServing',
+    caloriesKcal: value.caloriesKcal,
+    proteinGrams: value.proteinGrams,
+    carbohydrateGrams: value.carbohydrateGrams,
+    fatGrams: value.fatGrams,
+    sugarGrams: value.sugarGrams,
+    fiberGrams: value.fiberGrams,
+  };
+}
+
+export function parseRecipe(recipe) {
+  if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe)) return recipe;
+  return { ...recipe, nutrition: parseRecipeNutrition(recipe.nutrition) };
+}
 
 function buildQuery(params) {
   const query = {};
@@ -58,7 +98,9 @@ function buildQuery(params) {
  */
 export function listRecipes(params = {}) {
   return api.get('/recipes', { query: buildQuery(params) }).then((data) => ({
-    recipes: Array.isArray(data && data.recipes) ? data.recipes : [],
+    // Array.map is deliberate: one malformed present nutrition member rejects
+    // the whole response, so callers can never render a valid-looking subset.
+    recipes: Array.isArray(data && data.recipes) ? data.recipes.map(parseRecipe) : [],
     pagination: (data && data.pagination) || null,
   }));
 }
@@ -72,5 +114,5 @@ export function listRecipes(params = {}) {
  *   archived, or unusable for a non-admin caller.
  */
 export function getRecipe(recipeId) {
-  return api.get(`/recipes/${encodeURIComponent(recipeId)}`).then((data) => data.recipe);
+  return api.get(`/recipes/${encodeURIComponent(recipeId)}`).then((data) => parseRecipe(data.recipe));
 }

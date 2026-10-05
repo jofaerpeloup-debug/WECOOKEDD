@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_RECIPE_INTAKE_BYTES, parseRecipeIntake } from '../src/recipeAuthoring/recipeIntake.js';
+import {
+  MAX_RECIPE_INTAKE_BYTES, acceptNutritionSuggestion, parseRecipeIntake,
+} from '../src/recipeAuthoring/recipeIntake.js';
 
 const recipe = (patch = {}) => ({ '@context': 'https://schema.org', '@type': 'Recipe', ...patch });
 const encoder = new TextEncoder();
@@ -138,7 +140,8 @@ test('keeps ingredients unresolved and separates metadata disclosure from generi
   })));
   assert.deepEqual(result.unresolved[0].values, ['1 cup rice', '2 eggs']);
   assert.deepEqual(Object.keys(result.values), []);
-  assert.deepEqual(result.unsupported.map(({ field }) => field), ['image', 'nutrition']);
+  assert.deepEqual(result.unsupported.map(({ field }) => field), ['image']);
+  assert.deepEqual(result.invalid.map(({ field }) => field), ['nutrition']);
   assert.deepEqual(result.metadata.map(({ source, status, field, value }) => ({ source, status, field, value })), [
     { source: 'recipeCategory', status: 'suggested', field: 'category', value: 'dinner' },
     { source: 'suitableForDiet', status: 'suggested', field: 'dietaryTags', value: 'vegan' },
@@ -271,4 +274,59 @@ test('@graph wrapper properties are classified as unsupported and never mapped',
   ]);
   assert.equal(Object.hasOwn(result.values, 'imageUrl'), false);
   assert.equal(Object.hasOwn(result.values, 'difficulty'), false);
+});
+
+function jsonLdNutrition(overrides = {}) {
+  return {
+    '@type': 'NutritionInformation', servingSize: '1 serving', calories: '320 kcal',
+    proteinContent: '28 g', carbohydrateContent: '12 grams', fatContent: '18 g',
+    sugarContent: '3 g', fiberContent: '2 g', ...overrides,
+  };
+}
+
+test('complete explicit Schema.org nutrition creates only a per-serving suggestion with source disclosure', () => {
+  const result = parseRecipeIntake(JSON.stringify(recipe({
+    nutrition: jsonLdNutrition(), author: { '@type': 'Person', name: 'Untrusted author' },
+  })), { sourceUrl: 'https://example.com/final-recipe' });
+  assert.deepEqual(result.nutritionSuggestion, {
+    status: 'suggested',
+    nutrition: {
+      schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+      carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+    },
+    source: { kind: 'jsonLd', label: 'Schema.org Recipe JSON-LD', url: 'https://example.com/final-recipe' },
+    reason: 'Complete explicit per-serving nutrition; Moderator acceptance is required.',
+  });
+  assert.equal('nutrition' in result.values, false);
+  assert.ok(result.unsupported.some(({ field }) => field === 'author'));
+  assert.equal(JSON.stringify(result.nutritionSuggestion).includes('Untrusted author'), false);
+});
+
+test('JSON-LD nutrition never guesses units, basis, missing values, totals, or partial suggestions', () => {
+  for (const nutrition of [
+    jsonLdNutrition({ servingSize: undefined }), jsonLdNutrition({ servingSize: '4 servings' }),
+    jsonLdNutrition({ calories: '320 calories' }), jsonLdNutrition({ proteinContent: 28 }),
+    jsonLdNutrition({ carbohydrateContent: '12 oz' }), jsonLdNutrition({ fiberContent: undefined }),
+    jsonLdNutrition({ sugarContent: '-1 g' }), { ...jsonLdNutrition(), '@type': 'Thing' },
+  ]) {
+    const result = parseRecipeIntake(JSON.stringify(recipe({ nutrition })));
+    assert.equal(result.nutritionSuggestion, null);
+    assert.ok(result.invalid.some(({ field }) => field.startsWith('nutrition')));
+  }
+});
+
+test('nutrition suggestion requires explicit Moderator acceptance before entering the form', () => {
+  const suggestion = parseRecipeIntake(JSON.stringify(recipe({ nutrition: jsonLdNutrition() }))).nutritionSuggestion;
+  const changes = [];
+  const outcome = acceptNutritionSuggestion({
+    suggestion, change: (field, value) => changes.push([field, value]),
+  });
+  assert.deepEqual(outcome, { status: 'accepted', changed: true });
+  assert.deepEqual(changes, [
+    ['nutrition', {
+      caloriesKcal: '320', proteinGrams: '28', carbohydrateGrams: '12',
+      fatGrams: '18', sugarGrams: '3', fiberGrams: '2',
+    }],
+    ['nutritionSource', { kind: 'jsonLd', label: 'Schema.org Recipe JSON-LD', url: '' }],
+  ]);
 });

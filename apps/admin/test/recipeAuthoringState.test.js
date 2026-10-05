@@ -28,6 +28,31 @@ test('step changes reset acknowledgement and content changes on Review invalidat
   assert.equal(state.publishAcknowledged, false);
 });
 
+test('nutrition participates in saved-versus-working Details state and server refresh replacement', () => {
+  const nutrition = {
+    schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+    carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+  };
+  const recipe = {
+    id: 'r1', title: 'Draft', publicationStatus: 'draft', isActive: true, updatedAt: 'v1',
+    nutrition, nutritionSource: { kind: 'manual', label: 'Panel' },
+  };
+  let state = initialAuthoringState({ recipe });
+  state = recipeAuthoringReducer(state, {
+    type: 'CHANGE', field: 'nutrition', value: { ...state.form.nutrition, caloriesKcal: '400' },
+  });
+  assert.equal(hasUnsavedChanges(state), true);
+
+  state = recipeAuthoringReducer(state, {
+    type: 'SAVE_SUCCESS', recipe: { ...recipe, updatedAt: 'v2', nutrition: { ...nutrition, caloriesKcal: 400 } },
+    step: 'details', preserveWorking: true,
+  });
+  assert.equal(state.form.nutrition.caloriesKcal, '400');
+  assert.equal(state.saved.nutrition.caloriesKcal, '400');
+  assert.equal(state.updatedAt, 'v2');
+  assert.equal(hasUnsavedChanges(state), false);
+});
+
 test('saving one section preserves unrelated local edits', () => {
   let state = initialAuthoringState({ recipe: { id: 'r1', title: 'Old', description: '', publicationStatus: 'draft', isActive: true, updatedAt: 'one' } });
   state = { ...state, form: { ...state.form, title: 'New', difficulty: 'hard' } };

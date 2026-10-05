@@ -189,7 +189,7 @@ test('Recipe model declares independent publication metadata without a legacy-ch
 });
 
 test('generic PATCH rejects lifecycle and server-owned attribution mass assignment', () => {
-  for (const field of ['publicationStatus', 'isActive', 'createdBy', 'updatedBy', 'publishedBy', 'publishedAt']) {
+  for (const field of ['publicationStatus', 'isActive', 'createdBy', 'updatedBy', 'publishedBy', 'publishedAt', 'nutritionProvenance', 'nutritionAcceptedAt']) {
     assert.equal(
       updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: { [field]: field === 'isActive' ? false : 'x' } }).success,
       false,

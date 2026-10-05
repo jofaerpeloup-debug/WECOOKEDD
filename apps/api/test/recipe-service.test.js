@@ -110,6 +110,19 @@ test('createRecipe validates every ingredient through IngredientService and pers
   assert.deepEqual(capturedArgs.dietaryTags, []);
 });
 
+test('createDraft preserves explicit nutrition null as clean unavailability', async (t) => {
+  let capturedArgs;
+  t.mock.method(recipeRepository, 'createRecipe', async (args) => {
+    capturedArgs = args;
+    return { _id: 'recipe1', ...args };
+  });
+
+  await recipeService.createDraft({ title: 'Nutrition unavailable', nutrition: null }, { actorId: CHICKEN_ID });
+
+  assert.equal(capturedArgs.nutrition, null);
+  assert.equal(capturedArgs.nutritionProvenance, undefined);
+});
+
 test('createRecipe preserves canonical lb/oz quantities without conversion', async (t) => {
   mockNoDuplicateCandidates(t);
   t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
@@ -677,6 +690,26 @@ test('listRecipes drops a recipe whose non-optional ingredient is archived when 
   assert.equal(result.items[0]._id, 'recipe1');
   // Known V1 trade-off: total reflects the pre-filter database count.
   assert.equal(result.total, 2);
+});
+
+test('listRecipes rejects a mixed consumer page when any present nutrition is malformed', async (t) => {
+  t.mock.method(recipeRepository, 'findMany', async () => [
+    completeStoredRecipe({
+      _id: 'recipe1',
+      nutrition: null,
+      ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
+    }),
+    completeStoredRecipe({
+      _id: 'recipe2',
+      nutrition: { schemaVersion: 1, basis: 'perServing', caloriesKcal: 320 },
+      ingredients: [{ ingredientId: activeIngredient(GARLIC_ID), optional: false }],
+    }),
+  ]);
+  t.mock.method(recipeRepository, 'countByFilter', async () => 2);
+
+  await assert.rejects(() => recipeService.listRecipes({
+    status: 'active', page: 1, limit: 20, sort: 'titleAsc', isAdmin: false,
+  }), (error) => error.code === 'RECIPE_NUTRITION_MALFORMED');
 });
 
 test('listRecipes does not apply the usability trim when an admin requests status=all', async (t) => {
@@ -1561,4 +1594,89 @@ test('findUsableRecipeById omits an archived optional ingredient usage from the 
 
   assert.equal(result.ingredients.length, 1);
   assert.equal(result.ingredients[0].ingredient.name, 'Chicken');
+});
+
+test('updateRecipe stores complete nutrition with server-derived provenance under existing concurrency authority', async (t) => {
+  const updatedAt = new Date('2026-10-05T00:00:00.000Z');
+  const acceptedAt = new Date('2026-10-06T00:00:00.000Z');
+  const nutrition = {
+    schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+    carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+  };
+  const existing = completeStoredRecipe({ publicationStatus: 'draft', updatedAt });
+  let mutation;
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(recipeRepository, 'updateById', async (id, update, options) => {
+    mutation = { id, update, options };
+    return { ...existing, ...update.$set };
+  });
+
+  await recipeService.updateRecipe('recipe1', {
+    nutrition,
+    nutritionSource: { kind: 'jsonLd', label: 'Schema.org Recipe JSON-LD', url: 'https://example.com/adobo' },
+    expectedUpdatedAt: updatedAt.toISOString(),
+  }, { actorId: CHICKEN_ID, now: acceptedAt });
+
+  assert.deepEqual(mutation.update.$set.nutrition, nutrition);
+  assert.deepEqual(mutation.update.$set.nutritionProvenance, {
+    sourceKind: 'jsonLd', sourceLabel: 'Schema.org Recipe JSON-LD', sourceUrl: 'https://example.com/adobo',
+    acceptedBy: CHICKEN_ID, acceptedAt,
+  });
+  assert.equal(mutation.update.$set.updatedBy, CHICKEN_ID);
+  assert.equal(mutation.options.expectedUpdatedAt, updatedAt.toISOString());
+});
+
+test('nutrition clearing removes public data and provenance atomically, while stale writes still conflict', async (t) => {
+  const updatedAt = new Date('2026-10-05T00:00:00.000Z');
+  const existing = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt,
+    nutrition: { schemaVersion: 1, basis: 'perServing', caloriesKcal: 1, proteinGrams: 1, carbohydrateGrams: 1, fatGrams: 1, sugarGrams: 1, fiberGrams: 1 },
+    nutritionProvenance: { sourceKind: 'manual', sourceLabel: 'Panel', acceptedBy: CHICKEN_ID, acceptedAt: updatedAt },
+  });
+  let mutation;
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(recipeRepository, 'updateById', async (id, update, options) => {
+    mutation = { update, options };
+    return existing;
+  });
+  await recipeService.updateRecipe('recipe1', {
+    nutrition: null, expectedUpdatedAt: updatedAt.toISOString(),
+  }, { actorId: CHICKEN_ID });
+  assert.deepEqual(mutation.update.$unset, { nutrition: '', nutritionProvenance: '' });
+
+  await assert.rejects(() => recipeService.updateRecipe('recipe1', {
+    nutrition: null, expectedUpdatedAt: '2026-10-04T00:00:00.000Z',
+  }, { actorId: CHICKEN_ID }), { code: 'RECIPE_EDIT_CONFLICT', statusCode: 409 });
+});
+
+test('consumer detail rejects malformed present nutrition before ordinary usability filtering', async (t) => {
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => completeStoredRecipe({
+    nutrition: { schemaVersion: 1, basis: 'perServing', caloriesKcal: 1 },
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
+  }));
+  assert.equal(await recipeService.findUsableRecipeById('recipe1'), null);
+  await assert.rejects(
+    () => recipeService.getRecipeById('recipe1', { isAdmin: false }),
+    (error) => error.code === 'RECIPE_NUTRITION_MALFORMED',
+  );
+});
+
+test('duplicate analysis accepts sourced nutrition without creating persistence provenance', async (t) => {
+  mockNoDuplicateCandidates(t);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  failOnRecipeWrites(t);
+  const nutrition = {
+    schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+    carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+  };
+
+  const result = await recipeService.checkRecipeDuplicates({
+    candidate: adoboPayload({
+      nutrition,
+      nutritionSource: { kind: 'manual', label: 'Reviewed laboratory panel' },
+    }),
+  });
+
+  assert.equal(result.candidates.length, 0);
+  assert.match(result.resultDigest, /^[0-9a-f]{64}$/u);
 });

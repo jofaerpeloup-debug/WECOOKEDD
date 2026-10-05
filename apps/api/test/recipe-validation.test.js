@@ -545,3 +545,69 @@ test('listRecipesSchema accepts status active/inactive/all and rejects anything 
   assert.equal(listRecipesSchema.safeParse({ query: { status: 'all' } }).success, true);
   assert.equal(listRecipesSchema.safeParse({ query: { status: 'archived' } }).success, false);
 });
+
+const validNutrition = () => ({
+  schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+  carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+});
+const validNutritionSource = () => ({
+  kind: 'manual', label: 'Laboratory nutrition panel', url: 'https://example.com/nutrition',
+});
+
+test('Recipe write validation accepts only complete exact v1 per-serving nutrition with source material', () => {
+  const accepted = validPayload({ nutrition: validNutrition(), nutritionSource: validNutritionSource() });
+  assert.equal(createRecipeSchema.safeParse({ body: accepted }).success, true);
+  assert.equal(createDraftSchema.safeParse({ body: {
+    title: 'Draft nutrition', nutrition: validNutrition(), nutritionSource: validNutritionSource(),
+  } }).success, true);
+  assert.equal(updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID },
+    body: { nutrition: validNutrition(), nutritionSource: validNutritionSource() },
+  }).success, true);
+  assert.equal(updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID }, body: { nutrition: null },
+  }).success, true);
+});
+
+test('Recipe nutrition validation rejects partial, extra, coerced, nonfinite, negative, and unsourced input', () => {
+  const invalidNutrition = [
+    { ...validNutrition(), fiberGrams: undefined },
+    { ...validNutrition(), caloriesKcal: '320' },
+    { ...validNutrition(), proteinGrams: -1 },
+    { ...validNutrition(), fatGrams: Number.NaN },
+    { ...validNutrition(), sugarGrams: Number.POSITIVE_INFINITY },
+    { ...validNutrition(), sodiumGrams: 1 },
+    { ...validNutrition(), schemaVersion: 2 },
+    { ...validNutrition(), basis: 'totalRecipe' },
+  ];
+  for (const nutrition of invalidNutrition) {
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({
+      nutrition, nutritionSource: validNutritionSource(),
+    }) }).success, false);
+  }
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ nutrition: validNutrition() }) }).success, false);
+  assert.equal(updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID }, body: { nutritionSource: validNutritionSource() },
+  }).success, false);
+  assert.equal(updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID }, body: {
+      nutrition: validNutrition(), nutritionSource: { ...validNutritionSource(), acceptedBy: INGREDIENT_ID },
+    },
+  }).success, false);
+  assert.equal(updateRecipeSchema.safeParse({
+    params: { recipeId: RECIPE_ID }, body: {
+      nutrition: validNutrition(), nutritionSource: validNutritionSource(), nutritionAcceptedAt: '2026-10-06T00:00:00Z',
+    },
+  }).success, false);
+});
+
+test('duplicate-check candidate accepts complete sourced nutrition and rejects malformed nutrition', () => {
+  const { confirmFilipinoCuisine, ...candidate } = validPayload({
+    nutrition: validNutrition(),
+    nutritionSource: validNutritionSource(),
+  });
+  assert.equal(duplicateCheckSchema.safeParse({ body: { candidate } }).success, true);
+  assert.equal(duplicateCheckSchema.safeParse({ body: {
+    candidate: { ...candidate, nutrition: { ...candidate.nutrition, fiberGrams: undefined } },
+  } }).success, false);
+});
