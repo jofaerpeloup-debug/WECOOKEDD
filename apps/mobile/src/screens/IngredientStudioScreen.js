@@ -13,14 +13,16 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Badge from '../components/Badge';
-import { searchIngredients } from '../api/ingredientService';
+import { searchIngredientsStrict } from '../api/ingredientService';
 import { getIngredientErrorMessage } from '../api/ingredientErrors';
 import { getSubstitutesFor } from '../api/substitutionService';
 import { getSubstitutionErrorMessage } from '../api/substitutionErrors';
+import { useAuth } from '../context/AuthContext';
 
 const SEARCH_DELAY_MS = 300;
 const SEARCH_LIMIT = 20;
 const COMPACT_CONTEXT_MAX_LENGTH = 22;
+const ASSISTANT_QUERY_MAX_LENGTH = 100;
 
 function sourceMatchesSelection(selectedIngredientId, resultSourceIngredientId) {
   return Boolean(
@@ -41,8 +43,12 @@ function compactContextLabel(value) {
 // of those values are presented here.
 export default function IngredientStudioScreen({ navigation, route }) {
   const { colors, shadow } = useTheme();
+  const { status: authStatus, user } = useAuth();
   const styles = makeStyles(colors, shadow);
   const asTab = route?.name === 'Swaps';
+  const authUserId = authStatus === 'authenticated' && typeof user?.id === 'string'
+    ? user.id.trim()
+    : '';
 
   const [query, setQuery] = useState('');
   const [ingredients, setIngredients] = useState([]);
@@ -50,6 +56,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
   const [searchLoading, setSearchLoading] = useState(true);
   const [searchError, setSearchError] = useState(null);
   const [searchNonce, setSearchNonce] = useState(0);
+  const [confirmedEmptyQuery, setConfirmedEmptyQuery] = useState(null);
 
   const [substitutionState, setSubstitutionState] = useState({
     sourceIngredientId: null,
@@ -61,29 +68,84 @@ export default function IngredientStudioScreen({ navigation, route }) {
 
   const searchGeneration = useRef(0);
   const substitutesGeneration = useRef(0);
+  const assistantHandoffRef = useRef(false);
+  const authOwnerRef = useRef(authUserId);
+  const previousAuthOwnerRef = useRef(authUserId);
+  const accountStateIsCurrent = previousAuthOwnerRef.current === authUserId;
+  authOwnerRef.current = authUserId;
+
+  const clearSubstitutionState = () => {
+    substitutesGeneration.current += 1;
+    setSubstitutionState({
+      sourceIngredientId: null,
+      substitutes: [],
+      loading: false,
+      error: null,
+    });
+  };
+
+  const changeQuery = (value) => {
+    searchGeneration.current += 1;
+    assistantHandoffRef.current = false;
+    setQuery(value);
+    setIngredients([]);
+    setSelected(null);
+    setSearchError(null);
+    setConfirmedEmptyQuery(null);
+    clearSubstitutionState();
+  };
+
+  useEffect(function resetForAuthenticatedOwnerChange() {
+    if (previousAuthOwnerRef.current === authUserId) return;
+    previousAuthOwnerRef.current = authUserId;
+    searchGeneration.current += 1;
+    substitutesGeneration.current += 1;
+    assistantHandoffRef.current = false;
+    setQuery('');
+    setIngredients([]);
+    setSelected(null);
+    setSearchLoading(false);
+    setSearchError(null);
+    setConfirmedEmptyQuery(null);
+    setSubstitutionState({
+      sourceIngredientId: null,
+      substitutes: [],
+      loading: false,
+      error: null,
+    });
+  }, [authUserId]);
 
   useEffect(function loadIngredientCatalog() {
+    if (!accountStateIsCurrent) return undefined;
     const generation = ++searchGeneration.current;
+    const ownerId = authUserId;
     const trimmed = query.trim();
     setSearchLoading(true);
     setSearchError(null);
     setIngredients([]);
+    setSelected(null);
+    setConfirmedEmptyQuery(null);
 
     const timer = setTimeout(async () => {
       try {
-        const result = await searchIngredients({
+        const result = await searchIngredientsStrict({
           search: trimmed || undefined,
           limit: SEARCH_LIMIT,
         });
-        if (generation !== searchGeneration.current) return;
+        if (generation !== searchGeneration.current || ownerId !== authOwnerRef.current) return;
         setIngredients(result.ingredients);
-        setSelected((current) => current || result.ingredients[0] || null);
+        setSelected(result.ingredients[0] || null);
+        setConfirmedEmptyQuery(trimmed && result.ingredients.length === 0 ? trimmed : null);
       } catch (err) {
-        if (generation !== searchGeneration.current) return;
+        if (generation !== searchGeneration.current || ownerId !== authOwnerRef.current) return;
         setIngredients([]);
+        setSelected(null);
+        setConfirmedEmptyQuery(null);
         setSearchError(getIngredientErrorMessage(err));
       } finally {
-        if (generation === searchGeneration.current) setSearchLoading(false);
+        if (generation === searchGeneration.current && ownerId === authOwnerRef.current) {
+          setSearchLoading(false);
+        }
       }
     }, trimmed ? SEARCH_DELAY_MS : 0);
 
@@ -91,10 +153,29 @@ export default function IngredientStudioScreen({ navigation, route }) {
       clearTimeout(timer);
       if (generation === searchGeneration.current) searchGeneration.current += 1;
     };
-  }, [query, searchNonce]);
+  }, [accountStateIsCurrent, authUserId, query, searchNonce]);
+
+  const askAssistant = () => {
+    const currentQuery = query.trim();
+    if (
+      assistantHandoffRef.current ||
+      !currentQuery ||
+      confirmedEmptyQuery !== currentQuery ||
+      searchLoading ||
+      searchError ||
+      selected
+    ) return;
+    assistantHandoffRef.current = true;
+    const boundedQuery = currentQuery.slice(0, ASSISTANT_QUERY_MAX_LENGTH);
+    navigation.navigate('Assistant', {
+      initialPrompt: `I couldn't find "${boundedQuery}" in the ingredient catalog. What cooking alternatives can I use?`,
+    });
+  };
 
   useEffect(function loadSubstitutions() {
+    if (!accountStateIsCurrent) return undefined;
     const generation = ++substitutesGeneration.current;
+    const ownerId = authUserId;
 
     if (!selected?.id) {
       setSubstitutionState({
@@ -114,7 +195,10 @@ export default function IngredientStudioScreen({ navigation, route }) {
     });
     getSubstitutesFor(selected.id)
       .then((result) => {
-        if (generation === substitutesGeneration.current) {
+        if (
+          generation === substitutesGeneration.current &&
+          ownerId === authOwnerRef.current
+        ) {
           setSubstitutionState({
             sourceIngredientId: selected.id,
             substitutes: result.substitutes,
@@ -124,7 +208,10 @@ export default function IngredientStudioScreen({ navigation, route }) {
         }
       })
       .catch((err) => {
-        if (generation === substitutesGeneration.current) {
+        if (
+          generation === substitutesGeneration.current &&
+          ownerId === authOwnerRef.current
+        ) {
           setSubstitutionState({
             sourceIngredientId: selected.id,
             substitutes: [],
@@ -137,7 +224,19 @@ export default function IngredientStudioScreen({ navigation, route }) {
     return () => {
       substitutesGeneration.current += 1;
     };
-  }, [selected, substitutesNonce]);
+  }, [accountStateIsCurrent, authUserId, selected, substitutesNonce]);
+
+  if (!accountStateIsCurrent) {
+    return (
+      <View style={styles.root}>
+        <TopBar
+          mode={asTab ? 'title' : 'back'}
+          title="Ingredient Swaps"
+          onBack={asTab ? undefined : () => navigation.goBack()}
+        />
+      </View>
+    );
+  }
 
   const substitutionStateIsCurrent = sourceMatchesSelection(
     selected?.id,
@@ -240,7 +339,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
             placeholder="Search an ingredient..."
             placeholderTextColor={colors.inkFaint}
             value={query}
-            onChangeText={setQuery}
+            onChangeText={changeQuery}
             autoCapitalize="none"
             autoCorrect={false}
             autoComplete="off"
@@ -249,7 +348,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
           />
           {query.length > 0 && (
             <Pressable
-              onPress={() => setQuery('')}
+              onPress={() => changeQuery('')}
               hitSlop={8}
               accessibilityRole="button"
               accessibilityLabel="Clear ingredient search"
@@ -300,9 +399,22 @@ export default function IngredientStudioScreen({ navigation, route }) {
                 );
               })}
               {ingredients.length === 0 && (
-                <Text style={styles.noMatches} accessibilityLiveRegion="polite">
-                  {query.trim() ? `No ingredients match “${query.trim()}”.` : 'No ingredients available.'}
-                </Text>
+                <View style={styles.noMatchesWrap} accessibilityLiveRegion="polite">
+                  <Text style={styles.noMatches}>
+                    {query.trim() ? `No ingredients match “${query.trim()}”.` : 'No ingredients available.'}
+                  </Text>
+                  {confirmedEmptyQuery === query.trim() && query.trim() ? (
+                    <Pressable
+                      onPress={askAssistant}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Ask Chef Assistant about ${query.trim()}`}
+                      style={styles.assistantAction}
+                    >
+                      <Ionicons name="sparkles-outline" size={16} color={colors.onAccent} />
+                      <Text style={styles.assistantActionText}>Ask Chef Assistant</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               )}
             </ScrollView>
           </>
@@ -427,6 +539,21 @@ function makeStyles(colors, shadow) {
       fontSize: typography.sizes.sm,
       color: colors.inkFaint,
       paddingVertical: spacing.sm,
+    },
+    noMatchesWrap: { alignItems: 'flex-start', gap: spacing.sm, paddingBottom: spacing.xs },
+    assistantAction: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      backgroundColor: colors.sageDeep,
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+    },
+    assistantActionText: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.sm,
+      color: colors.onAccent,
     },
     scroll: {
       padding: spacing.lg,

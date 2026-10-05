@@ -15,6 +15,7 @@ import { sendAssistantMessage } from '../api/assistantService';
 import { getAssistantError } from '../api/assistantErrors';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import {
   ASSISTANT_LIMITS,
   completeAssistantRequest,
@@ -34,10 +35,14 @@ const QUICK_PROMPTS = [
   'What can I make with chicken and garlic?',
 ];
 
-export default function AssistantScreen({ navigation }) {
+export default function AssistantScreen({ navigation, route }) {
   const { colors } = useTheme();
+  const { status: authStatus, user } = useAuth();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
+  const authUserId = authStatus === 'authenticated' && typeof user?.id === 'string'
+    ? user.id.trim()
+    : '';
   const [assistantState, setAssistantState] = useState(createAssistantState);
   const stateRef = useRef(assistantState);
   const scrollRef = useRef(null);
@@ -45,6 +50,11 @@ export default function AssistantScreen({ navigation }) {
   const generationRef = useRef(0);
   const nextRequestIdRef = useRef(0);
   const activeRequestRef = useRef(null);
+  const initialPromptConsumedRef = useRef(false);
+  const authOwnerRef = useRef(authUserId);
+  const previousAuthOwnerRef = useRef(authUserId);
+  const accountStateIsCurrent = previousAuthOwnerRef.current === authUserId;
+  authOwnerRef.current = authUserId;
 
   const commitState = useCallback((nextState) => {
     stateRef.current = nextState;
@@ -52,12 +62,12 @@ export default function AssistantScreen({ navigation }) {
   }, []);
 
   const claimRequest = useCallback(() => {
-    if (!mountedRef.current || activeRequestRef.current) return null;
+    if (!mountedRef.current || activeRequestRef.current || !authOwnerRef.current) return null;
     nextRequestIdRef.current += 1;
-    const identity = createAssistantRequestIdentity(
-      generationRef.current,
-      nextRequestIdRef.current
-    );
+    const identity = {
+      ...createAssistantRequestIdentity(generationRef.current, nextRequestIdRef.current),
+      ownerId: authOwnerRef.current,
+    };
     activeRequestRef.current = identity;
     return identity;
   }, []);
@@ -70,7 +80,7 @@ export default function AssistantScreen({ navigation }) {
         activeRequest: activeRequestRef.current,
       },
       identity
-    );
+    ) && identity?.ownerId === authOwnerRef.current;
   }, []);
 
   const runRequest = useCallback(
@@ -141,10 +151,32 @@ export default function AssistantScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
+    if (previousAuthOwnerRef.current === authUserId) return;
+    previousAuthOwnerRef.current = authUserId;
+    generationRef.current += 1;
+    activeRequestRef.current = null;
+    initialPromptConsumedRef.current = true;
+    if (route?.params?.initialPrompt) navigation.setParams({ initialPrompt: undefined });
+    commitState(createAssistantState());
+  }, [authUserId, commitState, navigation, route?.params?.initialPrompt]);
+
+  useEffect(() => {
+    if (!accountStateIsCurrent || initialPromptConsumedRef.current) return;
+    const initialPrompt = typeof route?.params?.initialPrompt === 'string'
+      ? route.params.initialPrompt.trim()
+      : '';
+    if (!initialPrompt) return;
+    initialPromptConsumedRef.current = true;
+    navigation.setParams({ initialPrompt: undefined });
+    send(initialPrompt.slice(0, ASSISTANT_LIMITS.maxUserLength));
+  }, [accountStateIsCurrent, navigation, route?.params?.initialPrompt, send]);
+
+  useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
   }, [assistantState.messages, assistantState.status, assistantState.error]);
 
-  const isSending = assistantState.status === 'sending';
+  const renderedAssistantState = accountStateIsCurrent ? assistantState : createAssistantState();
+  const isSending = renderedAssistantState.status === 'sending';
 
   return (
     <KeyboardAvoidingView
@@ -206,7 +238,7 @@ export default function AssistantScreen({ navigation }) {
           ))}
         </View>
 
-        {assistantState.messages.map((message, index) => (
+        {renderedAssistantState.messages.map((message, index) => (
           <View
             key={`${message.role}-${index}`}
             style={[styles.msgRow, message.role === 'user' && styles.msgRowUser]}
@@ -241,10 +273,10 @@ export default function AssistantScreen({ navigation }) {
           </View>
         ) : null}
 
-        {assistantState.error ? (
+        {renderedAssistantState.error ? (
           <View style={styles.errorCard} accessibilityRole="alert">
-            <Text style={styles.errorText}>{assistantState.error}</Text>
-            {assistantState.failedRequest ? (
+            <Text style={styles.errorText}>{renderedAssistantState.error}</Text>
+            {renderedAssistantState.failedRequest ? (
               <Pressable
                 style={styles.retryBtn}
                 onPress={retry}
@@ -263,7 +295,7 @@ export default function AssistantScreen({ navigation }) {
           style={styles.input}
           placeholder="Ask anything..."
           placeholderTextColor={colors.inkFaint}
-          value={assistantState.input}
+          value={renderedAssistantState.input}
           onChangeText={updateInput}
           onSubmitEditing={() => send()}
           returnKeyType="send"

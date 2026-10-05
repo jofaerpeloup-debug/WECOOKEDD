@@ -48,10 +48,28 @@ describe('production-reachable deferred features remain honest', () => {
     const detail = read('screens/SwapDetailScreen.js');
     expect(detail).toMatch(/Molecular/);
     expect(detail).toMatch(/COOKING SCIENCE/);
-    expect(detail).toMatch(/Apply Substitute to Formula/);
+    expect(detail).toMatch(/Add Substitute to Shopping/);
     expect(detail).toMatch(/Not provided/);
-    expect(detail).toMatch(/No recipe was changed/);
+    expect(detail).not.toMatch(/Apply Substitute to Formula|No recipe was changed/);
+    expect(detail).toMatch(/lockedIngredient=\{hasCatalogResult \? \{ id: substituteId, name: substituteName \} : null\}/);
+    expect(detail).toMatch(/onAdd=\{addItem\}/);
     expect(detail).not.toMatch(/data\/mockData|molecularSwap|systemMatch|confidenceText/);
+  });
+
+  it('keeps ING2 free of local authority, inferred quantities, and AI domain writes', () => {
+    const studio = read('screens/IngredientStudioScreen.js');
+    const detail = read('screens/SwapDetailScreen.js');
+    const picker = read('components/IngredientPickerModal.js');
+    const assistant = read('screens/AssistantScreen.js');
+    const service = read('api/substitutionService.js');
+    const bounded = `${studio}\n${detail}\n${picker}\n${assistant}\n${service}`;
+
+    expect(bounded).not.toMatch(/AsyncStorage|EXPO_PUBLIC_OPENAI_|api\.openai\.com|\bfetch\s*\(/);
+    expect(picker).not.toMatch(/\bratio\b|shoppingListService|setItems/i);
+    expect(picker).toMatch(/const \[qty, setQty\] = useState\(''\)/);
+    expect(picker).toMatch(/const \[unit, setUnit\] = useState\(null\)/);
+    expect(detail).not.toMatch(/applySubstitute|recipeService|updateRecipe|createIngredient|createSubstitution/);
+    expect(assistant).not.toMatch(/createIngredient|createSubstitution|addItem|ShoppingList|AsyncStorage/);
   });
 
   it('does not mount legacy mock persistence providers in production', () => {

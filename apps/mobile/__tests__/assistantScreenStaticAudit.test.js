@@ -80,6 +80,9 @@ jest.mock('../src/screens/assistantState', () => {
   };
 });
 
+let mockAuth = { status: 'authenticated', user: { id: 'user-a' } };
+jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
+
 const {
   act,
   cleanup,
@@ -106,10 +109,33 @@ function deferred() {
 
 let currentView;
 
-function renderAssistant() {
-  currentView = render(<AssistantScreen navigation={{ goBack: jest.fn() }} />);
+function renderAssistant(route, navigation = { goBack: jest.fn(), setParams: jest.fn() }) {
+  currentView = render(<AssistantScreen navigation={navigation} route={route} />);
   return currentView;
 }
+
+it('consumes one bounded route prompt exactly once through the normal send path', async () => {
+  const request = deferred();
+  api.post.mockReturnValue(request.promise);
+  const route = { params: { initialPrompt: '  Help me use dragon fruit  ' } };
+  const navigation = { goBack: jest.fn(), setParams: jest.fn() };
+  const view = renderAssistant(route, navigation);
+
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(navigation.setParams).toHaveBeenCalledWith({ initialPrompt: undefined });
+  expect(api.post).toHaveBeenCalledWith('/assistant/chat', {
+    body: { messages: [{ role: 'user', content: 'Help me use dragon fruit' }] },
+  });
+  expect(view.getAllByText('Help me use dragon fruit')).toHaveLength(1);
+
+  view.rerender(<AssistantScreen navigation={navigation} route={route} />);
+  fireEvent.press(view.getByLabelText('Clear conversation'));
+  view.rerender(<AssistantScreen navigation={navigation} route={route} />);
+  expect(api.post).toHaveBeenCalledTimes(1);
+
+  await settle(request, 'resolve', 'Late old answer');
+  expect(view.queryByText('Late old answer')).toBeNull();
+});
 
 function submitTypedQuestion(question) {
   fireEvent.changeText(currentView.getByLabelText('Question for Chef Assistant'), question);
@@ -125,6 +151,7 @@ async function settle(deferredRequest, method, value) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockAuth = { status: 'authenticated', user: { id: 'user-a' } };
 });
 
 afterEach(() => {
@@ -251,6 +278,58 @@ it('keeps request A from mutating conversation B after reset', async () => {
   await settle(requestB, 'resolve', 'Answer B');
   expect(currentView.getAllByText('Question B')).toHaveLength(1);
   expect(currentView.getAllByText('Answer B')).toHaveLength(1);
+});
+
+it('consumes navigation prompt state across a genuine unmount and remount', () => {
+  api.post.mockReturnValue(new Promise(() => {}));
+  let route = { params: { initialPrompt: 'Use celeriac' } };
+  const navigation = {
+    goBack: jest.fn(),
+    setParams: jest.fn((params) => {
+      route = { ...route, params: { ...route.params, ...params } };
+    }),
+  };
+  const first = renderAssistant(route, navigation);
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(navigation.setParams).toHaveBeenCalledWith({ initialPrompt: undefined });
+
+  first.unmount();
+  renderAssistant(route, navigation);
+
+  expect(api.post).toHaveBeenCalledTimes(1);
+  expect(currentView.queryByText('Use celeriac')).toBeNull();
+});
+
+it.each([
+  ['success', 'resolve', 'Late account A answer'],
+  ['failure', 'reject', new Error('late account A failure')],
+])('clears account A and ignores its late request %s after a direct switch to B', async (
+  _label,
+  method,
+  value
+) => {
+  const accountARequest = deferred();
+  const accountBRequest = deferred();
+  api.post
+    .mockReturnValueOnce(accountARequest.promise)
+    .mockReturnValueOnce(accountBRequest.promise);
+  const navigation = { goBack: jest.fn(), setParams: jest.fn() };
+  const view = renderAssistant(undefined, navigation);
+  submitTypedQuestion('Account A question');
+
+  mockAuth = { status: 'authenticated', user: { id: 'user-b' } };
+  view.rerender(<AssistantScreen navigation={navigation} />);
+  await waitFor(() => expect(view.queryByText('Account A question')).toBeNull());
+  submitTypedQuestion('Account B question');
+
+  await settle(accountARequest, method, value);
+  expect(view.queryByText('Late account A answer')).toBeNull();
+  expect(view.queryByText(/could not complete that request/)).toBeNull();
+  expect(view.getAllByText('Account B question')).toHaveLength(1);
+  expect(view.getByText('Thinking...')).toBeOnTheScreen();
+
+  await settle(accountBRequest, 'resolve', 'Account B answer');
+  expect(view.getAllByText('Account B answer')).toHaveLength(1);
 });
 
 it('routes a quick prompt through the normal service and single-flight path', async () => {

@@ -70,7 +70,9 @@ const { act, cleanup, fireEvent, render, waitFor } = require('@testing-library/r
 const shoppingListService = require('../src/api/shoppingListService');
 const { ShoppingListProvider } = require('../src/context/ShoppingListContext');
 const ShoppingItemEditModal = require('../src/components/ShoppingItemEditModal').default;
+const IngredientPickerModal = require('../src/components/IngredientPickerModal').default;
 const ShoppingListScreen = require('../src/screens/ShoppingListScreen').default;
+const SwapDetailScreen = require('../src/screens/SwapDetailScreen').default;
 
 function deferred() {
   let resolve;
@@ -117,6 +119,18 @@ function renderModal(props = {}) {
   };
   const merged = { ...defaultProps, ...props };
   return { ...render(<ShoppingItemEditModal {...merged} />), props: merged };
+}
+
+function renderLockedPicker(props = {}) {
+  const defaultProps = {
+    visible: true,
+    lockedIngredient: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Aquafaba' },
+    onClose: jest.fn(),
+    onAdd: jest.fn(async () => ({ ok: true })),
+    onAdded: jest.fn(),
+  };
+  const merged = { ...defaultProps, ...props };
+  return { ...render(<IngredientPickerModal {...merged} />), props: merged };
 }
 
 async function settle(request, method, value) {
@@ -410,4 +424,276 @@ it('does not let an unmounted edit response affect a remounted screen or its ope
   expect(freshView.getByText('Edit Shopping Item')).toBeOnTheScreen();
   expect(freshView.getByLabelText('Quantity').props.value).toBe('1');
   expect(freshView.queryByText('6 kg')).toBeNull();
+});
+
+describe('locked substitute picker', () => {
+  it('opens from Swap Detail with the exact validated substitute identity and context mutation path', async () => {
+    shoppingListService.getShoppingList.mockResolvedValue(list([]));
+    shoppingListService.addItem.mockResolvedValue(list([item({
+      ingredientId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+      ingredient: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Aquafaba' },
+      quantity: 2,
+      unit: 'tbsp',
+    })]));
+    const route = { params: {
+      sourceIngredient: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Egg' },
+      substitution: {
+        id: 'cccccccccccccccccccccccc',
+        source: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Egg' },
+        substitute: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Aquafaba' },
+        contexts: ['baking'],
+        notes: null,
+      },
+    } };
+    const view = render(
+      <ShoppingListProvider>
+        <SwapDetailScreen navigation={{ goBack: jest.fn() }} route={route} />
+      </ShoppingListProvider>
+    );
+    fireEvent.press(view.getByText('Add Substitute to Shopping'));
+    expect(view.getByText('Locked catalog ingredient')).toBeOnTheScreen();
+    fireEvent.press(view.getByLabelText('tbsp unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '2');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    await waitFor(() => expect(shoppingListService.addItem).toHaveBeenCalledWith({
+      ingredientId: 'bbbbbbbbbbbbbbbbbbbbbbbb', unit: 'tbsp', quantity: 2,
+    }));
+    await waitFor(() => expect(view.getByText('Added to Shopping List')).toBeOnTheScreen());
+  });
+
+  it('seeds the exact canonical substitute while leaving unit and quantity unset', () => {
+    const view = renderLockedPicker();
+    expect(view.getByText('Aquafaba')).toBeOnTheScreen();
+    expect(view.getByText('Locked catalog ingredient')).toBeOnTheScreen();
+    expect(view.queryByText('Change')).toBeNull();
+    expect(view.queryByLabelText('Quantity')).toBeNull();
+    expect(view.getByLabelText('Add item to shopping list').props.accessibilityState.disabled).toBe(true);
+  });
+
+  it('submits an explicit measurable quantity and unit only after authoritative success', async () => {
+    const request = deferred();
+    const view = renderLockedPicker({ onAdd: jest.fn(() => request.promise) });
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '2.5');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+
+    expect(view.props.onAdd).toHaveBeenCalledWith({
+      ingredientId: 'aaaaaaaaaaaaaaaaaaaaaaaa', unit: 'kg', quantity: 2.5,
+    });
+    expect(view.props.onAdded).not.toHaveBeenCalled();
+    expect(view.props.onClose).not.toHaveBeenCalled();
+    expect(view.getByLabelText('Close add item').props.accessibilityState.disabled).toBe(true);
+
+    await settle(request, 'resolve', { ok: true });
+    expect(view.props.onAdded).toHaveBeenCalledTimes(1);
+    expect(view.props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits explicit toTaste without a quantity', async () => {
+    const view = renderLockedPicker();
+    fireEvent.press(view.getByLabelText('to taste unit'));
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    await waitFor(() => expect(view.props.onAdd).toHaveBeenCalledWith({
+      ingredientId: 'aaaaaaaaaaaaaaaaaaaaaaaa', unit: 'toTaste', quantity: undefined,
+    }));
+  });
+
+  it('uses a synchronous submit lock so rapid Save issues one mutation', () => {
+    const view = renderLockedPicker({ onAdd: jest.fn(() => new Promise(() => {})) });
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '3');
+    const save = view.getByLabelText('Add item to shopping list');
+    act(() => {
+      save.props.onAccessibilityTap();
+      save.props.onAccessibilityTap();
+    });
+    expect(view.props.onAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps same-frame header Close behind the synchronous submit lock', async () => {
+    const request = deferred();
+    const view = renderLockedPicker({ onAdd: jest.fn(() => request.promise) });
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '3');
+    const save = view.getByLabelText('Add item to shopping list');
+    const close = view.getByLabelText('Close add item');
+
+    act(() => {
+      save.props.onAccessibilityTap();
+      close.props.onPress();
+    });
+
+    expect(view.props.onAdd).toHaveBeenCalledTimes(1);
+    expect(view.props.onClose).not.toHaveBeenCalled();
+    await settle(request, 'resolve', { ok: true });
+    expect(view.props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['archived ingredient', 'That ingredient is unavailable.'],
+    ['list limit', 'Your shopping list is full.'],
+    ['network failure', 'Shopping is temporarily unavailable.'],
+    ['busy mutation', null],
+  ])('keeps the draft open for %s', async (_label, message) => {
+    const result = message ? { ok: false, error: message } : { ok: false, busy: true };
+    const view = renderLockedPicker({ onAdd: jest.fn(async () => result) });
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '4');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    const expected = message || 'Another change is still saving. Try again in a moment.';
+    await waitFor(() => expect(view.getByText(expected)).toBeOnTheScreen());
+    expect(view.props.onClose).not.toHaveBeenCalled();
+    expect(view.getByLabelText('Quantity').props.value).toBe('4');
+  });
+
+  it('ignores an old completion after close and reopen', async () => {
+    const request = deferred();
+    const oldClose = jest.fn();
+    const newClose = jest.fn();
+    const base = {
+      lockedIngredient: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Aquafaba' },
+      onAdd: jest.fn(() => request.promise),
+      onAdded: jest.fn(),
+    };
+    const view = render(<IngredientPickerModal {...base} visible onClose={oldClose} />);
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '2');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    view.rerender(<IngredientPickerModal {...base} visible={false} onClose={oldClose} />);
+    view.rerender(<IngredientPickerModal {...base} visible onClose={newClose} />);
+    await settle(request, 'resolve', { ok: true });
+    expect(oldClose).not.toHaveBeenCalled();
+    expect(newClose).not.toHaveBeenCalled();
+    expect(base.onAdded).not.toHaveBeenCalled();
+    expect(view.getByText('Aquafaba')).toBeOnTheScreen();
+  });
+
+  it('keeps a reopened modal draft and save ownership when the prior session rejects', async () => {
+    const oldRequest = deferred();
+    const currentRequest = deferred();
+    const oldClose = jest.fn();
+    const currentClose = jest.fn();
+    const onAdded = jest.fn();
+    const onAdd = jest.fn()
+      .mockReturnValueOnce(oldRequest.promise)
+      .mockReturnValueOnce(currentRequest.promise);
+    const base = {
+      lockedIngredient: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Aquafaba' },
+      onAdd,
+      onAdded,
+    };
+    const view = render(<IngredientPickerModal {...base} visible onClose={oldClose} />);
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '2');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+
+    view.rerender(<IngredientPickerModal {...base} visible={false} onClose={oldClose} />);
+    view.rerender(<IngredientPickerModal {...base} visible onClose={currentClose} />);
+    fireEvent.press(view.getByLabelText('cup unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '7');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    expect(onAdd).toHaveBeenCalledTimes(2);
+    expect(view.getByLabelText('Close add item').props.accessibilityState.disabled).toBe(true);
+
+    await settle(oldRequest, 'reject', new Error('old session failed'));
+
+    expect(view.getByText('Add Item')).toBeOnTheScreen();
+    expect(view.getByLabelText('Quantity').props.value).toBe('7');
+    expect(view.getByLabelText('cup unit').props.accessibilityState.selected).toBe(true);
+    expect(view.getByLabelText('Close add item').props.accessibilityState.disabled).toBe(true);
+    expect(view.getByLabelText('Add item to shopping list').props.accessibilityState).toEqual({
+      busy: true,
+      disabled: true,
+    });
+    expect(view.queryByText(/Couldn.t add that item/)).toBeNull();
+    expect(oldClose).not.toHaveBeenCalled();
+    expect(currentClose).not.toHaveBeenCalled();
+    expect(onAdded).not.toHaveBeenCalled();
+
+    await settle(currentRequest, 'resolve', { ok: true });
+    expect(onAdded).toHaveBeenCalledTimes(1);
+    expect(currentClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores old completion after account change or unmount', async () => {
+    const accountRequest = deferred();
+    const close = jest.fn();
+    const props = {
+      visible: true,
+      lockedIngredient: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Aquafaba' },
+      onAdd: jest.fn(() => accountRequest.promise),
+      onClose: close,
+      onAdded: jest.fn(),
+    };
+    const view = render(<IngredientPickerModal {...props} />);
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '2');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    mockAuth = { status: 'authenticated', user: { id: 'user-b' } };
+    view.rerender(<IngredientPickerModal {...props} />);
+    await settle(accountRequest, 'resolve', { ok: true });
+    expect(close).not.toHaveBeenCalled();
+    expect(props.onAdded).not.toHaveBeenCalled();
+
+    const unmountRequest = deferred();
+    const unmountProps = { ...props, onAdd: jest.fn(() => unmountRequest.promise) };
+    const unmounted = render(<IngredientPickerModal {...unmountProps} />);
+    fireEvent.press(unmounted.getByLabelText('kg unit'));
+    fireEvent.changeText(unmounted.getByLabelText('Quantity'), '2');
+    fireEvent(unmounted.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    unmounted.unmount();
+    await settle(unmountRequest, 'resolve', { ok: true });
+    expect(close).not.toHaveBeenCalled();
+    expect(props.onAdded).not.toHaveBeenCalled();
+  });
+
+  it('keeps the new account draft and save ownership when the prior account rejects', async () => {
+    const userARequest = deferred();
+    const userBRequest = deferred();
+    const close = jest.fn();
+    const onAdded = jest.fn();
+    const onAdd = jest.fn()
+      .mockReturnValueOnce(userARequest.promise)
+      .mockReturnValueOnce(userBRequest.promise);
+    const props = {
+      visible: true,
+      lockedIngredient: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'Aquafaba' },
+      onAdd,
+      onClose: close,
+      onAdded,
+    };
+    const view = render(<IngredientPickerModal {...props} />);
+    fireEvent.press(view.getByLabelText('kg unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '2');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+
+    mockAuth = { status: 'authenticated', user: { id: 'user-b' } };
+    view.rerender(<IngredientPickerModal {...props} />);
+    fireEvent.press(view.getByLabelText('tbsp unit'));
+    fireEvent.changeText(view.getByLabelText('Quantity'), '5');
+    fireEvent(view.getByLabelText('Add item to shopping list'), 'accessibilityTap');
+    expect(onAdd).toHaveBeenCalledTimes(2);
+    expect(view.getByLabelText('Close add item').props.accessibilityState.disabled).toBe(true);
+
+    await settle(userARequest, 'reject', new Error('user A failed'));
+
+    expect(view.getByText('Add Item')).toBeOnTheScreen();
+    expect(view.getByLabelText('Quantity').props.value).toBe('5');
+    expect(view.getByLabelText('tbsp unit').props.accessibilityState.selected).toBe(true);
+    expect(view.getByLabelText('Close add item').props.accessibilityState.disabled).toBe(true);
+    expect(view.getByLabelText('Add item to shopping list').props.accessibilityState).toEqual({
+      busy: true,
+      disabled: true,
+    });
+    expect(view.queryByText(/Couldn.t add that item/)).toBeNull();
+    expect(close).not.toHaveBeenCalled();
+    expect(onAdded).not.toHaveBeenCalled();
+
+    await settle(userBRequest, 'resolve', { ok: false, error: 'User B current failure.' });
+    expect(view.getByText('User B current failure.')).toBeOnTheScreen();
+    expect(view.getByLabelText('Quantity').props.value).toBe('5');
+    expect(view.getByLabelText('Close add item').props.accessibilityState.disabled).toBe(false);
+    expect(close).not.toHaveBeenCalled();
+    expect(onAdded).not.toHaveBeenCalled();
+  });
 });

@@ -1,11 +1,14 @@
-import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
+import IngredientPickerModal from '../components/IngredientPickerModal';
+import { useShoppingList } from '../context/ShoppingListContext';
+import { isCanonicalIngredientId } from '../api/substitutionService';
 
 function MetricRow({ label, value }) {
   const { colors } = useTheme();
@@ -25,16 +28,28 @@ export default function SwapDetailScreen({ navigation, route }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
+  const { addItem, isMutating } = useShoppingList();
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [added, setAdded] = useState(false);
   const sourceIngredient = route?.params?.sourceIngredient || null;
   const substitution = route?.params?.substitution || null;
   const substitute = substitution?.substitute || null;
-  const hasCatalogResult = !!sourceIngredient?.name && !!substitute?.name;
-
-  const applySubstitute = () =>
-    Alert.alert(
-      'Recipe editing unavailable',
-      'This catalog suggestion cannot be applied automatically yet. No recipe was changed.'
-    );
+  const sourceName = typeof sourceIngredient?.name === 'string' ? sourceIngredient.name.trim() : '';
+  const substituteName = typeof substitute?.name === 'string' ? substitute.name.trim() : '';
+  const sourceId = typeof sourceIngredient?.id === 'string' ? sourceIngredient.id.trim() : '';
+  const relationSourceId = typeof substitution?.source?.id === 'string'
+    ? substitution.source.id.trim()
+    : '';
+  const substituteId = typeof substitute?.id === 'string' ? substitute.id.trim() : '';
+  const hasCatalogResult = Boolean(
+    isCanonicalIngredientId(sourceId) &&
+    sourceName &&
+    isCanonicalIngredientId(substitution?.id) &&
+    relationSourceId.toLowerCase() === sourceId.toLowerCase() &&
+    isCanonicalIngredientId(substituteId) &&
+    substituteName &&
+    sourceId.toLowerCase() !== substituteId.toLowerCase()
+  );
 
   return (
     <View style={styles.root}>
@@ -128,13 +143,25 @@ export default function SwapDetailScreen({ navigation, route }) {
         </View>
 
         <Button
-          title="Apply Substitute to Formula"
+          title={added ? 'Added to Shopping List' : 'Add Substitute to Shopping'}
           variant="primary"
-          onPress={applySubstitute}
-          disabled={!hasCatalogResult}
+          onPress={() => setPickerVisible(true)}
+          disabled={!hasCatalogResult || isMutating || added}
           style={{ marginTop: spacing.lg }}
         />
+        {!hasCatalogResult ? (
+          <Text style={styles.unavailableText} accessibilityRole="alert">
+            This substitute is no longer available. Return to Ingredient Swaps and refresh the catalog.
+          </Text>
+        ) : null}
       </ScrollView>
+      <IngredientPickerModal
+        visible={pickerVisible}
+        lockedIngredient={hasCatalogResult ? { id: substituteId, name: substituteName } : null}
+        onClose={() => setPickerVisible(false)}
+        onAdd={addItem}
+        onAdded={() => setAdded(true)}
+      />
     </View>
   );
 }
@@ -295,6 +322,13 @@ function makeStyles(colors) {
       fontSize: typography.sizes.sm,
       lineHeight: 19,
       color: colors.ink,
+    },
+    unavailableText: {
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.sm,
+      lineHeight: 19,
+      color: colors.error,
+      marginTop: spacing.md,
     },
   });
 }
