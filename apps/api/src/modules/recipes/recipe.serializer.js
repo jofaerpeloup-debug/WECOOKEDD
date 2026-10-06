@@ -32,6 +32,64 @@ function toStructuredSteps(instructions) {
   }));
 }
 
+const NUTRITION_KEYS = Object.freeze([
+  'schemaVersion',
+  'basis',
+  'caloriesKcal',
+  'proteinGrams',
+  'carbohydrateGrams',
+  'fatGrams',
+  'sugarGrams',
+  'fiberGrams',
+]);
+const NUTRIENT_KEYS = NUTRITION_KEYS.slice(2);
+
+function malformedNutritionError() {
+  const error = new Error('Stored Recipe nutrition is malformed.');
+  error.code = 'RECIPE_NUTRITION_MALFORMED';
+  return error;
+}
+
+function toPublicNutrition(value) {
+  if (value === undefined || value === null) return null;
+  const nutrition = typeof value.toObject === 'function' ? value.toObject() : value;
+  if (!nutrition || typeof nutrition !== 'object' || Array.isArray(nutrition)) {
+    throw malformedNutritionError();
+  }
+  const keys = Object.keys(nutrition).sort();
+  if (keys.length !== NUTRITION_KEYS.length || keys.some((key, index) => key !== [...NUTRITION_KEYS].sort()[index])) {
+    throw malformedNutritionError();
+  }
+  if (nutrition.schemaVersion !== 1 || nutrition.basis !== 'perServing') {
+    throw malformedNutritionError();
+  }
+  if (NUTRIENT_KEYS.some((key) => (
+    typeof nutrition[key] !== 'number' || !Number.isFinite(nutrition[key]) || nutrition[key] < 0
+  ))) {
+    throw malformedNutritionError();
+  }
+  return {
+    schemaVersion: 1,
+    basis: 'perServing',
+    caloriesKcal: nutrition.caloriesKcal,
+    proteinGrams: nutrition.proteinGrams,
+    carbohydrateGrams: nutrition.carbohydrateGrams,
+    fatGrams: nutrition.fatGrams,
+    sugarGrams: nutrition.sugarGrams,
+    fiberGrams: nutrition.fiberGrams,
+  };
+}
+
+function toStaffNutritionSource(provenance) {
+  if (!provenance) return null;
+  const source = {
+    kind: provenance.sourceKind,
+    label: provenance.sourceLabel,
+  };
+  if (provenance.sourceUrl) source.url = provenance.sourceUrl;
+  return source;
+}
+
 // Maps a Recipe document to the public API representation, field-by-field
 // rather than spreading the document, so __v, a legacy physical `cuisine`
 // property, and any other internal field is never leaked. `cuisine` is
@@ -48,6 +106,7 @@ function toPublicRecipe(recipe) {
     prepTimeMinutes: recipe.prepTimeMinutes,
     cookTimeMinutes: recipe.cookTimeMinutes,
     servings: recipe.servings,
+    nutrition: toPublicNutrition(recipe.nutrition),
     ingredients: (recipe.ingredients || []).map(toPublicRecipeIngredient),
     instructions: recipe.instructions || [],
     steps: toStructuredSteps(recipe.instructions || []),
@@ -74,6 +133,7 @@ function toStaffRecipe(recipe) {
     updatedBy: actorId(recipe.updatedBy),
     publishedBy: actorId(recipe.publishedBy),
     publishedAt: recipe.publishedAt ?? null,
+    nutritionSource: recipe.nutrition == null ? null : toStaffNutritionSource(recipe.nutritionProvenance),
   };
 }
 
@@ -89,4 +149,10 @@ function toDuplicateCandidateRecipe(recipe) {
   };
 }
 
-module.exports = { toPublicRecipe, toStaffRecipe, toStructuredSteps, toDuplicateCandidateRecipe };
+module.exports = {
+  toPublicRecipe,
+  toStaffRecipe,
+  toStructuredSteps,
+  toDuplicateCandidateRecipe,
+  toPublicNutrition,
+};

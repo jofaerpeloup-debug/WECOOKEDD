@@ -27,6 +27,23 @@ const REGIONS = new Set(RECIPE_REGIONS.map(({ value }) => value));
 const CATEGORIES = new Set(RECIPE_CATEGORIES.map(({ value }) => value));
 const UNITS = new Set(RECIPE_UNITS.map(({ value }) => value));
 const scalarDetails = ['difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings'];
+export const NUTRIENT_FIELDS = Object.freeze([
+  ['caloriesKcal', 'Calories', 'kcal'],
+  ['proteinGrams', 'Protein', 'g'],
+  ['carbohydrateGrams', 'Carbohydrate', 'g'],
+  ['fatGrams', 'Fat', 'g'],
+  ['sugarGrams', 'Sugar', 'g'],
+  ['fiberGrams', 'Fiber', 'g'],
+]);
+const MAX_NUTRITION_SOURCE_LABEL_LENGTH = 500;
+
+export function blankNutrition() {
+  return Object.fromEntries(NUTRIENT_FIELDS.map(([field]) => [field, '']));
+}
+
+function blankNutritionSource() {
+  return { kind: 'manual', label: '', url: '' };
+}
 
 export function blankIngredient() {
   return { key: `ingredient-${Date.now()}-${Math.random()}`, ingredient: null, quantity: '', unit: 'g', optional: false, note: '' };
@@ -38,6 +55,7 @@ export function emptyRecipeForm() {
     ingredients: [blankIngredient()], instructions: [''],
     difficulty: '', prepTimeMinutes: '', cookTimeHours: '', cookTimeMinutePart: '', servings: '',
     region: '', category: '', dietaryTags: [],
+    nutrition: null, nutritionSource: blankNutritionSource(),
   };
 }
 
@@ -56,6 +74,12 @@ export function formFromRecipe(recipe) {
     difficulty: recipe.difficulty ?? '', prepTimeMinutes: valueOrBlank(recipe.prepTimeMinutes),
     cookTimeHours: cookTime.hours, cookTimeMinutePart: cookTime.minutes, servings: valueOrBlank(recipe.servings),
     region: recipe.region ?? '', category: recipe.category ?? '', dietaryTags: [...(recipe.dietaryTags || [])],
+    nutrition: recipe.nutrition ? Object.fromEntries(NUTRIENT_FIELDS.map(([field]) => [field, valueOrBlank(recipe.nutrition[field])])) : null,
+    nutritionSource: recipe.nutritionSource ? {
+      kind: recipe.nutritionSource.kind || 'manual',
+      label: recipe.nutritionSource.label ?? '',
+      url: recipe.nutritionSource.url ?? '',
+    } : blankNutritionSource(),
   };
 }
 
@@ -136,6 +160,28 @@ export function normalizeInstructions(rows = []) {
   return rows.map((row) => String(row ?? '').trim()).filter(Boolean);
 }
 
+function normalizeNutrition(nutrition) {
+  if (nutrition == null) return null;
+  return {
+    schemaVersion: 1,
+    basis: 'perServing',
+    ...Object.fromEntries(NUTRIENT_FIELDS.map(([field]) => {
+      const text = String(nutrition[field] ?? '').trim();
+      return [field, text === '' ? null : Number(text)];
+    })),
+  };
+}
+
+function normalizeNutritionSource(source) {
+  const normalized = {
+    kind: source?.kind === 'jsonLd' ? 'jsonLd' : 'manual',
+    label: String(source?.label ?? '').trim(),
+  };
+  const url = String(source?.url ?? '').trim();
+  if (url) normalized.url = url;
+  return normalized;
+}
+
 export function normalizeSection(form, step) {
   if (step === 'basics') return { title: collapsed(form.title), description: String(form.description ?? '').trim(), imageUrl: form.imageUrl ?? null };
   if (step === 'ingredients') return { ingredients: normalizeIngredients(form.ingredients) };
@@ -147,6 +193,8 @@ export function normalizeSection(form, step) {
     servings: form.servings === '' ? '' : Number(form.servings),
     region: form.region || '', category: form.category || '',
     dietaryTags: [...new Set(form.dietaryTags || [])],
+    nutrition: normalizeNutrition(form.nutrition),
+    nutritionSource: form.nutrition == null ? null : normalizeNutritionSource(form.nutritionSource),
   };
   return {};
 }
@@ -157,6 +205,35 @@ function validateInteger(errors, field, value, min, max, label, required) {
   const text = String(value).trim();
   const number = /^-?\d+$/.test(text) ? Number(text) : Number.NaN;
   if (!Number.isInteger(number) || number < min || number > max) error(errors, field, `${label} must be a whole number from ${min} to ${max}.`);
+}
+
+function isPublicHttpsUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function validateNutrition(errors, form) {
+  if (form.nutrition == null) return;
+  for (const [field, label] of NUTRIENT_FIELDS) {
+    const text = String(form.nutrition[field] ?? '').trim();
+    const number = text === '' ? Number.NaN : Number(text);
+    if (!Number.isFinite(number) || number < 0) {
+      error(errors, `nutrition.${field}`, `${label} must be a finite nonnegative number.`);
+    }
+  }
+  const label = String(form.nutritionSource?.label ?? '').trim();
+  if (!label) error(errors, 'nutritionSource.label', 'Nutrition source is required.');
+  else if (label.length > MAX_NUTRITION_SOURCE_LABEL_LENGTH) {
+    error(errors, 'nutritionSource.label', `Nutrition source must be ${MAX_NUTRITION_SOURCE_LABEL_LENGTH} characters or fewer.`);
+  }
+  const url = String(form.nutritionSource?.url ?? '').trim();
+  if (url && !isPublicHttpsUrl(url)) {
+    error(errors, 'nutritionSource.url', 'Nutrition source URL must be HTTPS and contain no credentials.');
+  }
 }
 
 export function validateStep(form, step, { published = false } = {}) {
@@ -210,6 +287,7 @@ export function validateStep(form, step, { published = false } = {}) {
     if (form.region && !REGIONS.has(form.region)) error(errors, 'region', 'Choose a supported region.');
     if (form.category && !CATEGORIES.has(form.category)) error(errors, 'category', 'Choose a supported category.');
     if ((form.dietaryTags || []).some((tag) => !DIETARY_TAGS.has(tag))) error(errors, 'dietaryTags', 'Choose only supported dietary tags.');
+    validateNutrition(errors, form);
   }
   return errors;
 }
@@ -232,7 +310,7 @@ export function stepForField(field = '') {
   if (/^(title|description|image)/.test(field)) return 'basics';
   if (/^ingredients/.test(field)) return 'ingredients';
   if (/^(instructions|steps)/.test(field)) return 'instructions';
-  if (/^(difficulty|prepTimeMinutes|cookTimeMinutes|servings|region|category|dietaryTags)/.test(field)) return 'details';
+  if (/^(difficulty|prepTimeMinutes|cookTimeMinutes|servings|region|category|dietaryTags|nutrition)/.test(field)) return 'details';
   return 'review';
 }
 
@@ -245,10 +323,18 @@ export function buildStepPatch(savedForm, workingForm, step) {
   const after = normalizeSection(workingForm, step);
   const patch = {};
   for (const [field, value] of Object.entries(after)) {
+    if (step === 'details' && (field === 'nutrition' || field === 'nutritionSource')) continue;
     if (comparable(value) === comparable(before[field])) continue;
     if (step === 'basics' && field === 'description' && value === '') patch[field] = null;
     else if (step === 'details' && (scalarDetails.includes(field) || field === 'region' || field === 'category') && value === '') patch[field] = null;
     else patch[field] = value;
+  }
+  if (step === 'details' && (
+    comparable(before.nutrition) !== comparable(after.nutrition)
+    || comparable(before.nutritionSource) !== comparable(after.nutritionSource)
+  )) {
+    patch.nutrition = after.nutrition;
+    if (after.nutrition !== null) patch.nutritionSource = after.nutritionSource;
   }
   return patch;
 }

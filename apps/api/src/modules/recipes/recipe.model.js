@@ -20,6 +20,7 @@ const MAX_INSTRUCTION_LENGTH = 1000;
 const MAX_INGREDIENT_NOTE_LENGTH = 200;
 const MAX_IMAGE_URL_LENGTH = 2000;
 const MAX_IMAGE_ASSET_ID_LENGTH = 255;
+const MAX_NUTRITION_SOURCE_LABEL_LENGTH = 500;
 
 function collapseWhitespace(value) {
   return typeof value === 'string' ? value.trim().replace(/\s+/gu, ' ') : value;
@@ -69,6 +70,57 @@ const recipeIngredientSchema = new mongoose.Schema(
 // pairs the same quantity/unit semantics — see
 // shared/constants/measurement-units.js.
 recipeIngredientSchema.pre('validate', validateQuantityForUnit);
+
+const nonnegativeFiniteNumber = {
+  validator: (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0,
+  message: 'Nutrition values must be finite nonnegative numbers.',
+};
+
+const NUTRITION_NUMBER_KEYS = [
+  'caloriesKcal',
+  'proteinGrams',
+  'carbohydrateGrams',
+  'fatGrams',
+  'sugarGrams',
+  'fiberGrams',
+];
+const NUTRITION_KEYS = ['schemaVersion', 'basis', ...NUTRITION_NUMBER_KEYS].sort();
+
+function isExactNutrition(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== NUTRITION_KEYS.length || keys.some((key, index) => key !== NUTRITION_KEYS[index])) {
+    return false;
+  }
+  return value.schemaVersion === 1
+    && value.basis === 'perServing'
+    && NUTRITION_NUMBER_KEYS.every((key) => nonnegativeFiniteNumber.validator(value[key]));
+}
+
+// The public nutrition payload is intentionally stored separately from its
+// internal provenance so a field-by-field serializer can expose the exact v1
+// object without leaking staff identity or audit metadata. Mixed prevents both
+// numeric-string coercion and silent removal of unknown keys before the exact
+// object validator runs.
+
+const nutritionProvenanceSchema = new mongoose.Schema(
+  {
+    sourceKind: { type: String, required: true, enum: ['manual', 'jsonLd'] },
+    sourceLabel: { type: String, required: true, trim: true, maxlength: MAX_NUTRITION_SOURCE_LABEL_LENGTH },
+    sourceUrl: {
+      type: String,
+      trim: true,
+      maxlength: MAX_IMAGE_URL_LENGTH,
+      validate: {
+        validator: (value) => value == null || isPublicHttpsUrl(value),
+        message: 'nutrition source URL must be a public HTTPS URL without credentials.',
+      },
+    },
+    acceptedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    acceptedAt: { type: Date, required: true },
+  },
+  { _id: false, strict: 'throw' }
+);
 
 function isStructurallyValidStepArray(arr) {
   return (
@@ -138,6 +190,20 @@ const recipeSchema = new mongoose.Schema(
         validator: Number.isInteger,
         message: 'servings must be an integer.',
       },
+    },
+    nutrition: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+      validate: {
+        validator: (value) => value == null || isExactNutrition(value),
+        message: 'Nutrition must be a complete exact v1 per-serving object.',
+      },
+    },
+    // Internal only. recipe.serializer.js never exposes acceptedBy or
+    // acceptedAt, and the consumer representation exposes none of this object.
+    nutritionProvenance: {
+      type: nutritionProvenanceSchema,
+      default: undefined,
     },
     ingredients: {
       type: [recipeIngredientSchema],
@@ -214,6 +280,15 @@ recipeSchema.pre('validate', function validateManagedImageConsistency() {
   }
 });
 
+recipeSchema.pre('validate', function validateNutritionProvenanceConsistency() {
+  if (this.nutrition != null && this.nutritionProvenance == null) {
+    this.invalidate('nutritionProvenance', 'nutrition requires server-owned provenance.');
+  }
+  if (this.nutrition == null && this.nutritionProvenance != null) {
+    this.invalidate('nutritionProvenance', 'nutrition provenance requires nutrition.');
+  }
+});
+
 // Primary list-filtering shapes; ingredients.ingredientId backs the
 // "recipes using this ingredient" lookup (also useful for later
 // recommendation logic); title backs titleAsc/titleDesc sort and search.
@@ -247,3 +322,4 @@ module.exports.MAX_INSTRUCTION_LENGTH = MAX_INSTRUCTION_LENGTH;
 module.exports.MAX_INGREDIENT_NOTE_LENGTH = MAX_INGREDIENT_NOTE_LENGTH;
 module.exports.MAX_IMAGE_URL_LENGTH = MAX_IMAGE_URL_LENGTH;
 module.exports.MAX_IMAGE_ASSET_ID_LENGTH = MAX_IMAGE_ASSET_ID_LENGTH;
+module.exports.MAX_NUTRITION_SOURCE_LABEL_LENGTH = MAX_NUTRITION_SOURCE_LABEL_LENGTH;

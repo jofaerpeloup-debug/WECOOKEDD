@@ -2,7 +2,7 @@ const recipeRepository = require('./recipe.repository');
 const ingredientService = require('../ingredients/ingredient.service');
 const { AppError } = require('../../shared/errors/app-error');
 const imageProvider = require('../uploads/cloudinary-image.provider');
-const { toDuplicateCandidateRecipe } = require('./recipe.serializer');
+const { toDuplicateCandidateRecipe, toPublicNutrition } = require('./recipe.serializer');
 const {
   DUPLICATE_CANDIDATE_LIMIT,
   createDuplicateReview,
@@ -15,6 +15,8 @@ const {
   titleSchema,
   draftInstructionsArraySchema,
   draftStepsArraySchema,
+  nutritionSchema,
+  nutritionSourceSchema,
 } = require('./recipe.validation');
 const { consumerPublicationFilter } = require('./recipe.visibility');
 
@@ -136,6 +138,43 @@ function normalizeDietaryTags(tags = []) {
   return [...new Set(tags)];
 }
 
+function sourceFromProvenance(provenance) {
+  if (!provenance) return undefined;
+  const source = {
+    kind: provenance.sourceKind,
+    label: provenance.sourceLabel,
+  };
+  if (provenance.sourceUrl) source.url = provenance.sourceUrl;
+  return source;
+}
+
+function buildNutritionProvenance(source, { actorId, now }) {
+  if (!actorId) {
+    throw new AppError('Authenticated staff attribution is required for nutrition.', {
+      statusCode: 500,
+      code: 'RECIPE_NUTRITION_ACTOR_REQUIRED',
+    });
+  }
+  const normalized = parseAuthoringValue(nutritionSourceSchema, source, 'nutritionSource');
+  return {
+    sourceKind: normalized.kind,
+    sourceLabel: normalized.label,
+    sourceUrl: normalized.url,
+    acceptedBy: actorId,
+    acceptedAt: now,
+  };
+}
+
+function applyNutritionToDocument(doc, nutrition, nutritionSource, context) {
+  if (nutrition === undefined) return;
+  if (nutrition === null) {
+    doc.nutrition = null;
+    return;
+  }
+  doc.nutrition = parseAuthoringValue(nutritionSchema, nutrition, 'nutrition');
+  doc.nutritionProvenance = buildNutritionProvenance(nutritionSource, context);
+}
+
 // Reduces validated step input to the persisted `instructions: string[]`
 // shape (Mongo's source of truth). A structured `steps` array wins when
 // present — the validation layer has already guaranteed contiguous 1..N
@@ -206,7 +245,7 @@ function normalizeIngredients(ingredients) {
   }));
 }
 
-function toPublishedValidationInput(recipe) {
+function toPublishedValidationInput(recipe, { nutritionSource } = {}) {
   // A populated reference becomes null when its target Ingredient was deleted.
   // The stored usage was still structurally complete, so use a validation-only
   // ObjectId sentinel here and leave missing/inactive-reference eligibility to
@@ -236,11 +275,21 @@ function toPublishedValidationInput(recipe) {
   };
   if (recipe.region != null) input.region = recipe.region;
   if (recipe.category != null) input.category = recipe.category;
+  if (recipe.nutrition != null) {
+    input.nutrition = typeof recipe.nutrition.toObject === 'function'
+      ? recipe.nutrition.toObject()
+      : recipe.nutrition;
+    input.nutritionSource = nutritionSource === undefined
+      ? sourceFromProvenance(recipe.nutritionProvenance)
+      : nutritionSource;
+  } else if (recipe.nutrition === null) {
+    input.nutrition = null;
+  }
   return input;
 }
 
-function assertPublishedComplete(recipe) {
-  const result = publishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe));
+function assertPublishedComplete(recipe, options) {
+  const result = publishedRecipeBodySchema.safeParse(toPublishedValidationInput(recipe, options));
   if (!result.success) {
     throw incompleteRecipeError(result.error.issues);
   }
@@ -306,7 +355,7 @@ function toNonAdminView(recipe) {
 function buildPublishedRecipeDocument({
   title, description, region, category, difficulty, prepTimeMinutes,
   cookTimeMinutes, servings, ingredients, instructions, steps,
-  dietaryTags = [], imageUrl, imageAssetId,
+  dietaryTags = [], imageUrl, imageAssetId, nutrition, nutritionSource,
 }, { actorId, now = new Date() } = {}) {
   const doc = {
     title: normalizeTitle(title),
@@ -330,6 +379,7 @@ function buildPublishedRecipeDocument({
   // validation layer). Never fabricated from cuisine/title/anything else.
   if (region !== undefined) doc.region = region;
   if (category !== undefined) doc.category = category;
+  applyNutritionToDocument(doc, nutrition, nutritionSource, { actorId, now });
 
   return doc;
 }
@@ -475,8 +525,25 @@ async function createRecipe(input, { actorId, now = new Date() } = {}) {
 async function checkRecipeDuplicates({ recipeId, expectedUpdatedAt, candidate }) {
   if (candidate) {
     await assertIngredientsActive(candidate.ingredients);
-    const subject = buildPublishedRecipeDocument(candidate);
-    assertPublishedComplete(subject);
+    // Duplicate checking is analysis only. Normalize the candidate nutrition
+    // and its supplied source for completeness validation without constructing
+    // persistence provenance or inventing an actor/acceptance timestamp.
+    const { nutrition, nutritionSource, ...candidateWithoutNutrition } = candidate;
+    const subject = buildPublishedRecipeDocument(candidateWithoutNutrition);
+    let normalizedNutritionSource;
+    if (nutrition !== undefined) {
+      subject.nutrition = nutrition === null
+        ? null
+        : parseAuthoringValue(nutritionSchema, nutrition, 'nutrition');
+      if (nutrition !== null) {
+        normalizedNutritionSource = parseAuthoringValue(
+          nutritionSourceSchema,
+          nutritionSource,
+          'nutritionSource',
+        );
+      }
+    }
+    assertPublishedComplete(subject, { nutritionSource: normalizedNutritionSource });
     return compareRecipeSubject(subject);
   }
 
@@ -490,7 +557,7 @@ async function checkRecipeDuplicates({ recipeId, expectedUpdatedAt, candidate })
   return compareRecipeSubject(subject, { excludeId: subject._id });
 }
 
-async function createDraft(input, { actorId } = {}) {
+async function createDraft(input, { actorId, now = new Date() } = {}) {
   const doc = {
     title: normalizeTitle(input.title),
     publicationStatus: 'draft',
@@ -514,6 +581,7 @@ async function createDraft(input, { actorId } = {}) {
   if (input.dietaryTags !== undefined) doc.dietaryTags = normalizeDietaryTags(input.dietaryTags);
   if (input.imageUrl !== undefined) doc.imageUrl = input.imageUrl;
   if (input.imageAssetId !== undefined) doc.imageAssetId = input.imageAssetId;
+  applyNutritionToDocument(doc, input.nutrition, input.nutritionSource, { actorId, now });
   return recipeRepository.createRecipe(doc);
 }
 
@@ -528,8 +596,14 @@ function findRecipeById(id) {
 // unusable recipe exactly as if it didn't exist.
 async function getRecipeById(id, { isAdmin } = {}) {
   const recipe = await recipeRepository.findByIdWithIngredients(id);
-  if (!recipe || (!isAdmin && !isUsableForNonAdmin(recipe))) {
+  if (!recipe) {
     throw notFoundError();
+  }
+  if (!isAdmin) {
+    // Match list behavior: malformed present authoritative nutrition is a
+    // response failure, never ordinary publication/usability filtering.
+    toPublicNutrition(recipe.nutrition);
+    if (!isUsableForNonAdmin(recipe)) throw notFoundError();
   }
   return isAdmin ? recipe : toNonAdminView(recipe);
 }
@@ -632,6 +706,13 @@ async function listRecipes({
     recipeRepository.countByFilter(filter),
   ]);
 
+  // Authoritative nutrition is not ordinary publication incompleteness. A
+  // malformed present value must reject the whole consumer response before
+  // the legacy usability filter can turn it into a valid-looking omission.
+  if (!isAdmin) {
+    rawItems.forEach((recipe) => toPublicNutrition(recipe.nutrition));
+  }
+
   // Known V1 simplification, same trade-off as substitutions (see
   // docs/architecture/recipes.md): the "usable" filter runs in application
   // code after the database page is fetched, so pagination.total/
@@ -648,7 +729,7 @@ async function listRecipes({
   return { items, total, page, limit };
 }
 
-async function updateRecipe(id, patch, { actorId } = {}) {
+async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
   const existing = await recipeRepository.findRawById(id);
   if (!existing) {
     throw notFoundError();
@@ -691,6 +772,15 @@ async function updateRecipe(id, patch, { actorId } = {}) {
     update.instructions = toInstructionsList({ instructions: patch.instructions, steps: patch.steps });
   }
   if (patch.dietaryTags !== undefined) update.dietaryTags = normalizeDietaryTags(patch.dietaryTags);
+  if (patch.nutrition !== undefined) {
+    if (patch.nutrition === null) {
+      unset.nutrition = '';
+      unset.nutritionProvenance = '';
+    } else {
+      update.nutrition = parseAuthoringValue(nutritionSchema, patch.nutrition, 'nutrition');
+      update.nutritionProvenance = buildNutritionProvenance(patch.nutritionSource, { actorId, now });
+    }
+  }
   const oldImageAssetId = existing.imageAssetId ?? null;
   let nextImageAssetId = oldImageAssetId;
   let shouldSetImageAssetId = false;

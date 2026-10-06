@@ -487,6 +487,36 @@ test('changing the source cannot replay A or overwrite edited and cleared fields
   delete globalThis.__recipeAuthoringIntegrationApi;
 });
 
+test('nutrition stays suggestion-only until explicit acceptance and a replacement preview invalidates the prior handoff', () => {
+  const nutrition = (calories) => ({
+    '@type': 'Recipe',
+    nutrition: {
+      '@type': 'NutritionInformation', servingSize: '1 serving', calories: `${calories} kcal`,
+      proteinContent: '28 g', carbohydrateContent: '12 g', fatContent: '18 g',
+      sugarContent: '3 g', fiberContent: '2 g',
+    },
+  });
+  const changes = [];
+  let preview = null;
+  let application = 'existing';
+  const dependencies = {
+    form: emptyRecipeForm(), change: (field, value) => changes.push([field, value]),
+    setPreview: (value) => { preview = value; },
+    setApplication: (value) => { application = value; },
+  };
+  createRecipeIntakeHandlers({ ...dependencies, input: JSON.stringify(nutrition(100)), preview }).previewInput();
+  assert.equal(preview.nutritionSuggestion.nutrition.caloriesKcal, 100);
+  assert.deepEqual(changes, []);
+  assert.equal(application, null);
+
+  createRecipeIntakeHandlers({ ...dependencies, input: JSON.stringify(nutrition(250)), preview }).previewInput();
+  assert.equal(preview.nutritionSuggestion.nutrition.caloriesKcal, 250);
+  createRecipeIntakeHandlers({ ...dependencies, input: JSON.stringify(nutrition(250)), preview }).acceptNutrition();
+  assert.equal(changes[0][0], 'nutrition');
+  assert.equal(changes[0][1].caloriesKcal, '250');
+  assert.equal(changes[1][0], 'nutritionSource');
+});
+
 test('production JSX keeps Preview local, queues unresolved source, and gates resolution behind the explicit action', () => {
   const intakeSource = readFileSync(new URL('../src/recipeAuthoring/recipeIntake.js', import.meta.url), 'utf8');
   const stepsSource = readFileSync(new URL('../src/recipeAuthoring/RecipeAuthoringSteps.jsx', import.meta.url), 'utf8');
