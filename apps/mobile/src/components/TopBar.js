@@ -26,6 +26,8 @@ function Wordmark({ style }) {
  * `onSavedPress` is opt-in: only screens that pass it get the bookmark
  * affordance (teammate `c1c86ed` Dashboard header). Every other `mode="brand"`
  * caller renders the wordmark and notification bell without a Saved action.
+ * `onShoppingPress` is likewise opt-in. `shoppingCount` is presentation-only;
+ * the caller remains responsible for supplying an authoritative count.
  */
 export default function TopBar({
   mode = 'brand',
@@ -33,6 +35,8 @@ export default function TopBar({
   onBack,
   onBellPress,
   onSavedPress,
+  onShoppingPress,
+  shoppingCount,
   rightIcon,
   onRightPress,
   transparent = false,
@@ -48,6 +52,11 @@ export default function TopBar({
     if (onBellPress) onBellPress();
     else setNotifVisible(true);
   };
+
+  const hasShoppingCount = Number.isInteger(shoppingCount) && shoppingCount > 0;
+  const shoppingLabel = hasShoppingCount
+    ? `Shopping list, ${shoppingCount} unchecked ${shoppingCount === 1 ? 'item' : 'items'}`
+    : 'Shopping list';
 
   return (
     <View
@@ -73,6 +82,30 @@ export default function TopBar({
                 accessibilityLabel="Saved recipes"
               >
                 <Ionicons name="bookmark-outline" size={16} color={colors.ink} />
+              </Pressable>
+            )}
+            {onShoppingPress && (
+              <Pressable
+                onPress={onShoppingPress}
+                hitSlop={10}
+                style={styles.shoppingBtn}
+                accessibilityRole="button"
+                accessibilityLabel={shoppingLabel}
+              >
+                <Ionicons name="cart-outline" size={18} color={colors.ink} />
+                {hasShoppingCount && (
+                  <View
+                    testID="shopping-count-badge"
+                    style={styles.shoppingBadge}
+                    accessible={false}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                  >
+                    <Text style={styles.shoppingBadgeText}>
+                      {shoppingCount >= 100 ? '99+' : shoppingCount}
+                    </Text>
+                  </View>
+                )}
               </Pressable>
             )}
             <Pressable
@@ -146,6 +179,34 @@ function makeStyles(colors) {
       backgroundColor: colors.sagePale,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    shoppingBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.sagePale,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    shoppingBadge: {
+      position: 'absolute',
+      top: -7,
+      right: -9,
+      minWidth: 17,
+      height: 17,
+      paddingHorizontal: 4,
+      borderRadius: 9,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: colors.cream,
+    },
+    shoppingBadgeText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 9,
+      lineHeight: 12,
+      color: colors.onAccent,
     },
     brandRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     brand: {

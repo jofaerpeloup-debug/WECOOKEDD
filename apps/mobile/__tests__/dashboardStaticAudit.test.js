@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const source = fs.readFileSync(path.join(__dirname, '../src/screens/DashboardScreen.js'), 'utf8');
+const topBar = fs.readFileSync(path.join(__dirname, '../src/components/TopBar.js'), 'utf8');
 
 describe('Dashboard production authority and shared recent searches', () => {
   it('keeps real Recipe service, image, favorites, and Recipe Detail navigation', () => {
@@ -35,5 +36,36 @@ describe('Dashboard production authority and shared recent searches', () => {
 
   it('retains the exact Dashboard to Search preset handoff', () => {
     expect(source).toMatch(/navigation\.navigate\('Discover', \{ initialFilter: filterKey \|\| 'all' \}\)/);
+  });
+
+  it('consumes only the existing Shopping provider and derives a ready unchecked-entry count', () => {
+    expect(source).toMatch(/import \{ useShoppingList \} from '\.\.\/context\/ShoppingListContext'/);
+    expect(source).toMatch(/items: shoppingItems, status: shoppingStatus/);
+    expect(source).toMatch(/shoppingStatus === 'ready'/);
+    expect(source).toMatch(/shoppingItems\.reduce\(\(count, item\) => count \+ \(item\.isChecked \? 0 : 1\), 0\)/);
+    expect(source).not.toMatch(/shoppingListService|AsyncStorage|loadJSON|saveJSON/);
+    expect(source).not.toMatch(/useState\([^)]*shopping|setShopping|useEffect\([^]*shoppingListService/);
+  });
+
+  it('opts only Dashboard into one caller-owned List navigation action', () => {
+    expect(source).toMatch(/onShoppingPress=\{\(\) => navigation\.navigate\('List'\)\}/);
+    expect(source).toMatch(/shoppingCount=\{uncheckedShoppingCount\}/);
+    expect(topBar).not.toMatch(/navigate\('List'\)|route\.name|useRoute\(/);
+  });
+
+  it('keeps shared TopBar Shopping support explicit, capped only visually, and hidden by default', () => {
+    expect(topBar).toMatch(/onShoppingPress,/);
+    expect(topBar).toMatch(/\{onShoppingPress && \(/);
+    expect(topBar).toMatch(/shoppingCount >= 100 \? '99\+' : shoppingCount/);
+    expect(topBar).toMatch(/Shopping list, \$\{shoppingCount\} unchecked/);
+    expect(topBar).toMatch(/accessibilityElementsHidden/);
+    expect(topBar).toMatch(/importantForAccessibility="no-hide-descendants"/);
+  });
+
+  it('introduces no Shopping request, storage, mutation, backend, or async owner', () => {
+    const combined = `${source}\n${topBar}`;
+    expect(combined).not.toMatch(/getShoppingList|reloadShopping|addItem|setChecked|removeItem|clearItems/);
+    expect(combined).not.toMatch(/shoppingListService|AsyncStorage|SecureStore/);
+    expect(combined).not.toMatch(/shoppingGen|shoppingLoading|shoppingError|setShopping/);
   });
 });
