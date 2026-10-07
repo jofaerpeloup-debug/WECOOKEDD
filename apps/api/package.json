@@ -15,7 +15,8 @@
     "test": "node --test",
     "audit:catalog": "node scripts/audit-catalog-consistency.js",
     "migrate:auth-identities": "node scripts/migrate-auth-identities.js",
-    "migrate:notifications-v1": "node scripts/migrate-notifications-v1.js"
+    "migrate:notifications-v1": "node scripts/migrate-notifications-v1.js",
+    "migrate:shopping-list-versions": "node scripts/migrate-shopping-list-versions.js"
   },
   "dependencies": {
     "@wecooked/contracts": "0.0.0",
