@@ -13,6 +13,7 @@ import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useSearchHistory } from '../context/SearchHistoryContext';
+import { useShoppingList } from '../context/ShoppingListContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
@@ -111,9 +112,17 @@ export default function DashboardScreen({ navigation }) {
   const styles = makeStyles(colors);
   const { user } = useAuth();
   const { recentSearches: recent, recordSearch, clearSearchHistory } = useSearchHistory();
+  const { items: shoppingItems, status: shoppingStatus } = useShoppingList();
 
   const firstName = firstNameOf(user);
   const greeting = greetingForNow();
+  const uncheckedShoppingCount = useMemo(
+    () =>
+      shoppingStatus === 'ready'
+        ? shoppingItems.reduce((count, item) => count + (item.isChecked ? 0 : 1), 0)
+        : null,
+    [shoppingItems, shoppingStatus]
+  );
 
   const [query, setQuery] = useState('');
   const trimmed = query.trim();
@@ -305,7 +314,12 @@ export default function DashboardScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="brand" onSavedPress={() => navigation.navigate('Saved')} />
+      <TopBar
+        mode="brand"
+        onSavedPress={() => navigation.navigate('Saved')}
+        onShoppingPress={() => navigation.navigate('List')}
+        shoppingCount={uncheckedShoppingCount}
+      />
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}

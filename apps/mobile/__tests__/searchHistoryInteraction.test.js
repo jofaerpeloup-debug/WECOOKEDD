@@ -59,6 +59,10 @@ jest.mock('../src/utils/recipeFreshnessState', () => ({
   shouldBlockRecipeFailure: jest.fn((error, recipes) => Boolean(error && !recipes.length)),
 }));
 jest.mock('../src/hooks/useRecipeScreenRefresh', () => jest.fn());
+const mockShoppingListState = Object.freeze({ items: Object.freeze([]), status: 'ready' });
+jest.mock('../src/context/ShoppingListContext', () => ({
+  useShoppingList: () => mockShoppingListState,
+}));
 
 let mockCurrentUser = { id: 'user-a' };
 jest.mock('../src/context/AuthContext', () => ({
