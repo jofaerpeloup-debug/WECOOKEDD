@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +17,90 @@ import { formatMinutes } from '../utils/recipe';
 import { formatDayDate, formatWeekRange, shiftWeek, startOfLocalWeek, weekDays } from '../utils/mealPlanDates';
 import { confirm, notify } from '../utils/alert';
 import { addPlannedRecipesToShoppingList } from '../utils/mealPlanShopping';
+
+const DRAG_ACTIVATION_DISTANCE = 10;
+const DRAG_PREVIEW_WIDTH = 220;
+
+function gesturePoint(event, gestureState) {
+  return {
+    x: gestureState?.moveX ?? event?.nativeEvent?.pageX ?? event?.nativeEvent?.locationX ?? 0,
+    y: gestureState?.moveY ?? event?.nativeEvent?.pageY ?? event?.nativeEvent?.locationY ?? 0,
+  };
+}
+
+function isCompleteMovedEntry(returnedEntry, submittedEntry, targetDateKey) {
+  return !!returnedEntry
+    && returnedEntry.id === submittedEntry.id
+    && returnedEntry.dateKey === targetDateKey
+    && returnedEntry.recipeId === submittedEntry.recipeId
+    && typeof returnedEntry.createdAt === 'string'
+    && typeof returnedEntry.updatedAt === 'string'
+    && typeof returnedEntry.isAvailable === 'boolean'
+    && (returnedEntry.isAvailable
+      ? !!returnedEntry.recipe && returnedEntry.recipe.id === returnedEntry.recipeId
+      : returnedEntry.recipe === null);
+}
+
+function MealPlanDragHandle({
+  colors,
+  disabled,
+  entry,
+  label,
+  onDragMove,
+  onDragRelease,
+  onDragStart,
+  onDragTerminate,
+  styles,
+}) {
+  const latestRef = useRef({ disabled, entry, onDragMove, onDragRelease, onDragStart, onDragTerminate });
+  const grantedRef = useRef(false);
+  latestRef.current = { disabled, entry, onDragMove, onDragRelease, onDragStart, onDragTerminate };
+
+  const responder = useMemo(() => {
+    const shouldStartDrag = (_event, gestureState) => {
+      if (latestRef.current.disabled) return false;
+      return Math.hypot(gestureState.dx || 0, gestureState.dy || 0) >= DRAG_ACTIVATION_DISTANCE;
+    };
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: shouldStartDrag,
+      onMoveShouldSetPanResponderCapture: shouldStartDrag,
+      onPanResponderGrant: (event, gestureState) => {
+        const current = latestRef.current;
+        grantedRef.current = !current.disabled && current.onDragStart(current.entry, gesturePoint(event, gestureState));
+      },
+      onPanResponderMove: (event, gestureState) => {
+        if (grantedRef.current) latestRef.current.onDragMove(gesturePoint(event, gestureState));
+      },
+      onPanResponderRelease: (event, gestureState) => {
+        if (grantedRef.current) latestRef.current.onDragRelease(gesturePoint(event, gestureState));
+        grantedRef.current = false;
+      },
+      onPanResponderTerminate: () => {
+        if (grantedRef.current) latestRef.current.onDragTerminate();
+        grantedRef.current = false;
+      },
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+    });
+  }, []);
+
+  return (
+    <Pressable
+      {...responder.panHandlers}
+      style={styles.dragHandle}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint="Drag to another day in this week. Use Move to choose another week."
+      accessibilityState={{ disabled }}
+      testID={`meal-plan-drag-${entry.id}`}
+    >
+      <Ionicons name="reorder-three-outline" size={20} color={colors.sageDeep} />
+      <Text style={styles.dragText}>Drag</Text>
+    </Pressable>
+  );
+}
 
 export default function MealPlanScreen({ navigation }) {
   const { colors } = useTheme();
@@ -37,11 +121,26 @@ export default function MealPlanScreen({ navigation }) {
   const [pendingEntryId, setPendingEntryId] = useState(null);
   const [clearing, setClearing] = useState(false);
   const [addingGroceries, setAddingGroceries] = useState(false);
+  const [dragState, setDragState] = useState(null);
+  const [dragError, setDragError] = useState(null);
   const generationRef = useRef(0);
   const moveAttemptRef = useRef(0);
+  const mutationSequenceRef = useRef(0);
   const mountedRef = useRef(true);
   const ownerRef = useRef(ownerId);
   const rangeRef = useRef(range);
+  const entriesRef = useRef([]);
+  const mutationRef = useRef(null);
+  const operationRef = useRef(null);
+  const loadRef = useRef(null);
+  const dragRef = useRef(null);
+  const rootRef = useRef(null);
+  const scrollRef = useRef(null);
+  const rootFrameRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
+  const dayLayoutsRef = useRef({});
+  const scrollFrameRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
+  const scrollOffsetRef = useRef(0);
+  const dragPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
 
   useEffect(() => {
     ownerRef.current = ownerId;
@@ -54,6 +153,11 @@ export default function MealPlanScreen({ navigation }) {
     setPendingEntryId(null);
     setClearing(false);
     setAddingGroceries(false);
+    setDragState(null);
+    setDragError(null);
+    dragRef.current = null;
+    operationRef.current = null;
+    mutationRef.current = null;
   }, [ownerId]);
 
   useEffect(() => {
@@ -61,6 +165,14 @@ export default function MealPlanScreen({ navigation }) {
       moveAttemptRef.current += 1;
       setMoveEntry(null);
       setMoveError(null);
+      setPendingEntryId(null);
+      setDragState(null);
+      setDragError(null);
+      setClearing(false);
+      dragRef.current = null;
+      operationRef.current = null;
+      mutationRef.current = null;
+      dayLayoutsRef.current = {};
     }
     rangeRef.current = range;
   }, [range]);
@@ -70,12 +182,30 @@ export default function MealPlanScreen({ navigation }) {
     return () => {
       mountedRef.current = false;
       moveAttemptRef.current += 1;
+      dragRef.current = null;
+      operationRef.current = null;
+      mutationRef.current = null;
     };
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options = null) => {
     if (!ownerId) return 'ignored';
+    const preservedOperation = options?.preserveOperation || null;
     const generation = ++generationRef.current;
+    const activeOperation = operationRef.current;
+    if (activeOperation && activeOperation !== preservedOperation) {
+      moveAttemptRef.current += 1;
+      operationRef.current = null;
+      if (mutationRef.current === activeOperation.claim) mutationRef.current = null;
+      setPendingEntryId((current) => current === activeOperation.entryId ? null : current);
+    }
+    if (dragRef.current && dragRef.current.operation !== preservedOperation) {
+      const activeDrag = dragRef.current;
+      dragRef.current = null;
+      if (mutationRef.current === activeDrag.claim) mutationRef.current = null;
+      setDragState(null);
+    }
+    if (preservedOperation) preservedOperation.generation = generation;
     setData((old) => ({
       ownerId,
       range,
@@ -94,17 +224,35 @@ export default function MealPlanScreen({ navigation }) {
       return 'error';
     }
   }, [ownerId, range, startDate, endDate]);
+  // PanResponder retains its original handlers. Always route a drag's stale
+  // recovery through the current render's account/range-aware loader.
+  loadRef.current = load;
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const trusted = data.ownerId === ownerId && data.range === range;
   const entries = trusted ? data.entries : [];
   const status = trusted ? data.status : 'loading';
+  entriesRef.current = entries;
   const grouped = useMemo(() => {
     const map = Object.fromEntries(days.map((day) => [day.dateKey, []]));
     for (const entry of entries) if (map[entry.dateKey]) map[entry.dateKey].push(entry);
     return map;
   }, [days, entries]);
+
+  useEffect(() => {
+    const activeDrag = dragRef.current;
+    if (!activeDrag || !trusted || data.status !== 'ready') return;
+    if (activeDrag.phase === 'pending' && operationRef.current === activeDrag.operation) return;
+    const current = entries.find((entry) => entry.id === activeDrag.entry.id);
+    if (current && current.dateKey === activeDrag.entry.dateKey && current.updatedAt === activeDrag.entry.updatedAt) return;
+    moveAttemptRef.current += 1;
+    if (operationRef.current === activeDrag.operation) operationRef.current = null;
+    if (mutationRef.current === activeDrag.claim) mutationRef.current = null;
+    dragRef.current = null;
+    setPendingEntryId((pending) => pending === activeDrag.entry.id ? null : pending);
+    setDragState(null);
+  }, [data.status, entries, trusted]);
 
   useEffect(() => {
     if (!moveEntry || pendingEntryId || !trusted || data.status !== 'ready') return;
@@ -115,8 +263,9 @@ export default function MealPlanScreen({ navigation }) {
   }, [data.status, entries, moveEntry, pendingEntryId, trusted]);
 
   const openMove = (entry) => {
-    if (pendingEntryId || clearing) return;
+    if (mutationRef.current || dragRef.current || pendingEntryId || clearing) return;
     moveAttemptRef.current += 1;
+    setDragError(null);
     setMoveError(null);
     setMoveEntry(entry);
   };
@@ -128,32 +277,70 @@ export default function MealPlanScreen({ navigation }) {
     setMoveEntry(null);
   };
 
-  const move = async (dateKey) => {
-    if (!moveEntry || pendingEntryId || clearing || dateKey === moveEntry.dateKey) return;
-    const submittedEntry = moveEntry;
-    const requestOwner = ownerId;
-    const requestRange = range;
-    const requestGeneration = generationRef.current;
+  const operationStillOwned = (operation) => (
+    mountedRef.current
+    && operationRef.current === operation
+    && mutationRef.current === operation.claim
+    && operation.attempt === moveAttemptRef.current
+    && generationRef.current === operation.generation
+    && ownerRef.current === operation.ownerId
+    && rangeRef.current === operation.range
+    && operation.entryId === operation.submittedEntry.id
+    && operation.expectedUpdatedAt === operation.submittedEntry.updatedAt
+  );
+
+  const currentEntryMatches = (submittedEntry) => {
+    const current = entriesRef.current.find((entry) => entry.id === submittedEntry.id);
+    return !!current
+      && current.dateKey === submittedEntry.dateKey
+      && current.updatedAt === submittedEntry.updatedAt;
+  };
+
+  const runConditionalMove = async (submittedEntry, dateKey, claim, errorTarget, activeDrag = null, authority = {
+    ownerId,
+    range,
+    generation: generationRef.current,
+    startDate,
+    endDate,
+  }) => {
+    const requestOwner = authority.ownerId;
+    const requestRange = authority.range;
     const attempt = ++moveAttemptRef.current;
-    setMoveError(null);
+    const operation = {
+      attempt,
+      claim,
+      entryId: submittedEntry.id,
+      errorTarget,
+      expectedUpdatedAt: submittedEntry.updatedAt,
+      generation: authority.generation,
+      ownerId: requestOwner,
+      range: requestRange,
+      submittedEntry,
+    };
+    operationRef.current = operation;
+    if (activeDrag) {
+      activeDrag.operation = operation;
+      activeDrag.phase = 'pending';
+      setDragState({ ...activeDrag });
+      setDragError(null);
+    } else {
+      setMoveError(null);
+    }
     setPendingEntryId(submittedEntry.id);
     try {
       const returnedEntry = await moveMealPlanEntry(submittedEntry.id, {
         dateKey,
         expectedUpdatedAt: submittedEntry.updatedAt,
       });
-      if (
-        !mountedRef.current ||
-        attempt !== moveAttemptRef.current ||
-        generationRef.current !== requestGeneration ||
-        ownerRef.current !== requestOwner ||
-        rangeRef.current !== requestRange
-      ) return;
+      if (!operationStillOwned(operation) || !currentEntryMatches(submittedEntry)) return;
+      if (!isCompleteMovedEntry(returnedEntry, submittedEntry, dateKey)) {
+        throw new Error('Something went wrong. Please try again.');
+      }
       setData((old) => {
         if (old.ownerId !== requestOwner || old.range !== requestRange) return old;
         const current = old.entries.find((entry) => entry.id === submittedEntry.id);
         if (!current || current.updatedAt !== submittedEntry.updatedAt) return old;
-        const inDisplayedWeek = returnedEntry.dateKey >= startDate && returnedEntry.dateKey <= endDate;
+        const inDisplayedWeek = returnedEntry.dateKey >= authority.startDate && returnedEntry.dateKey <= authority.endDate;
         return {
           ...old,
           entries: inDisplayedWeek
@@ -161,42 +348,180 @@ export default function MealPlanScreen({ navigation }) {
             : old.entries.filter((entry) => entry.id !== submittedEntry.id),
         };
       });
-      setMoveEntry(null);
-      setMoveError(null);
+      if (errorTarget === 'sheet') {
+        setMoveEntry(null);
+        setMoveError(null);
+      } else {
+        setDragError(null);
+      }
     } catch (err) {
-      if (
-        !mountedRef.current ||
-        attempt !== moveAttemptRef.current ||
-        generationRef.current !== requestGeneration ||
-        ownerRef.current !== requestOwner ||
-        rangeRef.current !== requestRange
-      ) return;
+      if (!operationStillOwned(operation) || !currentEntryMatches(submittedEntry)) return;
       const failure = getMealPlanErrorState(err);
+      const setOperationError = errorTarget === 'sheet' ? setMoveError : setDragError;
       if (failure.kind === 'stale') {
-        setMoveError('Your meal plan changed. Reloading the latest plan.');
-        const reloadResult = await load();
-        if (
-          mountedRef.current &&
-          attempt === moveAttemptRef.current &&
-          ownerRef.current === requestOwner &&
-          rangeRef.current === requestRange
-        ) {
-          setMoveError(reloadResult === 'success'
+        setOperationError('Your meal plan changed. Reloading the latest plan.');
+        const reloadResult = await loadRef.current({ preserveOperation: operation });
+        if (operationStillOwned(operation)) {
+          setOperationError(reloadResult === 'success'
             ? 'Your meal plan changed. The latest plan is now loaded.'
             : 'Your meal plan changed. Reload the latest plan and try again.');
         }
       } else {
-        setMoveError(failure.message);
+        setOperationError(failure.message);
       }
     } finally {
-      if (mountedRef.current && ownerRef.current === requestOwner) {
+      if (operationStillOwned(operation)) {
+        operationRef.current = null;
+        mutationRef.current = null;
         setPendingEntryId((current) => current === submittedEntry.id ? null : current);
+        if (activeDrag && dragRef.current === activeDrag) {
+          dragRef.current = null;
+          setDragState(null);
+        }
       }
     }
   };
 
+  const move = (dateKey) => {
+    if (!moveEntry || mutationRef.current || dragRef.current || pendingEntryId || clearing || dateKey === moveEntry.dateKey) return;
+    if (!currentEntryMatches(moveEntry)) return;
+    const claim = { id: ++mutationSequenceRef.current, kind: 'move' };
+    mutationRef.current = claim;
+    runConditionalMove(moveEntry, dateKey, claim, 'sheet');
+  };
+
+  const updateDragPosition = useCallback((point) => {
+    const rootFrame = rootFrameRef.current;
+    dragPosition.setValue({
+      x: point.x - rootFrame.x - (DRAG_PREVIEW_WIDTH / 2),
+      y: point.y - rootFrame.y - 34,
+    });
+  }, [dragPosition]);
+
+  const captureRootFrame = useCallback((event) => {
+    const { width, height } = event.nativeEvent.layout;
+    rootFrameRef.current = { x: 0, y: 0, width, height };
+    rootRef.current?.measureInWindow?.((x, y, measuredWidth, measuredHeight) => {
+      rootFrameRef.current = { x, y, width: measuredWidth, height: measuredHeight };
+    });
+  }, []);
+
+  const captureScrollFrame = useCallback((event) => {
+    const { x, y, width, height } = event.nativeEvent.layout;
+    const rootFrame = rootFrameRef.current;
+    scrollFrameRef.current = { x: rootFrame.x + x, y: rootFrame.y + y, width, height };
+    scrollRef.current?.measureInWindow?.((measuredX, measuredY, measuredWidth, measuredHeight) => {
+      scrollFrameRef.current = {
+        x: measuredX,
+        y: measuredY,
+        width: measuredWidth,
+        height: measuredHeight,
+      };
+    });
+  }, []);
+
+  const targetForPoint = useCallback((point) => {
+    const frame = scrollFrameRef.current;
+    if (
+      point.x < frame.x
+      || point.x > frame.x + frame.width
+      || point.y < frame.y
+      || point.y > frame.y + frame.height
+    ) return null;
+    const contentX = point.x - frame.x;
+    const contentY = point.y - frame.y + scrollOffsetRef.current;
+    const target = days.find((day) => {
+      const layout = dayLayoutsRef.current[day.dateKey];
+      return layout
+        && contentX >= layout.x
+        && contentX <= layout.x + layout.width
+        && contentY >= layout.y
+        && contentY <= layout.y + layout.height;
+    });
+    return target?.dateKey || null;
+  }, [days]);
+
+  const cancelDrag = useCallback(() => {
+    const activeDrag = dragRef.current;
+    if (!activeDrag || activeDrag.phase !== 'dragging') return;
+    if (mutationRef.current === activeDrag.claim) mutationRef.current = null;
+    dragRef.current = null;
+    setDragState(null);
+  }, []);
+
+  const beginDrag = useCallback((entry, point) => {
+    if (
+      mutationRef.current
+      || dragRef.current
+      || ownerRef.current !== ownerId
+      || rangeRef.current !== range
+      || data.status !== 'ready'
+    ) return false;
+    const current = entriesRef.current.find((candidate) => candidate.id === entry.id);
+    if (!current || current.dateKey !== entry.dateKey || current.updatedAt !== entry.updatedAt) return false;
+    const claim = { id: ++mutationSequenceRef.current, kind: 'drag' };
+    const activeDrag = {
+      authority: {
+        ownerId,
+        range,
+        generation: generationRef.current,
+        startDate,
+        endDate,
+      },
+      claim,
+      entry: current,
+      generation: generationRef.current,
+      ownerId,
+      phase: 'dragging',
+      range,
+      targetDateKey: null,
+    };
+    mutationRef.current = claim;
+    dragRef.current = activeDrag;
+    setDragError(null);
+    updateDragPosition(point);
+    const targetDateKey = targetForPoint(point);
+    activeDrag.targetDateKey = targetDateKey;
+    setDragState({ ...activeDrag });
+    return true;
+  }, [data.status, ownerId, range, targetForPoint, updateDragPosition]);
+
+  const moveDrag = useCallback((point) => {
+    const activeDrag = dragRef.current;
+    if (!activeDrag || activeDrag.phase !== 'dragging') return;
+    updateDragPosition(point);
+    const targetDateKey = targetForPoint(point);
+    if (targetDateKey !== activeDrag.targetDateKey) {
+      activeDrag.targetDateKey = targetDateKey;
+      setDragState({ ...activeDrag });
+    }
+  }, [targetForPoint, updateDragPosition]);
+
+  const releaseDrag = useCallback((point) => {
+    const activeDrag = dragRef.current;
+    if (!activeDrag || activeDrag.phase !== 'dragging') return;
+    updateDragPosition(point);
+    const targetDateKey = targetForPoint(point);
+    const valid = activeDrag.ownerId === ownerRef.current
+      && activeDrag.range === rangeRef.current
+      && activeDrag.generation === generationRef.current
+      && mutationRef.current === activeDrag.claim
+      && currentEntryMatches(activeDrag.entry)
+      && !!targetDateKey
+      && targetDateKey !== activeDrag.entry.dateKey;
+    if (!valid) {
+      cancelDrag();
+      return;
+    }
+    activeDrag.targetDateKey = targetDateKey;
+    activeDrag.claim.kind = 'move';
+    runConditionalMove(activeDrag.entry, targetDateKey, activeDrag.claim, 'drag', activeDrag, activeDrag.authority);
+  }, [cancelDrag, runConditionalMove, targetForPoint, updateDragPosition]);
+
   const remove = async (entryId) => {
-    if (pendingEntryId || clearing) return;
+    if (mutationRef.current || dragRef.current || pendingEntryId || clearing) return;
+    const claim = { id: ++mutationSequenceRef.current, kind: 'remove' };
+    mutationRef.current = claim;
     const requestOwner = ownerId;
     const requestRange = range;
     setPendingEntryId(entryId);
@@ -207,12 +532,17 @@ export default function MealPlanScreen({ navigation }) {
     } catch (err) {
       if (ownerRef.current === requestOwner) notify('Couldn’t remove meal', getMealPlanErrorMessage(err));
     } finally {
-      if (ownerRef.current === requestOwner) setPendingEntryId(null);
+      if (ownerRef.current === requestOwner && mutationRef.current === claim) {
+        mutationRef.current = null;
+        setPendingEntryId(null);
+      }
     }
   };
 
   const clearWeek = async () => {
-    if (clearing || pendingEntryId) return;
+    if (mutationRef.current || dragRef.current || clearing || pendingEntryId) return;
+    const claim = { id: ++mutationSequenceRef.current, kind: 'clear' };
+    mutationRef.current = claim;
     const requestOwner = ownerId;
     const requestRange = range;
     setClearing(true);
@@ -223,7 +553,10 @@ export default function MealPlanScreen({ navigation }) {
     } catch (err) {
       if (ownerRef.current === requestOwner) notify('Couldn’t clear meal plan', getMealPlanErrorMessage(err));
     } finally {
-      if (ownerRef.current === requestOwner) setClearing(false);
+      if (ownerRef.current === requestOwner && mutationRef.current === claim) {
+        mutationRef.current = null;
+        setClearing(false);
+      }
     }
   };
 
@@ -253,38 +586,59 @@ export default function MealPlanScreen({ navigation }) {
   };
 
   const plannedCount = entries.length;
+  const dragActive = !!dragState;
+  const mealPlanControlsDisabled = clearing || !!pendingEntryId || dragActive;
   return (
-    <View style={styles.root}>
+    <View ref={rootRef} style={styles.root} onLayout={captureRootFrame}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}><Ionicons name="chevron-back" size={18} color={colors.ink} /></Pressable>
         <View style={{ flex: 1 }}><Text style={styles.title}>Meal Plan</Text><Text style={styles.subtitle}>{plannedCount} {plannedCount === 1 ? 'meal' : 'meals'} this week</Text></View>
         {plannedCount > 0 ? (
-          <Pressable hitSlop={8} disabled={clearing || !!pendingEntryId} onPress={() => confirm('Clear meal plan', 'Remove every planned meal in this week?', clearWeek, { confirmLabel: 'Clear', destructive: true })}>
+          <Pressable hitSlop={8} disabled={mealPlanControlsDisabled} onPress={() => confirm('Clear meal plan', 'Remove every planned meal in this week?', clearWeek, { confirmLabel: 'Clear', destructive: true })}>
             <Text style={styles.clear}>{clearing ? 'Clearing…' : 'Clear'}</Text>
           </Pressable>
         ) : null}
       </View>
 
       <View style={styles.weekNav}>
-        <Pressable style={styles.weekButton} onPress={() => setWeekAnchor((date) => shiftWeek(date, -1))} accessibilityLabel="Previous week"><Ionicons name="chevron-back" size={18} color={colors.sageDeep} /></Pressable>
+        <Pressable style={styles.weekButton} disabled={dragActive} onPress={() => setWeekAnchor((date) => shiftWeek(date, -1))} accessibilityLabel="Previous week" accessibilityState={{ disabled: dragActive }}><Ionicons name="chevron-back" size={18} color={colors.sageDeep} /></Pressable>
         <Text style={styles.weekLabel}>{formatWeekRange(days)}</Text>
-        <Pressable style={styles.weekButton} onPress={() => setWeekAnchor((date) => shiftWeek(date, 1))} accessibilityLabel="Next week"><Ionicons name="chevron-forward" size={18} color={colors.sageDeep} /></Pressable>
+        <Pressable style={styles.weekButton} disabled={dragActive} onPress={() => setWeekAnchor((date) => shiftWeek(date, 1))} accessibilityLabel="Next week" accessibilityState={{ disabled: dragActive }}><Ionicons name="chevron-forward" size={18} color={colors.sageDeep} /></Pressable>
       </View>
 
       {status === 'loading' && entries.length === 0 ? <ActivityIndicator style={styles.loading} color={colors.sageDeep} /> : null}
       {status === 'error' ? <Pressable style={styles.errorCard} onPress={load}><Text style={styles.errorText}>{data.error} Tap to retry.</Text></Pressable> : null}
+      {dragError ? <View style={styles.errorCard} accessibilityLiveRegion="polite"><Text style={styles.errorText}>{dragError}</Text></View> : null}
 
-      {status === 'ready' || entries.length > 0 ? <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      {status === 'ready' || entries.length > 0 ? <ScrollView
+        ref={scrollRef}
+        testID="meal-plan-scroll"
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={dragState?.phase !== 'dragging'}
+        scrollEventThrottle={16}
+        onLayout={captureScrollFrame}
+        onScroll={(event) => { scrollOffsetRef.current = event.nativeEvent.contentOffset.y; }}
+      >
         {days.map((day) => (
-          <View key={day.dateKey} style={styles.daySection} testID={`meal-plan-day-${day.dateKey}`}>
+          <View
+            key={day.dateKey}
+            style={[
+              styles.daySection,
+              dragState ? styles.dayDropZone : null,
+              dragState?.targetDateKey === day.dateKey && day.dateKey !== dragState.entry.dateKey ? styles.dayDropTarget : null,
+            ]}
+            testID={`meal-plan-day-${day.dateKey}`}
+            onLayout={(event) => { dayLayoutsRef.current[day.dateKey] = event.nativeEvent.layout; }}
+          >
             <View style={styles.dayHead}>
               <View><Text style={styles.dayName}>{day.label}</Text><Text style={styles.dayDate}>{formatDayDate(day.date)}</Text></View>
-              <Pressable style={styles.addBtn} hitSlop={6} onPress={() => setPickDay(day)} disabled={status !== 'ready'} accessibilityRole="button" accessibilityLabel={`Add recipe to ${day.label}`}><Ionicons name="add" size={16} color={colors.sageDeep} /></Pressable>
+              <Pressable style={styles.addBtn} hitSlop={6} onPress={() => setPickDay(day)} disabled={status !== 'ready' || mealPlanControlsDisabled} accessibilityRole="button" accessibilityLabel={`Add recipe to ${day.label}`} accessibilityState={{ disabled: status !== 'ready' || mealPlanControlsDisabled }}><Ionicons name="add" size={16} color={colors.sageDeep} /></Pressable>
             </View>
             {grouped[day.dateKey].length === 0 ? (
-              <Pressable style={styles.emptyDay} onPress={() => setPickDay(day)} disabled={status !== 'ready'}><Text style={styles.emptyText}>Tap + to plan a meal</Text></Pressable>
+              <Pressable style={styles.emptyDay} onPress={() => setPickDay(day)} disabled={status !== 'ready' || mealPlanControlsDisabled}><Text style={styles.emptyText}>Tap + to plan a meal</Text></Pressable>
             ) : grouped[day.dateKey].map((entry) => (
-              <View key={entry.id} style={styles.mealRow}>
+              <View key={entry.id} style={[styles.mealRow, dragState?.entry.id === entry.id ? styles.dragSource : null]}>
                 <View style={styles.mealTop}>
                   {entry.isAvailable ? (
                     <Pressable style={styles.mealMain} onPress={() => navigation.navigate('RecipeDetail', { recipeSource: 'api', recipeId: entry.recipeId, initialRecipe: entry.recipe })} accessibilityRole="button" accessibilityLabel={`Open ${entry.recipe.title}`}>
@@ -294,14 +648,25 @@ export default function MealPlanScreen({ navigation }) {
                   ) : (
                     <View style={styles.mealMain}><View style={styles.unavailableIcon}><Ionicons name="restaurant-outline" size={20} color={colors.inkFaint} /></View><View style={{ flex: 1 }}><Text style={styles.mealTitle}>Recipe unavailable</Text><Text style={styles.mealMeta}>This planned entry can still be moved or removed.</Text></View></View>
                   )}
+                  <MealPlanDragHandle
+                    colors={colors}
+                    disabled={status !== 'ready' || (mealPlanControlsDisabled && !(dragState?.phase === 'dragging' && dragState.entry.id === entry.id))}
+                    entry={entry}
+                    label={entry.isAvailable ? `Drag ${entry.recipe.title}` : `Drag unavailable recipe planned for ${formatDayDate(day.date)}`}
+                    onDragStart={beginDrag}
+                    onDragMove={moveDrag}
+                    onDragRelease={releaseDrag}
+                    onDragTerminate={cancelDrag}
+                    styles={styles}
+                  />
                   <Pressable
                     hitSlop={8}
                     onPress={() => openMove(entry)}
                     style={styles.move}
-                    disabled={!!pendingEntryId || clearing}
+                    disabled={mealPlanControlsDisabled}
                     accessibilityRole="button"
                     accessibilityLabel={entry.isAvailable ? `Move ${entry.recipe.title}` : `Move unavailable recipe planned for ${formatDayDate(day.date)}`}
-                    accessibilityState={{ disabled: !!pendingEntryId || clearing }}
+                    accessibilityState={{ disabled: mealPlanControlsDisabled }}
                   >
                     <Ionicons name="calendar-outline" size={16} color={colors.sageDeep} />
                     <Text style={styles.moveText}>Move</Text>
@@ -310,10 +675,10 @@ export default function MealPlanScreen({ navigation }) {
                     hitSlop={8}
                     onPress={() => remove(entry.id)}
                     style={styles.remove}
-                    disabled={!!pendingEntryId || clearing}
+                    disabled={mealPlanControlsDisabled}
                     accessibilityRole="button"
                     accessibilityLabel={entry.isAvailable ? `Remove ${entry.recipe.title}` : `Remove unavailable recipe planned for ${formatDayDate(day.date)}`}
-                    accessibilityState={{ disabled: !!pendingEntryId || clearing }}
+                    accessibilityState={{ disabled: mealPlanControlsDisabled }}
                   >
                     {pendingEntryId === entry.id ? <ActivityIndicator size="small" color={colors.inkFaint} /> : <Ionicons name="remove-circle-outline" size={20} color={colors.inkFaint} />}
                   </Pressable>
@@ -323,6 +688,22 @@ export default function MealPlanScreen({ navigation }) {
           </View>
         ))}
       </ScrollView> : null}
+
+      {dragState ? (
+        <Animated.View
+          pointerEvents="none"
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          testID="meal-plan-drag-preview"
+          style={[styles.dragPreview, { transform: dragPosition.getTranslateTransform() }]}
+        >
+          <Ionicons name="reorder-three-outline" size={20} color={colors.sageDeep} />
+          <Text numberOfLines={1} style={styles.dragPreviewText}>
+            {dragState.entry.isAvailable ? dragState.entry.recipe.title : 'Recipe unavailable'}
+          </Text>
+          {dragState.phase === 'pending' ? <ActivityIndicator size="small" color={colors.sageDeep} /> : null}
+        </Animated.View>
+      ) : null}
 
       {plannedCount > 0 ? (
         <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.lg }]}>
@@ -361,6 +742,8 @@ function makeStyles(colors) {
     errorText: { fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.error, textAlign: 'center' },
     scroll: { paddingHorizontal: spacing.xl, paddingBottom: 110 },
     daySection: { marginBottom: spacing.xl },
+    dayDropZone: { borderWidth: 1, borderColor: colors.hairline, borderStyle: 'dashed', borderRadius: radius.md, padding: spacing.sm },
+    dayDropTarget: { borderWidth: 2, borderColor: colors.sageDeep, borderStyle: 'solid', backgroundColor: colors.sagePale },
     dayHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
     dayName: { fontFamily: typography.body.bold, fontSize: 11.5, letterSpacing: 1.1, textTransform: 'uppercase', color: colors.inkFaint },
     dayDate: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 1 },
@@ -368,12 +751,17 @@ function makeStyles(colors) {
     emptyDay: { borderWidth: 1, borderColor: colors.hairline, borderStyle: 'dashed', borderRadius: radius.md, paddingVertical: 14, alignItems: 'center' },
     emptyText: { fontFamily: typography.body.fontFamily, fontSize: 12.5, color: colors.inkFaint },
     mealRow: { backgroundColor: colors.creamDeep, borderRadius: 12, padding: 8, marginBottom: 8 },
+    dragSource: { opacity: 0.45 },
     mealTop: { flexDirection: 'row', alignItems: 'center' },
     mealMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
     thumb: { width: 48, height: 48, borderRadius: 10, backgroundColor: colors.paper },
     unavailableIcon: { width: 48, height: 48, borderRadius: 10, backgroundColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
     mealTitle: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
     mealMeta: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 2 },
+    dragHandle: { width: 46, minHeight: 44, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', gap: 1 },
+    dragText: { fontFamily: typography.body.semibold, fontSize: 10, color: colors.sageDeep },
+    dragPreview: { position: 'absolute', top: 0, left: 0, zIndex: 20, elevation: 8, width: DRAG_PREVIEW_WIDTH, minHeight: 60, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.sageDeep, borderRadius: radius.md, backgroundColor: colors.paper, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    dragPreviewText: { flex: 1, fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
     move: { paddingHorizontal: 7, paddingVertical: 6, alignItems: 'center', gap: 1 },
     moveText: { fontFamily: typography.body.semibold, fontSize: 10, color: colors.sageDeep },
     remove: { padding: 6 },

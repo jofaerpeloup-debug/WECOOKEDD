@@ -54,9 +54,9 @@ describe('MealPlan real backend integration', () => {
     expect(moveSheet).toMatch(/shiftWeek\(date, -1\)/);
     expect(moveSheet).toMatch(/shiftWeek\(date, 1\)/);
     expect(screen).toMatch(/Your meal plan changed\. Reloading the latest plan\./);
-    expect(screen).toMatch(/const reloadResult = await load\(\)/);
-    expect(screen).toMatch(/generationRef\.current !== requestGeneration/);
-    expect(screen).toMatch(/attempt !== moveAttemptRef\.current/);
+    expect(screen).toMatch(/const reloadResult = await loadRef\.current\(\{ preserveOperation: operation \}\)/);
+    expect(screen).toMatch(/generationRef\.current === operation\.generation/);
+    expect(screen).toMatch(/operation\.attempt === moveAttemptRef\.current/);
   });
 });
 
@@ -97,10 +97,60 @@ describe('shopping-list and deferred boundaries', () => {
     expect(dates).toMatch(/new Date\(year, monthIndex, day, 12/);
   });
 
-  it('Move sources contain no local persistence, drag behavior, slots, reminders, mock recipes, or UTC date generation', () => {
+  it('Meal Plan sources contain no local persistence, slots, reminders, mock recipes, or UTC date generation', () => {
     for (const source of [screen, moveSheet, service]) {
-      expect(source).not.toMatch(/AsyncStorage|PanResponder|drag(?:ging)?|mock(?:Recipe|Data)|toISOString|Date\.UTC|86400000/i);
+      expect(source).not.toMatch(/AsyncStorage|mock(?:Recipe|Data)|toISOString|Date\.UTC|86400000/i);
       expect(source).not.toMatch(/mealType|reminder|expo-notifications/i);
     }
+  });
+});
+
+describe('MOBILE-MEAL3 frozen drag contract', () => {
+  it('uses only PanResponder and Animated with a deliberate handle-only threshold', () => {
+    expect(screen).toMatch(/import \{[^}]*Animated[^}]*PanResponder[^}]*\} from 'react-native'/);
+    expect(screen).toMatch(/PanResponder\.create/);
+    expect(screen).toMatch(/onMoveShouldSetPanResponderCapture: shouldStartDrag/);
+    expect(screen).toMatch(/Math\.hypot\([^)]*dx[^)]*dy[^)]*\) >= DRAG_ACTIVATION_DISTANCE/);
+    expect(screen).toMatch(/function MealPlanDragHandle/);
+    expect(screen).toMatch(/testID=\{`meal-plan-drag-\$\{entry\.id\}`\}/);
+    expect(screen).toMatch(/accessibilityRole="button"/);
+    expect(screen).toMatch(/accessibilityState=\{\{ disabled \}\}/);
+    expect(screen).toMatch(/dragHandle: \{ width: 46, minHeight: 44/);
+    expect(screen).toMatch(/disabled=\{status !== 'ready'/);
+    expect(screen).not.toMatch(/GestureHandler|Draggable|Reanimated/);
+  });
+
+  it('keeps one shared conditional move path with exact entry id and captured version', () => {
+    expect(screen).toMatch(/runConditionalMove\(moveEntry, dateKey, claim, 'sheet'\)/);
+    expect(screen).toMatch(/runConditionalMove\(activeDrag\.entry, targetDateKey, activeDrag\.claim, 'drag', activeDrag, activeDrag\.authority\)/);
+    expect(screen).toMatch(/moveMealPlanEntry\(submittedEntry\.id, \{\s*dateKey,\s*expectedUpdatedAt: submittedEntry\.updatedAt/);
+    expect(screen).toMatch(/operationRef\.current === operation/);
+    expect(screen).toMatch(/generationRef\.current === operation\.generation/);
+    expect(screen).toMatch(/operation\.expectedUpdatedAt === operation\.submittedEntry\.updatedAt/);
+    expect(screen).toMatch(/current\.updatedAt === submittedEntry\.updatedAt/);
+    expect(screen).toMatch(/loadRef\.current = load/);
+    expect(screen).toMatch(/authority: \{\s*ownerId,\s*range,\s*generation: generationRef\.current/);
+  });
+
+  it('keeps drag in-week, pessimistic, and server-response authoritative', () => {
+    expect(screen).toMatch(/const target = days\.find/);
+    expect(screen).toMatch(/targetDateKey !== activeDrag\.entry\.dateKey/);
+    expect(screen).toMatch(/isCompleteMovedEntry\(returnedEntry, submittedEntry, dateKey\)/);
+    expect(screen).toMatch(/entry\.id === submittedEntry\.id \? returnedEntry : entry/);
+    expect(screen).not.toMatch(/setData[\s\S]{0,300}dateKey:\s*targetDateKey/);
+    expect(screen).not.toMatch(/removeMealPlanEntry[\s\S]{0,300}createMealPlanEntry|createMealPlanEntry[\s\S]{0,300}removeMealPlanEntry/);
+  });
+
+  it('renders a non-touchable preview, dimmed source, valid target treatment, and accessible fallback', () => {
+    expect(screen).toMatch(/pointerEvents="none"/);
+    expect(screen).toMatch(/importantForAccessibility="no-hide-descendants"/);
+    expect(screen).toMatch(/styles\.dragSource/);
+    expect(screen).toMatch(/styles\.dayDropZone/);
+    expect(screen).toMatch(/styles\.dayDropTarget/);
+    expect(screen).toMatch(/scrollEnabled=\{dragState\?\.phase !== 'dragging'\}/);
+    expect(screen).toMatch(/accessibilityHint="Drag to another day in this week\. Use Move to choose another week\."/);
+    expect(screen).toMatch(/<Text style=\{styles\.moveText\}>Move<\/Text>/);
+    expect(moveSheet).toMatch(/shiftWeek\(date, -1\)/);
+    expect(moveSheet).toMatch(/shiftWeek\(date, 1\)/);
   });
 });
