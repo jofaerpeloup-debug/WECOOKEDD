@@ -54,7 +54,9 @@ export async function importRecipeUrlForPreview(url, { request } = {}) {
   return {
     sourceUrl: result.sourceUrl,
     input,
-    preview: parseRecipeIntake(input),
+    // One parser owns pasted and URL-imported candidates. The server-returned
+    // final URL is context for an explicit nutrition suggestion only.
+    preview: parseRecipeIntake(input, { sourceUrl: result.sourceUrl }),
   };
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, CircleAlert, ImageOff } from 'lucide-react';
 import { getRecipe } from '../recipeApi.js';
 import { categoryLabel, DIETARY_TAG_LABELS, DIFFICULTY_LABELS, regionLabel, UNIT_LABELS } from '../recipeOptions.js';
-import { STEP_LABELS, combineDuration, formatDuration, statusLabel } from './recipeAuthoringModel.js';
+import { NUTRIENT_FIELDS, STEP_LABELS, combineDuration, formatDuration, statusLabel } from './recipeAuthoringModel.js';
 
 const shown = (value, suffix = '') => value === '' || value == null ? '—' : `${value}${suffix}`;
 const CLASSIFICATION_LABELS = {
@@ -146,6 +146,11 @@ export default function RecipeReview({
         <section><h3>Ingredients</h3>{ingredients.length ? <ul>{ingredients.map((row, index) => <li key={row.key || index}><strong>{row.ingredient.name}</strong> — {row.unit === 'toTaste' ? 'to taste' : `${row.quantity} ${UNIT_LABELS[row.unit] || row.unit}`}{row.optional ? ' (optional)' : ''}{row.note ? `, ${row.note}` : ''}</li>)}</ul> : <p className="wc-author-muted">None yet.</p>}</section>
       </div>
       <section><h3>Instructions</h3>{instructions.length ? <ol>{instructions.map((text, index) => <li key={`${index}-${text}`}>{text}</li>)}</ol> : <p className="wc-author-muted">None yet.</p>}</section>
+      <section className="wc-author-nutrition-review"><h3>Nutrition</h3>
+        {form.nutrition == null
+          ? <p className="wc-author-muted">Authoritative nutrition is unavailable.</p>
+          : <><p><strong>Basis:</strong> Per serving</p><dl>{NUTRIENT_FIELDS.map(([field, label, unit]) => <div key={field}><dt>{label}</dt><dd>{shown(form.nutrition[field], ` ${unit}`)}</dd></div>)}</dl><p><strong>Source:</strong> {form.nutritionSource.url ? <a href={form.nutritionSource.url} target="_blank" rel="noreferrer">{form.nutritionSource.label}</a> : form.nutritionSource.label}</p></>}
+      </section>
       {readOnly && recipeMeta && <section className="wc-author-audit"><h3>Staff record</h3><p>Created {recipeMeta.createdAt ? new Date(recipeMeta.createdAt).toLocaleString() : '—'} · Updated {recipeMeta.updatedAt ? new Date(recipeMeta.updatedAt).toLocaleString() : '—'}</p></section>}
     </div>
   );

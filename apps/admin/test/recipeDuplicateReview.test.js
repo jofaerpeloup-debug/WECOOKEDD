@@ -374,6 +374,23 @@ test('bounded no-evidence result renders no acknowledgement control through defa
   assert.doesNotMatch(html, /I reviewed this result and want to continue as a distinct Recipe or variant/);
 });
 
+test('shared RecipeReview renders exact per-serving nutrition and source without internal provenance', () => {
+  const form = {
+    ...reviewProps().form,
+    nutrition: {
+      caloriesKcal: '320', proteinGrams: '28', carbohydrateGrams: '12',
+      fatGrams: '18', sugarGrams: '3', fiberGrams: '2',
+    },
+    nutritionSource: { kind: 'jsonLd', label: 'Schema.org Recipe JSON-LD', url: 'https://example.com/final' },
+  };
+  const html = renderReview({ form });
+  assert.match(html, /<strong>Basis:<\/strong> Per serving/);
+  assert.match(html, /Calories<\/dt><dd>320 kcal/);
+  assert.match(html, /Fiber<\/dt><dd>2 g/);
+  assert.match(html, /href="https:\/\/example\.com\/final"/);
+  assert.doesNotMatch(html, /acceptedBy|acceptedAt|staffId|actorId/);
+});
+
 test('default RecipeReview renders the frozen legacy Published lifecycle label', () => {
   const legacyCandidate = {
     recipe: {

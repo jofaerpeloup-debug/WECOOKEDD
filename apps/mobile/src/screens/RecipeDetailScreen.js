@@ -43,6 +43,14 @@ import {
 
 const MIN_SERVINGS = 1;
 const MAX_SERVINGS = 20;
+const NUTRITION_ROWS = Object.freeze([
+  ['caloriesKcal', 'Calories', 'kcal'],
+  ['proteinGrams', 'Protein', 'g'],
+  ['carbohydrateGrams', 'Carbohydrate', 'g'],
+  ['fatGrams', 'Fat', 'g'],
+  ['sugarGrams', 'Sugar', 'g'],
+  ['fiberGrams', 'Fiber', 'g'],
+]);
 
 // -------------------------------------------------------------------------
 // Recipe Detail accepts only the real API route contract. Every current caller
@@ -705,7 +713,13 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             )}
           </View>
 
-          <Pressable style={styles.ddNutritionCard} onPress={() => setNutritionOpen((v) => !v)}>
+          <Pressable
+            style={styles.ddNutritionCard}
+            onPress={() => setNutritionOpen((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel="Nutrition information, per serving"
+            accessibilityState={{ expanded: nutritionOpen }}
+          >
             <View style={styles.ddNutritionHead}>
               <Text style={styles.ddNutritionTitle}>Nutrition Info</Text>
               <Text style={styles.ddNutritionToggle}>
@@ -714,9 +728,23 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             </View>
             {nutritionOpen && (
               <View style={styles.ddNutritionBody}>
-                <Text style={styles.ddNutritionUnavailable}>
-                  Nutrition information isn't available for this recipe yet.
-                </Text>
+                {recipe.nutrition === null ? (
+                  <Text style={styles.ddNutritionUnavailable}>
+                    Nutrition information isn't available for this recipe yet.
+                  </Text>
+                ) : (
+                  <>
+                    <Text style={styles.ddNutritionBasis}>Per serving</Text>
+                    <View style={styles.ddNutritionGrid}>
+                      {NUTRITION_ROWS.map(([field, label, unit]) => (
+                        <View key={field} style={styles.ddNutritionRow}>
+                          <Text style={styles.ddNutritionLabel}>{label}</Text>
+                          <Text style={styles.ddNutritionValue}>{recipe.nutrition[field]} {unit}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                )}
               </View>
             )}
           </Pressable>
@@ -1058,6 +1086,23 @@ function makeStyles(colors) {
     ddNutritionTitle: { fontFamily: typography.display.fontFamily, fontSize: 16, color: colors.ink },
     ddNutritionToggle: { fontFamily: typography.body.bold, fontSize: 12.5, color: colors.sageDeep },
     ddNutritionBody: { marginTop: spacing.md },
+    ddNutritionBasis: {
+      fontFamily: typography.body.semibold,
+      fontSize: 12.5,
+      color: colors.inkSoft,
+      marginBottom: spacing.sm,
+    },
+    ddNutritionGrid: { gap: spacing.xs },
+    ddNutritionRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      gap: spacing.md,
+      paddingVertical: spacing.xs,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.hairline,
+    },
+    ddNutritionLabel: { fontFamily: typography.body.fontFamily, fontSize: 12.5, color: colors.inkSoft },
+    ddNutritionValue: { fontFamily: typography.body.semibold, fontSize: 12.5, color: colors.ink },
     ddNutritionUnavailable: {
       fontFamily: typography.body.fontFamily,
       fontSize: 12.5,

@@ -17,6 +17,7 @@ const {
   MAX_INGREDIENT_NOTE_LENGTH,
   MAX_IMAGE_URL_LENGTH,
   MAX_IMAGE_ASSET_ID_LENGTH,
+  MAX_NUTRITION_SOURCE_LABEL_LENGTH,
 } = require('./recipe.model');
 
 function collapseWhitespace(value) {
@@ -89,6 +90,44 @@ const servingsSchema = z
   .int(`Servings must be a whole number from 1 to ${MAX_SERVINGS}.`)
   .min(1, `Servings must be a whole number from 1 to ${MAX_SERVINGS}.`)
   .max(MAX_SERVINGS, `Servings must be a whole number from 1 to ${MAX_SERVINGS}.`);
+
+const nutritionNumberSchema = z
+  .number('Nutrition values must be numbers.')
+  .finite('Nutrition values must be finite numbers.')
+  .nonnegative('Nutrition values must be nonnegative.');
+
+const nutritionSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    basis: z.literal('perServing'),
+    caloriesKcal: nutritionNumberSchema,
+    proteinGrams: nutritionNumberSchema,
+    carbohydrateGrams: nutritionNumberSchema,
+    fatGrams: nutritionNumberSchema,
+    sugarGrams: nutritionNumberSchema,
+    fiberGrams: nutritionNumberSchema,
+  })
+  .strict();
+
+const nutritionSourceSchema = z
+  .object({
+    kind: z.enum(['manual', 'jsonLd']),
+    label: z.string().trim().min(1, 'Nutrition source is required.')
+      .max(MAX_NUTRITION_SOURCE_LABEL_LENGTH, `Nutrition source must be ${MAX_NUTRITION_SOURCE_LABEL_LENGTH} characters or fewer.`),
+    url: z.string().trim().max(MAX_IMAGE_URL_LENGTH)
+      .refine(isPublicHttpsUrl, 'Nutrition source URL must be a public HTTPS URL without credentials.')
+      .optional(),
+  })
+  .strict();
+
+function refineNutritionSource(body, ctx) {
+  if (body.nutrition != null && body.nutritionSource === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['nutritionSource'], message: 'Nutrition source material is required.' });
+  }
+  if ((body.nutrition === null || body.nutrition === undefined) && body.nutritionSource !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['nutritionSource'], message: 'Nutrition source material requires complete nutrition.' });
+  }
+}
 
 const instructionItemSchema = z
   .string('Instruction must be a string.')
@@ -365,6 +404,8 @@ const publishedRecipeFields = {
   prepTimeMinutes: prepTimeMinutesSchema.optional(),
   cookTimeMinutes: cookTimeMinutesSchema,
   servings: servingsSchema,
+  nutrition: nutritionSchema.nullable().optional(),
+  nutritionSource: nutritionSourceSchema.optional(),
   ingredients: ingredientsArraySchema,
   // Steps may arrive as legacy `instructions: string[]` or as structured
   // `steps: [{ order, text }]`. At least one is required on create; when
@@ -386,6 +427,7 @@ function refinePublishedRecipe(body, ctx) {
   }
   refineStepConsistency(body, ctx);
   refineImageConsistency(body, ctx);
+  refineNutritionSource(body, ctx);
 }
 
 // Authoritative completeness contract reused by Publish, Published edits,
@@ -438,6 +480,8 @@ const createDraftSchema = z.object({
       prepTimeMinutes: prepTimeMinutesSchema.optional(),
       cookTimeMinutes: cookTimeMinutesSchema.optional(),
       servings: servingsSchema.optional(),
+      nutrition: nutritionSchema.nullable().optional(),
+      nutritionSource: nutritionSourceSchema.optional(),
       ingredients: draftIngredientsArraySchema.optional(),
       instructions: draftInstructionsArraySchema.optional(),
       steps: draftStepsArraySchema.optional(),
@@ -449,6 +493,7 @@ const createDraftSchema = z.object({
     .superRefine((body, ctx) => {
       refineStepConsistency(body, ctx);
       refineImageConsistency(body, ctx);
+      refineNutritionSource(body, ctx);
     }),
 });
 
@@ -471,6 +516,8 @@ const updateRecipeSchema = z.object({
       prepTimeMinutes: prepTimeMinutesSchema.nullable().optional(),
       cookTimeMinutes: cookTimeMinutesSchema.nullable().optional(),
       servings: servingsSchema.nullable().optional(),
+      nutrition: nutritionSchema.nullable().optional(),
+      nutritionSource: nutritionSourceSchema.optional(),
       ingredients: draftIngredientsArraySchema.optional(),
       instructions: draftInstructionsArraySchema.optional(),
       steps: draftStepsArraySchema.optional(),
@@ -483,6 +530,7 @@ const updateRecipeSchema = z.object({
     .superRefine((body, ctx) => {
       refineStepConsistency(body, ctx);
       refineImageConsistency(body, ctx, { update: true });
+      refineNutritionSource(body, ctx);
     })
     .refine((body) => Object.keys(body).some((field) => field !== 'expectedUpdatedAt'), {
       message: 'At least one recipe content field must be provided.',
@@ -543,4 +591,6 @@ module.exports = {
   titleSchema,
   draftInstructionsArraySchema,
   draftStepsArraySchema,
+  nutritionSchema,
+  nutritionSourceSchema,
 };

@@ -167,3 +167,63 @@ test('field mapping, status labels, and command payloads are deterministic', () 
   assert.deepEqual(publishBody('token'), { confirmFilipinoCuisine: true, expectedUpdatedAt: 'token' });
 });
 
+function completeNutritionForm(form) {
+  return {
+    ...form,
+    nutrition: {
+      caloriesKcal: '320', proteinGrams: '28', carbohydrateGrams: '12',
+      fatGrams: '18', sugarGrams: '3', fiberGrams: '2',
+    },
+    nutritionSource: { kind: 'manual', label: ' Reviewed laboratory panel ', url: 'https://example.com/panel' },
+  };
+}
+
+test('authoring nutrition is complete-or-null, finite, nonnegative, and source-backed', () => {
+  const unavailable = emptyRecipeForm();
+  assert.equal(unavailable.nutrition, null);
+  assert.equal(validateStep(unavailable, 'details').nutrition, undefined);
+
+  const valid = completeNutritionForm(unavailable);
+  assert.deepEqual(validateStep(valid, 'details'), {});
+  for (const [field, value] of [
+    ['caloriesKcal', ''], ['proteinGrams', '-1'], ['carbohydrateGrams', 'NaN'],
+    ['fatGrams', 'Infinity'], ['sugarGrams', undefined],
+  ]) {
+    const form = completeNutritionForm(unavailable);
+    form.nutrition = { ...form.nutrition, [field]: value };
+    assert.ok(validateStep(form, 'details')[`nutrition.${field}`], field);
+  }
+  const unsourced = completeNutritionForm(unavailable);
+  unsourced.nutritionSource = { kind: 'manual', label: '', url: '' };
+  assert.ok(validateStep(unsourced, 'details')['nutritionSource.label']);
+  const badUrl = completeNutritionForm(unavailable);
+  badUrl.nutritionSource.url = 'http://example.com/panel';
+  assert.ok(validateStep(badUrl, 'details')['nutritionSource.url']);
+});
+
+test('Details diff emits exact numeric v1 nutrition and source, never blank-to-zero filling', () => {
+  const saved = emptyRecipeForm();
+  const working = completeNutritionForm(saved);
+  assert.deepEqual(buildStepPatch(saved, working, 'details'), {
+    nutrition: {
+      schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+      carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+    },
+    nutritionSource: { kind: 'manual', label: 'Reviewed laboratory panel', url: 'https://example.com/panel' },
+  });
+
+  const incomplete = completeNutritionForm(saved);
+  incomplete.nutrition.caloriesKcal = '';
+  assert.equal(buildStepPatch(saved, incomplete, 'details').nutrition.caloriesKcal, null);
+
+  const hydrated = formFromRecipe({
+    title: 'Adobo', nutrition: buildStepPatch(saved, working, 'details').nutrition,
+    nutritionSource: { kind: 'manual', label: 'Panel' },
+  });
+  assert.equal(hydrated.nutrition.caloriesKcal, '320');
+  assert.equal(hydrated.nutritionSource.label, 'Panel');
+  assert.deepEqual(buildStepPatch(hydrated, { ...hydrated, nutrition: null }, 'details'), { nutrition: null });
+  assert.equal(stepForField('nutrition.fiberGrams'), 'details');
+  assert.equal(stepForField('nutritionSource.label'), 'details');
+});
+

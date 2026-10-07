@@ -170,7 +170,7 @@ export function recipeAuthoringReducer(state, action) {
 function copySection(target, source, step) {
   const fields = {
     basics: ['title', 'description', 'imageUrl'], ingredients: ['ingredients'], instructions: ['instructions'],
-    details: ['difficulty', 'prepTimeMinutes', 'cookTimeHours', 'cookTimeMinutePart', 'servings', 'region', 'category', 'dietaryTags'],
+    details: ['difficulty', 'prepTimeMinutes', 'cookTimeHours', 'cookTimeMinutePart', 'servings', 'region', 'category', 'dietaryTags', 'nutrition', 'nutritionSource'],
   }[step] || [];
   fields.forEach((field) => { target[field] = source[field]; });
 }

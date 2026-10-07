@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Recipe = require('../src/modules/recipes/recipe.model');
-const { toPublicRecipe } = require('../src/modules/recipes/recipe.serializer');
+const { toPublicRecipe, toStaffRecipe } = require('../src/modules/recipes/recipe.serializer');
 const { RECIPE_REGIONS, RECIPE_CATEGORIES } = require('@wecooked/contracts');
 
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
@@ -331,4 +331,86 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
   assert.deepEqual(Object.keys(publicRecipe.ingredients[0].ingredient).sort(), ['id', 'name']);
   assert.equal('_id' in publicRecipe, false);
   assert.equal('__v' in publicRecipe, false);
+});
+
+const validNutrition = () => ({
+  schemaVersion: 1,
+  basis: 'perServing',
+  caloriesKcal: 320,
+  proteinGrams: 28,
+  carbohydrateGrams: 12,
+  fatGrams: 18,
+  sugarGrams: 3,
+  fiberGrams: 2,
+});
+
+const nutritionProvenance = () => ({
+  sourceKind: 'manual',
+  sourceLabel: 'Laboratory nutrition panel',
+  sourceUrl: 'https://example.com/nutrition',
+  acceptedBy: INGREDIENT_ID,
+  acceptedAt: new Date('2026-10-06T00:00:00.000Z'),
+});
+
+test('Recipe persists only a complete exact v1 nutrition object with matching internal provenance', async () => {
+  const explicitNull = baseRecipe({ nutrition: null });
+  await assert.doesNotReject(() => explicitNull.validate());
+  assert.equal(explicitNull.nutrition, null);
+
+  await assert.doesNotReject(() => baseRecipe({
+    nutrition: validNutrition(),
+    nutritionProvenance: nutritionProvenance(),
+  }).validate());
+
+  for (const nutrition of [
+    { ...validNutrition(), caloriesKcal: '320' },
+    { ...validNutrition(), proteinGrams: -1 },
+    { ...validNutrition(), fatGrams: Number.NaN },
+    { ...validNutrition(), sugarGrams: Number.POSITIVE_INFINITY },
+    Object.fromEntries(Object.entries(validNutrition()).filter(([key]) => key !== 'fiberGrams')),
+  ]) {
+    await assert.rejects(() => baseRecipe({ nutrition, nutritionProvenance: nutritionProvenance() }).validate());
+  }
+  await assert.rejects(() => baseRecipe({ nutrition: validNutrition() }).validate(), /provenance/);
+  await assert.rejects(() => baseRecipe({ nutritionProvenance: nutritionProvenance() }).validate(), /requires nutrition/);
+  await assert.rejects(() => baseRecipe({
+    nutrition: { ...validNutrition(), sodiumGrams: 1 },
+    nutritionProvenance: nutritionProvenance(),
+  }).validate());
+});
+
+test('public nutrition serialization is exact, complete-or-null, and redacts all provenance', () => {
+  const base = {
+    _id: '507f1f77bcf86cd799439099', title: 'Adobo', ingredients: [], instructions: [],
+    dietaryTags: [], isActive: true,
+  };
+  assert.equal(toPublicRecipe(base).nutrition, null);
+  assert.equal(toPublicRecipe({ ...base, nutrition: null }).nutrition, null);
+
+  const recipe = { ...base, nutrition: validNutrition(), nutritionProvenance: nutritionProvenance() };
+  const consumer = toPublicRecipe(recipe);
+  const staff = toStaffRecipe(recipe);
+  assert.deepEqual(consumer.nutrition, validNutrition());
+  assert.deepEqual(Object.keys(consumer.nutrition), Object.keys(validNutrition()));
+  assert.equal('nutritionProvenance' in consumer, false);
+  assert.equal(JSON.stringify(consumer).includes(INGREDIENT_ID), false);
+  assert.deepEqual(staff.nutritionSource, {
+    kind: 'manual', label: 'Laboratory nutrition panel', url: 'https://example.com/nutrition',
+  });
+  assert.equal(JSON.stringify(staff).includes('acceptedBy'), false);
+  assert.equal(JSON.stringify(staff).includes('acceptedAt'), false);
+});
+
+test('present malformed stored nutrition fails closed instead of becoming unavailable or partial', () => {
+  const base = {
+    _id: '507f1f77bcf86cd799439099', title: 'Adobo', ingredients: [], instructions: [],
+    dietaryTags: [], isActive: true,
+  };
+  for (const nutrition of [
+    { ...validNutrition(), fiberGrams: undefined },
+    { ...validNutrition(), caloriesKcal: '320' },
+    { ...validNutrition(), internalActorId: INGREDIENT_ID },
+  ]) {
+    assert.throws(() => toPublicRecipe({ ...base, nutrition }), (error) => error.code === 'RECIPE_NUTRITION_MALFORMED');
+  }
 });

@@ -140,6 +140,37 @@ test('POST /api/v1/recipes/duplicate-check is Moderator-only and validates the s
   assert.equal(malformed.body.error.code, 'VALIDATION_ERROR');
 });
 
+test('POST /api/v1/recipes/duplicate-check analyzes valid nutrition without a Recipe mutation', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(ingredientRepository, 'findById', async (id) => activeIngredient(id));
+  for (const method of ['createRecipe', 'updateById', 'publishById', 'archiveById', 'restoreById']) {
+    t.mock.method(recipeRepository, method, async () => assert.fail(`duplicate analysis must not call ${method}`));
+  }
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const nutrition = {
+    schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+    carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+  };
+  const { confirmFilipinoCuisine, ...candidate } = validCreatePayload({
+    nutrition,
+    nutritionSource: { kind: 'manual', label: 'Reviewed laboratory panel' },
+  });
+
+  const accepted = await request(app)
+    .post('/api/v1/recipes/duplicate-check')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ candidate });
+  assert.equal(accepted.status, 200);
+  assert.match(accepted.body.data.duplicateReview.resultDigest, /^[0-9a-f]{64}$/u);
+
+  const rejected = await request(app)
+    .post('/api/v1/recipes/duplicate-check')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ candidate: { ...candidate, nutrition: { ...nutrition, fiberGrams: '2' } } });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error.code, 'VALIDATION_ERROR');
+});
+
 for (const actor of [
   { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID },
   { id: ADMIN_ID, role: 'admin', sessionId: ADMIN_SESSION_ID },
@@ -1031,6 +1062,40 @@ test('PATCH /api/v1/recipes/:id applies a partial update for a moderator', async
 
   assert.equal(response.status, 200);
   assert.equal(response.body.data.recipe.servings, 6);
+});
+
+test('PATCH /api/v1/recipes/:id derives nutrition provenance from the authenticated CATALOG_WRITE actor', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const existing = fakeRecipeDoc({ publicationStatus: 'draft' });
+  let mutation;
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(recipeRepository, 'updateById', async (id, update, options) => {
+    mutation = { id, update, options };
+    return fakeRecipeDoc({ ...update.$set, publicationStatus: 'draft' });
+  });
+  const nutrition = {
+    schemaVersion: 1, basis: 'perServing', caloriesKcal: 320, proteinGrams: 28,
+    carbohydrateGrams: 12, fatGrams: 18, sugarGrams: 3, fiberGrams: 2,
+  };
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const response = await request(app)
+    .patch(`/api/v1/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      nutrition,
+      nutritionSource: { kind: 'manual', label: 'Reviewed laboratory panel', url: 'https://example.com/panel' },
+    });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data.recipe.nutrition, nutrition);
+  assert.deepEqual(response.body.data.recipe.nutritionSource, {
+    kind: 'manual', label: 'Reviewed laboratory panel', url: 'https://example.com/panel',
+  });
+  assert.equal(mutation.update.$set.nutritionProvenance.acceptedBy, MODERATOR_ID);
+  assert.ok(mutation.update.$set.nutritionProvenance.acceptedAt instanceof Date);
+  assert.equal(JSON.stringify(response.body).includes('acceptedBy'), false);
+  assert.equal(JSON.stringify(response.body).includes('acceptedAt'), false);
+  assert.equal(JSON.stringify(response.body).includes('nutritionProvenance'), false);
 });
 
 test('PATCH /api/v1/recipes/:id rejects an empty body', async (t) => {

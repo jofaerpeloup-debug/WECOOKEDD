@@ -334,10 +334,22 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
     expect(apiCode).not.toMatch(/CollectionDetail/);
   });
 
-  it('Nutrition Info card never fabricates macros', () => {
+  it('Nutrition Info card renders only exact authoritative per-serving values and honest null unavailability', () => {
     expect(apiCode).toMatch(/Nutrition Info/);
     expect(apiCode).toMatch(/isn't available for this recipe yet/);
-    expect(apiCode).not.toMatch(/calories|protein|carbs|\bfat\b|estimateNutrition|estimateMacros/i);
+    expect(raw).toMatch(/\['caloriesKcal', 'Calories', 'kcal'\]/);
+    expect(raw).toMatch(/\['proteinGrams', 'Protein', 'g'\]/);
+    expect(raw).toMatch(/\['carbohydrateGrams', 'Carbohydrate', 'g'\]/);
+    expect(raw).toMatch(/\['fatGrams', 'Fat', 'g'\]/);
+    expect(raw).toMatch(/\['sugarGrams', 'Sugar', 'g'\]/);
+    expect(raw).toMatch(/\['fiberGrams', 'Fiber', 'g'\]/);
+    expect(apiCode).toMatch(/recipe\.nutrition === null/);
+    expect(apiCode).toMatch(/recipe\.nutrition\[field\]/);
+    expect(apiCode).toMatch(/accessibilityLabel="Nutrition information, per serving"/);
+    expect(apiCode).toMatch(/accessibilityState=\{\{ expanded: nutritionOpen \}\}/);
+    const nutritionCard = apiCode.slice(apiCode.indexOf('style={styles.ddNutritionCard}'), apiCode.indexOf('style={styles.ddActionRow}'));
+    expect(nutritionCard).toMatch(/Per serving/);
+    expect(nutritionCard).not.toMatch(/scaleQuantity|estimateNutrition|estimateMacros|servings\s*[*/]|[*/]\s*servings/);
   });
 });
 

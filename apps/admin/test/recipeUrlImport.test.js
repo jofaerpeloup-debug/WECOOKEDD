@@ -88,6 +88,11 @@ test('raw server candidate is serialized into the sole M27 parser and retains it
       name: 'Chicken Adobo',
       prepTime: 'not-a-duration',
       recipeIngredient: ['1 kg chicken'],
+      nutrition: {
+        '@type': 'NutritionInformation', servingSize: '1 serving', calories: '320 kcal',
+        proteinContent: '28 g', carbohydrateContent: '12 g', fatContent: '18 g',
+        sugarContent: '3 g', fiberContent: '2 g',
+      },
       remoteOnlyField: true,
     },
   });
@@ -101,6 +106,8 @@ test('raw server candidate is serialized into the sole M27 parser and retains it
   assert.deepEqual(result.preview.invalid.map(({ field }) => field), ['prepTime']);
   assert.deepEqual(result.preview.unsupported.map(({ field }) => field), ['remoteOnlyField']);
   assert.deepEqual(result.preview.unresolved[0].values, ['1 kg chicken']);
+  assert.equal(result.preview.nutritionSuggestion.source.url, 'https://example.com/final');
+  assert.equal(result.preview.nutritionSuggestion.source.kind, 'jsonLd');
 });
 
 test('URL candidates use the sole parser for identical safe and rejected yield classifications', async () => {
@@ -242,6 +249,49 @@ test('rendered intake acceptance stays local and source replacement removes stal
   assert.equal(changes.length, 1, 'replacement Preview must not accept its suggestions');
 });
 
+test('rendered nutrition acceptance control wires the reviewed suggestion into the local form only', () => {
+  const form = emptyRecipeForm();
+  const changes = [];
+  const render = createHookHarness(RecipeIntake, {
+    form,
+    change(field, value) { changes.push([field, value]); form[field] = value; },
+    busy: false,
+    dispatch() {},
+  });
+  let tree = render();
+  const textarea = findElementMatching(tree, ({ type }) => type === 'textarea');
+  textarea.props.onChange({ target: { value: JSON.stringify({
+    '@type': 'Recipe',
+    nutrition: {
+      '@type': 'NutritionInformation', servingSize: '1 serving', calories: '320 kcal',
+      proteinContent: '28 g', carbohydrateContent: '12 g', fatContent: '18 g',
+      sugarContent: '3 g', fiberContent: '2 g',
+    },
+  }) } });
+  tree = render();
+  findElementMatching(tree, (element) => (
+    element.type === 'button' && elementText(element) === 'Preview'
+  )).props.onClick();
+  tree = render();
+
+  assert.deepEqual(changes, [], 'rendering and previewing must remain suggestion-only');
+  assert.match(elementText(tree), /Source: Schema\.org Recipe JSON-LD/u);
+  const accept = findElementMatching(tree, (element) => (
+    element.type === 'button' && elementText(element) === 'Accept nutrition suggestion'
+  ));
+  assert.ok(accept, 'the rendered explicit acceptance control must be present');
+  accept.props.onClick();
+
+  assert.deepEqual(changes.map(([field]) => field), ['nutrition', 'nutritionSource']);
+  assert.equal(changes[0][1].caloriesKcal, '320');
+  assert.deepEqual(changes[1][1], { kind: 'jsonLd', label: 'Schema.org Recipe JSON-LD', url: '' });
+  tree = render();
+  assert.match(elementText(tree), /Accepted in current form\. Save the Details step to persist it\./u);
+  assert.equal(findElementMatching(tree, (element) => (
+    element.type === 'button' && elementText(element) === 'Accept nutrition suggestion'
+  )), null);
+});
+
 test('URL import handler exposes loading, safe error, retry, and success without any save call', async () => {
   const calls = { import: 0, create: 0, patch: 0, publish: 0, upload: 0 };
   const request = async () => {
@@ -345,7 +395,7 @@ test('UI keeps URL import preview-only and source-display-only', () => {
   assert.match(steps, /const result = await importFromUrl\(\)/u);
   assert.match(steps, /setUnresolvedFromPreview\(result\.preview\)/u);
   assert.match(steps, /!state\.recipeId && <RecipeIntake/u);
-  assert.match(helper, /parseRecipeIntake\(input\)/u);
+  assert.match(helper, /parseRecipeIntake\(input, \{ sourceUrl: result\.sourceUrl \}\)/u);
   assert.doesNotMatch(helper, /createDraft|updateRecipe|publishRecipe|uploadRecipeImage/u);
 });
 

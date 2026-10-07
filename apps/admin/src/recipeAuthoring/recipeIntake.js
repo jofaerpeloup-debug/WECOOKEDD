@@ -3,12 +3,13 @@ import {
   MAX_COOK_TIME_MINUTES, MAX_DESCRIPTION_LENGTH, MAX_INSTRUCTION_LENGTH,
   MAX_INSTRUCTIONS, MAX_PREP_TIME_MINUTES, MAX_SERVINGS, MAX_TITLE_LENGTH,
 } from '../recipeOptions.js';
+import { NUTRIENT_FIELDS } from './recipeAuthoringModel.js';
 
 export const MAX_RECIPE_INTAKE_BYTES = 256 * 1024;
 
 const supportedProperties = new Set([
   '@context', '@type', 'name', 'description', 'prepTime', 'cookTime',
-  'recipeYield', 'recipeInstructions', 'recipeIngredient',
+  'recipeYield', 'recipeInstructions', 'recipeIngredient', 'nutrition',
 ]);
 const structuralWrapperProperties = new Set(['@context', '@graph']);
 const metadataProperties = new Set(['recipeCategory', 'suitableForDiet', 'recipeCuisine']);
@@ -22,7 +23,10 @@ const MAX_METADATA_SOURCE_DISPLAY = 200;
 const TRUNCATION_MARKER = '… [truncated]';
 
 function emptyResult(error = null) {
-  return { ok: !error, error, values: {}, mapped: [], metadata: [], unsupported: [], invalid: [], unresolved: [] };
+  return {
+    ok: !error, error, values: {}, mapped: [], metadata: [], unsupported: [], invalid: [], unresolved: [],
+    nutritionSuggestion: null,
+  };
 }
 
 function hasType(value, expected) {
@@ -136,6 +140,55 @@ function mapIngredients(result, recipe) {
   });
 }
 
+const nutritionMembers = Object.freeze([
+  ['calories', 'caloriesKcal', /^(\d+(?:\.\d+)?|\.\d+)\s*(?:kcal|kilocalories?)$/iu],
+  ['proteinContent', 'proteinGrams', /^(\d+(?:\.\d+)?|\.\d+)\s*(?:g|grams?)$/iu],
+  ['carbohydrateContent', 'carbohydrateGrams', /^(\d+(?:\.\d+)?|\.\d+)\s*(?:g|grams?)$/iu],
+  ['fatContent', 'fatGrams', /^(\d+(?:\.\d+)?|\.\d+)\s*(?:g|grams?)$/iu],
+  ['sugarContent', 'sugarGrams', /^(\d+(?:\.\d+)?|\.\d+)\s*(?:g|grams?)$/iu],
+  ['fiberContent', 'fiberGrams', /^(\d+(?:\.\d+)?|\.\d+)\s*(?:g|grams?)$/iu],
+]);
+
+function parseMeasuredNutrition(value, pattern) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(pattern);
+  if (!match) return null;
+  const number = Number(match[1]);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function mapNutritionSuggestion(result, recipe, sourceUrl) {
+  if (!Object.hasOwn(recipe, 'nutrition')) return;
+  const source = recipe.nutrition;
+  if (!source || typeof source !== 'object' || Array.isArray(source) || !hasType(source, 'NutritionInformation')) {
+    addInvalid(result, 'nutrition', 'Expected one Schema.org NutritionInformation object.');
+    return;
+  }
+  if (typeof source.servingSize !== 'string' || !/^(?:1\s+serving|per\s+serving)$/iu.test(source.servingSize.trim())) {
+    addInvalid(result, 'nutrition.servingSize', 'Nutrition must explicitly state a per-serving basis.');
+    return;
+  }
+  const nutrition = { schemaVersion: 1, basis: 'perServing' };
+  for (const [sourceField, targetField, pattern] of nutritionMembers) {
+    const value = parseMeasuredNutrition(source[sourceField], pattern);
+    if (value === null) {
+      addInvalid(result, `nutrition.${sourceField}`, `Expected an explicit ${targetField === 'caloriesKcal' ? 'kilocalorie' : 'gram'} value.`);
+      return;
+    }
+    nutrition[targetField] = value;
+  }
+  result.nutritionSuggestion = {
+    status: 'suggested',
+    nutrition,
+    source: {
+      kind: 'jsonLd',
+      label: 'Schema.org Recipe JSON-LD',
+      ...(sourceUrl ? { url: sourceUrl } : {}),
+    },
+    reason: 'Complete explicit per-serving nutrition; Moderator acceptance is required.',
+  };
+}
+
 function sourceDisplay(value) {
   const serialized = JSON.stringify(value);
   const text = serialized === undefined ? String(value) : serialized;
@@ -237,7 +290,7 @@ function discloseCuisine(result, recipe) {
   });
 }
 
-export function parseRecipeIntake(input) {
+export function parseRecipeIntake(input, { sourceUrl } = {}) {
   const text = typeof input === 'string' ? input : String(input ?? '');
   if (new TextEncoder().encode(text).byteLength > MAX_RECIPE_INTAKE_BYTES) {
     return emptyResult({ code: 'INPUT_TOO_LARGE', message: 'JSON-LD input must be 256 KiB or smaller.' });
@@ -265,6 +318,7 @@ export function parseRecipeIntake(input) {
   }
   mapInstructions(result, recipe);
   mapIngredients(result, recipe);
+  mapNutritionSuggestion(result, recipe, sourceUrl);
   mapCategorySuggestion(result, recipe);
   mapDietarySuggestions(result, recipe);
   discloseCuisine(result, recipe);
@@ -339,6 +393,13 @@ export function acceptMetadataSuggestion({ form, suggestion, change }) {
   return { status: 'accepted', changed: true, field: suggestion.field, value: suggestion.value };
 }
 
+export function acceptNutritionSuggestion({ suggestion, change }) {
+  if (suggestion?.status !== 'suggested') return { status: 'ineligible', changed: false };
+  change('nutrition', Object.fromEntries(NUTRIENT_FIELDS.map(([field]) => [field, String(suggestion.nutrition[field])])));
+  change('nutritionSource', { ...suggestion.source, url: suggestion.source.url || '' });
+  return { status: 'accepted', changed: true };
+}
+
 export function createRecipeIntakeHandlers({ input, form, preview, change, setPreview, setApplication }) {
   return {
     previewInput() {
@@ -357,6 +418,9 @@ export function createRecipeIntakeHandlers({ input, form, preview, change, setPr
     },
     acceptSuggestion(suggestion) {
       return acceptMetadataSuggestion({ form, suggestion, change });
+    },
+    acceptNutrition() {
+      return acceptNutritionSuggestion({ suggestion: preview?.nutritionSuggestion, change });
     },
   };
 }

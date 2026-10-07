@@ -4,11 +4,31 @@ jest.mock('react-native', () => {
   const React = require('react');
   const host = (name) => React.forwardRef(({ children, ...props }, ref) => React.createElement(name, { ...props, ref }, children));
   const Modal = ({ visible, children, ...props }) => visible ? React.createElement('Modal', props, children) : null;
+  class ValueXY {
+    constructor(value) { this.value = value; }
+    setValue(value) { this.value = value; }
+    getTranslateTransform() { return [{ translateX: this.value.x }, { translateY: this.value.y }]; }
+  }
   return {
     AccessibilityInfo: { setAccessibilityFocus: jest.fn() },
     ActivityIndicator: host('ActivityIndicator'),
+    Animated: { ValueXY, View: host('AnimatedView') },
     findNodeHandle: () => 1,
     Modal,
+    PanResponder: {
+      create: (config) => ({
+        panHandlers: {
+          onStartShouldSetResponder: config.onStartShouldSetPanResponder,
+          onMoveShouldSetResponder: config.onMoveShouldSetPanResponder,
+          onMoveShouldSetResponderCapture: config.onMoveShouldSetPanResponderCapture,
+          onResponderGrant: config.onPanResponderGrant,
+          onResponderMove: config.onPanResponderMove,
+          onResponderRelease: config.onPanResponderRelease,
+          onResponderTerminate: config.onPanResponderTerminate,
+          onResponderTerminationRequest: config.onPanResponderTerminationRequest,
+        },
+      }),
+    },
     Pressable: host('Pressable'),
     ScrollView: host('ScrollView'),
     StyleSheet: {
@@ -52,9 +72,15 @@ jest.mock('../src/context/ShoppingListContext', () => ({
 jest.mock('../src/components/RecipeImage', () => 'RecipeImage');
 jest.mock('../src/components/MealPlanSheet', () => {
   const React = require('react');
-  const { Text } = require('react-native');
-  return function MockMealPlanSheet({ visible }) {
-    return visible ? React.createElement(Text, null, 'Add meal sheet open') : null;
+  const { Pressable, Text, View } = require('react-native');
+  return function MockMealPlanSheet({ visible, onAdded }) {
+    return visible ? React.createElement(View, null,
+      React.createElement(Text, null, 'Add meal sheet open'),
+      React.createElement(Pressable, {
+        accessibilityLabel: 'Complete add meal',
+        onPress: () => onAdded?.(Object.freeze({ id: 'created-entry' })),
+      }, React.createElement(Text, null, 'Complete add'))
+    ) : null;
   };
 });
 jest.mock('../src/api/mealPlanService', () => ({
@@ -133,6 +159,41 @@ function openMove(view, label = 'Move Chicken Adobo') {
   return view.getByLabelText('Move meal');
 }
 
+function dragPoint(dayIndex, overrides = {}) {
+  return { moveX: 160, moveY: 140 + (dayIndex * 100), dx: 0, dy: 12, ...overrides };
+}
+
+function layoutDragTargets(view) {
+  fireEvent(view.getByTestId('meal-plan-scroll'), 'layout', {
+    nativeEvent: { layout: { x: 0, y: 100, width: 320, height: 700 } },
+  });
+  currentWeek().forEach((day, index) => {
+    fireEvent(view.getByTestId(`meal-plan-day-${day.dateKey}`), 'layout', {
+      nativeEvent: { layout: { x: 0, y: index * 100, width: 320, height: 90 } },
+    });
+  });
+}
+
+function beginDrag(view, entryId = 'entry-1') {
+  layoutDragTargets(view);
+  const handle = view.getByTestId(`meal-plan-drag-${entryId}`);
+  expect(handle.props.onStartShouldSetResponder()).toBe(false);
+  expect(handle.props.onMoveShouldSetResponder({}, { dx: 0, dy: 9 })).toBe(false);
+  expect(handle.props.onMoveShouldSetResponder({}, dragPoint(0))).toBe(true);
+  act(() => handle.props.onResponderGrant({ nativeEvent: {} }, dragPoint(0)));
+  return handle;
+}
+
+function hoverDrag(view, dayIndex, entryId = 'entry-1') {
+  const handle = view.getByTestId(`meal-plan-drag-${entryId}`);
+  act(() => handle.props.onResponderMove({ nativeEvent: {} }, dragPoint(dayIndex)));
+}
+
+function releaseDrag(view, dayIndex, entryId = 'entry-1', overrides = {}) {
+  const handle = view.getByTestId(`meal-plan-drag-${entryId}`);
+  act(() => handle.props.onResponderRelease({ nativeEvent: {} }, dragPoint(dayIndex, overrides)));
+}
+
 async function settle(request, method, value) {
   await act(async () => {
     request[method](value);
@@ -162,6 +223,338 @@ it('opens an entry-specific sheet with current/selected semantics and disables t
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   })).length).toBe(2);
   expect(view.getByText('Current plan')).toBeOnTheScreen();
+});
+
+it('drags in-week with exact id/version, one submit, pessimistic source visibility, and returned-entry reconciliation', async () => {
+  const days = currentWeek();
+  const request = deferred();
+  const sibling = entry({ id: 'entry-2', dateKey: days[2].dateKey });
+  const returned = entry({
+    dateKey: days[1].dateKey,
+    updatedAt: '2026-09-14T09:00:00.000Z',
+    recipe: { ...entry().recipe, title: 'Server Adobo' },
+  });
+  moveMealPlanEntry.mockReturnValue(request.promise);
+  const { view } = await renderLoaded([entry(), sibling]);
+
+  beginDrag(view);
+  expect(view.getByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).toBeOnTheScreen();
+  expect(view.getByTestId('meal-plan-scroll').props.scrollEnabled).toBe(false);
+  hoverDrag(view, 1);
+  expect(view.getByTestId(`meal-plan-day-${days[1].dateKey}`).props.style)
+    .toContainEqual(expect.objectContaining({ borderWidth: 2 }));
+  releaseDrag(view, 1);
+
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+  expect(moveMealPlanEntry).toHaveBeenCalledWith('entry-1', {
+    dateKey: days[1].dateKey,
+    expectedUpdatedAt: '2026-09-14T08:30:00.000Z',
+  });
+  expect(within(view.getByTestId(`meal-plan-day-${days[0].dateKey}`)).getByText('Chicken Adobo')).toBeOnTheScreen();
+  expect(within(view.getByTestId(`meal-plan-day-${days[0].dateKey}`)).getByLabelText('Move Chicken Adobo')).toBeDisabled();
+  expect(view.getByTestId('meal-plan-drag-entry-1')).toBeDisabled();
+  expect(view.getByTestId('meal-plan-scroll').props.scrollEnabled).toBe(true);
+  releaseDrag(view, 1);
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+
+  await settle(request, 'resolve', returned);
+  await waitFor(() => expect(within(view.getByTestId(`meal-plan-day-${days[1].dateKey}`)).getByText('Server Adobo')).toBeOnTheScreen());
+  expect(within(view.getByTestId(`meal-plan-day-${days[2].dateKey}`)).getByText('Chicken Adobo')).toBeOnTheScreen();
+  expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen();
+});
+
+it('cancels same-day, outside, below-threshold, and terminated gestures without a request', async () => {
+  const { view } = await renderLoaded();
+  const handle = view.getByTestId('meal-plan-drag-entry-1');
+  expect(handle.props.onMoveShouldSetResponder({}, { dx: 4, dy: 4 })).toBe(false);
+  expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen();
+
+  beginDrag(view);
+  releaseDrag(view, 0);
+  expect(moveMealPlanEntry).not.toHaveBeenCalled();
+
+  beginDrag(view);
+  releaseDrag(view, 1, 'entry-1', { moveX: -10, moveY: -10 });
+  expect(moveMealPlanEntry).not.toHaveBeenCalled();
+
+  const terminatingHandle = beginDrag(view);
+  hoverDrag(view, 1);
+  act(() => terminatingHandle.props.onResponderTerminate());
+  expect(moveMealPlanEntry).not.toHaveBeenCalled();
+  expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen();
+  expect(view.getByTestId('meal-plan-scroll').props.scrollEnabled).toBe(true);
+});
+
+it('disables drag while a fresh authoritative generation is loading', async () => {
+  const refresh = deferred();
+  getMealPlan.mockResolvedValueOnce([entry()]).mockReturnValueOnce(refresh.promise);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeEnabled());
+
+  act(() => { mockFocusedEffect(); });
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeDisabled());
+  expect(view.getByTestId('meal-plan-drag-entry-1').props.onMoveShouldSetResponder({}, dragPoint(0))).toBe(false);
+
+  await settle(refresh, 'resolve', [entry()]);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeEnabled());
+});
+
+it.each([
+  ['duplicate', 'That recipe is already planned for this day.'],
+  ['notFound', 'That planned meal no longer exists.'],
+  ['network', 'Connection failed.'],
+  ['generic', 'Server failed.'],
+])('keeps the drag source authoritative after a %s move failure', async (kind, message) => {
+  moveMealPlanEntry.mockRejectedValue({ kind, message });
+  const days = currentWeek();
+  const { view } = await renderLoaded();
+  beginDrag(view);
+  releaseDrag(view, 1);
+
+  await waitFor(() => expect(view.getByText(message)).toBeOnTheScreen());
+  expect(within(view.getByTestId(`meal-plan-day-${days[0].dateKey}`)).getByText('Chicken Adobo')).toBeOnTheScreen();
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+});
+
+it('retains the drag source on malformed success and never applies client-authored movement', async () => {
+  moveMealPlanEntry.mockResolvedValue({
+    id: null, dateKey: null, recipeId: null, isAvailable: false, recipe: null, createdAt: null, updatedAt: null,
+  });
+  const days = currentWeek();
+  const { view } = await renderLoaded();
+  beginDrag(view);
+  releaseDrag(view, 1);
+
+  await waitFor(() => expect(view.getByText('Something went wrong. Please try again.')).toBeOnTheScreen());
+  expect(within(view.getByTestId(`meal-plan-day-${days[0].dateKey}`)).getByText('Chicken Adobo')).toBeOnTheScreen();
+  expect(within(view.getByTestId(`meal-plan-day-${days[1].dateKey}`)).queryByText('Chicken Adobo')).not.toBeOnTheScreen();
+});
+
+it('uses the guarded stale refetch for drag and never auto-resubmits', async () => {
+  const refreshed = entry({ updatedAt: '2026-09-14T10:00:00.000Z' });
+  getMealPlan.mockResolvedValueOnce([entry()]).mockResolvedValueOnce([refreshed]);
+  moveMealPlanEntry.mockRejectedValue({ kind: 'stale', message: 'stale' });
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+  beginDrag(view);
+  releaseDrag(view, 1);
+
+  await waitFor(() => expect(getMealPlan).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(view.getByText('Your meal plan changed. The latest plan is now loaded.')).toBeOnTheScreen());
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+  expect(view.getByText('Chicken Adobo')).toBeOnTheScreen();
+});
+
+it('drags an unavailable entry without fabricating recipe content', async () => {
+  const days = currentWeek();
+  const unavailable = entry({ isAvailable: false, recipe: null });
+  moveMealPlanEntry.mockResolvedValue({
+    ...unavailable, dateKey: days[1].dateKey, updatedAt: '2026-09-14T09:00:00.000Z',
+  });
+  const { view } = await renderLoaded([unavailable]);
+  beginDrag(view);
+  releaseDrag(view, 1);
+
+  await waitFor(() => expect(within(view.getByTestId(`meal-plan-day-${days[1].dateKey}`)).getByText('Recipe unavailable')).toBeOnTheScreen());
+  expect(moveMealPlanEntry).toHaveBeenCalledWith('entry-1', expect.objectContaining({
+    expectedUpdatedAt: '2026-09-14T08:30:00.000Z',
+  }));
+  expect(view.queryByText('Chicken Adobo')).not.toBeOnTheScreen();
+});
+
+it('allows only one active drag and blocks conflicting Meal Plan controls', async () => {
+  const days = currentWeek();
+  const second = entry({
+    id: 'entry-2',
+    recipeId: 'recipe-2',
+    recipe: { ...entry().recipe, id: 'recipe-2', title: 'Pancit' },
+  });
+  const request = deferred();
+  moveMealPlanEntry.mockReturnValue(request.promise);
+  const { view } = await renderLoaded([entry(), second]);
+  beginDrag(view);
+
+  const secondHandle = view.getByTestId('meal-plan-drag-entry-2');
+  expect(secondHandle).toBeDisabled();
+  expect(secondHandle.props.onMoveShouldSetResponder({}, dragPoint(0))).toBe(false);
+  expect(view.getByLabelText('Move Chicken Adobo')).toBeDisabled();
+  expect(view.getByLabelText('Remove Chicken Adobo')).toBeDisabled();
+  expect(view.getByLabelText('Add recipe to Tuesday')).toBeDisabled();
+  expect(view.getByLabelText('Next week')).toBeDisabled();
+
+  releaseDrag(view, 1);
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+  expect(within(view.getByTestId(`meal-plan-day-${days[0].dateKey}`)).getByText('Chicken Adobo')).toBeOnTheScreen();
+  await settle(request, 'reject', { kind: 'network', message: 'Connection failed.' });
+});
+
+it.each([
+  ['account', async (view, navigation) => {
+    mockUser = { id: 'user-b' };
+    getMealPlan.mockResolvedValueOnce([]);
+    view.rerender(<MealPlanScreen navigation={navigation} />);
+  }],
+  ['range', async (view) => {
+    getMealPlan.mockResolvedValueOnce([]);
+    act(() => view.getByLabelText('Next week').props.onPress());
+  }],
+  ['generation', async () => {
+    getMealPlan.mockResolvedValueOnce([entry()]);
+    await act(async () => { await mockFocusedEffect(); });
+  }],
+])('invalidates an active drag after %s authority changes', async (_scenario, invalidate) => {
+  getMealPlan.mockResolvedValueOnce([entry()]);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+  const handle = beginDrag(view);
+  const lateRelease = handle.props.onResponderRelease;
+  await invalidate(view, navigation);
+  await waitFor(() => expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen());
+  act(() => lateRelease({ nativeEvent: {} }, dragPoint(1)));
+  expect(moveMealPlanEntry).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['entry removal', (authoritativeEntries) => authoritativeEntries.splice(0, 1)],
+  ['version replacement', (authoritativeEntries) => {
+    authoritativeEntries[0] = entry({ updatedAt: '2026-09-14T10:00:00.000Z' });
+  }],
+])('rejects a late release after authoritative %s without relying on generation cancellation', async (_scenario, changeAuthority) => {
+  const authoritativeEntries = [entry()];
+  getMealPlan.mockResolvedValueOnce(authoritativeEntries);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+  const handle = beginDrag(view);
+  const lateRelease = handle.props.onResponderRelease;
+
+  changeAuthority(authoritativeEntries);
+  act(() => lateRelease({ nativeEvent: {} }, dragPoint(1)));
+
+  expect(moveMealPlanEntry).not.toHaveBeenCalled();
+  expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen();
+  expect(view.getByTestId('meal-plan-scroll').props.scrollEnabled).toBe(true);
+});
+
+it.each([
+  ['success', 'resolve', entry({ dateKey: currentWeek()[1].dateKey, updatedAt: '2026-09-14T09:00:00.000Z' })],
+  ['failure', 'reject', { kind: 'network', message: 'Old owner failure.' }],
+  ['stale failure', 'reject', { kind: 'stale', message: 'Old owner stale.' }],
+])('keeps a new owner drag authoritative after the old owner has a late %s', async (_outcome, method, value) => {
+  const oldRequest = deferred();
+  const newRequest = deferred();
+  const days = currentWeek();
+  const ownerBEntry = entry({
+    id: 'entry-b',
+    recipeId: 'recipe-b',
+    recipe: { ...entry().recipe, id: 'recipe-b', title: 'Owner B Meal' },
+  });
+  const ownerBReturned = entry({
+    ...ownerBEntry,
+    dateKey: days[1].dateKey,
+    updatedAt: '2026-09-14T10:30:00.000Z',
+    recipe: { ...ownerBEntry.recipe, title: 'Owner B Server Meal' },
+  });
+  getMealPlan.mockResolvedValueOnce([entry()]).mockResolvedValueOnce([ownerBEntry]);
+  moveMealPlanEntry.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+
+  beginDrag(view);
+  releaseDrag(view, 1);
+  mockUser = { id: 'user-b' };
+  view.rerender(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByText('Owner B Meal')).toBeOnTheScreen());
+
+  beginDrag(view, 'entry-b');
+  releaseDrag(view, 1, 'entry-b');
+  expect(moveMealPlanEntry).toHaveBeenNthCalledWith(2, 'entry-b', {
+    dateKey: days[1].dateKey,
+    expectedUpdatedAt: ownerBEntry.updatedAt,
+  });
+
+  await settle(oldRequest, method, value);
+  expect(getMealPlan).toHaveBeenCalledTimes(2);
+  expect(view.queryByText('Old owner failure.')).not.toBeOnTheScreen();
+  expect(view.queryByText('Old owner stale.')).not.toBeOnTheScreen();
+  expect(view.getByTestId('meal-plan-drag-entry-b')).toBeDisabled();
+
+  await settle(newRequest, 'resolve', ownerBReturned);
+  await waitFor(() => expect(within(view.getByTestId(`meal-plan-day-${days[1].dateKey}`)).getByText('Owner B Server Meal')).toBeOnTheScreen());
+  expect(view.getByTestId('meal-plan-drag-entry-b')).toBeEnabled();
+  expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen();
+});
+
+it('ignores pending drag success and finalizer work after the displayed week changes', async () => {
+  const request = deferred();
+  const days = currentWeek();
+  const nextDays = weekDays(shiftWeek(days[0].date, 1));
+  const nextEntry = entry({
+    id: 'entry-next',
+    recipeId: 'recipe-next',
+    dateKey: nextDays[0].dateKey,
+    recipe: { ...entry().recipe, id: 'recipe-next', title: 'Next Week Soup' },
+  });
+  getMealPlan.mockResolvedValueOnce([entry()]).mockResolvedValueOnce([nextEntry]);
+  moveMealPlanEntry.mockReturnValueOnce(request.promise);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+  beginDrag(view);
+  releaseDrag(view, 1);
+
+  act(() => view.getByLabelText('Next week').props.onPress());
+  await waitFor(() => expect(view.getByText('Next Week Soup')).toBeOnTheScreen());
+  await settle(request, 'resolve', entry({ dateKey: days[1].dateKey, updatedAt: '2026-09-14T09:00:00.000Z' }));
+
+  expect(view.getByText('Next Week Soup')).toBeOnTheScreen();
+  expect(view.queryByText('Chicken Adobo')).not.toBeOnTheScreen();
+  expect(view.getByTestId('meal-plan-drag-entry-next')).toBeEnabled();
+  expect(view.queryByTestId('meal-plan-drag-preview', { includeHiddenElements: true })).not.toBeOnTheScreen();
+});
+
+it.each([
+  ['failure', { kind: 'network', message: 'Old generation failure.' }],
+  ['stale failure', { kind: 'stale', message: 'Old generation stale.' }],
+])('ignores pending drag %s, error, and stale-refetch work after a newer generation and version', async (_outcome, failure) => {
+  const request = deferred();
+  const refreshed = entry({
+    updatedAt: '2026-09-14T10:00:00.000Z',
+    recipe: { ...entry().recipe, title: 'Refreshed Meal' },
+  });
+  getMealPlan.mockResolvedValueOnce([entry()]).mockResolvedValueOnce([refreshed]);
+  moveMealPlanEntry.mockReturnValueOnce(request.promise);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+  beginDrag(view);
+  releaseDrag(view, 1);
+
+  await act(async () => { await mockFocusedEffect(); });
+  await waitFor(() => expect(view.getByText('Refreshed Meal')).toBeOnTheScreen());
+  await settle(request, 'reject', failure);
+
+  expect(getMealPlan).toHaveBeenCalledTimes(2);
+  expect(view.getByText('Refreshed Meal')).toBeOnTheScreen();
+  expect(view.queryByText(failure.message)).not.toBeOnTheScreen();
+  expect(view.queryByText(/Your meal plan changed/)).not.toBeOnTheScreen();
+  expect(view.getByTestId('meal-plan-drag-entry-1')).toBeEnabled();
+});
+
+it('does not process or refetch a pending stale drag failure after unmount', async () => {
+  const request = deferred();
+  moveMealPlanEntry.mockReturnValue(request.promise);
+  const { view } = await renderLoaded();
+  beginDrag(view);
+  releaseDrag(view, 1);
+  view.unmount();
+  await settle(request, 'reject', { kind: 'stale', message: 'Unmounted stale.' });
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+  expect(getMealPlan).toHaveBeenCalledTimes(1);
 });
 
 it('navigates previous and next target weeks and submits a real cross-week date', async () => {
@@ -412,6 +805,41 @@ it('ignores a late move response after the authenticated account changes', async
   expect(view.queryByText('Chicken Adobo')).not.toBeOnTheScreen();
 });
 
+it('uses the current account authority for a new same-week drag after an account switch', async () => {
+  const days = currentWeek();
+  const ownerBEntry = entry({
+    id: 'entry-b',
+    recipeId: 'recipe-b',
+    recipe: { ...entry().recipe, id: 'recipe-b', title: 'Owner B Meal' },
+  });
+  const ownerBReturned = entry({
+    ...ownerBEntry,
+    dateKey: days[1].dateKey,
+    updatedAt: '2026-09-14T10:30:00.000Z',
+    recipe: { ...ownerBEntry.recipe, title: 'Owner B Server Meal' },
+  });
+  getMealPlan.mockResolvedValueOnce([entry()]).mockResolvedValueOnce([ownerBEntry]);
+  moveMealPlanEntry.mockResolvedValueOnce(ownerBReturned);
+  const navigation = { goBack: jest.fn(), navigate: jest.fn() };
+  const view = render(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-1')).toBeOnTheScreen());
+
+  mockUser = { id: 'user-b' };
+  view.rerender(<MealPlanScreen navigation={navigation} />);
+  await waitFor(() => expect(view.getByTestId('meal-plan-drag-entry-b')).toBeEnabled());
+
+  beginDrag(view, 'entry-b');
+  releaseDrag(view, 1, 'entry-b');
+  expect(moveMealPlanEntry).toHaveBeenCalledTimes(1);
+  expect(moveMealPlanEntry).toHaveBeenCalledWith('entry-b', {
+    dateKey: days[1].dateKey,
+    expectedUpdatedAt: ownerBEntry.updatedAt,
+  });
+  await waitFor(() => expect(within(view.getByTestId(`meal-plan-day-${days[1].dateKey}`)).getByText('Owner B Server Meal')).toBeOnTheScreen());
+  expect(view.getByTestId('meal-plan-drag-entry-b')).toBeEnabled();
+  expect(view.queryByText('Chicken Adobo')).not.toBeOnTheScreen();
+});
+
 it('keeps existing add, remove, Recipe Detail, and focus reload wiring live', async () => {
   removeMealPlanEntry.mockResolvedValue(true);
   const { navigation, view } = await renderLoaded();
@@ -419,10 +847,12 @@ it('keeps existing add, remove, Recipe Detail, and focus reload wiring live', as
   expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', expect.objectContaining({ recipeId: 'recipe-1' }));
   fireEvent.press(view.getByLabelText('Add recipe to Monday'));
   expect(view.getByText('Add meal sheet open')).toBeOnTheScreen();
+  fireEvent.press(view.getByLabelText('Complete add meal'));
+  await waitFor(() => expect(getMealPlan.mock.calls.length).toBeGreaterThanOrEqual(2));
   fireEvent.press(view.getByLabelText('Remove Chicken Adobo'));
   await waitFor(() => expect(removeMealPlanEntry).toHaveBeenCalledWith('entry-1'));
   await act(async () => mockFocusedEffect());
-  expect(getMealPlan.mock.calls.length).toBeGreaterThanOrEqual(2);
+  expect(getMealPlan.mock.calls.length).toBeGreaterThanOrEqual(3);
 });
 
 it('does not update screen state from a move response after unmount', async () => {
