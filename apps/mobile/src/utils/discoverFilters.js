@@ -1,6 +1,6 @@
 import {
   categoryLabel, dietaryTagLabel, regionLabel, RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS,
-  RECIPE_DIFFICULTIES, RECIPE_REGIONS, RECIPE_SORTS,
+  RECIPE_DIFFICULTIES, RECIPE_REGIONS, RECIPE_SORTS, RECIPE_TOTAL_TIME_BUCKETS,
 } from '../api/recipeOptions';
 
 export const MAX_PREP_MINUTES = 1440;
@@ -13,15 +13,22 @@ export const DIFFICULTY_OPTIONS = [
   { value: 'hard', label: 'Hard' },
 ];
 
-export const DIETARY_OPTIONS = [{ value: '', label: 'Any' }, ...RECIPE_DIETARY_TAGS.map((value) => ({ value, label: dietaryTagLabel(value) }))];
+export const DIETARY_OPTIONS = RECIPE_DIETARY_TAGS.map((value) => ({ value, label: dietaryTagLabel(value) }));
+export const TOTAL_TIME_OPTIONS = [
+  { value: '', label: 'Any' },
+  { value: 'under-15', label: 'Under 15 min' },
+  { value: '15-to-30', label: '15-30 min' },
+  { value: '31-to-60', label: '31-60 min' },
+  { value: 'over-60', label: 'Over 60 min' },
+];
 export const REGION_OPTIONS = [{ value: '', label: 'Any' }, ...RECIPE_REGIONS.map((value) => ({ value, label: regionLabel(value) }))];
 export const CATEGORY_OPTIONS = [{ value: '', label: 'Any' }, ...RECIPE_CATEGORIES.map((value) => ({ value, label: categoryLabel(value) }))];
 
 const PRESET_FILTERS = {
   all: {},
   easy: { difficulty: 'easy' },
-  vegetarian: { dietaryTag: 'vegetarian' },
-  vegan: { dietaryTag: 'vegan' },
+  vegetarian: { dietaryTags: ['vegetarian'] },
+  vegan: { dietaryTags: ['vegan'] },
 };
 
 function normalizedPrepMinutes(value) {
@@ -46,6 +53,24 @@ function normalizedIngredient(value) {
   return id && name ? { id, name } : undefined;
 }
 
+function normalizedDietaryTags(value) {
+  if (!Array.isArray(value)) return [];
+  return RECIPE_DIETARY_TAGS.filter((tag) => value.includes(tag));
+}
+
+function equalFilterValue(key, left, right) {
+  if (key === 'ingredient') {
+    return left?.id === right?.id && left?.name === right?.name;
+  }
+  if (key === 'dietaryTags') {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((tag, index) => tag === right[index]);
+  }
+  return left === right;
+}
+
 export function normalizeDiscoverFilters(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const normalized = { sort: normalizedSort(source.sort) };
@@ -54,11 +79,13 @@ export function normalizeDiscoverFilters(value) {
   if (RECIPE_DIFFICULTIES.includes(source.difficulty)) {
     normalized.difficulty = source.difficulty;
   }
-  if (RECIPE_DIETARY_TAGS.includes(source.dietaryTag)) {
-    normalized.dietaryTag = source.dietaryTag;
-  }
+  const dietaryTags = normalizedDietaryTags(source.dietaryTags);
+  if (dietaryTags.length > 0) normalized.dietaryTags = dietaryTags;
   const prep = normalizedPrepMinutes(source.maxPrepTimeMinutes);
   if (prep !== undefined) normalized.maxPrepTimeMinutes = prep;
+  if (RECIPE_TOTAL_TIME_BUCKETS.includes(source.totalTimeBucket)) {
+    normalized.totalTimeBucket = source.totalTimeBucket;
+  }
   const ingredient = normalizedIngredient(source.ingredient);
   if (ingredient) normalized.ingredient = ingredient;
   return normalized;
@@ -78,15 +105,11 @@ export function presetFiltersState(current, key) {
   const currentIsNormalized =
     sourceKeys.length === currentKeys.length &&
     currentKeys.every((filterKey) => {
-      if (filterKey !== 'ingredient') return current[filterKey] === normalizedCurrent[filterKey];
-      return (
-        current.ingredient?.id === normalizedCurrent.ingredient.id &&
-        current.ingredient?.name === normalizedCurrent.ingredient.name
-      );
+      return equalFilterValue(filterKey, current[filterKey], normalizedCurrent[filterKey]);
     });
   const equivalent =
     currentKeys.length === nextKeys.length &&
-    nextKeys.every((filterKey) => normalizedCurrent[filterKey] === next[filterKey]);
+    nextKeys.every((filterKey) => equalFilterValue(filterKey, normalizedCurrent[filterKey], next[filterKey]));
   return currentIsNormalized && equivalent ? current : next;
 }
 
@@ -96,8 +119,8 @@ export function selectedPresetKey(value) {
   if (keys.length === 0) return 'all';
   if (keys.length !== 1) return null;
   if (filters.difficulty === 'easy') return 'easy';
-  if (filters.dietaryTag === 'vegetarian') return 'vegetarian';
-  if (filters.dietaryTag === 'vegan') return 'vegan';
+  if (filters.dietaryTags?.length === 1 && filters.dietaryTags[0] === 'vegetarian') return 'vegetarian';
+  if (filters.dietaryTags?.length === 1 && filters.dietaryTags[0] === 'vegan') return 'vegan';
   return null;
 }
 
@@ -106,9 +129,10 @@ export function activeFilterCount(value) {
 }
 
 export function discoverFilterQuery(value) {
-  const { ingredient, ...filters } = normalizeDiscoverFilters(value);
+  const { ingredient, dietaryTags, ...filters } = normalizeDiscoverFilters(value);
   return {
     ...filters,
+    ...(dietaryTags ? { dietaryTags: dietaryTags.join(',') } : {}),
     ...(ingredient ? { ingredientId: ingredient.id } : {}),
   };
 }
@@ -119,9 +143,10 @@ export function draftFromFilters(value) {
     region: filters.region || '',
     category: filters.category || '',
     difficulty: filters.difficulty || '',
-    dietaryTag: filters.dietaryTag || '',
+    dietaryTags: [...(filters.dietaryTags || [])],
     maxPrepTimeMinutes:
       filters.maxPrepTimeMinutes === undefined ? '' : String(filters.maxPrepTimeMinutes),
+    totalTimeBucket: filters.totalTimeBucket || '',
     ingredient: filters.ingredient || null,
     sort: filters.sort,
   };
@@ -130,7 +155,7 @@ export function draftFromFilters(value) {
 export function validateDiscoverFilterDraft(value) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const difficulty = RECIPE_DIFFICULTIES.includes(source.difficulty) ? source.difficulty : '';
-  const dietaryTag = RECIPE_DIETARY_TAGS.includes(source.dietaryTag) ? source.dietaryTag : '';
+  const dietaryTags = normalizedDietaryTags(source.dietaryTags);
   const region = RECIPE_REGIONS.includes(source.region) ? source.region : '';
   const category = RECIPE_CATEGORIES.includes(source.category) ? source.category : '';
   const rawPrep = String(source.maxPrepTimeMinutes ?? '').trim();
@@ -152,8 +177,9 @@ export function validateDiscoverFilterDraft(value) {
       region,
       category,
       difficulty,
-      dietaryTag,
+      dietaryTags,
       maxPrepTimeMinutes: rawPrep,
+      totalTimeBucket: source.totalTimeBucket,
       ingredient: source.ingredient,
       sort: source.sort,
     }),

@@ -501,6 +501,47 @@ test('listRecipesSchema accepts exact canonical region/category filters', () => 
   assert.equal(result.data.query.category, 'dinner');
 });
 
+test('listRecipesSchema accepts only frozen total-time buckets', () => {
+  for (const totalTimeBucket of ['under-15', '15-to-30', '31-to-60', 'over-60']) {
+    const result = listRecipesSchema.safeParse({ query: { totalTimeBucket } });
+    assert.equal(result.success, true, totalTimeBucket);
+    assert.equal(result.data.query.totalTimeBucket, totalTimeBucket);
+  }
+  for (const totalTimeBucket of ['', 'under-14', '15-30', '61-plus', '$gt', { $gt: 60 }, ['under-15']]) {
+    assert.equal(listRecipesSchema.safeParse({ query: { totalTimeBucket } }).success, false);
+  }
+});
+
+test('listRecipesSchema parses, bounds, validates, and deduplicates canonical dietaryTags', () => {
+  const all = 'vegetarian,vegan,pescatarian,glutenFree,dairyFree,nutFree';
+  const accepted = listRecipesSchema.safeParse({ query: { dietaryTags: all } });
+  assert.equal(accepted.success, true);
+  assert.deepEqual(accepted.data.query.dietaryTags, all.split(','));
+
+  const duplicate = listRecipesSchema.safeParse({
+    query: { dietaryTags: 'vegetarian,vegan,vegetarian' },
+  });
+  assert.equal(duplicate.success, true);
+  assert.deepEqual(duplicate.data.query.dietaryTags, ['vegetarian', 'vegan']);
+
+  for (const dietaryTags of [
+    '', ' ', 'vegetarian,', ',vegan', 'vegetarian,,vegan', 'Vegetarian',
+    'keto', '$ne', 'vegetarian,vegan,pescatarian,glutenFree,dairyFree,nutFree,vegan',
+    { $all: ['vegan'] }, ['vegetarian', 'vegan'],
+  ]) {
+    assert.equal(listRecipesSchema.safeParse({ query: { dietaryTags } }).success, false);
+  }
+});
+
+test('listRecipesSchema preserves dietaryTag as a one-tag alias and rejects dual representation', () => {
+  const alias = listRecipesSchema.safeParse({ query: { dietaryTag: 'vegan' } });
+  assert.equal(alias.success, true);
+  assert.equal(alias.data.query.dietaryTag, 'vegan');
+  assert.equal(listRecipesSchema.safeParse({
+    query: { dietaryTag: 'vegan', dietaryTags: 'vegan' },
+  }).success, false);
+});
+
 test('listRecipesSchema accepts only the frozen Draft publication filter and updated-time sort', () => {
   const accepted = listRecipesSchema.safeParse({
     query: { publicationStatus: 'draft', status: 'active', sort: 'updatedDesc' },

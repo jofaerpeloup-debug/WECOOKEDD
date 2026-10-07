@@ -109,6 +109,22 @@ test('recipe filters reject bracketed Mongo operators before query construction'
   assertValidationError(response);
 });
 
+test('DISC6 recipe filters reject operator-shaped values before query construction', async (t) => {
+  mockAdminAuth(t);
+  t.mock.method(recipeRepository, 'findMany', failIfCalled('recipeRepository.findMany'));
+  t.mock.method(recipeRepository, 'countByFilter', failIfCalled('recipeRepository.countByFilter'));
+
+  for (const query of [
+    'dietaryTags%5B%24all%5D=vegan',
+    'totalTimeBucket%5B%24gt%5D=60',
+    'dietaryTags=%24ne',
+    'totalTimeBucket=%24expr',
+  ]) {
+    const response = await authenticated(request(app).get(`/api/v1/recipes?${query}`));
+    assertValidationError(response);
+  }
+});
+
 test('catalog list filters reject bracketed Mongo operators before query construction', async (t) => {
   mockAdminAuth(t);
   t.mock.method(ingredientRepository, 'findMany', failIfCalled('ingredientRepository.findMany'));

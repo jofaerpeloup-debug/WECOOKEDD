@@ -18,6 +18,7 @@ import {
   DIFFICULTY_OPTIONS,
   REGION_OPTIONS,
   CATEGORY_OPTIONS,
+  TOTAL_TIME_OPTIONS,
   draftFromFilters,
   validateDiscoverFilterDraft,
 } from '../utils/discoverFilters';
@@ -42,6 +43,34 @@ function ChoiceGroup({ label, options, value, onChange, styles }) {
               accessibilityState={{ selected }}
             >
               <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function MultiChoiceGroup({ label, options, values, onChange, styles }) {
+  const selectedValues = Array.isArray(values) ? values : [];
+  return (
+    <View style={styles.group} accessibilityRole="group" accessibilityLabel={label}>
+      <Text style={styles.groupLabel}>{label}</Text>
+      <View style={styles.choices}>
+        {options.map((option) => {
+          const checked = selectedValues.includes(option.value);
+          return (
+            <Pressable
+              key={option.value}
+              onPress={() => onChange(option.value)}
+              style={[styles.choice, checked && styles.choiceSelected]}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`${label}: ${option.label}`}
+              accessibilityState={{ checked }}
+            >
+              <Text style={[styles.choiceText, checked && styles.choiceTextSelected]}>
                 {option.label}
               </Text>
             </Pressable>
@@ -199,6 +228,15 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
     setPrepError(null);
   };
 
+  const toggleDietaryTag = (tag) => {
+    setDraft((current) => ({
+      ...current,
+      dietaryTags: current.dietaryTags.includes(tag)
+        ? current.dietaryTags.filter((value) => value !== tag)
+        : [...current.dietaryTags, tag],
+    }));
+  };
+
   if (!visible) return null;
 
   return (
@@ -243,11 +281,18 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
                 onChange={(difficulty) => setDraft((current) => ({ ...current, difficulty }))}
                 styles={styles}
               />
-              <ChoiceGroup
-                label="Dietary tag"
+              <MultiChoiceGroup
+                label="Dietary"
                 options={DIETARY_OPTIONS}
-                value={draft.dietaryTag}
-                onChange={(dietaryTag) => setDraft((current) => ({ ...current, dietaryTag }))}
+                values={draft.dietaryTags}
+                onChange={toggleDietaryTag}
+                styles={styles}
+              />
+              <ChoiceGroup
+                label="Total time"
+                options={TOTAL_TIME_OPTIONS}
+                value={draft.totalTimeBucket}
+                onChange={(totalTimeBucket) => setDraft((current) => ({ ...current, totalTimeBucket }))}
                 styles={styles}
               />
 

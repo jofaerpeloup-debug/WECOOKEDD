@@ -3,6 +3,7 @@ const path = require('path');
 
 const screen = fs.readFileSync(path.join(__dirname, '../src/screens/DiscoverScreen.js'), 'utf8');
 const panel = fs.readFileSync(path.join(__dirname, '../src/components/DiscoverFiltersSheet.js'), 'utf8');
+const recipeService = fs.readFileSync(path.join(__dirname, '../src/api/recipeService.js'), 'utf8');
 const executableScreen = screen
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/(^|[^:])\/\/.*$/gm, '$1');
@@ -27,6 +28,17 @@ describe('MOBILE-DISC5 Search shell static contract', () => {
     expect(panel).toMatch(/onApply\(\{ \.\.\.result\.filters, sort: appliedFilters\.sort \}\)/);
     expect(panel).toMatch(/validateDiscoverFilterDraft\(draft\)/);
     expect(panel).toMatch(/Show recipes/);
+  });
+
+  it('keeps DISC6 dietary and total-time controls staged and wire projection bounded', () => {
+    expect(panel).toMatch(/accessibilityRole="checkbox"/);
+    expect(panel).toMatch(/accessibilityState=\{\{ checked \}\}/);
+    expect(panel).toMatch(/label="Total time"/);
+    expect(panel).toMatch(/setDraft\(\(current\) =>/);
+    expect(recipeService).toMatch(/'dietaryTags'/);
+    expect(recipeService).toMatch(/'totalTimeBucket'/);
+    expect(recipeService).toMatch(/value\.join\(','\)/);
+    expect(recipeService).not.toMatch(/\$expr|minimumTotalTime|maximumTotalTime/);
   });
 
   it('keeps exactly the six supported sorts visible outside narrowing filters', () => {

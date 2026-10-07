@@ -555,7 +555,7 @@ it('replaces an old query with a Dashboard preset and keeps the preset result au
   await advance();
   view.rerender(<DiscoverScreen navigation={navigation} route={{ params: { initialFilter: 'vegan' } }} />);
   await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
-  expect(listRecipes).toHaveBeenLastCalledWith({ dietaryTag: 'vegan', sort: 'titleAsc', page: 1, limit: 20 });
+  expect(listRecipes).toHaveBeenLastCalledWith({ dietaryTags: 'vegan', sort: 'titleAsc', page: 1, limit: 20 });
   await settle(preset, 'resolve', page([recipe('vegan', 'Current Vegan')]));
   await settle(old, 'resolve', page([recipe('old', 'Stale Query')]));
   expect(view.getByText('Current Vegan')).toBeOnTheScreen();
@@ -628,7 +628,7 @@ it('records keyboard submission and opening a result, but typing alone does not'
 });
 
 it.each(['resolve', 'reject'])(
-  'keeps current instance visible when an unmounted instance settles late by %s',
+  'keeps the current account/session instance visible when an unmounted instance settles late by %s',
   async (method) => {
   const old = deferred();
   const current = deferred();
@@ -729,7 +729,9 @@ it('composes the complete Search request from query, narrowing draft, Ingredient
   fireEvent.press(view.getByLabelText(`Region: ${REGION_OPTIONS[1].label}`));
   fireEvent.press(view.getByLabelText(`Category: ${CATEGORY_OPTIONS[1].label}`));
   fireEvent.press(view.getByLabelText('Difficulty: Hard'));
-  fireEvent.press(view.getByLabelText('Dietary tag: Vegan'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegan'));
+  fireEvent.press(view.getByLabelText('Dietary: Nut-free'));
+  fireEvent.press(view.getByLabelText('Total time: 31-60 min'));
   fireEvent.changeText(view.getByLabelText('Maximum prep minutes, from 1 to 1440'), '45');
   fireEvent.changeText(view.getByLabelText('Search ingredients'), 'garlic');
   await advance();
@@ -741,13 +743,71 @@ it('composes the complete Search request from query, narrowing draft, Ingredient
     region: REGION_OPTIONS[1].value,
     category: CATEGORY_OPTIONS[1].value,
     difficulty: 'hard',
-    dietaryTag: 'vegan',
+    dietaryTags: 'vegan,nutFree',
     maxPrepTimeMinutes: 45,
+    totalTimeBucket: '31-to-60',
     ingredientId: 'ingredient-garlic',
     sort: 'newest',
     page: 1,
     limit: 20,
   }));
+});
+
+it('rapid Apply A to B rejects A success and preserves B request ownership', async () => {
+  const a = deferred();
+  const b = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegetarian'));
+  fireEvent.press(view.getByLabelText('Total time: Under 15 min'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+  expect(listRecipes).toHaveBeenLastCalledWith({
+    dietaryTags: 'vegetarian', totalTimeBucket: 'under-15', sort: 'titleAsc', page: 1, limit: 20,
+  });
+
+  fireEvent.press(view.getByLabelText('Filters, 2 active'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegetarian'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegan'));
+  fireEvent.press(view.getByLabelText('Total time: Over 60 min'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+  expect(listRecipes).toHaveBeenLastCalledWith({
+    dietaryTags: 'vegan', totalTimeBucket: 'over-60', sort: 'titleAsc', page: 1, limit: 20,
+  });
+
+  await settle(a, 'resolve', page([recipe('stale-a', 'Stale A')]));
+  expect(view.queryByText('Stale A')).toBeNull();
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  await settle(b, 'resolve', page([recipe('current-b', 'Current B')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
+});
+
+it('rapid Apply A to B rejects A error and stale finalizer', async () => {
+  const a = deferred();
+  const b = deferred();
+  listRecipes.mockResolvedValueOnce(page([])).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegetarian'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+  fireEvent.press(view.getByLabelText('Filters, 1 active'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegetarian'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegan'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+
+  await settle(a, 'reject', new Error('stale Apply A'));
+  expect(view.queryByText('Recipe request failed.')).toBeNull();
+  expect(view.getByLabelText('Loading recipes')).toBeOnTheScreen();
+  await settle(b, 'resolve', page([recipe('current-b', 'Current B')]));
+  expect(view.getByText('Current B')).toBeOnTheScreen();
 });
 
 it('renders a later-page error and retries the same authoritative page', async () => {
@@ -774,6 +834,9 @@ it('keeps the DISC4 controls mounted and wired to accessible 44-point targets', 
   });
   const { view } = renderSheet();
   expect(flattenedStyle(view.getByLabelText('Difficulty: Hard'))).toMatchObject({ minWidth: 44, minHeight: 44 });
+  expect(flattenedStyle(view.getByLabelText('Dietary: Vegan'))).toMatchObject({ minWidth: 44, minHeight: 44 });
+  expect(view.getByLabelText('Dietary: Vegan').props.accessibilityState).toEqual({ checked: false });
+  expect(flattenedStyle(view.getByLabelText('Total time: Under 15 min'))).toMatchObject({ minWidth: 44, minHeight: 44 });
   fireEvent.changeText(view.getByLabelText('Search ingredients'), 'onion');
   expect(flattenedStyle(view.getByLabelText('Clear ingredient search'))).toMatchObject({ minWidth: 44, minHeight: 44 });
   await advance();

@@ -27,8 +27,10 @@ const LIST_PARAM_KEYS = [
   'category',
   'difficulty',
   'dietaryTag',
+  'dietaryTags',
   'ingredientId',
   'maxPrepTimeMinutes',
+  'totalTimeBucket',
   'page',
   'limit',
   'sort',
@@ -79,6 +81,10 @@ function buildQuery(params) {
   for (const key of LIST_PARAM_KEYS) {
     const value = params[key];
     if (value === undefined || value === null || value === '') continue;
+    if (key === 'dietaryTags' && Array.isArray(value)) {
+      if (value.length > 0) query[key] = value.join(',');
+      continue;
+    }
     query[key] = value;
   }
   return query;
@@ -88,7 +94,8 @@ function buildQuery(params) {
  * GET /api/v1/recipes
  * @param {{
  *   search?: string, region?: string, category?: string, difficulty?: string,
- *   dietaryTag?: string, ingredientId?: string, maxPrepTimeMinutes?: number,
+ *   dietaryTag?: string, dietaryTags?: string[]|string, ingredientId?: string,
+ *   maxPrepTimeMinutes?: number, totalTimeBucket?: 'under-15'|'15-to-30'|'31-to-60'|'over-60',
  *   page?: number, limit?: number,
  *   sort?: 'titleAsc'|'titleDesc'|'newest'|'oldest'|'prepTimeAsc'|'prepTimeDesc',
  * }} [params]

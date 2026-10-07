@@ -45,6 +45,7 @@ export const RECIPE_UNITS = [
 ];
 
 export const RECIPE_SORTS = ['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc'];
+export const RECIPE_TOTAL_TIME_BUCKETS = ['under-15', '15-to-30', '31-to-60', 'over-60'];
 
 export const DISCOVER_SORT_OPTIONS = [
   { value: 'titleAsc', label: 'Title: A-Z' },
@@ -105,6 +106,6 @@ export function unitLabel(value) {
 export const DISCOVER_FILTERS = [
   { key: 'all', label: 'All', query: {} },
   { key: 'easy', label: 'Easy', query: { difficulty: 'easy' } },
-  { key: 'vegetarian', label: 'Vegetarian', query: { dietaryTag: 'vegetarian' } },
-  { key: 'vegan', label: 'Vegan', query: { dietaryTag: 'vegan' } },
+  { key: 'vegetarian', label: 'Vegetarian', query: { dietaryTags: ['vegetarian'] } },
+  { key: 'vegan', label: 'Vegan', query: { dietaryTags: ['vegan'] } },
 ];
