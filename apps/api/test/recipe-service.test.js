@@ -89,6 +89,53 @@ function completeStoredRecipe(overrides = {}) {
   return recipe;
 }
 
+function evaluateMongoExpression(expression, document) {
+  if (typeof expression === 'string' && expression.startsWith('$')) {
+    return document[expression.slice(1)];
+  }
+  if (Array.isArray(expression)) {
+    return expression.map((entry) => evaluateMongoExpression(entry, document));
+  }
+  if (!expression || typeof expression !== 'object') return expression;
+  if ('$ifNull' in expression) {
+    const [value, fallback] = evaluateMongoExpression(expression.$ifNull, document);
+    return value === null || value === undefined ? fallback : value;
+  }
+  if ('$add' in expression) {
+    const operands = evaluateMongoExpression(expression.$add, document);
+    if (!operands.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+      throw new TypeError('$add only supports numeric operands in this test evaluator');
+    }
+    return operands.reduce((sum, value) => sum + value, 0);
+  }
+  if ('$isNumber' in expression) {
+    const value = evaluateMongoExpression(expression.$isNumber, document);
+    return typeof value === 'number' && Number.isFinite(value);
+  }
+  if ('$and' in expression) {
+    const results = expression.$and.map((entry) => evaluateMongoExpression(entry, document));
+    return results.every(Boolean);
+  }
+  if ('$cond' in expression) {
+    const [condition, whenTrue, whenFalse] = expression.$cond;
+    return evaluateMongoExpression(condition, document)
+      ? evaluateMongoExpression(whenTrue, document)
+      : evaluateMongoExpression(whenFalse, document);
+  }
+  for (const [operator, compare] of [
+    ['$lt', (left, right) => left < right],
+    ['$lte', (left, right) => left <= right],
+    ['$gte', (left, right) => left >= right],
+    ['$gt', (left, right) => left > right],
+  ]) {
+    if (operator in expression) {
+      const [left, right] = evaluateMongoExpression(expression[operator], document);
+      return compare(left, right);
+    }
+  }
+  throw new Error(`Unsupported expression ${JSON.stringify(expression)}`);
+}
+
 test('createRecipe validates every ingredient through IngredientService and persists a normalized document', async (t) => {
   mockNoDuplicateCandidates(t);
   const checkedIds = [];
@@ -404,7 +451,7 @@ test('listRecipes builds a filter from region, category, difficulty, dietaryTag,
   assert.equal(capturedFilter.region, 'central-luzon');
   assert.equal(capturedFilter.category, 'dinner');
   assert.equal(capturedFilter.difficulty, 'easy');
-  assert.equal(capturedFilter.dietaryTags, 'dairyFree');
+  assert.deepEqual(capturedFilter.dietaryTags, { $all: ['dairyFree'] });
   assert.equal(capturedFilter['ingredients.ingredientId'], CHICKEN_ID);
   assert.deepEqual(capturedFilter.prepTimeMinutes, { $lte: 30 });
   assert.deepEqual(capturedFilter.$and, [
@@ -416,6 +463,88 @@ test('listRecipes builds a filter from region, category, difficulty, dietaryTag,
     },
   ]);
   assert.equal('cuisine' in capturedFilter, false);
+});
+
+test('listRecipes guards malformed stored time values and preserves every total-time boundary', async (t) => {
+  const filters = [];
+  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+    filters.push(filter);
+    return [];
+  });
+  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
+
+  for (const totalTimeBucket of ['under-15', '15-to-30', '31-to-60', 'over-60']) {
+    await recipeService.listRecipes({
+      totalTimeBucket, status: 'active', page: 1, limit: 20, sort: 'titleAsc', isAdmin: false,
+    });
+  }
+
+  const fixtures = [
+    { name: '14', prepTimeMinutes: 4, cookTimeMinutes: 10 },
+    { name: '15', prepTimeMinutes: 5, cookTimeMinutes: 10 },
+    { name: '30', prepTimeMinutes: 20, cookTimeMinutes: 10 },
+    { name: '31', prepTimeMinutes: 21, cookTimeMinutes: 10 },
+    { name: '60', prepTimeMinutes: 50, cookTimeMinutes: 10 },
+    { name: '61', prepTimeMinutes: 51, cookTimeMinutes: 10 },
+    { name: 'missing prep', cookTimeMinutes: 14 },
+    { name: 'null prep', prepTimeMinutes: null, cookTimeMinutes: 14 },
+    { name: 'string prep', prepTimeMinutes: '4', cookTimeMinutes: 10 },
+    { name: 'array prep', prepTimeMinutes: [4], cookTimeMinutes: 10 },
+    { name: 'object prep', prepTimeMinutes: { value: 4 }, cookTimeMinutes: 10 },
+    { name: 'missing cook', prepTimeMinutes: 1 },
+    { name: 'null cook', prepTimeMinutes: 1, cookTimeMinutes: null },
+    { name: 'string cook', prepTimeMinutes: 1, cookTimeMinutes: '10' },
+    { name: 'array cook', prepTimeMinutes: 1, cookTimeMinutes: [10] },
+    { name: 'object cook', prepTimeMinutes: 1, cookTimeMinutes: { value: 10 } },
+  ];
+  const matches = filters.map((filter) => fixtures
+    .filter((fixture) => evaluateMongoExpression(filter.$expr, fixture))
+    .map((fixture) => fixture.name));
+  assert.deepEqual(matches, [
+    ['14', 'missing prep', 'null prep'],
+    ['15', '30'],
+    ['31', '60'],
+    ['61'],
+  ]);
+});
+
+test('listRecipes deduplicates multi-dietary AND and composes all filters identically for find and count', async (t) => {
+  let findFilter;
+  let countFilter;
+  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { findFilter = filter; return []; });
+  t.mock.method(recipeRepository, 'countByFilter', async (filter) => { countFilter = filter; return 0; });
+
+  await recipeService.listRecipes({
+    search: 'adobo.*',
+    region: 'bicol-region',
+    category: 'dinner',
+    difficulty: 'hard',
+    dietaryTags: ['vegan', 'glutenFree', 'vegan'],
+    ingredientId: CHICKEN_ID,
+    maxPrepTimeMinutes: 30,
+    totalTimeBucket: '31-to-60',
+    status: 'active',
+    page: 1,
+    limit: 20,
+    sort: 'titleAsc',
+    isAdmin: false,
+  });
+
+  assert.deepEqual(findFilter, countFilter);
+  assert.deepEqual(findFilter.dietaryTags, { $all: ['vegan', 'glutenFree'] });
+  assert.equal(findFilter.region, 'bicol-region');
+  assert.equal(findFilter.category, 'dinner');
+  assert.equal(findFilter.difficulty, 'hard');
+  assert.equal(findFilter['ingredients.ingredientId'], CHICKEN_ID);
+  assert.deepEqual(findFilter.prepTimeMinutes, { $lte: 30 });
+  assert.equal(findFilter.$or[0].title.source, 'adobo\\.\\*');
+  assert.ok(findFilter.$expr);
+  assert.deepEqual(findFilter.$and, [{
+    $or: [
+      { publicationStatus: 'published' },
+      { publicationStatus: { $exists: false } },
+    ],
+  }]);
 });
 
 test('recipe dependency lookup matches active Published and legacy consumer-visible recipes using any ingredient entry', async (t) => {

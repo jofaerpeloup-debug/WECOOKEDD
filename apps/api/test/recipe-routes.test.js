@@ -483,6 +483,53 @@ test('GET /api/v1/recipes?region=&category=&maxPrepTimeMinutes=20 is applied as 
   assert.deepEqual(capturedFilter.prepTimeMinutes, { $lte: 20 });
 });
 
+test('GET /api/v1/recipes composes canonical dietaryTags and totalTimeBucket through controller and service', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  let findFilter;
+  let countFilter;
+  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { findFilter = filter; return []; });
+  t.mock.method(recipeRepository, 'countByFilter', async (filter) => { countFilter = filter; return 0; });
+
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const response = await request(app)
+    .get('/api/v1/recipes?search=adobo&region=central-luzon&category=dinner&difficulty=easy&dietaryTags=vegetarian%2Cvegan%2Cvegetarian&ingredientId=507f1f77bcf86cd799439011&maxPrepTimeMinutes=20&totalTimeBucket=15-to-30')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(findFilter, countFilter);
+  assert.deepEqual(findFilter.dietaryTags, { $all: ['vegetarian', 'vegan'] });
+  assert.ok(findFilter.$expr);
+  assert.equal(findFilter.$or[0].title.source, 'adobo');
+});
+
+test('GET /api/v1/recipes preserves dietaryTag alias and rejects dual/repeated/empty DISC6 parameters', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const captured = [];
+  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { captured.push(filter); return []; });
+  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+
+  const alias = await request(app)
+    .get('/api/v1/recipes?dietaryTag=vegan')
+    .set('Authorization', `Bearer ${token}`);
+  assert.equal(alias.status, 200);
+  assert.deepEqual(captured[0].dietaryTags, { $all: ['vegan'] });
+
+  for (const query of [
+    'dietaryTag=vegan&dietaryTags=vegan',
+    'dietaryTags=',
+    'dietaryTags=vegan&dietaryTags=vegetarian',
+    'totalTimeBucket=under-15&totalTimeBucket=over-60',
+  ]) {
+    const response = await request(app)
+      .get(`/api/v1/recipes?${query}`)
+      .set('Authorization', `Bearer ${token}`);
+    assert.equal(response.status, 400, query);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR', query);
+  }
+  assert.equal(captured.length, 1);
+});
+
 test('GET /api/v1/recipes?cuisine=filipino is rejected (retired query param)', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });

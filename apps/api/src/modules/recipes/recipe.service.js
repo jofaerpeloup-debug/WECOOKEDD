@@ -645,6 +645,30 @@ async function findUsableRecipeById(id) {
   return { ...view, ingredients: view.ingredients.map(toUsageSummary) };
 }
 
+function totalTimeExpression(bucket) {
+  const normalizedPrep = { $ifNull: ['$prepTimeMinutes', 0] };
+  const total = { $add: [normalizedPrep, '$cookTimeMinutes'] };
+  const comparisons = {
+    'under-15': [{ $lt: [total, 15] }],
+    '15-to-30': [{ $gte: [total, 15] }, { $lte: [total, 30] }],
+    '31-to-60': [{ $gte: [total, 31] }, { $lte: [total, 60] }],
+    'over-60': [{ $gt: [total, 60] }],
+  };
+  const bucketComparisons = comparisons[bucket];
+  return {
+    $cond: [
+      {
+        $and: [
+          { $isNumber: '$cookTimeMinutes' },
+          { $isNumber: normalizedPrep },
+        ],
+      },
+      bucketComparisons.length === 1 ? bucketComparisons[0] : { $and: bucketComparisons },
+      false,
+    ],
+  };
+}
+
 async function listRecipes({
   search,
   publicationStatus,
@@ -652,8 +676,10 @@ async function listRecipes({
   category,
   difficulty,
   dietaryTag,
+  dietaryTags,
   ingredientId,
   maxPrepTimeMinutes,
+  totalTimeBucket,
   status,
   page,
   limit,
@@ -682,14 +708,18 @@ async function listRecipes({
   if (difficulty) {
     filter.difficulty = difficulty;
   }
-  if (dietaryTag) {
-    filter.dietaryTags = dietaryTag;
+  const selectedDietaryTags = dietaryTags || (dietaryTag ? [dietaryTag] : []);
+  if (selectedDietaryTags.length > 0) {
+    filter.dietaryTags = { $all: [...new Set(selectedDietaryTags)] };
   }
   if (ingredientId) {
     filter['ingredients.ingredientId'] = ingredientId;
   }
   if (maxPrepTimeMinutes !== undefined) {
     filter.prepTimeMinutes = { $lte: maxPrepTimeMinutes };
+  }
+  if (totalTimeBucket) {
+    filter.$expr = totalTimeExpression(totalTimeBucket);
   }
   if (search) {
     const pattern = new RegExp(escapeRegex(search), 'i');

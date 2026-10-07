@@ -69,6 +69,23 @@ const legacyStoredCategorySchema = z.enum(
 const difficultySchema = z.enum(DIFFICULTIES, 'Invalid difficulty.');
 const unitSchema = z.enum(UNITS, 'Invalid unit.');
 const dietaryTagSchema = z.enum(DIETARY_TAGS, 'Invalid dietary tag.');
+const totalTimeBucketSchema = z.enum(
+  ['under-15', '15-to-30', '31-to-60', 'over-60'],
+  'Invalid total time bucket.',
+);
+const dietaryTagsQuerySchema = z
+  .string('dietaryTags must be a comma-delimited string.')
+  .min(1, 'dietaryTags cannot be empty.')
+  .superRefine((value, ctx) => {
+    const submitted = value.split(',');
+    if (submitted.length > DIETARY_TAGS.length) {
+      ctx.addIssue({ code: 'custom', message: 'A maximum of 6 dietary tags is allowed.' });
+    }
+    if (submitted.some((tag) => !DIETARY_TAGS.includes(tag))) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid dietary tag.' });
+    }
+  })
+  .transform((value) => [...new Set(value.split(','))]);
 
 const prepTimeMinutesSchema = z
   .number()
@@ -374,14 +391,25 @@ const listRecipesSchema = z.object({
       category: categorySchema.optional(),
       difficulty: difficultySchema.optional(),
       dietaryTag: dietaryTagSchema.optional(),
+      dietaryTags: dietaryTagsQuerySchema.optional(),
       ingredientId: objectIdSchema.optional(),
       maxPrepTimeMinutes: z.coerce.number().int().min(0).max(MAX_PREP_TIME_MINUTES).optional(),
+      totalTimeBucket: totalTimeBucketSchema.optional(),
       status: statusSchema,
       page: pageSchema,
       limit: limitSchema,
       sort: sortSchema,
     })
-    .strict(),
+    .strict()
+    .superRefine((query, ctx) => {
+      if (query.dietaryTag !== undefined && query.dietaryTags !== undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['dietaryTags'],
+          message: 'dietaryTag and dietaryTags cannot be supplied together.',
+        });
+      }
+    }),
 });
 
 const filipinoCuisineConfirmationSchema = z.literal(true, {
