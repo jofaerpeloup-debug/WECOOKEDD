@@ -121,10 +121,26 @@ describe('CookMode Finish is real, M5C Cook History backend', () => {
     expect(catchBlock[1]).not.toMatch(/markCooked|setCooked/);
   });
 
-  it('does not port mock per-step timers or native timer side effects', () => {
-    expect(code).toMatch(/Timer unavailable/);
-    expect(code).toMatch(/does not include a timer for this step/);
-    expect(code).not.toMatch(/setInterval|setTimeout|Vibration|\.seconds\b|scheduleNotification/);
+  it('adds only an explicit manual timer and never derives duration from recipe steps', () => {
+    expect(raw).toMatch(/validateCookTimerDuration\(timerInput\)/);
+    expect(raw).toMatch(/createCookTimerEndAt\(Date\.now\(\), validation\.durationMs\)/);
+    expect(code).toMatch(/\['hours', 'Hours', 1\]/);
+    expect(code).toMatch(/\['minutes', 'Minutes', 2\]/);
+    expect(code).toMatch(/\['seconds', 'Seconds', 2\]/);
+    expect(code).toMatch(/accessibilityLabel=\{label\}/);
+    expect(code).not.toMatch(/parseInstructionDuration|step\.seconds|recipe\.cookTimeMinutes/);
+    expect(code).not.toMatch(/Vibration|scheduleNotification|AsyncStorage/);
+  });
+
+  it('keeps the absolute clock, lifecycle cleanup, completion isolation, and active-exit guard explicit', () => {
+    expect(code).toMatch(/getCookTimerRemainingMs\(current\.endAtMs, nowMs\)/);
+    expect(code).toMatch(/AppState\.addEventListener\('change'/);
+    expect(code).toMatch(/navigation\.addListener\('beforeRemove'/);
+    expect(code).toMatch(/clearInterval\(intervalRef\.current\)/);
+    expect(code).toMatch(/AccessibilityInfo\.announceForAccessibility/);
+    const completeTimer = code.match(/const completeTimer = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[commitTimer\]\);/);
+    expect(completeTimer).toBeTruthy();
+    expect(completeTimer[1]).not.toMatch(/goNext|finishCooking|recordCompletion|navigation/);
   });
 });
 

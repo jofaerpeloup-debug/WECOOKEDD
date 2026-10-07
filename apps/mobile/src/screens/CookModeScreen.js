@@ -1,5 +1,16 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AccessibilityInfo,
+  Alert,
+  AppState,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
@@ -13,6 +24,22 @@ import {
   cookModeIngredientChecklist,
   cookModeSteps,
 } from '../utils/recipe';
+import {
+  COOK_TIMER_STATES,
+  createCookTimerEndAt,
+  formatCookTimer,
+  getCookTimerRemainingMs,
+  validateCookTimerDuration,
+} from '../utils/cookTimer';
+
+const IDLE_TIMER = Object.freeze({
+  status: COOK_TIMER_STATES.IDLE,
+  durationMs: 0,
+  remainingMs: 0,
+  endAtMs: null,
+});
+
+const TIMER_INPUT_LIMITS = Object.freeze({ hours: 1, minutes: 2, seconds: 2 });
 
 export default function CookModeScreen({ navigation, route }) {
   const params = route.params || {};
@@ -33,6 +60,226 @@ export default function CookModeScreen({ navigation, route }) {
   // actual guard against a double-tap firing two POSTs; `isFinishing` only
   // drives the disabled/opacity UI.
   const isFinishingRef = useRef(false);
+  const [timer, setTimer] = useState(IDLE_TIMER);
+  const [timerInput, setTimerInput] = useState({ hours: '', minutes: '', seconds: '' });
+  const [timerError, setTimerError] = useState('');
+  const timerRef = useRef(IDLE_TIMER);
+  const mountedRef = useRef(true);
+  const intervalRef = useRef(null);
+  const timerGenerationRef = useRef(0);
+  const completionAnnouncedRef = useRef(false);
+  const invalidLengthFieldsRef = useRef(new Set());
+  const promptGenerationRef = useRef(0);
+  const activePromptRef = useRef(null);
+  const allowedRemovalActionRef = useRef(null);
+
+  const commitTimer = useCallback((nextTimer) => {
+    timerRef.current = nextTimer;
+    if (mountedRef.current) setTimer(nextTimer);
+  }, []);
+
+  const completeTimer = useCallback(() => {
+    if (timerRef.current.status !== COOK_TIMER_STATES.RUNNING) return;
+    commitTimer({
+      ...timerRef.current,
+      status: COOK_TIMER_STATES.COMPLETED,
+      remainingMs: 0,
+      endAtMs: null,
+    });
+    if (!completionAnnouncedRef.current && mountedRef.current) {
+      completionAnnouncedRef.current = true;
+      AccessibilityInfo.announceForAccessibility?.('Timer complete');
+    }
+  }, [commitTimer]);
+
+  const reconcileTimer = useCallback(
+    (nowMs = Date.now(), generation = timerGenerationRef.current) => {
+      if (!mountedRef.current || generation !== timerGenerationRef.current) return;
+      const current = timerRef.current;
+      if (current.status !== COOK_TIMER_STATES.RUNNING) return;
+      const remainingMs = getCookTimerRemainingMs(current.endAtMs, nowMs);
+      if (remainingMs === null) return;
+      if (remainingMs <= 0) {
+        completeTimer();
+        return;
+      }
+      if (remainingMs !== current.remainingMs) {
+        commitTimer({ ...current, remainingMs });
+      }
+    },
+    [commitTimer, completeTimer]
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      timerGenerationRef.current += 1;
+      promptGenerationRef.current += 1;
+      activePromptRef.current = null;
+      allowedRemovalActionRef.current = null;
+      timerRef.current = IDLE_TIMER;
+      if (intervalRef.current !== null) clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (timer.status !== COOK_TIMER_STATES.RUNNING) return undefined;
+    const generation = timerGenerationRef.current;
+    const reconcileOwnedTimer = () => reconcileTimer(Date.now(), generation);
+    reconcileOwnedTimer();
+    intervalRef.current = setInterval(reconcileOwnedTimer, 250);
+    return () => {
+      if (intervalRef.current !== null) clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    };
+  }, [reconcileTimer, timer.endAtMs, timer.status]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (mountedRef.current && nextState === 'active') reconcileTimer();
+    });
+    return () => subscription.remove();
+  }, [reconcileTimer]);
+
+  useEffect(() => {
+    const removeListener = navigation.addListener('beforeRemove', (event) => {
+      if (!mountedRef.current) return;
+
+      if (allowedRemovalActionRef.current === event.data.action) {
+        allowedRemovalActionRef.current = null;
+        return;
+      }
+
+      const current = timerRef.current;
+      const hasActiveTimer =
+        current.status === COOK_TIMER_STATES.RUNNING ||
+        (current.status === COOK_TIMER_STATES.PAUSED && current.remainingMs > 0);
+      if (!hasActiveTimer) return;
+
+      event.preventDefault();
+      if (activePromptRef.current !== null) return;
+
+      const promptGeneration = promptGenerationRef.current + 1;
+      promptGenerationRef.current = promptGeneration;
+      activePromptRef.current = promptGeneration;
+      const ownsPrompt = () =>
+        mountedRef.current && activePromptRef.current === promptGeneration;
+      const stay = () => {
+        if (!ownsPrompt()) return;
+        activePromptRef.current = null;
+      };
+      const discard = () => {
+        if (!ownsPrompt()) return;
+        activePromptRef.current = null;
+        completionAnnouncedRef.current = true;
+        invalidLengthFieldsRef.current.clear();
+        timerGenerationRef.current += 1;
+        commitTimer(IDLE_TIMER);
+        setTimerInput({ hours: '', minutes: '', seconds: '' });
+        setTimerError('');
+        const action = event.data.action;
+        allowedRemovalActionRef.current = action;
+        try {
+          navigation.dispatch(action);
+        } finally {
+          if (allowedRemovalActionRef.current === action) {
+            allowedRemovalActionRef.current = null;
+          }
+        }
+      };
+
+      if (Platform.OS === 'web') {
+        const accepted =
+          typeof window !== 'undefined' &&
+          window.confirm('Discard timer?\n\nLeaving Cook Mode will discard the active timer.');
+        if (accepted) discard();
+        else stay();
+        return;
+      }
+
+      Alert.alert('Discard timer?', 'Leaving Cook Mode will discard the active timer.', [
+        { text: 'Stay', style: 'cancel', onPress: stay },
+        { text: 'Discard timer and leave', style: 'destructive', onPress: discard },
+      ]);
+    });
+    return removeListener;
+  }, [commitTimer, navigation]);
+
+  const updateTimerInput = (field, value) => {
+    const limit = TIMER_INPUT_LIMITS[field];
+    if (value.length > limit) {
+      invalidLengthFieldsRef.current.add(field);
+      setTimerInput((current) => ({ ...current, [field]: '' }));
+      setTimerError('Enter a duration from 00:00:01 to 03:00:00.');
+      return;
+    }
+    invalidLengthFieldsRef.current.delete(field);
+    setTimerInput((current) => ({ ...current, [field]: value }));
+    setTimerError('');
+  };
+
+  const startTimer = () => {
+    if (timerRef.current.status !== COOK_TIMER_STATES.IDLE) return;
+    if (invalidLengthFieldsRef.current.size > 0) {
+      setTimerError('Enter a duration from 00:00:01 to 03:00:00.');
+      return;
+    }
+    const validation = validateCookTimerDuration(timerInput);
+    if (!validation.ok) {
+      setTimerError(validation.error);
+      return;
+    }
+    const endAtMs = createCookTimerEndAt(Date.now(), validation.durationMs);
+    if (endAtMs === null) {
+      setTimerError('The timer could not start. Please try again.');
+      return;
+    }
+    completionAnnouncedRef.current = false;
+    timerGenerationRef.current += 1;
+    setTimerError('');
+    commitTimer({
+      status: COOK_TIMER_STATES.RUNNING,
+      durationMs: validation.durationMs,
+      remainingMs: validation.durationMs,
+      endAtMs,
+    });
+  };
+
+  const pauseTimer = () => {
+    const current = timerRef.current;
+    if (current.status !== COOK_TIMER_STATES.RUNNING) return;
+    const remainingMs = getCookTimerRemainingMs(current.endAtMs, Date.now());
+    if (remainingMs === null) return;
+    if (remainingMs <= 0) {
+      completeTimer();
+      return;
+    }
+    timerGenerationRef.current += 1;
+    commitTimer({ ...current, status: COOK_TIMER_STATES.PAUSED, remainingMs, endAtMs: null });
+  };
+
+  const resumeTimer = () => {
+    const current = timerRef.current;
+    if (current.status !== COOK_TIMER_STATES.PAUSED || current.remainingMs <= 0) return;
+    const endAtMs = createCookTimerEndAt(Date.now(), current.remainingMs);
+    if (endAtMs === null) return;
+    timerGenerationRef.current += 1;
+    commitTimer({ ...current, status: COOK_TIMER_STATES.RUNNING, endAtMs });
+  };
+
+  const resetTimer = () => {
+    completionAnnouncedRef.current = false;
+    timerGenerationRef.current += 1;
+    promptGenerationRef.current += 1;
+    activePromptRef.current = null;
+    allowedRemovalActionRef.current = null;
+    invalidLengthFieldsRef.current.clear();
+    commitTimer(IDLE_TIMER);
+    setTimerInput({ hours: '', minutes: '', seconds: '' });
+    setTimerError('');
+  };
 
   const steps = useMemo(() => cookModeSteps(recipe), [recipe]);
   const cookServings =
@@ -111,11 +358,21 @@ export default function CookModeScreen({ navigation, route }) {
     setStepIndex((index) => clampCookStepIndex(index + 1, steps.length));
   };
 
-  const showTimerGap = () => {
-    notify('Timer unavailable', 'This recipe does not include a timer for this step.');
-  };
-
   const title = recipe.title || 'Cook Mode';
+  const timerPanel = (
+    <CookTimerPanel
+      colors={colors}
+      styles={styles}
+      timer={timer}
+      input={timerInput}
+      error={timerError}
+      onChangeInput={updateTimerInput}
+      onStart={startTimer}
+      onPause={pauseTimer}
+      onResume={resumeTimer}
+      onReset={resetTimer}
+    />
+  );
 
   if (phase === 'prep') {
     return (
@@ -127,6 +384,8 @@ export default function CookModeScreen({ navigation, route }) {
           styles={styles}
           onBack={() => navigation.goBack()}
         />
+
+        {timerPanel}
 
         <ScrollView
           style={styles.flex}
@@ -213,6 +472,8 @@ export default function CookModeScreen({ navigation, route }) {
         onBack={() => navigation.goBack()}
       />
 
+      {timerPanel}
+
       <View style={styles.dotsRow}>
         {steps.map((item, index) => (
           <View
@@ -247,15 +508,6 @@ export default function CookModeScreen({ navigation, route }) {
           <Text style={styles.stepEyebrow}>Step {step.order}</Text>
           <Text style={styles.instruction}>{step.text}</Text>
 
-          <Pressable
-            style={styles.timerReadout}
-            onPress={showTimerGap}
-            accessibilityRole="button"
-            accessibilityLabel="Step timer unavailable"
-          >
-            <Ionicons name="time-outline" size={16} color={colors.stone} />
-            <Text style={styles.timerText}>Timer unavailable</Text>
-          </Pressable>
         </ScrollView>
 
         <View style={[styles.btnRow, { paddingBottom: insets.bottom + spacing.lg }]}>
@@ -271,6 +523,119 @@ export default function CookModeScreen({ navigation, route }) {
           </Pressable>
         </View>
       </View>
+    </View>
+  );
+}
+
+function CookTimerPanel({
+  colors,
+  styles,
+  timer,
+  input,
+  error,
+  onChangeInput,
+  onStart,
+  onPause,
+  onResume,
+  onReset,
+}) {
+  const display = formatCookTimer(timer.remainingMs);
+  const stateLabel = timer.status === COOK_TIMER_STATES.COMPLETED
+    ? 'Timer complete'
+    : `Timer ${timer.status.toLowerCase()}, ${display} remaining`;
+
+  return (
+    <View style={styles.timerPanel} accessibilityLabel="Cook timer">
+      <View style={styles.timerHeadingRow}>
+        <Ionicons
+          name="time-outline"
+          size={18}
+          color={colors.stone}
+          importantForAccessibility="no-hide-descendants"
+          accessibilityElementsHidden
+        />
+        <Text style={styles.timerHeading}>Cook timer</Text>
+      </View>
+
+      {timer.status === COOK_TIMER_STATES.IDLE ? (
+        <>
+          <View style={styles.timerInputs}>
+            {[
+              ['hours', 'Hours', 1],
+              ['minutes', 'Minutes', 2],
+              ['seconds', 'Seconds', 2],
+            ].map(([field, label, maxLength], index) => (
+              <React.Fragment key={field}>
+                {index > 0 && <Text style={styles.timerColon}>:</Text>}
+                <View style={styles.timerInputGroup}>
+                  <Text style={styles.timerInputLabel}>{label}</Text>
+                  <TextInput
+                    style={styles.timerInput}
+                    value={input[field]}
+                    onChangeText={(value) => onChangeInput(field, value)}
+                    maxLength={maxLength}
+                    keyboardType="number-pad"
+                    inputMode="numeric"
+                    placeholder={field === 'hours' ? '0' : '00'}
+                    placeholderTextColor={colors.inkFaint}
+                    accessibilityLabel={label}
+                    accessibilityHint={`Enter ${label.toLowerCase()} for the cook timer`}
+                  />
+                </View>
+              </React.Fragment>
+            ))}
+          </View>
+          {!!error && (
+            <Text style={styles.timerError} accessibilityRole="alert">
+              {error}
+            </Text>
+          )}
+          <Pressable
+            style={styles.timerPrimaryButton}
+            onPress={onStart}
+            accessibilityRole="button"
+            accessibilityLabel="Start timer"
+          >
+            <Text style={styles.timerPrimaryText}>Start timer</Text>
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <Text style={styles.timerReadout} accessibilityLabel={stateLabel}>
+            {timer.status === COOK_TIMER_STATES.COMPLETED ? 'Timer complete' : display}
+          </Text>
+          <View style={styles.timerActions}>
+            {timer.status === COOK_TIMER_STATES.RUNNING && (
+              <Pressable
+                style={styles.timerSecondaryButton}
+                onPress={onPause}
+                accessibilityRole="button"
+                accessibilityLabel="Pause timer"
+              >
+                <Text style={styles.timerSecondaryText}>Pause</Text>
+              </Pressable>
+            )}
+            {timer.status === COOK_TIMER_STATES.PAUSED && (
+              <Pressable
+                style={styles.timerPrimaryButton}
+                onPress={onResume}
+                accessibilityRole="button"
+                accessibilityLabel="Resume timer"
+              >
+                <Text style={styles.timerPrimaryText}>Resume</Text>
+              </Pressable>
+            )}
+            <Pressable
+              style={styles.timerSecondaryButton}
+              onPress={onReset}
+              accessibilityRole="button"
+              accessibilityLabel="Reset timer"
+            >
+              <Text style={styles.timerSecondaryText}>Reset</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -473,18 +838,107 @@ function makeStyles(colors) {
       lineHeight: 22,
       color: colors.inkSoft,
     },
-    timerReadout: {
+    timerPanel: {
+      marginHorizontal: spacing.xl,
+      marginBottom: spacing.sm,
+      padding: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.lg,
+      backgroundColor: colors.creamDeep,
+    },
+    timerHeadingRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      alignSelf: 'flex-start',
       gap: 8,
-      marginTop: 18,
-      paddingVertical: 6,
     },
-    timerText: {
+    timerHeading: {
+      fontFamily: typography.body.semibold,
+      fontSize: 13,
+      color: colors.ink,
+    },
+    timerInputs: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      gap: 8,
+      marginTop: spacing.sm,
+    },
+    timerInputGroup: { alignItems: 'center', gap: 4 },
+    timerInputLabel: {
+      fontFamily: typography.body.medium,
+      fontSize: 11,
+      color: colors.inkFaint,
+    },
+    timerInput: {
+      width: 58,
+      height: 44,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.md,
+      backgroundColor: colors.cream,
+      fontFamily: typography.body.semibold,
+      fontSize: 18,
+      color: colors.ink,
+      textAlign: 'center',
+    },
+    timerColon: {
+      paddingBottom: 10,
+      fontFamily: typography.body.bold,
+      fontSize: 18,
+      color: colors.inkFaint,
+    },
+    timerError: {
+      marginTop: spacing.sm,
+      fontFamily: typography.body.medium,
+      fontSize: 12,
+      color: colors.error || '#9b2c2c',
+      textAlign: 'center',
+    },
+    timerReadout: {
+      marginTop: spacing.sm,
       fontFamily: typography.display.fontFamily,
-      fontSize: 20,
-      color: colors.stone,
+      fontSize: 28,
+      color: colors.ink,
+      textAlign: 'center',
+    },
+    timerActions: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      gap: 10,
+      marginTop: spacing.sm,
+    },
+    timerPrimaryButton: {
+      minHeight: 42,
+      minWidth: 110,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.pill,
+      backgroundColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+      alignSelf: 'center',
+      marginTop: spacing.sm,
+    },
+    timerSecondaryButton: {
+      minHeight: 42,
+      minWidth: 100,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.pill,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      backgroundColor: colors.cream,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    timerPrimaryText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 13,
+      color: colors.onAccent,
+    },
+    timerSecondaryText: {
+      fontFamily: typography.body.semibold,
+      fontSize: 13,
+      color: colors.ink,
     },
     btnRow: { flexDirection: 'row', gap: 12, width: '100%', maxWidth: 320 },
     secondaryBtn: {

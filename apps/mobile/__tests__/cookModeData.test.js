@@ -48,7 +48,10 @@ describe('CookMode real recipe step adapter', () => {
   });
 
   it('never adds a title or timer duration to real steps', () => {
-    const [step] = cookModeSteps({ steps: [{ order: 1, text: 'Cook gently.' }] });
+    const [step] = cookModeSteps({
+      cookTimeMinutes: 45,
+      steps: [{ order: 1, text: 'Cook gently.', seconds: 600 }],
+    });
     expect(step).toEqual({ order: 1, text: 'Cook gently.' });
     expect(step).not.toHaveProperty('title');
     expect(step).not.toHaveProperty('seconds');
