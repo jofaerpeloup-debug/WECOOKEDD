@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { usePreventRemove } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
@@ -71,7 +72,6 @@ export default function CookModeScreen({ navigation, route }) {
   const invalidLengthFieldsRef = useRef(new Set());
   const promptGenerationRef = useRef(0);
   const activePromptRef = useRef(null);
-  const allowedRemovalActionRef = useRef(null);
 
   const commitTimer = useCallback((nextTimer) => {
     timerRef.current = nextTimer;
@@ -117,7 +117,6 @@ export default function CookModeScreen({ navigation, route }) {
       timerGenerationRef.current += 1;
       promptGenerationRef.current += 1;
       activePromptRef.current = null;
-      allowedRemovalActionRef.current = null;
       timerRef.current = IDLE_TIMER;
       if (intervalRef.current !== null) clearInterval(intervalRef.current);
       intervalRef.current = null;
@@ -143,69 +142,49 @@ export default function CookModeScreen({ navigation, route }) {
     return () => subscription.remove();
   }, [reconcileTimer]);
 
-  useEffect(() => {
-    const removeListener = navigation.addListener('beforeRemove', (event) => {
-      if (!mountedRef.current) return;
+  const hasActiveTimer =
+    timer.status === COOK_TIMER_STATES.RUNNING ||
+    (timer.status === COOK_TIMER_STATES.PAUSED && timer.remainingMs > 0);
 
-      if (allowedRemovalActionRef.current === event.data.action) {
-        allowedRemovalActionRef.current = null;
-        return;
-      }
+  usePreventRemove(hasActiveTimer, ({ data }) => {
+    if (!mountedRef.current || activePromptRef.current !== null) return;
 
-      const current = timerRef.current;
-      const hasActiveTimer =
-        current.status === COOK_TIMER_STATES.RUNNING ||
-        (current.status === COOK_TIMER_STATES.PAUSED && current.remainingMs > 0);
-      if (!hasActiveTimer) return;
+    const promptGeneration = promptGenerationRef.current + 1;
+    promptGenerationRef.current = promptGeneration;
+    activePromptRef.current = promptGeneration;
+    const ownsPrompt = () =>
+      mountedRef.current && activePromptRef.current === promptGeneration;
+    const stay = () => {
+      if (!ownsPrompt()) return;
+      activePromptRef.current = null;
+    };
+    const discard = () => {
+      if (!ownsPrompt()) return;
+      activePromptRef.current = null;
+      promptGenerationRef.current += 1;
+      completionAnnouncedRef.current = true;
+      invalidLengthFieldsRef.current.clear();
+      timerGenerationRef.current += 1;
+      commitTimer(IDLE_TIMER);
+      setTimerInput({ hours: '', minutes: '', seconds: '' });
+      setTimerError('');
+      navigation.dispatch(data.action);
+    };
 
-      event.preventDefault();
-      if (activePromptRef.current !== null) return;
+    if (Platform.OS === 'web') {
+      const accepted =
+        typeof window !== 'undefined' &&
+        window.confirm('Discard timer?\n\nLeaving Cook Mode will discard the active timer.');
+      if (accepted) discard();
+      else stay();
+      return;
+    }
 
-      const promptGeneration = promptGenerationRef.current + 1;
-      promptGenerationRef.current = promptGeneration;
-      activePromptRef.current = promptGeneration;
-      const ownsPrompt = () =>
-        mountedRef.current && activePromptRef.current === promptGeneration;
-      const stay = () => {
-        if (!ownsPrompt()) return;
-        activePromptRef.current = null;
-      };
-      const discard = () => {
-        if (!ownsPrompt()) return;
-        activePromptRef.current = null;
-        completionAnnouncedRef.current = true;
-        invalidLengthFieldsRef.current.clear();
-        timerGenerationRef.current += 1;
-        commitTimer(IDLE_TIMER);
-        setTimerInput({ hours: '', minutes: '', seconds: '' });
-        setTimerError('');
-        const action = event.data.action;
-        allowedRemovalActionRef.current = action;
-        try {
-          navigation.dispatch(action);
-        } finally {
-          if (allowedRemovalActionRef.current === action) {
-            allowedRemovalActionRef.current = null;
-          }
-        }
-      };
-
-      if (Platform.OS === 'web') {
-        const accepted =
-          typeof window !== 'undefined' &&
-          window.confirm('Discard timer?\n\nLeaving Cook Mode will discard the active timer.');
-        if (accepted) discard();
-        else stay();
-        return;
-      }
-
-      Alert.alert('Discard timer?', 'Leaving Cook Mode will discard the active timer.', [
-        { text: 'Stay', style: 'cancel', onPress: stay },
-        { text: 'Discard timer and leave', style: 'destructive', onPress: discard },
-      ]);
-    });
-    return removeListener;
-  }, [commitTimer, navigation]);
+    Alert.alert('Discard timer?', 'Leaving Cook Mode will discard the active timer.', [
+      { text: 'Stay', style: 'cancel', onPress: stay },
+      { text: 'Discard timer and leave', style: 'destructive', onPress: discard },
+    ]);
+  });
 
   const updateTimerInput = (field, value) => {
     const limit = TIMER_INPUT_LIMITS[field];
@@ -274,7 +253,6 @@ export default function CookModeScreen({ navigation, route }) {
     timerGenerationRef.current += 1;
     promptGenerationRef.current += 1;
     activePromptRef.current = null;
-    allowedRemovalActionRef.current = null;
     invalidLengthFieldsRef.current.clear();
     commitTimer(IDLE_TIMER);
     setTimerInput({ hours: '', minutes: '', seconds: '' });

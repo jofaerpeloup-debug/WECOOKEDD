@@ -1,7 +1,11 @@
 const React = require('react');
+const fs = require('fs');
+const path = require('path');
+const babel = require('@babel/core');
 
 let mockAppStateListener;
 const mockAppStateRemove = jest.fn();
+let mockPreventRemoveState;
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -30,6 +34,11 @@ jest.mock('react-native', () => {
 });
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('@react-navigation/native', () => ({
+  usePreventRemove: jest.fn((enabled, callback) => {
+    mockPreventRemoveState = { enabled, callback };
+  }),
+}));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
 }));
@@ -74,24 +83,23 @@ function recipe() {
 }
 
 function renderCookMode() {
-  const listeners = {};
-  const listenerRemovers = {};
   const navigation = {
-    addListener: jest.fn((name, listener) => {
-      listeners[name] = listener;
-      listenerRemovers[name] = jest.fn();
-      return listenerRemovers[name];
-    }),
     dispatch: jest.fn(),
     goBack: jest.fn(),
   };
+  mockPreventRemoveState = { enabled: false, callback: null };
   const view = render(
     <CookModeScreen
       navigation={navigation}
       route={{ params: { recipeSource: 'api', recipe: recipe(), servings: 2, ingredients: [] } }}
     />
   );
-  return { ...view, listeners, listenerRemovers, navigation };
+  const attemptRemoval = (action) => {
+    if (!mockPreventRemoveState.enabled) return false;
+    mockPreventRemoveState.callback({ data: { action } });
+    return true;
+  };
+  return { ...view, attemptRemoval, navigation };
 }
 
 function enterDuration(view, { hours = '', minutes = '', seconds = '' }) {
@@ -105,8 +113,39 @@ function startTimer(view, duration = { seconds: '10' }) {
   fireEvent.press(view.getByLabelText('Start timer'));
 }
 
-function removalEvent(type = 'GO_BACK') {
-  return { preventDefault: jest.fn(), data: { action: { type } } };
+function removalAction(type = 'GO_BACK') {
+  return { type };
+}
+
+function loadInstalledNavigationCoreModule(filename, stubs = {}) {
+  const nativeRoot = path.dirname(require.resolve('@react-navigation/native/package.json'));
+  const modulePath = path.join(
+    nativeRoot,
+    'node_modules',
+    '@react-navigation',
+    'core',
+    'lib',
+    'module',
+    filename
+  );
+  const transformed = babel.transformSync(fs.readFileSync(modulePath, 'utf8'), {
+    filename: modulePath,
+    babelrc: false,
+    configFile: false,
+    presets: [require('babel-preset-expo')],
+    caller: { name: 'babel-jest', supportsStaticESM: false },
+  });
+  const loaded = { exports: {} };
+  const moduleRequire = (request) => {
+    if (Object.prototype.hasOwnProperty.call(stubs, request)) return stubs[request];
+    return require(request);
+  };
+  Function('require', 'exports', 'module', transformed.code)(
+    moduleRequire,
+    loaded.exports,
+    loaded
+  );
+  return loaded.exports;
 }
 
 function latestDiscardActions() {
@@ -123,6 +162,7 @@ beforeEach(() => {
   jest.setSystemTime(BASE_TIME);
   jest.clearAllMocks();
   mockAppStateListener = undefined;
+  mockPreventRemoveState = { enabled: false, callback: null };
   mockRecordCompletion.mockResolvedValue(undefined);
 });
 
@@ -283,141 +323,181 @@ it('a captured interval callback is inert after unmount', () => {
   expect(view.navigation.dispatch).not.toHaveBeenCalled();
 });
 
-it('owns one discard prompt while repeated removal events remain prevented', () => {
+it.each([
+  ['RUNNING', (view) => startTimer(view)],
+  ['PAUSED with time remaining', (view) => {
+    startTimer(view);
+    fireEvent.press(view.getByLabelText('Pause timer'));
+  }],
+])('enables the supported removal flow for %s', (_state, arrange) => {
   const view = renderCookMode();
-  startTimer(view);
-  const first = removalEvent('FIRST_BACK');
-  const second = removalEvent('SECOND_BACK');
+  arrange(view);
 
-  act(() => {
-    view.listeners.beforeRemove(first);
-    view.listeners.beforeRemove(second);
-  });
+  let prevented;
+  act(() => { prevented = view.attemptRemoval(removalAction()); });
 
-  expect(first.preventDefault).toHaveBeenCalledTimes(1);
-  expect(second.preventDefault).toHaveBeenCalledTimes(1);
+  expect(prevented).toBe(true);
   expect(Alert.alert).toHaveBeenCalledTimes(1);
   expect(view.navigation.dispatch).not.toHaveBeenCalled();
 });
 
-it('keeps the first removal action as prompt owner across three distinct Back actions', () => {
+it('owns one prompt and retains the first action across repeated active removals', () => {
   const view = renderCookMode();
   startTimer(view);
-  const backA = removalEvent('BACK_A');
-  const backB = removalEvent('BACK_B');
-  const backC = removalEvent('BACK_C');
+  const backA = removalAction('BACK_A');
+  const backB = removalAction('BACK_B');
+  const backC = removalAction('BACK_C');
 
   act(() => {
-    view.listeners.beforeRemove(backA);
-    view.listeners.beforeRemove(backB);
-    view.listeners.beforeRemove(backC);
+    expect(view.attemptRemoval(backA)).toBe(true);
+    expect(view.attemptRemoval(backB)).toBe(true);
+    expect(view.attemptRemoval(backC)).toBe(true);
   });
-
-  expect(backA.preventDefault).toHaveBeenCalledTimes(1);
-  expect(backB.preventDefault).toHaveBeenCalledTimes(1);
-  expect(backC.preventDefault).toHaveBeenCalledTimes(1);
   expect(Alert.alert).toHaveBeenCalledTimes(1);
 
   act(() => latestDiscardActions()[1].onPress());
-
   expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.navigation.dispatch).toHaveBeenCalledWith(backA.data.action);
-  expect(view.navigation.dispatch).not.toHaveBeenCalledWith(backB.data.action);
-  expect(view.navigation.dispatch).not.toHaveBeenCalledWith(backC.data.action);
+  expect(view.navigation.dispatch).toHaveBeenCalledWith(backA);
+  expect(view.navigation.dispatch).not.toHaveBeenCalledWith(backB);
+  expect(view.navigation.dispatch).not.toHaveBeenCalledWith(backC);
 });
 
-it('Stay preserves the timer and permits a later removal to own a fresh prompt', () => {
+it('Stay preserves the timer, permits a fresh prompt, and makes the old Discard inert', () => {
   const view = renderCookMode();
   startTimer(view);
-  const first = removalEvent('FIRST_BACK');
-  act(() => view.listeners.beforeRemove(first));
-  expect(Alert.alert).toHaveBeenCalledWith(
-    'Discard timer?',
-    'Leaving Cook Mode will discard the active timer.',
-    expect.any(Array)
-  );
-  const firstActions = latestDiscardActions();
-  expect(firstActions[0]).toEqual(expect.objectContaining({
+  const backA = removalAction('BACK_A');
+  act(() => view.attemptRemoval(backA));
+  const promptA = latestDiscardActions();
+  expect(promptA[0]).toEqual(expect.objectContaining({
     text: 'Stay', style: 'cancel', onPress: expect.any(Function),
   }));
 
-  act(() => firstActions[0].onPress());
+  act(() => promptA[0].onPress());
   expect(view.navigation.dispatch).not.toHaveBeenCalled();
   expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
 
-  const second = removalEvent('SECOND_BACK');
-  act(() => view.listeners.beforeRemove(second));
-  expect(Alert.alert).toHaveBeenCalledTimes(2);
-  const secondActions = latestDiscardActions();
-
-  act(() => firstActions[0].onPress());
-  const third = removalEvent('THIRD_BACK');
-  act(() => view.listeners.beforeRemove(third));
-  expect(third.preventDefault).toHaveBeenCalledTimes(1);
-  expect(Alert.alert).toHaveBeenCalledTimes(2);
-
-  act(() => secondActions[0].onPress());
-  expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
-});
-
-it('makes old Discard inert after Stay while the new prompt retains ownership', () => {
-  const view = renderCookMode();
-  startTimer(view);
-  const backA = removalEvent('BACK_A');
-  act(() => view.listeners.beforeRemove(backA));
-  const promptA = latestDiscardActions();
-  const stayA = promptA[0].onPress;
-  const discardA = promptA[1].onPress;
-
-  act(() => stayA());
-  expect(view.navigation.dispatch).not.toHaveBeenCalled();
-  expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
-
-  const backB = removalEvent('BACK_B');
-  act(() => view.listeners.beforeRemove(backB));
+  const backB = removalAction('BACK_B');
+  act(() => view.attemptRemoval(backB));
   const promptB = latestDiscardActions();
   expect(Alert.alert).toHaveBeenCalledTimes(2);
 
-  act(() => discardA());
+  act(() => promptA[1].onPress());
   expect(view.navigation.dispatch).not.toHaveBeenCalled();
   expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
 
-  const competingBack = removalEvent('COMPETING_BACK');
-  act(() => view.listeners.beforeRemove(competingBack));
-  expect(competingBack.preventDefault).toHaveBeenCalledTimes(1);
+  act(() => view.attemptRemoval(removalAction('COMPETING_BACK')));
   expect(Alert.alert).toHaveBeenCalledTimes(2);
 
-  act(() => promptB[1].onPress());
-  expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.navigation.dispatch).toHaveBeenCalledWith(backB.data.action);
-  expect(view.navigation.dispatch).not.toHaveBeenCalledWith(backA.data.action);
-  expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
+  act(() => promptB[0].onPress());
+  expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
 });
 
-it('Discard is one-shot and its confirmed action passes the removal guard without a loop', () => {
+it('Discard clears the timer and dispatches the owned action exactly once', () => {
   const view = renderCookMode();
   startTimer(view);
-  const event = removalEvent();
-  view.navigation.dispatch.mockImplementation((action) => {
-    view.listeners.beforeRemove({ preventDefault: jest.fn(), data: { action } });
-  });
-  act(() => view.listeners.beforeRemove(event));
-  const actions = latestDiscardActions();
+  const action = removalAction();
+  act(() => view.attemptRemoval(action));
+  const discard = latestDiscardActions()[1].onPress;
 
   act(() => {
-    actions[1].onPress();
-    actions[1].onPress();
+    discard();
+    discard();
   });
+
   expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.navigation.dispatch).toHaveBeenCalledWith(event.data.action);
+  expect(view.navigation.dispatch).toHaveBeenCalledWith(action);
+  expect(view.navigation.dispatch.mock.calls[0][0]).toBe(action);
   expect(Alert.alert).toHaveBeenCalledTimes(1);
   expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
 });
 
-it('Reset invalidates both captured discard callbacks', () => {
+it('real navigation core completes a prevented removal once without a continuation loop', () => {
+  let beforeRemoveListener;
+  let preventedAction;
+  let routes = [{ key: 'home', name: 'Home' }, { key: 'guarded', name: 'Guarded' }];
+  const nextRoutes = routes.slice(0, 1);
+  const navigation = {
+    addListener: jest.fn((_event, listener) => {
+      beforeRemoveListener = listener;
+      return jest.fn();
+    }),
+  };
+  const { usePreventRemove: installedUsePreventRemove } = loadInstalledNavigationCoreModule(
+    'usePreventRemove.js',
+    {
+      react: React,
+      'nanoid/non-secure': { nanoid: () => 'test-prevent-remove-id' },
+      'use-latest-callback': { __esModule: true, default: (callback) => callback },
+      './useNavigation.js': { useNavigation: () => navigation },
+      './useRoute.js': { useRoute: () => ({ key: 'guarded' }) },
+      './usePreventRemoveContext.js': {
+        usePreventRemoveContext: () => ({
+          setPreventRemove: jest.fn(),
+          notifyPreventRemove: jest.fn(),
+        }),
+      },
+    }
+  );
+  const { shouldPreventRemove } = loadInstalledNavigationCoreModule(
+    'useOnPreventRemove.js',
+    {
+      react: React,
+      './NavigationBuilderContext.js': { NavigationBuilderContext: React.createContext({}) },
+      './NavigationProvider.js': { NavigationRouteContext: React.createContext(undefined) },
+    }
+  );
+  const emitter = {
+    emit: jest.fn((event) => {
+      let defaultPrevented = false;
+      beforeRemoveListener({
+        ...event,
+        preventDefault: () => { defaultPrevented = true; },
+      });
+      return { defaultPrevented };
+    }),
+  };
+  const dispatch = jest.fn((action) => {
+    const prevented = shouldPreventRemove(emitter, {}, routes, nextRoutes, action);
+    if (!prevented) routes = nextRoutes;
+  });
+  navigation.dispatch = dispatch;
+
+  function ActiveGuard() {
+    installedUsePreventRemove(true, ({ data }) => {
+      preventedAction = data.action;
+      Alert.alert('Discard timer?', 'Leave?', [
+        { text: 'Stay', style: 'cancel' },
+        {
+          text: 'Discard timer and leave',
+          style: 'destructive',
+          onPress: () => navigation.dispatch(data.action),
+        },
+      ]);
+    });
+    return <React.Fragment>Guarded route</React.Fragment>;
+  }
+
+  render(<ActiveGuard />);
+  expect(navigation.addListener).toHaveBeenCalledWith('beforeRemove', expect.any(Function));
+  const initialAction = { type: 'GO_BACK' };
+  act(() => navigation.dispatch(initialAction));
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  expect(preventedAction).toBeDefined();
+  expect(routes).toHaveLength(2);
+
+  act(() => latestDiscardActions()[1].onPress());
+
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(dispatch.mock.calls[1][0]).toBe(preventedAction);
+  expect(routes).toEqual(nextRoutes);
+  expect(emitter.emit).toHaveBeenCalledTimes(1);
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+});
+
+it('Reset invalidates old prompt callbacks, returns to IDLE, and stops guarding removal', () => {
   const view = renderCookMode();
   startTimer(view);
-  act(() => view.listeners.beforeRemove(removalEvent()));
+  act(() => view.attemptRemoval(removalAction('BACK_BEFORE_RESET')));
   const actions = latestDiscardActions();
 
   fireEvent.press(view.getByLabelText('Reset timer'));
@@ -428,89 +508,14 @@ it('Reset invalidates both captured discard callbacks', () => {
 
   expect(view.navigation.dispatch).not.toHaveBeenCalled();
   expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
-});
-
-it('Reset directly invalidates an old Discard without invoking old Stay first', () => {
-  const view = renderCookMode();
-  startTimer(view);
-  act(() => view.listeners.beforeRemove(removalEvent('BACK_BEFORE_RESET')));
-  const oldDiscard = latestDiscardActions()[1].onPress;
-
-  fireEvent.press(view.getByLabelText('Reset timer'));
-  expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
-  expect(view.queryByLabelText('Pause timer')).toBeNull();
-
-  act(() => oldDiscard());
-  expect(view.navigation.dispatch).not.toHaveBeenCalled();
+  expect(view.attemptRemoval(removalAction('IDLE_BACK'))).toBe(false);
   expect(Alert.alert).toHaveBeenCalledTimes(1);
-  expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
-
-  const idleRemoval = removalEvent('IDLE_BACK');
-  act(() => view.listeners.beforeRemove(idleRemoval));
-  expect(idleRemoval.preventDefault).not.toHaveBeenCalled();
-  expect(Alert.alert).toHaveBeenCalledTimes(1);
-  expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
 });
 
-it('cleans the one-shot bypass when confirmed dispatch does not re-enter beforeRemove', () => {
+it('unmount and session-tree replacement make captured prompt callbacks inert', () => {
   const view = renderCookMode();
   startTimer(view);
-  const actionA = { type: 'BACK_A' };
-  const firstRemoval = { preventDefault: jest.fn(), data: { action: actionA } };
-  act(() => view.listeners.beforeRemove(firstRemoval));
-
-  act(() => latestDiscardActions()[1].onPress());
-  expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.navigation.dispatch).toHaveBeenCalledWith(actionA);
-  expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
-
-  startTimer(view);
-  const laterSameActionRemoval = { preventDefault: jest.fn(), data: { action: actionA } };
-  act(() => view.listeners.beforeRemove(laterSameActionRemoval));
-
-  expect(laterSameActionRemoval.preventDefault).toHaveBeenCalledTimes(1);
-  expect(Alert.alert).toHaveBeenCalledTimes(2);
-  expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
-});
-
-it('cleans the one-shot bypass when confirmed dispatch throws', () => {
-  const view = renderCookMode();
-  startTimer(view);
-  const actionA = { type: 'BACK_A' };
-  const firstRemoval = { preventDefault: jest.fn(), data: { action: actionA } };
-  const dispatchError = new Error('dispatch failed');
-  view.navigation.dispatch.mockImplementationOnce(() => { throw dispatchError; });
-  act(() => view.listeners.beforeRemove(firstRemoval));
-  const firstDiscard = latestDiscardActions()[1].onPress;
-
-  let caughtError;
-  act(() => {
-    try {
-      firstDiscard();
-    } catch (error) {
-      caughtError = error;
-    }
-  });
-  expect(caughtError).toBe(dispatchError);
-  expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.navigation.dispatch).toHaveBeenCalledWith(actionA);
-  expect(view.getByLabelText('Start timer')).toBeOnTheScreen();
-
-  startTimer(view);
-  const laterSameActionRemoval = { preventDefault: jest.fn(), data: { action: actionA } };
-  act(() => view.listeners.beforeRemove(laterSameActionRemoval));
-
-  expect(laterSameActionRemoval.preventDefault).toHaveBeenCalledTimes(1);
-  expect(Alert.alert).toHaveBeenCalledTimes(2);
-  expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
-  expect(view.getByLabelText('Pause timer')).toBeOnTheScreen();
-});
-
-it('unmount invalidates captured Stay and Discard callbacks', () => {
-  const view = renderCookMode();
-  startTimer(view);
-  act(() => view.listeners.beforeRemove(removalEvent()));
+  act(() => view.attemptRemoval(removalAction()));
   const actions = latestDiscardActions();
 
   view.unmount();
@@ -523,18 +528,24 @@ it('unmount invalidates captured Stay and Discard callbacks', () => {
   expect(AccessibilityInfo.announceForAccessibility).not.toHaveBeenCalled();
 });
 
-it('lets IDLE and COMPLETED timers exit without discard confirmation', () => {
+it('does not guard IDLE or COMPLETED removal', () => {
   const view = renderCookMode();
-  const idleEvent = removalEvent();
-  act(() => view.listeners.beforeRemove(idleEvent));
-  expect(idleEvent.preventDefault).not.toHaveBeenCalled();
+  expect(view.attemptRemoval(removalAction('IDLE_BACK'))).toBe(false);
 
   startTimer(view, { seconds: '1' });
   act(() => jest.advanceTimersByTime(1000));
-  const completedEvent = removalEvent();
-  act(() => view.listeners.beforeRemove(completedEvent));
-  expect(completedEvent.preventDefault).not.toHaveBeenCalled();
+  expect(view.attemptRemoval(removalAction('COMPLETED_BACK'))).toBe(false);
   expect(Alert.alert).not.toHaveBeenCalled();
+});
+
+it('routes the custom in-screen Back through the same active removal contract', () => {
+  const view = renderCookMode();
+  startTimer(view);
+
+  fireEvent.press(view.getByLabelText('Back'));
+  expect(view.navigation.goBack).toHaveBeenCalledTimes(1);
+  act(() => view.attemptRemoval(removalAction('CUSTOM_BACK')));
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
 });
 
 it('keeps explicit Finish as the only Cook History path and retains its rapid-tap guard', async () => {
@@ -571,15 +582,21 @@ it.each([
 
   act(() => notify.mock.calls[0][2]());
   expect(view.navigation.goBack).toHaveBeenCalledTimes(1);
-  const finishRemoval = removalEvent('FINISH_BACK');
-  act(() => view.listeners.beforeRemove(finishRemoval));
-  expect(finishRemoval.preventDefault).toHaveBeenCalledTimes(1);
+  const finishRemoval = removalAction('FINISH_BACK');
+  act(() => view.attemptRemoval(finishRemoval));
   expect(Alert.alert).toHaveBeenCalledTimes(1);
 
-  const actions = latestDiscardActions();
+  const firstPrompt = latestDiscardActions();
+  act(() => firstPrompt[0].onPress());
+  expect(mockRecordCompletion).toHaveBeenCalledTimes(1);
+  expect(view.navigation.dispatch).not.toHaveBeenCalled();
+
+  act(() => view.attemptRemoval(removalAction('FINISH_BACK_AGAIN')));
+  const secondPrompt = latestDiscardActions();
   act(() => {
-    actions[1].onPress();
-    actions[1].onPress();
+    secondPrompt[1].onPress();
+    secondPrompt[1].onPress();
+    firstPrompt[1].onPress();
   });
   expect(view.navigation.dispatch).toHaveBeenCalledTimes(1);
   expect(mockRecordCompletion).toHaveBeenCalledTimes(1);
@@ -597,9 +614,7 @@ it('COMPLETED timer exits after one explicit Finish without a discard prompt', a
   expect(notify).toHaveBeenCalledTimes(1);
 
   act(() => notify.mock.calls[0][2]());
-  const finishRemoval = removalEvent('FINISH_BACK');
-  act(() => view.listeners.beforeRemove(finishRemoval));
-  expect(finishRemoval.preventDefault).not.toHaveBeenCalled();
+  expect(view.attemptRemoval(removalAction('FINISH_BACK'))).toBe(false);
   expect(Alert.alert).not.toHaveBeenCalled();
   expect(mockRecordCompletion).toHaveBeenCalledTimes(1);
 });
@@ -612,7 +627,6 @@ it('cleans intervals and listeners on unmount and ignores late lifecycle callbac
   view.unmount();
   expect(jest.getTimerCount()).toBe(0);
   expect(mockAppStateRemove).toHaveBeenCalledTimes(1);
-  expect(view.listenerRemovers.beforeRemove).toHaveBeenCalledTimes(1);
 
   act(() => {
     jest.setSystemTime(new Date(BASE_TIME.getTime() + 5000));
@@ -621,9 +635,9 @@ it('cleans intervals and listeners on unmount and ignores late lifecycle callbac
   expect(AccessibilityInfo.announceForAccessibility).not.toHaveBeenCalled();
 });
 
-it('registers the AppState and navigation-removal lifecycle exactly once', () => {
-  const view = renderCookMode();
+it('registers AppState cleanup while removal ownership is hook-managed', () => {
+  renderCookMode();
   expect(AppState.addEventListener).toHaveBeenCalledTimes(1);
   expect(AppState.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
-  expect(view.navigation.addListener).toHaveBeenCalledWith('beforeRemove', expect.any(Function));
+  expect(mockPreventRemoveState).toEqual({ enabled: false, callback: expect.any(Function) });
 });

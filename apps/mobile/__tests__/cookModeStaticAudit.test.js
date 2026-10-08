@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const babel = require('@babel/core');
 
 const SRC = path.join(__dirname, '../src');
 const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
@@ -11,6 +12,22 @@ const stripComments = (src) =>
 
 const raw = read('screens/CookModeScreen.js');
 const code = stripComments(raw);
+const ast = babel.parseSync(raw, {
+  babelrc: false,
+  configFile: false,
+  sourceType: 'module',
+  parserOpts: { plugins: ['jsx'] },
+});
+const nodes = [];
+const visit = (value) => {
+  if (!value || typeof value !== 'object') return;
+  if (typeof value.type === 'string') nodes.push(value);
+  Object.values(value).forEach((child) => {
+    if (Array.isArray(child)) child.forEach(visit);
+    else visit(child);
+  });
+};
+visit(ast.program);
 const recipeDetail = stripComments(read('screens/RecipeDetailScreen.js'));
 const rootNavigator = stripComments(read('navigation/RootNavigator.js'));
 const mainTabs = stripComments(read('navigation/MainTabs.js'));
@@ -132,15 +149,41 @@ describe('CookMode Finish is real, M5C Cook History backend', () => {
     expect(code).not.toMatch(/Vibration|scheduleNotification|AsyncStorage/);
   });
 
-  it('keeps the absolute clock, lifecycle cleanup, completion isolation, and active-exit guard explicit', () => {
+  it('keeps the absolute clock, lifecycle cleanup, completion isolation, and supported active-exit guard explicit', () => {
     expect(code).toMatch(/getCookTimerRemainingMs\(current\.endAtMs, nowMs\)/);
     expect(code).toMatch(/AppState\.addEventListener\('change'/);
-    expect(code).toMatch(/navigation\.addListener\('beforeRemove'/);
+    expect(nodes.some((node) =>
+      node.type === 'ImportDeclaration' &&
+      node.source.value === '@react-navigation/native' &&
+      node.specifiers.some((specifier) =>
+        specifier.type === 'ImportSpecifier' && specifier.imported.name === 'usePreventRemove')
+    )).toBe(true);
+    expect(nodes.some((node) =>
+      node.type === 'CallExpression' &&
+      node.callee.type === 'Identifier' &&
+      node.callee.name === 'usePreventRemove'
+    )).toBe(true);
+    expect(nodes.some((node) =>
+      node.type === 'CallExpression' &&
+      node.callee.type === 'MemberExpression' &&
+      node.callee.property.type === 'Identifier' &&
+      node.callee.property.name === 'addListener' &&
+      node.arguments[0]?.type === 'StringLiteral' &&
+      node.arguments[0].value === 'beforeRemove'
+    )).toBe(false);
+    expect(nodes.some((node) =>
+      node.type === 'Identifier' && node.name === 'allowedRemovalActionRef'
+    )).toBe(false);
     expect(code).toMatch(/clearInterval\(intervalRef\.current\)/);
     expect(code).toMatch(/AccessibilityInfo\.announceForAccessibility/);
     const completeTimer = code.match(/const completeTimer = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[commitTimer\]\);/);
     expect(completeTimer).toBeTruthy();
     expect(completeTimer[1]).not.toMatch(/goNext|finishCooking|recordCompletion|navigation/);
+  });
+
+  it('adds no persistence, notification, background-task, backend, package, or native integration', () => {
+    expect(code).not.toMatch(/AsyncStorage|expo-notifications|TaskManager|BackgroundFetch/);
+    expect(code).not.toMatch(/package\.json|package-lock\.json|android\/|ios\/|apps\/api|backend/);
   });
 });
 
