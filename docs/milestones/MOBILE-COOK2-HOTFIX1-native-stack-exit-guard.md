@@ -246,3 +246,52 @@ After authorized implementation, independent review, merge, and reproducing-plat
 ## 21. Verdict
 
 **MOBILE-COOK2-HOTFIX1 CONTRACT FROZEN - READY FOR IMPLEMENTATION**
+
+## 22. Closure evidence
+
+This section appends the HOTFIX1 closure record; sections 1--21 remain the
+historical audit and contract record.
+
+### Delivered hotfix history
+
+- PR #105 had already merged the original COOK2 implementation.
+- A post-merge native-stack defect was then found, reopening runtime
+  acceptance for the focused hotfix.
+- HOTFIX1 replaced the raw `beforeRemove` approach with the supported
+  `usePreventRemove` contract.
+- The initial independent review identified F1/F2 test-proof issues.
+- The follow-up fixes added real React Navigation continuation coverage and
+  semantic AST checks.
+
+### Final evidence
+
+| Evidence | Result |
+| --- | --- |
+| Final independent source re-review | **PASS** |
+| Focused HOTFIX1 automated verification | **2 suites, 46/46 PASS** |
+| Full COOK2 automated verification | **4 suites, 93/93 PASS** |
+| Tested real-device/runtime flow | **PASS** |
+
+Physical verification passed for: RUNNING Back -> Stay; RUNNING Back ->
+Discard; repeated Back; PAUSED exit; COMPLETED exit; IDLE exit; RUNNING Finish;
+PAUSED Finish; session replacement; and applicable native Back/gesture behavior.
+The original native/JavaScript mismatch warning was **not reproduced**.
+
+The React Native DevTools `fb-dotslash/dotslash.exe ENOENT` message was
+observed as a **NON-BLOCKING LOCAL TOOLING WARNING**. Metro continued, the app
+ran, and HOTFIX1 runtime behavior remained testable; it is not a product
+failure.
+
+### Closure scope and disposition
+
+This closure update changes only this milestone document. Production and test
+paths were not modified during closure; nothing was staged, committed, pushed,
+or deployed, and the protected stash was not touched.
+
+There are no remaining HOTFIX1 source, automated-evidence, or tested-runtime
+blockers for finalization. Production deployment remains outside this closure
+and was not performed.
+
+## 23. Closure verdict
+
+**MOBILE-COOK2-HOTFIX1 CLOSURE PASS — READY FOR FINALIZATION**
