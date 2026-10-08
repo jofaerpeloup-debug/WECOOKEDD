@@ -151,6 +151,79 @@ test('a valid token/session but a suspended user is rejected with AUTH_SESSION_I
   assert.equal(response.body.error.code, 'AUTH_SESSION_INVALID');
 });
 
+test('a valid token/session but a deactivated user is rejected independently of session revocation', async (t) => {
+  t.mock.method(sessionService, 'getActiveSessionById', async () => ({ _id: SESSION_ID, userId: USER_ID }));
+  t.mock.method(userService, 'getUserById', async () => ({
+    _id: USER_ID, role: 'user', status: 'active', deactivatedAt: new Date(),
+  }));
+  const token = signAccessToken({ userId: USER_ID, role: 'user', sessionId: SESSION_ID });
+  const response = await request(buildTestApp()).get('/protected').set('Authorization', `Bearer ${token}`);
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_SESSION_INVALID');
+});
+
+test('legacy missing generations resolve to zero and remain compatible', async (t) => {
+  t.mock.method(sessionService, 'getActiveSessionById', async () => ({
+    _id: SESSION_ID,
+    userId: USER_ID,
+  }));
+  t.mock.method(userService, 'getUserById', async () => ({
+    _id: USER_ID,
+    role: 'user',
+    status: 'active',
+  }));
+  const token = signAccessToken({ userId: USER_ID, role: 'user', sessionId: SESSION_ID });
+
+  const response = await request(buildTestApp())
+    .get('/protected')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+});
+
+test('generation advancement invalidates an otherwise active old session', async (t) => {
+  t.mock.method(sessionService, 'getActiveSessionById', async () => ({
+    _id: SESSION_ID,
+    userId: USER_ID,
+    securityGeneration: 4,
+  }));
+  t.mock.method(userService, 'getUserById', async () => ({
+    _id: USER_ID,
+    role: 'user',
+    status: 'active',
+    sessionGeneration: 5,
+  }));
+  const token = signAccessToken({ userId: USER_ID, role: 'user', sessionId: SESSION_ID });
+
+  const response = await request(buildTestApp())
+    .get('/protected')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error.code, 'AUTH_SESSION_INVALID');
+});
+
+test('a session at the current nonzero generation remains valid', async (t) => {
+  t.mock.method(sessionService, 'getActiveSessionById', async () => ({
+    _id: SESSION_ID,
+    userId: USER_ID,
+    securityGeneration: 5,
+  }));
+  t.mock.method(userService, 'getUserById', async () => ({
+    _id: USER_ID,
+    role: 'user',
+    status: 'active',
+    sessionGeneration: 5,
+  }));
+  const token = signAccessToken({ userId: USER_ID, role: 'user', sessionId: SESSION_ID });
+
+  const response = await request(buildTestApp())
+    .get('/protected')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+});
+
 test('a genuine repository/database failure propagates as a 500, not AUTH_SESSION_INVALID', async (t) => {
   t.mock.method(sessionService, 'getActiveSessionById', async () => {
     throw new Error('MongoDB connection timed out');

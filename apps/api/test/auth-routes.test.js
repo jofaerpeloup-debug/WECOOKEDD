@@ -132,6 +132,66 @@ test('social routes install the locked limiter and authentication order', () => 
   assert.equal(link.length, 5);
 });
 
+test('ACCOUNT2 routes enforce the frozen authentication and rate-limit order', () => {
+  const handles = (path) =>
+    authRoutes.stack.find((layer) => layer.route?.path === path).route.stack.map((layer) => layer.handle);
+  const request = handles('/email-change');
+  assert.equal(request[0], authenticate);
+  assert.equal(request[1], authRateLimiter);
+  assert.equal(request.length, 4);
+  const cancel = handles('/email-change/cancel');
+  assert.equal(cancel[0], authenticate);
+  assert.equal(cancel.length, 3);
+  const verify = handles('/email-change/verify');
+  assert.equal(verify[0], authRateLimiter);
+  assert.equal(verify.includes(authenticate), false);
+  assert.equal(verify.length, 4);
+  const deactivate = handles('/deactivate');
+  assert.equal(deactivate[0], authenticate);
+  assert.equal(deactivate[1], authRateLimiter);
+  assert.equal(deactivate.length, 4);
+});
+
+test('POST /api/v1/auth/email-change/verify maps every malformed token shape to the ACCOUNT2 error', async () => {
+  for (const body of [
+    {},
+    { token: null },
+    { token: 42 },
+    { token: '' },
+    { token: 'short' },
+    { token: `${'A'.repeat(42)}!` },
+  ]) {
+    await resetAuthLimiter();
+    const response = await request(app).post('/api/v1/auth/email-change/verify').send(body);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'AUTH_EMAIL_CHANGE_TOKEN_INVALID');
+  }
+});
+
+test('POST /api/v1/auth/email-change/verify collapses expired, replayed, replaced, and cancelled tokens', async (t) => {
+  const token = 'A'.repeat(43);
+  let scenario;
+  t.mock.method(userRepository, 'findPendingEmailChangeByTokenHash', async () => (
+    scenario === 'expired'
+      ? {
+        ...fakeUserDoc({ id: AUTH_USER_ID, email: 'old@example.com' }),
+        pendingEmail: 'new@example.com',
+        pendingEmailChangeExpiresAt: new Date('2000-01-01T00:00:00.000Z'),
+      }
+      : null
+  ));
+  t.mock.method(userRepository, 'verifyPendingEmailChange', async () => null);
+
+  for (scenario of ['expired', 'replayed', 'replaced', 'cancelled']) {
+    await resetAuthLimiter();
+    const response = await request(app)
+      .post('/api/v1/auth/email-change/verify')
+      .send({ token });
+    assert.equal(response.status, 400, scenario);
+    assert.equal(response.body.error.code, 'AUTH_EMAIL_CHANGE_TOKEN_INVALID', scenario);
+  }
+});
+
 // Mounts a valid authenticated session for AUTH_USER_ID.
 function mockAuthenticatedUser(t, { userId = AUTH_USER_ID, user } = {}) {
   t.mock.method(sessionRepository, 'findActiveById', async () => ({
@@ -863,8 +923,12 @@ test("POST /api/v1/auth/logout-all revokes all of the user's sessions", async (t
     revokedAt: null,
   }));
   t.mock.method(userRepository, 'findById', async () => fakeUserDoc({ id: AUTH_USER_ID }));
+  t.mock.method(userRepository, 'advanceSessionGenerationForActiveUser', async () => ({
+    _id: AUTH_USER_ID,
+    sessionGeneration: 1,
+  }));
   let capturedUserId;
-  t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async (userId) => {
     capturedUserId = userId;
     return 3;
   });
@@ -902,13 +966,18 @@ async function mockChangePassword(t, { userStatus = 'active', onRevokeAll } = {}
   );
 
   const persisted = [];
-  t.mock.method(userRepository, 'replacePasswordById', async (id, passwordHash) => {
+  t.mock.method(userRepository, 'replacePasswordById', async (
+    id,
+    _currentPasswordHash,
+    sessionGeneration,
+    passwordHash
+  ) => {
     persisted.push({ id, passwordHash });
-    return { matchedCount: 1, modifiedCount: 1 };
+    return { _id: id, sessionGeneration: sessionGeneration + 1 };
   });
 
   const revokedFor = [];
-  t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async (userId) => {
     revokedFor.push(userId);
     if (onRevokeAll) onRevokeAll();
     return 2;
@@ -1035,8 +1104,11 @@ test('after a successful change-password, the same access token fails the next a
   t.mock.method(userRepository, 'findByIdWithPassword', async () =>
     fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
   );
-  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({
+    _id: AUTH_USER_ID,
+    sessionGeneration: 1,
+  }));
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     sessionsRevoked = true;
     return 1;
   });
@@ -1066,10 +1138,13 @@ test('after a successful change-password, the pre-change refresh token can no lo
   t.mock.method(userRepository, 'findByIdWithPassword', async () =>
     fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
   );
-  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({
+    _id: AUTH_USER_ID,
+    sessionGeneration: 1,
+  }));
   // A revoked session no longer matches the active-by-hash filter.
   t.mock.method(sessionRepository, 'findActiveByHash', async () => (sessionsRevoked ? null : { _id: AUTH_SESSION_ID, userId: AUTH_USER_ID }));
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     sessionsRevoked = true;
     return 1;
   });
@@ -1157,15 +1232,15 @@ test('POST /api/v1/auth/forgot-password rejects malformed and extra fields', asy
   assert.equal(extra.body.error.code, 'VALIDATION_ERROR');
 });
 
-test('POST /api/v1/auth/reset-password atomically resets and revokes all sessions without issuing tokens', async (t) => {
+test('POST /api/v1/auth/reset-password atomically resets and advances the session generation without issuing tokens', async (t) => {
   await resetAuthLimiter();
   let resetArgs;
   t.mock.method(userRepository, 'resetPasswordByTokenHash', async (args) => {
     resetArgs = args;
-    return { _id: AUTH_USER_ID };
+    return { _id: AUTH_USER_ID, sessionGeneration: 1 };
   });
   const revokedFor = [];
-  t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async (userId) => {
     revokedFor.push(String(userId));
     return 2;
   });
@@ -1186,7 +1261,7 @@ test('POST /api/v1/auth/reset-password atomically resets and revokes all session
 test('POST /api/v1/auth/reset-password rejects invalid, expired, or replayed tokens identically', async (t) => {
   await resetAuthLimiter();
   t.mock.method(userRepository, 'resetPasswordByTokenHash', async () => null);
-  const revoke = t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
+  const revoke = t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 0);
 
   for (const token of ['B'.repeat(43), 'C'.repeat(43)]) {
     const response = await request(app)
@@ -1214,16 +1289,21 @@ test('an outstanding reset token cannot overwrite a password changed through aut
   t.mock.method(userRepository, 'findByIdWithPassword', async () =>
     fakeUserDoc({ id: AUTH_USER_ID, passwordHash: currentHash })
   );
-  t.mock.method(userRepository, 'replacePasswordById', async (id, passwordHash) => {
+  t.mock.method(userRepository, 'replacePasswordById', async (
+    id,
+    _currentPasswordHash,
+    sessionGeneration,
+    passwordHash
+  ) => {
     assert.equal(id, AUTH_USER_ID);
     replacementHash = passwordHash;
     resetCredentialActive = false;
-    return { matchedCount: 1 };
+    return { _id: id, sessionGeneration: sessionGeneration + 1 };
   });
   t.mock.method(userRepository, 'resetPasswordByTokenHash', async () =>
-    resetCredentialActive ? { _id: AUTH_USER_ID } : null
+    resetCredentialActive ? { _id: AUTH_USER_ID, sessionGeneration: 2 } : null
   );
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 1);
   const accessToken = signAccessToken({
     userId: AUTH_USER_ID,
     role: 'admin',
@@ -1269,7 +1349,7 @@ test('POST /api/v1/auth/verify-email atomically verifies and does not revoke ses
     verifyArgs = args;
     return { _id: AUTH_USER_ID };
   });
-  const revoke = t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
+  const revoke = t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 0);
 
   const response = await request(app)
     .post('/api/v1/auth/verify-email')

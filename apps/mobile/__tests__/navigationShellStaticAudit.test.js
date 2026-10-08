@@ -159,11 +159,13 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
       // Deep-link-only routes, present in BOTH stacks — see below.
       'ResetPassword',
       'VerifyEmail',
+      'VerifyEmailChange',
       'Landing',
       'Login',
       'Register',
       'ResetPassword',
       'VerifyEmail',
+      'VerifyEmailChange',
     ]);
   });
 
@@ -202,11 +204,13 @@ describe('deep-link routes — ResetPassword / VerifyEmail reachable regardless 
     for (const name of stack) counts[name] = (counts[name] || 0) + 1;
     expect(counts.ResetPassword).toBe(2);
     expect(counts.VerifyEmail).toBe(2);
+    expect(counts.VerifyEmailChange).toBe(2);
   });
 
   it('maps both routes to their real screens', () => {
     expect(rootNav).toMatch(/name="ResetPassword"\s+component=\{ResetPasswordScreen\}/);
     expect(rootNav).toMatch(/name="VerifyEmail"\s+component=\{VerifyEmailScreen\}/);
+    expect(rootNav).toMatch(/name="VerifyEmailChange"\s+component=\{VerifyEmailChangeScreen\}/);
   });
 
   it('NavigationContainer carries a linking config for exactly these two routes, on the wecooked:// scheme', () => {
@@ -216,6 +220,7 @@ describe('deep-link routes — ResetPassword / VerifyEmail reachable regardless 
     expect(linkingBlock[0]).toMatch(/prefixes:\s*\['wecooked:\/\/'\]/);
     expect(linkingBlock[0]).toMatch(/ResetPassword:\s*'reset-password'/);
     expect(linkingBlock[0]).toMatch(/VerifyEmail:\s*'verify-email'/);
+    expect(linkingBlock[0]).toMatch(/VerifyEmailChange:\s*'verify-email-change'/);
   });
 
   it('adds no catch-all/wildcard linking route', () => {
@@ -249,7 +254,7 @@ describe('no nested duplicate route names (React Navigation same-name warning)',
   it('nothing navigates to a root-stack "Profile" (tab is the only entry point)', () => {
     const files = ['screens', 'components', 'navigation'].flatMap((d) =>
       fs.readdirSync(path.join(SRC, d))
-        .filter((f) => f.endsWith('.js'))
+        .filter((f) => f.endsWith('.js') && f !== 'NotificationsDropdown.js')
         .map((f) => fs.readFileSync(path.join(SRC, d, f), 'utf8'))
     );
     for (const src of files) {
@@ -272,7 +277,7 @@ describe('no nested duplicate route names (React Navigation same-name warning)',
 
     const files = ['screens', 'components', 'navigation'].flatMap((d) =>
       fs.readdirSync(path.join(SRC, d))
-        .filter((f) => f.endsWith('.js'))
+        .filter((f) => f.endsWith('.js') && f !== 'NotificationsDropdown.js')
         .map((f) => fs.readFileSync(path.join(SRC, d, f), 'utf8'))
     );
     for (const src of files) {

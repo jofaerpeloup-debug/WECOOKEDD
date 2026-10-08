@@ -22,19 +22,31 @@ import * as tokenStore from './tokenStore';
 // Notifies the React layer that the session ended non-interactively (a refresh
 // was definitively rejected). Set by AuthContext while mounted.
 let onSessionExpired = null;
+let localSessionRevision = 0;
+let tokenMutationTail = Promise.resolve();
+
+function runTokenMutation(mutation) {
+  const result = tokenMutationTail.then(mutation, mutation);
+  tokenMutationTail = result.catch(() => {});
+  return result;
+}
 
 export function setOnSessionExpired(fn) {
   onSessionExpired = typeof fn === 'function' ? fn : null;
 }
 
 async function applyTokens(tokens) {
-  tokenStore.setAccessToken(tokens?.accessToken || null);
-  return tokenStore.setRefreshToken(tokens?.refreshToken || null);
+  return runTokenMutation(async () => {
+    tokenStore.setAccessToken(tokens?.accessToken || null);
+    const persisted = await tokenStore.setRefreshToken(tokens?.refreshToken || null);
+    localSessionRevision += 1;
+    return persisted;
+  });
 }
 
 // Ends the session and notifies the React layer exactly once.
 async function endSession() {
-  await tokenStore.clearSession();
+  await clearLocalSession();
   if (onSessionExpired) onSessionExpired();
 }
 
@@ -146,7 +158,7 @@ async function establishSession(data) {
     } catch {
       // best effort — the session is being torn down locally regardless
     }
-    await tokenStore.clearSession();
+    await clearLocalSession();
     throw new ApiError('Refresh token could not be persisted to secure storage.', {
       code: SESSION_PERSIST_FAILED,
     });
@@ -163,7 +175,7 @@ async function establishSession(data) {
     if (err instanceof ApiError && (err.isNetworkError || err.status >= 500)) {
       return data.user;
     }
-    await tokenStore.clearSession();
+    await clearLocalSession();
     throw err;
   }
 }
@@ -217,8 +229,19 @@ export function resetPassword({ token, newPassword }) {
 // password reset, where the server session (if any existed on this device)
 // is already revoked by the reset itself, so hitting /auth/logout again would
 // just be a pointless extra request against an already-dead session.
-export function clearLocalSession() {
-  return tokenStore.clearSession();
+export function getLocalSessionRevision() {
+  return localSessionRevision;
+}
+
+export function clearLocalSession(expectedRevision) {
+  return runTokenMutation(async () => {
+    if (expectedRevision !== undefined && expectedRevision !== localSessionRevision) {
+      return false;
+    }
+    await tokenStore.clearSession();
+    localSessionRevision += 1;
+    return true;
+  });
 }
 
 // --- email verification -------------------------------------------------
@@ -242,6 +265,22 @@ export function resendVerification(email) {
     auth: false,
     body: { email },
   });
+}
+
+export function requestEmailChange({ newEmail, currentPassword }) {
+  return api.post('/auth/email-change', { body: { newEmail, currentPassword } });
+}
+
+export function cancelEmailChange() {
+  return api.post('/auth/email-change/cancel', { body: {} });
+}
+
+export function verifyEmailChange(token) {
+  return api.post('/auth/email-change/verify', { auth: false, body: { token } });
+}
+
+export function deactivateAccount() {
+  return api.post('/auth/deactivate', { body: { confirmation: 'DEACTIVATE' } });
 }
 
 // --- Google social login (B4.1 backend contract) ----------------------
@@ -338,6 +377,7 @@ export function changePassword({ currentPassword, newPassword }) {
 }
 
 export async function logout() {
+  const sessionRevision = getLocalSessionRevision();
   try {
     // Revokes just this session server-side. Needs a valid access token; the
     // shared client will transparently refresh+retry once if it has expired.
@@ -348,16 +388,17 @@ export async function logout() {
   // Authoritative: local WeCooked session is now cleared. Provider-side (Google)
   // logout hygiene is not this module's concern — the React auth boundary
   // (AuthContext) triggers it best-effort, detached, after the state flip.
-  await tokenStore.clearSession();
+  await clearLocalSession(sessionRevision);
 }
 
 export async function logoutAll() {
+  const sessionRevision = getLocalSessionRevision();
   try {
     await api.post('/auth/logout-all');
   } catch {
     // Best effort — see logout().
   }
-  await tokenStore.clearSession();
+  await clearLocalSession(sessionRevision);
 }
 
 // --- startup session restore ----------------------------------------
@@ -383,7 +424,7 @@ export async function restoreSession() {
       // now. Stay signed-out for this launch without discarding the token.
       return null;
     }
-    await tokenStore.clearSession();
+    await clearLocalSession();
     return null;
   }
 }

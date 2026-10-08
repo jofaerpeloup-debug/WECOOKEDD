@@ -168,12 +168,38 @@ const userSchema = new mongoose.Schema(
       type: Date,
       select: false,
     },
+    pendingEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      maxlength: EMAIL_MAX_CHARS,
+    },
+    pendingEmailChangeTokenHash: {
+      type: String,
+      select: false,
+    },
+    pendingEmailChangeExpiresAt: {
+      type: Date,
+    },
+    deactivatedAt: {
+      type: Date,
+    },
+    sessionGeneration: {
+      type: Number,
+      min: 0,
+      default: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: 'Session generation must be an integer.',
+      },
+    },
   },
   { timestamps: true }
 );
 
 userSchema.index({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
 userSchema.index({ emailVerificationTokenHash: 1 }, { unique: true, sparse: true });
+userSchema.index({ pendingEmailChangeTokenHash: 1 }, { unique: true, sparse: true });
 
 const User = mongoose.model('User', userSchema);
 

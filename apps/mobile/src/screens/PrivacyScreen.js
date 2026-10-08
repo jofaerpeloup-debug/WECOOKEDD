@@ -11,11 +11,11 @@ const SECTIONS = [
   },
   {
     heading: 'How We Use It',
-    body: 'To run the core features of the app — showing your saved recipes, personalizing swap suggestions to your dietary profile, and syncing your shopping list. We don’t sell your personal information.',
+    body: 'To run the core features of the app, including showing saved recipes, storing the account preferences you choose, and syncing your shopping list. We do not sell your personal information.',
   },
   {
     heading: 'Dietary & Allergy Data',
-    body: 'Because allergy information affects the substitutions Chef AI suggests, we treat it as sensitive. It’s used only to tailor suggestions within the app and is never shared with third parties for advertising.',
+    body: 'Dietary preferences and avoidance notes are stored with your private account profile. They do not automatically filter recipes, influence recommendations, or guarantee that any recipe is allergy-safe.',
   },
   {
     heading: 'Third-Party Services',
@@ -23,11 +23,11 @@ const SECTIONS = [
   },
   {
     heading: 'Data Retention',
-    body: 'Your data is kept while your account is active. Deleting your account (Settings → Log Out, then contact support) removes your saved content within a reasonable time.',
+    body: 'Deactivation is reversible and does not delete your profile, preferences, saved content, or public attribution. We make no permanent-deletion or retention-period claim here.',
   },
   {
     heading: 'Your Choices',
-    body: 'You can edit or remove your dietary preferences anytime from Profile, control what notifications you receive from Settings → Notifications, and request account deletion via Help Center.',
+    body: 'You can edit or remove dietary preferences and avoidance notes from Profile, control notifications in Settings, and reversibly deactivate your account from Security.',
   },
   {
     heading: 'Children’s Privacy',

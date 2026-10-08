@@ -11,13 +11,13 @@ const assert = require('node:assert/strict');
 const userRepository = require('../src/modules/users/user.repository');
 const userService = require('../src/modules/users/user.service');
 const sessionService = require('../src/modules/sessions/session.service');
-const sessionRepository = require('../src/modules/sessions/session.repository');
 const auditService = require('../src/modules/audit/audit.service');
 const { hashPassword, comparePassword } = require('../src/shared/security/password');
 const { hashPasswordResetToken } = require('../src/shared/security/password-reset-token');
 const {
   hashEmailVerificationToken,
 } = require('../src/shared/security/email-verification-token');
+const { hashEmailChangeToken } = require('../src/shared/security/email-change-token');
 const { AppError } = require('../src/shared/errors/app-error');
 
 const ACTING_ADMIN_ID = '507f1f77bcf86cd799439001';
@@ -322,11 +322,11 @@ test('adminUpdateUser ignores a role key in patch and writes ONLY status', async
     fakeUser({ role: 'user', status: 'active' })
   );
   let capturedWrite;
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     capturedWrite = { id, expectedStatus, desiredStatus };
     return fakeUser({ _id: id, status: desiredStatus });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -398,7 +398,7 @@ test('adminUpdateUser self-protection is not bypassable by re-casing the target 
     updated = true;
     return fakeUser();
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await assert.rejects(
     () =>
@@ -419,10 +419,10 @@ test('adminUpdateUser allows a harmless self no-op (status stays active)', async
   t.mock.method(userRepository, 'findById', async () =>
     fakeUser({ _id: ACTING_ADMIN_ID, role: 'admin', status: 'active' })
   );
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     fakeUser({ _id: id, role: 'admin', status: desiredStatus })
   );
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   const result = await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -438,7 +438,7 @@ test('adminUpdateUser allows a harmless self no-op (status stays active)', async
 
 function trackOrder(t, { updateResult = fakeUser(), revoke = async () => 0 } = {}) {
   const order = [];
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     order.push('update');
     return { ...updateResult, _id: id, status: desiredStatus };
   });
@@ -446,8 +446,7 @@ function trackOrder(t, { updateResult = fakeUser(), revoke = async () => 0 } = {
     order.push('revoke');
     return revoke(userId);
   };
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', trackRevoke);
-  t.mock.method(sessionService, 'revokeAllSessionsForUserCreatedBy', trackRevoke);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', trackRevoke);
   return order;
 }
 
@@ -477,7 +476,7 @@ test('active -> suspended persists status THEN revokes sessions (order matters)'
   assert.deepEqual(order, ['update', 'revoke']);
 });
 
-test('suspended -> active revokes sessions FIRST, THEN persists active (order matters)', async (t) => {
+test('suspended -> active advances generation before bounded cleanup', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'suspended' }));
   const order = trackOrder(t);
 
@@ -487,17 +486,17 @@ test('suspended -> active revokes sessions FIRST, THEN persists active (order ma
     patch: { status: 'active' },
   });
 
-  assert.deepEqual(order, ['revoke', 'update']);
+  assert.deepEqual(order, ['update', 'revoke']);
 });
 
-test('suspended -> active: if revocation fails, the user is NOT reactivated', async (t) => {
+test('suspended -> active cleanup failure cannot undo the generation-advancing recovery write', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'suspended' }));
   let updateCalled = false;
   t.mock.method(userRepository, 'updateStatusIfCurrent', async () => {
     updateCalled = true;
     return fakeUser({ status: 'active' });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUserCreatedBy', async () => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     throw new Error('session store unavailable');
   });
 
@@ -510,17 +509,17 @@ test('suspended -> active: if revocation fails, the user is NOT reactivated', as
       }),
     /session store unavailable/
   );
-  assert.equal(updateCalled, false, 'status must not be flipped to active when revocation failed');
+  assert.equal(updateCalled, true, 'the generation-advancing recovery write precedes cleanup');
 });
 
 test('active -> suspended: if revocation fails, the status update already happened (no rollback)', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
   let updateCalled = false;
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     updateCalled = true;
     return fakeUser({ _id: id, status: desiredStatus });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     throw new Error('session store unavailable');
   });
 
@@ -542,12 +541,12 @@ test('a role key alongside status: suspended is stripped — repository sees sta
   );
   let capturedWrite;
   const order = [];
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     order.push('update');
     capturedWrite = { expectedStatus, desiredStatus };
     return fakeUser({ _id: id, status: desiredStatus });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     order.push('revoke');
     return 2;
   });
@@ -563,18 +562,18 @@ test('a role key alongside status: suspended is stripped — repository sees sta
   assert.deepEqual(order, ['update', 'revoke']);
 });
 
-test('a role key alongside status: active on a suspended user is stripped — status only, revoke-first ordering', async (t) => {
+test('a role key alongside status: active on a suspended user is stripped — status only', async (t) => {
   t.mock.method(userRepository, 'findById', async () =>
     fakeUser({ role: 'user', status: 'suspended' })
   );
   let capturedWrite;
   const order = [];
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     order.push('update');
     capturedWrite = { expectedStatus, desiredStatus };
     return fakeUser({ _id: id, status: desiredStatus });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUserCreatedBy', async () => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     order.push('revoke');
     return 1;
   });
@@ -587,7 +586,7 @@ test('a role key alongside status: active on a suspended user is stripped — st
 
   assert.deepEqual(capturedWrite, { expectedStatus: 'suspended', desiredStatus: 'active' });
   assert.equal('role' in capturedWrite, false);
-  assert.deepEqual(order, ['revoke', 'update']);
+  assert.deepEqual(order, ['update', 'revoke']);
 });
 
 test('adminUpdateUser throws USER_NOT_FOUND when the target is deleted between read and write', async (t) => {
@@ -596,7 +595,7 @@ test('adminUpdateUser throws USER_NOT_FOUND when the target is deleted between r
     reads++ === 0 ? fakeUser({ status: 'active' }) : null
   );
   t.mock.method(userRepository, 'updateStatusIfCurrent', async () => null);
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await assert.rejects(
     () =>
@@ -614,10 +613,10 @@ test('adminUpdateUser throws USER_NOT_FOUND when the target is deleted between r
 
 test('adminUpdateUser emits one exact success event for a persisted status transition', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     fakeUser({ _id: id, status: desiredStatus })
   );
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 2);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 2);
   let event;
   auditService.record.mock.mockImplementation(async (value) => {
     event = value;
@@ -646,11 +645,11 @@ test('adminUpdateUser emits one exact success event for a persisted status trans
 test('adminUpdateUser emits no event for a no-op or a mutation failure before persistence', async (t) => {
   let currentStatus = 'active';
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: currentStatus }));
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     if (desiredStatus === 'suspended') throw new Error('write failed');
     return fakeUser({ _id: id, status: desiredStatus });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -674,10 +673,10 @@ test('adminUpdateUser emits no event for a no-op or a mutation failure before pe
 test('a post-persistence suspension revocation error emits partial_failure without storing it', async (t) => {
   const infrastructureError = new Error('session provider private details');
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     fakeUser({ _id: id, status: desiredStatus })
   );
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     throw infrastructureError;
   });
   let event;
@@ -713,10 +712,10 @@ test('a post-persistence suspension revocation error emits partial_failure witho
 
 test('an audit failure does not replay or fail a successful status mutation', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
-  const update = t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  const update = t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     fakeUser({ _id: id, status: desiredStatus })
   );
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 1);
   auditService.record.mock.mockImplementation(async () => null);
 
   const updated = await userService.adminUpdateUser({
@@ -755,7 +754,7 @@ test('concurrent suspension attempts produce one CAS winner, one audit, and one 
   t.mock.method(
     userRepository,
     'updateStatusIfCurrent',
-    async (id, expectedStatus, desiredStatus) => {
+    async (id, expectedStatus, expectedGeneration, desiredStatus) => {
       casAttempts += 1;
       if (status !== expectedStatus) return null;
       status = desiredStatus;
@@ -763,7 +762,7 @@ test('concurrent suspension attempts produce one CAS winner, one audit, and one 
       return fakeUser({ _id: id, status });
     }
   );
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 2);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 2);
   const events = [];
   auditService.record.mock.mockImplementation(async (event) => {
     events.push(event);
@@ -795,149 +794,75 @@ test('concurrent suspension attempts produce one CAS winner, one audit, and one 
   });
 });
 
-test('concurrent reactivation fences a delayed stale sweep from a new session', async (t) => {
-  let status = 'suspended';
-  let initialReads = 0;
-  let releaseInitialReads;
-  const bothInitialReadsCompleted = new Promise((resolve) => {
-    releaseInitialReads = resolve;
-  });
-  t.mock.method(userRepository, 'findById', async () => {
-    if (initialReads < 2) {
-      const observedStatus = status;
-      initialReads += 1;
-      if (initialReads === 2) releaseInitialReads();
-      await bothInitialReadsCompleted;
-      return fakeUser({ status: observedStatus });
-    }
-    return fakeUser({ status });
-  });
-
-  const sessions = [
-    {
-      id: 'old-session-1',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      expiresAt: new Date('2100-01-01T00:00:00.000Z'),
-      revokedAt: null,
-    },
-    {
-      id: 'old-session-2',
-      createdAt: new Date('2026-01-02T00:00:00.000Z'),
-      expiresAt: new Date('2100-01-01T00:00:00.000Z'),
-      revokedAt: null,
-    },
-  ];
-  const cutoffs = [];
-  let sweepCalls = 0;
-  let releaseBothSweeps;
-  const bothSweepsStarted = new Promise((resolve) => {
-    releaseBothSweeps = resolve;
-  });
-  let releaseDelayedSweep;
-  const delayedSweepMayFinish = new Promise((resolve) => {
-    releaseDelayedSweep = resolve;
-  });
-
-  t.mock.method(
-    sessionRepository,
-    'revokeAllForUserCreatedBy',
-    async (userId, createdAtCutoff, now) => {
-      assert.equal(String(userId), TARGET_USER_ID);
-      sweepCalls += 1;
-      const sweepNumber = sweepCalls;
-      cutoffs.push(createdAtCutoff);
-      if (sweepCalls === 2) releaseBothSweeps();
-      await bothSweepsStarted;
-      if (sweepNumber === 2) await delayedSweepMayFinish;
-
-      let revokedCount = 0;
-      for (const session of sessions) {
-        if (
-          session.revokedAt === null &&
-          session.expiresAt > now &&
-          session.createdAt <= createdAtCutoff
-        ) {
-          session.revokedAt = now;
-          revokedCount += 1;
-        }
-      }
-      return revokedCount;
-    }
+test('suspension recovery generation fence protects a newer session from delayed cleanup', async (t) => {
+  t.mock.method(userRepository, 'findById', async () =>
+    fakeUser({ status: 'suspended', sessionGeneration: 4 })
   );
-
-  let casAttempts = 0;
-  let winningWrites = 0;
-  let newSession;
   t.mock.method(
     userRepository,
     'updateStatusIfCurrent',
-    async (id, expectedStatus, desiredStatus) => {
-      casAttempts += 1;
-      if (status !== expectedStatus) return null;
-
-      status = desiredStatus;
-      winningWrites += 1;
-      const latestCutoffMs = Math.max(...cutoffs.map((cutoff) => cutoff.getTime()));
-      newSession = {
-        id: 'post-reactivation-session',
-        createdAt: new Date(latestCutoffMs + 1),
-        expiresAt: new Date('2100-01-01T00:00:00.000Z'),
-        revokedAt: null,
-      };
-      sessions.push(newSession);
-      releaseDelayedSweep();
-      return fakeUser({ _id: id, status });
+    async (id, expectedStatus, expectedGeneration, desiredStatus) => {
+      assert.equal(expectedStatus, 'suspended');
+      assert.equal(expectedGeneration, 4);
+      assert.equal(desiredStatus, 'active');
+      return fakeUser({ _id: id, status: 'active', sessionGeneration: 5 });
     }
   );
 
-  const events = [];
-  auditService.record.mock.mockImplementation(async (event) => {
-    events.push(event);
-    return event;
+  const sessions = [
+    { id: 'old', securityGeneration: 4, revoked: false },
+  ];
+  let releaseCleanup;
+  const cleanupMayFinish = new Promise((resolve) => {
+    releaseCleanup = resolve;
   });
-
-  const requests = [1, 2].map(() =>
-    userService.adminUpdateUser({
-      actingUserId: ACTING_ADMIN_ID,
-      actingUserRole: 'admin',
-      targetUserId: TARGET_USER_ID,
-      patch: { status: 'active' },
-    })
+  let cleanupStarted;
+  const cleanupDidStart = new Promise((resolve) => {
+    cleanupStarted = resolve;
+  });
+  t.mock.method(
+    sessionService,
+    'revokeAllSessionsBeforeGeneration',
+    async (_userId, committedGeneration) => {
+      assert.equal(committedGeneration, 5);
+      cleanupStarted();
+      await cleanupMayFinish;
+      for (const session of sessions) {
+        if (session.securityGeneration < committedGeneration) session.revoked = true;
+      }
+      return 1;
+    }
   );
-  const results = await Promise.all(requests);
 
-  assert.equal(initialReads, 2);
-  assert.equal(sweepCalls, 2);
-  assert.equal(casAttempts, 2);
-  assert.equal(winningWrites, 1);
-  assert.equal(status, 'active');
-  assert.equal(results.every((user) => user.status === 'active'), true);
-  assert.equal(sessions[0].revokedAt instanceof Date, true);
-  assert.equal(sessions[1].revokedAt instanceof Date, true);
-  assert.ok(newSession.createdAt > cutoffs[0]);
-  assert.ok(newSession.createdAt > cutoffs[1]);
-  assert.equal(newSession.revokedAt, null);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].outcome, 'success');
-  assert.deepEqual(events[0].metadata, {
-    fromStatus: 'suspended',
-    toStatus: 'active',
+  const recovery = userService.adminUpdateUser({
+    actingUserId: ACTING_ADMIN_ID,
+    actingUserRole: 'admin',
+    targetUserId: TARGET_USER_ID,
+    patch: { status: 'active' },
   });
-});
+  await cleanupDidStart;
+  const newSession = { id: 'new', securityGeneration: 5, revoked: false };
+  sessions.push(newSession);
+  releaseCleanup();
+  const result = await recovery;
 
+  assert.equal(result.sessionGeneration, 5);
+  assert.equal(sessions[0].revoked, true);
+  assert.equal(newSession.revoked, false);
+});
 test('a lost CAS retries once when the reloaded status still needs the transition', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
   let attempts = 0;
   t.mock.method(
     userRepository,
     'updateStatusIfCurrent',
-    async (id, expectedStatus, desiredStatus) => {
+    async (id, expectedStatus, expectedGeneration, desiredStatus) => {
       attempts += 1;
       if (attempts === 1) return null;
       return fakeUser({ _id: id, status: desiredStatus });
     }
   );
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 1);
 
   const result = await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -955,7 +880,7 @@ test('a lost CAS retries once when the reloaded status still needs the transitio
 test('status CAS retries are bounded to one retry', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
   const cas = t.mock.method(userRepository, 'updateStatusIfCurrent', async () => null);
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await assert.rejects(
     () =>
@@ -1167,7 +1092,7 @@ test('updateOwnProfile propagates an unexpected repository error unchanged', asy
 });
 
 test('updateOwnProfile never calls the session service', async (t) => {
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
   t.mock.method(userRepository, 'updateById', async (id) => fakeUser({ _id: id }));
 
   await userService.updateOwnProfile({
@@ -1202,9 +1127,14 @@ test('changePassword: happy path — loads by authenticated id, verifies current
     return fakePasswordUser('current-secret');
   });
   let writeArgs;
-  t.mock.method(userRepository, 'replacePasswordById', async (id, passwordHash) => {
-    writeArgs = { id, passwordHash };
-    return { matchedCount: 1, modifiedCount: 1 };
+  t.mock.method(userRepository, 'replacePasswordById', async (
+    id,
+    currentPasswordHash,
+    sessionGeneration,
+    passwordHash
+  ) => {
+    writeArgs = { id, currentPasswordHash, sessionGeneration, passwordHash };
+    return { _id: id, sessionGeneration: sessionGeneration + 1 };
   });
 
   await userService.changePassword({
@@ -1215,6 +1145,7 @@ test('changePassword: happy path — loads by authenticated id, verifies current
 
   assert.equal(lookupId, PW_USER_ID);
   assert.equal(writeArgs.id, PW_USER_ID);
+  assert.equal(writeArgs.sessionGeneration, 0);
   // Repository receives a bcrypt hash, never the plaintext.
   assert.notEqual(writeArgs.passwordHash, 'brand-new-secret');
   assert.match(writeArgs.passwordHash, /^\$2[aby]\$/);
@@ -1228,7 +1159,8 @@ test('changePassword: a local-plus-social user remains eligible because the hash
     })
   );
   const write = t.mock.method(userRepository, 'replacePasswordById', async () => ({
-    matchedCount: 1,
+    _id: PW_USER_ID,
+    sessionGeneration: 1,
   }));
 
   await userService.changePassword({
@@ -1245,7 +1177,7 @@ test('changePassword: the repository write receives exactly (id, passwordHash) a
   let allArgs;
   t.mock.method(userRepository, 'replacePasswordById', async (...args) => {
     allArgs = args;
-    return { matchedCount: 1 };
+    return { _id: PW_USER_ID, sessionGeneration: 1 };
   });
 
   await userService.changePassword({
@@ -1254,9 +1186,11 @@ test('changePassword: the repository write receives exactly (id, passwordHash) a
     newPassword: 'brand-new-secret',
   });
 
-  assert.equal(allArgs.length, 2);
+  assert.equal(allArgs.length, 4);
   assert.equal(allArgs[0], PW_USER_ID);
   assert.equal(typeof allArgs[1], 'string');
+  assert.equal(allArgs[2], 0);
+  assert.equal(typeof allArgs[3], 'string');
   assert.equal(allArgs.includes('brand-new-secret'), false);
   assert.equal(allArgs.includes('current-secret'), false);
 });
@@ -1377,7 +1311,7 @@ test('changePassword: account with an empty hash → 400 AUTH_PASSWORD_CHANGE_UN
 
 test('changePassword: replacePasswordById matches no document (deleted mid-request) → 401 AUTH_SESSION_INVALID', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 0, modifiedCount: 0 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => null);
 
   await assert.rejects(
     () =>
@@ -1411,9 +1345,12 @@ test('changePassword: an unexpected repository persistence error propagates unch
   );
 });
 
-test('changePassword: returns nothing (no user object, no hash) on success', async (t) => {
+test('changePassword returns only the committed generation needed for bounded cleanup', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({
+    _id: PW_USER_ID,
+    sessionGeneration: 1,
+  }));
 
   const result = await userService.changePassword({
     userId: PW_USER_ID,
@@ -1421,13 +1358,16 @@ test('changePassword: returns nothing (no user object, no hash) on success', asy
     newPassword: 'brand-new-secret',
   });
 
-  assert.equal(result, undefined);
+  assert.deepEqual(result, { sessionGeneration: 1 });
 });
 
 test('changePassword: does not revoke sessions itself (AuthService orchestrates that)', async (t) => {
   t.mock.method(userRepository, 'findByIdWithPassword', async () => fakePasswordUser('current-secret'));
-  t.mock.method(userRepository, 'replacePasswordById', async () => ({ matchedCount: 1 }));
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(userRepository, 'replacePasswordById', async () => ({
+    _id: PW_USER_ID,
+    sessionGeneration: 1,
+  }));
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await userService.changePassword({
     userId: PW_USER_ID,
@@ -1547,7 +1487,7 @@ test('resetPasswordWithToken persists only a bcrypt hash and returns the matched
   let captured;
   t.mock.method(userRepository, 'resetPasswordByTokenHash', async (args) => {
     captured = args;
-    return { _id: PW_USER_ID };
+    return { _id: PW_USER_ID, sessionGeneration: 4 };
   });
   const rawToken = 'A'.repeat(43);
 
@@ -1560,7 +1500,7 @@ test('resetPasswordWithToken persists only a bcrypt hash and returns the matched
   assert.notEqual(captured.passwordHash, 'brand-new-secret');
   assert.equal(await comparePassword('brand-new-secret', captured.passwordHash), true);
   assert.ok(captured.now instanceof Date);
-  assert.deepEqual(result, { userId: PW_USER_ID });
+  assert.deepEqual(result, { userId: PW_USER_ID, sessionGeneration: 4 });
 });
 
 test('resetPasswordWithToken gives one safe error when the atomic token match loses', async (t) => {
@@ -1691,11 +1631,11 @@ test('verifyEmailWithToken gives one safe error when the atomic token match lose
 test('adminUpdateUser delegates a suspension through the status compare-and-set path', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
   let capturedWrite;
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     capturedWrite = { id, expectedStatus, desiredStatus };
     return fakeUser({ _id: id, status: 'suspended' });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 1);
 
   await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -1715,7 +1655,7 @@ test('adminUpdateUser suspended-to-suspended remains unaudited', async (t) => {
   t.mock.method(userRepository, 'updateStatusIfCurrent', async (id) => {
     return fakeUser({ _id: id, status: 'suspended' });
   });
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -1732,7 +1672,7 @@ test('a reset credential cleared by suspension cannot revive after reactivation'
   let resetCredentialActive = true;
   const order = [];
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status }));
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     order.push(`update:${desiredStatus}`);
     assert.equal(status, expectedStatus);
     status = desiredStatus;
@@ -1745,8 +1685,7 @@ test('a reset credential cleared by suspension cannot revive after reactivation'
     order.push(`revoke:${status}`);
     return 1;
   };
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', trackRevoke);
-  t.mock.method(sessionService, 'revokeAllSessionsForUserCreatedBy', trackRevoke);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', trackRevoke);
 
   await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -1763,19 +1702,19 @@ test('a reset credential cleared by suspension cannot revive after reactivation'
   assert.deepEqual(order, [
     'update:suspended',
     'revoke:suspended',
-    'revoke:suspended',
     'update:active',
+    'revoke:active',
   ]);
 });
 
 test('adminUpdateUser active-to-active does not clear reset credentials', async (t) => {
   t.mock.method(userRepository, 'findById', async () => fakeUser({ status: 'active' }));
   let capturedWrite;
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     capturedWrite = { expectedStatus, desiredStatus };
     return fakeUser({ _id: id, status: 'active' });
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await userService.adminUpdateUser({
     actingUserId: ACTING_ADMIN_ID,
@@ -1785,5 +1724,130 @@ test('adminUpdateUser active-to-active does not clear reset credentials', async 
 
   assert.deepEqual(capturedWrite, { expectedStatus: 'active', desiredStatus: 'active' });
   assert.equal(auditService.record.mock.callCount(), 0);
+});
+
+test('email-change duplicate at commit invalidates only the exact losing pending generation', async (t) => {
+  const rawToken = 'A'.repeat(43);
+  const tokenHash = hashEmailChangeToken(rawToken);
+  t.mock.method(userRepository, 'findPendingEmailChangeByTokenHash', async () => fakeUser({
+    pendingEmail: 'winner@example.com',
+    pendingEmailChangeExpiresAt: new Date(Date.now() + 60_000),
+  }));
+  t.mock.method(userRepository, 'verifyPendingEmailChange', async () => {
+    const error = new Error('duplicate');
+    error.code = 11000;
+    throw error;
+  });
+  let invalidated;
+  t.mock.method(userRepository, 'invalidatePendingEmailChange', async (args) => { invalidated = args; });
+
+  await assert.rejects(
+    () => userService.verifyEmailChangeWithToken(rawToken),
+    { code: 'USER_EMAIL_ALREADY_EXISTS', statusCode: 409 }
+  );
+  assert.deepEqual(invalidated, { userId: TARGET_USER_ID, tokenHash });
+});
+
+test('replaced, expired, malformed, and replayed email-change credentials collapse to one error', async (t) => {
+  t.mock.method(userRepository, 'findPendingEmailChangeByTokenHash', async () => null);
+  await assert.rejects(
+    () => userService.verifyEmailChangeWithToken('B'.repeat(43)),
+    { code: 'AUTH_EMAIL_CHANGE_TOKEN_INVALID', statusCode: 400 }
+  );
+});
+
+test('malformed email-change credentials fail before hashing or repository access', async (t) => {
+  const lookup = t.mock.method(userRepository, 'findPendingEmailChangeByTokenHash', async () => null);
+  for (const rawToken of [undefined, null, 42, '', 'short', 'A'.repeat(42), `${'A'.repeat(42)}!`]) {
+    await assert.rejects(
+      () => userService.verifyEmailChangeWithToken(rawToken),
+      { code: 'AUTH_EMAIL_CHANGE_TOKEN_INVALID', statusCode: 400 }
+    );
+  }
+  assert.equal(lookup.mock.callCount(), 0);
+});
+
+test('email-change verification returns the exact generation advanced by the atomic write', async (t) => {
+  const rawToken = 'C'.repeat(43);
+  t.mock.method(userRepository, 'findPendingEmailChangeByTokenHash', async () => fakeUser({
+    email: 'old@example.com',
+    pendingEmail: 'new@example.com',
+    pendingEmailChangeExpiresAt: new Date('2100-01-01T00:00:00.000Z'),
+  }));
+  let captured;
+  t.mock.method(userRepository, 'verifyPendingEmailChange', async (args) => {
+    captured = args;
+    return fakeUser({ email: 'new@example.com', sessionGeneration: 6 });
+  });
+
+  const changed = await userService.verifyEmailChangeWithToken(rawToken);
+  assert.ok(captured.now instanceof Date);
+  assert.equal(changed.sessionGeneration, 6);
+  assert.equal(changed.previousEmail, 'old@example.com');
+  assert.equal(changed.email, 'new@example.com');
+});
+
+test('password reactivation is an exact state-and-generation CAS with no timestamp authority', async (t) => {
+  const deactivatedAt = new Date('2026-10-08T01:00:00.000Z');
+  let captured;
+  t.mock.method(userRepository, 'reactivatePasswordLoginIfCurrent', async (args) => {
+    captured = args;
+    return fakeUser({ deactivatedAt: undefined, sessionGeneration: 5 });
+  });
+
+  const user = await userService.completePasswordLogin({
+    userId: TARGET_USER_ID,
+    passwordHash: 'hash',
+    email: 'target@example.com',
+    deactivatedAt,
+    sessionGeneration: 4,
+  });
+
+  assert.deepEqual(captured, {
+    id: TARGET_USER_ID,
+    passwordHash: 'hash',
+    email: 'target@example.com',
+    deactivatedAt,
+    sessionGeneration: 4,
+  });
+  assert.equal(user.sessionGeneration, 5);
+});
+
+test('Google reactivation forwards the same exact generation fence as password login', async (t) => {
+  const deactivatedAt = new Date('2026-10-08T01:00:00.000Z');
+  let captured;
+  t.mock.method(userRepository, 'completeSocialLogin', async (args) => {
+    captured = args;
+    return fakeUser({ deactivatedAt: undefined, sessionGeneration: 5 });
+  });
+
+  const user = await userService.completeSocialLogin({
+    userId: TARGET_USER_ID,
+    email: 'target@example.com',
+    deactivatedAt,
+    sessionGeneration: 4,
+    provider: 'google',
+    subject: 'stable-subject',
+  });
+
+  assert.deepEqual(captured, {
+    id: TARGET_USER_ID,
+    email: 'target@example.com',
+    deactivatedAt,
+    sessionGeneration: 4,
+    provider: 'google',
+    subject: 'stable-subject',
+  });
+  assert.equal(user.sessionGeneration, 5);
+});
+test('deactivation returns the exact generation from the winning write', async (t) => {
+  let captured;
+  t.mock.method(userRepository, 'deactivateIfActive', async (args) => {
+    captured = args;
+    return fakeUser({ sessionGeneration: 9 });
+  });
+  const result = await userService.deactivate({ userId: TARGET_USER_ID });
+  assert.deepEqual(captured, { userId: TARGET_USER_ID });
+  assert.deepEqual(result, { userId: TARGET_USER_ID, sessionGeneration: 9 });
 });
 

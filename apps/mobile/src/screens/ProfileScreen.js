@@ -135,9 +135,9 @@ export default function ProfileScreen({ navigation }) {
             styles={styles}
           />
           <PreferenceRow
-            label="Allergies"
+            label="Allergies & Ingredients to Avoid"
             value={allergies.join(', ') || 'None'}
-            accessibilityLabel="Edit allergies"
+            accessibilityLabel="Edit allergies and ingredients to avoid"
             onPress={() => navigation.navigate('AccountDetails')}
             styles={styles}
           />

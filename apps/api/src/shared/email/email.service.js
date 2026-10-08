@@ -1,6 +1,12 @@
 const crypto = require('node:crypto');
 const { loadEnv } = require('../../config/env');
-const { buildPasswordResetEmail, buildVerificationEmail } = require('./email.templates');
+const {
+  buildPasswordResetEmail,
+  buildVerificationEmail,
+  buildEmailChangeVerificationEmail,
+  buildEmailChangeNotice,
+  buildEmailChangeCompletedEmail,
+} = require('./email.templates');
 
 const BREVO_EMAILS_URL = 'https://api.brevo.com/v3/smtp/email';
 const REQUEST_TIMEOUT_MS = 5000;
@@ -62,9 +68,27 @@ async function sendVerificationEmail({ to, verifyUrl, expiresInMinutes }) {
   await sendViaBrevo({ to, ...content });
 }
 
+async function sendEmailChangeVerificationEmail({ to, verifyUrl, expiresInMinutes }) {
+  await sendViaBrevo({ to, ...buildEmailChangeVerificationEmail({ verifyUrl, expiresInMinutes }) });
+}
+
+async function sendEmailChangeNotice({ to, pendingEmail }) {
+  await sendViaBrevo({ to, ...buildEmailChangeNotice({ pendingEmail }) });
+}
+
+async function sendEmailChangeCompletedEmail({ to, email }) {
+  await sendViaBrevo({ to, ...buildEmailChangeCompletedEmail({ email }) });
+}
+
 module.exports = {
   sendPasswordResetEmail,
   buildPasswordResetEmail,
   sendVerificationEmail,
   buildVerificationEmail,
+  sendEmailChangeVerificationEmail,
+  sendEmailChangeNotice,
+  sendEmailChangeCompletedEmail,
+  buildEmailChangeVerificationEmail,
+  buildEmailChangeNotice,
+  buildEmailChangeCompletedEmail,
 };

@@ -20,6 +20,7 @@ function stripComments(src) {
 const FILES = {
   ResetPassword: 'screens/ResetPasswordScreen.js',
   VerifyEmail: 'screens/VerifyEmailScreen.js',
+  VerifyEmailChange: 'screens/VerifyEmailChangeScreen.js',
 };
 
 const raw = {};
@@ -117,7 +118,19 @@ describe('VerifyEmailScreen — wired to the real endpoints, both auth states', 
   });
 });
 
-describe('both screens add no fake or dead identity providers, no OAuth internals', () => {
+describe('VerifyEmailChangeScreen consumes transient tokens and ends revoked local sessions', () => {
+  it('verifies through the public ACCOUNT2 endpoint then clears local credentials through AuthContext', () => {
+    expect(raw.VerifyEmailChange).toMatch(/const \{ verifyEmailChange \} = useAuth\(\)/);
+    expect(raw.VerifyEmailChange).toMatch(/await verifyEmailChange\(token\)/);
+  });
+
+  it('maps failures safely and never writes identity locally', () => {
+    expect(raw.VerifyEmailChange).toMatch(/getAuthErrorMessage/);
+    expect(code.VerifyEmailChange).not.toMatch(/setUser|syncUser|accessToken|refreshToken/);
+  });
+});
+
+describe('all deep-link screens add no fake or dead identity providers, no OAuth internals', () => {
   it.each(NAMES)('%s carries no Google/Facebook/Apple auth control', (name) => {
     expect(code[name]).not.toMatch(/GoogleSignin|facebook|apple-?auth/i);
   });

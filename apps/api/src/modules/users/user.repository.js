@@ -1,5 +1,14 @@
 const User = require('./user.model');
 
+function effectiveGenerationPredicate(sessionGeneration) {
+  if (!Number.isInteger(sessionGeneration) || sessionGeneration < 0) {
+    throw new TypeError('sessionGeneration must be a non-negative integer.');
+  }
+  return sessionGeneration === 0
+    ? { $or: [{ sessionGeneration: 0 }, { sessionGeneration: { $exists: false } }] }
+    : { sessionGeneration };
+}
+
 function createUser({ name, email, passwordHash }) {
   if (typeof passwordHash !== 'string' || passwordHash.trim().length === 0) {
     throw new TypeError('createUser requires a nonempty passwordHash.');
@@ -73,8 +82,56 @@ function findByIdWithPassword(id) {
 // successfully compared proves the credential snapshot is still current at
 // this point. The digest stays in the query predicate and is not selected into
 // the returned user document.
-function findByIdWithPasswordHash(id, passwordHash) {
-  return User.findOne({ _id: id, passwordHash });
+function findByIdWithPasswordHash(id, passwordHash, email, deactivatedAt, sessionGeneration) {
+  if (email === undefined) return User.findOne({ _id: id, passwordHash });
+  const deactivationPredicate = deactivatedAt
+    ? { deactivatedAt }
+    : { deactivatedAt: { $exists: false } };
+  const filter = {
+    _id: id,
+    passwordHash,
+    email,
+    status: 'active',
+    ...deactivationPredicate,
+    ...effectiveGenerationPredicate(sessionGeneration),
+  };
+  return User.findOne(filter);
+}
+
+function reactivatePasswordLoginIfCurrent({ id, passwordHash, email, deactivatedAt, sessionGeneration }) {
+  return User.findOneAndUpdate(
+    {
+      _id: id,
+      passwordHash,
+      email,
+      status: 'active',
+      deactivatedAt,
+      ...effectiveGenerationPredicate(sessionGeneration),
+    },
+    { $unset: { deactivatedAt: 1 }, $inc: { sessionGeneration: 1 } },
+    { returnDocument: 'after' }
+  );
+}
+
+function completeSocialLogin({ id, email, deactivatedAt, sessionGeneration, provider, subject }) {
+  const deactivationPredicate = deactivatedAt
+    ? { deactivatedAt }
+    : { deactivatedAt: { $exists: false } };
+  const update = deactivatedAt
+    ? { $unset: { deactivatedAt: 1 }, $inc: { sessionGeneration: 1 } }
+    : { $set: { email } };
+  return User.findOneAndUpdate(
+    {
+      _id: id,
+      email,
+      status: 'active',
+      authIdentities: { $elemMatch: { provider, subject } },
+      ...deactivationPredicate,
+      ...effectiveGenerationPredicate(sessionGeneration),
+    },
+    update,
+    { returnDocument: 'after' }
+  );
 }
 
 // Staff-application eligibility needs to know whether a local credential
@@ -115,6 +172,7 @@ function demoteModeratorToUser(id) {
 function buildPasswordReplacementUpdate(passwordHash) {
   return {
     $set: { passwordHash },
+    $inc: { sessionGeneration: 1 },
     $unset: {
       passwordResetTokenHash: 1,
       passwordResetExpiresAt: 1,
@@ -122,8 +180,18 @@ function buildPasswordReplacementUpdate(passwordHash) {
   };
 }
 
-function replacePasswordById(id, passwordHash) {
-  return User.updateOne({ _id: id }, buildPasswordReplacementUpdate(passwordHash));
+function replacePasswordById(id, currentPasswordHash, sessionGeneration, passwordHash) {
+  return User.findOneAndUpdate(
+    {
+      _id: id,
+      status: 'active',
+      deactivatedAt: { $exists: false },
+      passwordHash: currentPasswordHash,
+      ...effectiveGenerationPredicate(sessionGeneration),
+    },
+    buildPasswordReplacementUpdate(passwordHash),
+    { returnDocument: 'after', projection: { _id: 1, sessionGeneration: 1 } }
+  );
 }
 
 function setPasswordResetTokenForEligibleUser(id, tokenHash, expiresAt) {
@@ -153,7 +221,7 @@ function resetPasswordByTokenHash({ tokenHash, passwordHash, now }) {
       passwordHash: { $exists: true, $type: 'string', $ne: '' },
     },
     buildPasswordReplacementUpdate(passwordHash),
-    { returnDocument: 'after', projection: { _id: 1 } }
+    { returnDocument: 'after', projection: { _id: 1, sessionGeneration: 1 } }
   );
 }
 
@@ -200,6 +268,97 @@ function verifyEmailByTokenHash({ tokenHash, now }) {
   );
 }
 
+function setPendingEmailChange({ userId, passwordHash, currentEmail, pendingEmail, tokenHash, expiresAt }) {
+  return User.findOneAndUpdate(
+    {
+      _id: userId,
+      status: 'active',
+      deactivatedAt: { $exists: false },
+      email: currentEmail,
+      passwordHash,
+    },
+    {
+      $set: {
+        pendingEmail,
+        pendingEmailChangeTokenHash: tokenHash,
+        pendingEmailChangeExpiresAt: expiresAt,
+      },
+    },
+    { returnDocument: 'after' }
+  );
+}
+
+function clearPendingEmailChange(userId) {
+  return User.findOneAndUpdate(
+    { _id: userId, status: 'active', deactivatedAt: { $exists: false } },
+    {
+      $unset: {
+        pendingEmail: 1,
+        pendingEmailChangeTokenHash: 1,
+        pendingEmailChangeExpiresAt: 1,
+      },
+    },
+    { returnDocument: 'after' }
+  );
+}
+
+function findPendingEmailChangeByTokenHash(tokenHash) {
+  return User.findOne({ pendingEmailChangeTokenHash: tokenHash })
+    .select('+pendingEmailChangeTokenHash');
+}
+
+function verifyPendingEmailChange({ userId, tokenHash, pendingEmail, now }) {
+  return User.findOneAndUpdate(
+    {
+      _id: userId,
+      status: 'active',
+      deactivatedAt: { $exists: false },
+      pendingEmail,
+      pendingEmailChangeTokenHash: tokenHash,
+      pendingEmailChangeExpiresAt: { $gt: now },
+    },
+    {
+      $set: { email: pendingEmail, emailVerified: true },
+      $inc: { sessionGeneration: 1 },
+      $unset: {
+        pendingEmail: 1,
+        pendingEmailChangeTokenHash: 1,
+        pendingEmailChangeExpiresAt: 1,
+        emailVerificationTokenHash: 1,
+        emailVerificationExpiresAt: 1,
+      },
+    },
+    { returnDocument: 'after' }
+  );
+}
+
+function invalidatePendingEmailChange({ userId, tokenHash }) {
+  return User.updateOne(
+    { _id: userId, pendingEmailChangeTokenHash: tokenHash },
+    { $unset: { pendingEmail: 1, pendingEmailChangeTokenHash: 1, pendingEmailChangeExpiresAt: 1 } }
+  );
+}
+
+function deactivateIfActive({ userId }) {
+  return User.findOneAndUpdate(
+    { _id: userId, status: 'active', deactivatedAt: { $exists: false } },
+    {
+      $currentDate: { deactivatedAt: true },
+      $inc: { sessionGeneration: 1 },
+      $unset: {
+        pendingEmail: 1,
+        pendingEmailChangeTokenHash: 1,
+        pendingEmailChangeExpiresAt: 1,
+        passwordResetTokenHash: 1,
+        passwordResetExpiresAt: 1,
+        emailVerificationTokenHash: 1,
+        emailVerificationExpiresAt: 1,
+      },
+    },
+    { returnDocument: 'after' }
+  );
+}
+
 // Admin user-management list. Pure query mechanics — the caller (service)
 // owns the filter/sort/skip/limit values and every policy decision. The
 // model's `select: false` on passwordHash means the digest is never in the
@@ -235,8 +394,11 @@ function replaceAvatarIfRevision(id, observedRevision, avatar) {
 // caller owned the write. A null result is a lost race, never evidence of a
 // transition. Reset credentials are cleared in the same winning suspension
 // write, preserving the existing suspension security invariant.
-function updateStatusIfCurrent(id, expectedStatus, desiredStatus) {
+function updateStatusIfCurrent(id, expectedStatus, expectedGeneration, desiredStatus) {
   const update = { $set: { status: desiredStatus } };
+  if (desiredStatus !== expectedStatus) {
+    update.$inc = { sessionGeneration: 1 };
+  }
   if (desiredStatus === 'suspended') {
     update.$unset = {
       passwordResetTokenHash: 1,
@@ -245,9 +407,17 @@ function updateStatusIfCurrent(id, expectedStatus, desiredStatus) {
   }
 
   return User.findOneAndUpdate(
-    { _id: id, status: expectedStatus },
+    { _id: id, status: expectedStatus, ...effectiveGenerationPredicate(expectedGeneration) },
     update,
     { returnDocument: 'after', runValidators: true }
+  );
+}
+
+function advanceSessionGenerationForActiveUser(id) {
+  return User.findOneAndUpdate(
+    { _id: id, status: 'active', deactivatedAt: { $exists: false } },
+    { $inc: { sessionGeneration: 1 } },
+    { returnDocument: 'after', projection: { _id: 1, sessionGeneration: 1 } }
   );
 }
 
@@ -262,6 +432,8 @@ module.exports = {
   findByEmailWithPassword,
   findByIdWithPassword,
   findByIdWithPasswordHash,
+  reactivatePasswordLoginIfCurrent,
+  completeSocialLogin,
   findModeratorApplicantById,
   promoteEligibleUserToModerator,
   demoteModeratorToUser,
@@ -270,9 +442,16 @@ module.exports = {
   updateById,
   replaceAvatarIfRevision,
   updateStatusIfCurrent,
+  advanceSessionGenerationForActiveUser,
   replacePasswordById,
   setPasswordResetTokenForEligibleUser,
   resetPasswordByTokenHash,
   setEmailVerificationTokenForUser,
   verifyEmailByTokenHash,
+  setPendingEmailChange,
+  clearPendingEmailChange,
+  findPendingEmailChangeByTokenHash,
+  verifyPendingEmailChange,
+  invalidatePendingEmailChange,
+  deactivateIfActive,
 };

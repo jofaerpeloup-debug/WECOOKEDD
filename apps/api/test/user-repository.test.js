@@ -52,6 +52,104 @@ test('findByAuthIdentity keeps provider and subject paired with $elemMatch', (t)
   });
 });
 
+test('deactivation is an active-state CAS that clears every pending credential in the winning write', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return { _id: 'user-1' };
+  });
+  await userRepository.deactivateIfActive({ userId: '507f1f77bcf86cd799439011' });
+  assert.deepEqual(captured.filter, {
+    _id: '507f1f77bcf86cd799439011',
+    status: 'active',
+    deactivatedAt: { $exists: false },
+  });
+  assert.deepEqual(captured.update.$currentDate, { deactivatedAt: true });
+  assert.deepEqual(captured.update.$inc, { sessionGeneration: 1 });
+  for (const field of [
+    'pendingEmail', 'pendingEmailChangeTokenHash', 'pendingEmailChangeExpiresAt',
+    'passwordResetTokenHash', 'passwordResetExpiresAt',
+    'emailVerificationTokenHash', 'emailVerificationExpiresAt',
+  ]) assert.equal(captured.update.$unset[field], 1);
+  assert.equal(captured.options.returnDocument, 'after');
+});
+
+test('starting a new email change atomically replaces every prior pending generation', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return { _id: 'user-1' };
+  });
+  const expiresAt = new Date('2026-10-09T01:00:00.000Z');
+  await userRepository.setPendingEmailChange({
+    userId: '507f1f77bcf86cd799439011', passwordHash: 'observed-hash',
+    currentEmail: 'old@example.com', pendingEmail: 'new@example.com',
+    tokenHash: 'new-digest', expiresAt,
+  });
+  assert.deepEqual(captured.filter, {
+    _id: '507f1f77bcf86cd799439011', status: 'active', deactivatedAt: { $exists: false },
+    email: 'old@example.com', passwordHash: 'observed-hash',
+  });
+  assert.deepEqual(captured.update, { $set: {
+    pendingEmail: 'new@example.com', pendingEmailChangeTokenHash: 'new-digest',
+    pendingEmailChangeExpiresAt: expiresAt,
+  } });
+  assert.equal(captured.options.returnDocument, 'after');
+});
+
+test('email-change verification CAS binds owner, digest, pending email, expiry, and clears old verification', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return { _id: 'user-1' };
+  });
+  const now = new Date('2026-10-08T01:00:00.000Z');
+  await userRepository.verifyPendingEmailChange({
+    userId: '507f1f77bcf86cd799439011',
+    tokenHash: 'digest',
+    pendingEmail: 'new@example.com',
+    now,
+  });
+  assert.equal(captured.filter.pendingEmailChangeTokenHash, 'digest');
+  assert.equal(captured.filter.pendingEmail, 'new@example.com');
+  assert.deepEqual(captured.filter.pendingEmailChangeExpiresAt, { $gt: now });
+  assert.equal(captured.update.$set.email, 'new@example.com');
+  assert.equal(captured.update.$set.emailVerified, true);
+  assert.deepEqual(captured.update.$inc, { sessionGeneration: 1 });
+  assert.equal(captured.update.$currentDate, undefined);
+  assert.equal(captured.update.$unset.emailVerificationTokenHash, 1);
+  assert.equal(captured.options.returnDocument, 'after');
+});
+
+test('password reactivation matches exact lifecycle state and generation then advances generation', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return { _id: filter._id };
+  });
+  const deactivatedAt = new Date('2026-10-08T01:00:00.123Z');
+  await userRepository.reactivatePasswordLoginIfCurrent({
+    id: '507f1f77bcf86cd799439011',
+    passwordHash: 'observed-hash',
+    email: 'new@example.com',
+    deactivatedAt,
+    sessionGeneration: 3,
+  });
+  assert.deepEqual(captured.filter, {
+    _id: '507f1f77bcf86cd799439011',
+    passwordHash: 'observed-hash',
+    email: 'new@example.com',
+    status: 'active',
+    deactivatedAt,
+    sessionGeneration: 3,
+  });
+  assert.deepEqual(captured.update, {
+    $unset: { deactivatedAt: 1 },
+    $inc: { sessionGeneration: 1 },
+  });
+  assert.equal(captured.options.returnDocument, 'after');
+});
+
 test('createSocialUser forces normal active authority and never writes passwordHash', async (t) => {
   let captured;
   t.mock.method(User, 'create', async (document) => {
@@ -153,19 +251,29 @@ test('findByIdWithPasswordHash matches the exact credential snapshot without sel
 
 test('replacePasswordById atomically sets the hash and invalidates reset credentials', async (t) => {
   let captured;
-  t.mock.method(User, 'updateOne', (filter, update) => {
-    captured = { filter, update };
-    return Promise.resolve({ matchedCount: 1 });
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return Promise.resolve({ _id: 'user-1', sessionGeneration: 1 });
   });
 
-  await userRepository.replacePasswordById('user-1', 'new-password-hash');
+  await userRepository.replacePasswordById('user-1', 'old-password-hash', 0, 'new-password-hash');
 
-  assert.deepEqual(captured.filter, { _id: 'user-1' });
+  assert.deepEqual(captured.filter, {
+    _id: 'user-1',
+    status: 'active',
+    deactivatedAt: { $exists: false },
+    passwordHash: 'old-password-hash',
+    $or: [{ sessionGeneration: 0 }, { sessionGeneration: { $exists: false } }],
+  });
   assert.deepEqual(captured.update, {
     $set: { passwordHash: 'new-password-hash' },
+    $inc: { sessionGeneration: 1 },
     $unset: { passwordResetTokenHash: 1, passwordResetExpiresAt: 1 },
   });
-  assert.equal(User.updateOne.mock.callCount(), 1);
+  assert.deepEqual(captured.options, {
+    returnDocument: 'after',
+    projection: { _id: 1, sessionGeneration: 1 },
+  });
 });
 
 test('setPasswordResetTokenForEligibleUser re-checks active usable-hash eligibility', async (t) => {
@@ -216,9 +324,13 @@ test('resetPasswordByTokenHash atomically matches, replaces password, and consum
   });
   assert.deepEqual(captured.update, {
     $set: { passwordHash: 'new-password-hash' },
+    $inc: { sessionGeneration: 1 },
     $unset: { passwordResetTokenHash: 1, passwordResetExpiresAt: 1 },
   });
-  assert.deepEqual(captured.options, { returnDocument: 'after', projection: { _id: 1 } });
+  assert.deepEqual(captured.options, {
+    returnDocument: 'after',
+    projection: { _id: 1, sessionGeneration: 1 },
+  });
   assert.equal(User.findOneAndUpdate.mock.callCount(), 1);
 });
 
@@ -278,13 +390,14 @@ test('updateStatusIfCurrent atomically matches id and expected status', async (t
   const result = await userRepository.updateStatusIfCurrent(
     'user-1',
     'suspended',
+    7,
     'active'
   );
 
   assert.equal(result, updated);
   assert.deepEqual(captured, {
-    filter: { _id: 'user-1', status: 'suspended' },
-    update: { $set: { status: 'active' } },
+    filter: { _id: 'user-1', status: 'suspended', sessionGeneration: 7 },
+    update: { $set: { status: 'active' }, $inc: { sessionGeneration: 1 } },
     options: { returnDocument: 'after', runValidators: true },
   });
 });
@@ -309,17 +422,42 @@ test('updateStatusIfCurrent clears reset credentials in the winning suspension w
   const result = await userRepository.updateStatusIfCurrent(
     'user-1',
     'active',
+    0,
     'suspended'
   );
 
   assert.equal(result, null);
-  assert.deepEqual(captured.filter, { _id: 'user-1', status: 'active' });
+  assert.deepEqual(captured.filter, {
+    _id: 'user-1',
+    status: 'active',
+    $or: [{ sessionGeneration: 0 }, { sessionGeneration: { $exists: false } }],
+  });
   assert.deepEqual(captured.update, {
     $set: { status: 'suspended' },
+    $inc: { sessionGeneration: 1 },
     $unset: {
       passwordResetTokenHash: 1,
       passwordResetExpiresAt: 1,
     },
   });
   assert.deepEqual(captured.options, { returnDocument: 'after', runValidators: true });
+});
+
+test('Sign Out All Devices advances generation in one active-user write', async (t) => {
+  let captured;
+  t.mock.method(User, 'findOneAndUpdate', (filter, update, options) => {
+    captured = { filter, update, options };
+    return Promise.resolve({ _id: 'user-1', sessionGeneration: 9 });
+  });
+
+  await userRepository.advanceSessionGenerationForActiveUser('user-1');
+
+  assert.deepEqual(captured, {
+    filter: { _id: 'user-1', status: 'active', deactivatedAt: { $exists: false } },
+    update: { $inc: { sessionGeneration: 1 } },
+    options: {
+      returnDocument: 'after',
+      projection: { _id: 1, sessionGeneration: 1 },
+    },
+  });
 });

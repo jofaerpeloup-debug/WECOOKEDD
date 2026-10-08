@@ -114,6 +114,22 @@ const resendVerificationSchema = z.object({
   body: z.object({ email: emailSchema }).strict(),
 });
 
+const emailChangeSchema = z.object({
+  body: z.object({ newEmail: emailSchema, currentPassword: loginPasswordSchema }).strict(),
+});
+
+const emailChangeCancelSchema = z.object({ body: z.object({}).strict() });
+
+const emailChangeVerifySchema = z.object({
+  // Token-shape failures deliberately reach the service so malformed, expired,
+  // replayed, replaced, and cancelled credentials share one public error.
+  body: z.object({ token: z.unknown().optional() }).strict(),
+});
+
+const deactivateSchema = z.object({
+  body: z.object({ confirmation: z.literal('DEACTIVATE') }).strict(),
+});
+
 const socialChallengeSchema = z.object({
   body: z.object({ provider: z.literal('google') }).strict(),
 });
@@ -140,4 +156,8 @@ module.exports = {
   newPasswordSchema,
   verifyEmailSchema,
   resendVerificationSchema,
+  emailChangeSchema,
+  emailChangeCancelSchema,
+  emailChangeVerifySchema,
+  deactivateSchema,
 };

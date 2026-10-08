@@ -108,6 +108,27 @@ const resendVerification = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
+const requestEmailChange = asyncHandler(async (req, res) => {
+  const result = await authService.requestEmailChange({
+    userId: req.auth.userId,
+    newEmail: req.body.newEmail,
+    currentPassword: req.body.currentPassword,
+  });
+  sendSuccess(res, result);
+});
+
+const cancelEmailChange = asyncHandler(async (req, res) => {
+  sendSuccess(res, await authService.cancelEmailChange(req.auth.userId));
+});
+
+const verifyEmailChange = asyncHandler(async (req, res) => {
+  sendSuccess(res, await authService.verifyEmailChange(req.body.token));
+});
+
+const deactivate = asyncHandler(async (req, res) => {
+  sendSuccess(res, await authService.deactivate(req.auth.userId));
+});
+
 module.exports = {
   register,
   login,
@@ -123,4 +144,8 @@ module.exports = {
   resetPassword,
   verifyEmail,
   resendVerification,
+  requestEmailChange,
+  cancelEmailChange,
+  verifyEmailChange,
+  deactivate,
 };

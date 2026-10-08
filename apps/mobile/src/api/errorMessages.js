@@ -112,6 +112,10 @@ export function getAuthErrorMessage(err, fallback = FALLBACK) {
       return 'This password reset link is invalid or has expired. Request a new one and try again.';
     case 'AUTH_EMAIL_VERIFICATION_TOKEN_INVALID':
       return 'This verification link is invalid or has expired. Request a new one and try again.';
+    case 'AUTH_EMAIL_CHANGE_TOKEN_INVALID':
+      return 'This email-change link is invalid or has expired. Request a new one and try again.';
+    case 'AUTH_EMAIL_CHANGE_PASSWORD_UNAVAILABLE':
+      return 'Email change is unavailable because this account has no WeCooked password.';
 
     // --- authenticated password change (Security screen) ---
     case 'AUTH_CURRENT_PASSWORD_INVALID':

@@ -12,6 +12,10 @@ const {
   resendVerificationSchema,
   socialChallengeSchema,
   googleSocialSchema,
+  emailChangeSchema,
+  emailChangeCancelSchema,
+  emailChangeVerifySchema,
+  deactivateSchema,
 } = require('../src/modules/auth/auth.validation');
 const {
   PASSWORD_ALLOWED_SPECIAL_CHARS,
@@ -418,4 +422,21 @@ test('googleSocialSchema rejects every caller-controlled identity and policy fie
       `expected ${key} to be rejected`
     );
   }
+});
+
+test('ACCOUNT2 auth bodies are exact and normalize new email', () => {
+  const request = emailChangeSchema.safeParse({
+    body: { newEmail: ' NEW@Example.com ', currentPassword: 'legacy' },
+  });
+  assert.equal(request.success, true);
+  assert.equal(request.data.body.newEmail, 'new@example.com');
+  assert.equal(emailChangeSchema.safeParse({ body: { newEmail: 'new@example.com', currentPassword: 'legacy', userId: 'x' } }).success, false);
+  assert.equal(emailChangeCancelSchema.safeParse({ body: {} }).success, true);
+  assert.equal(emailChangeCancelSchema.safeParse({ body: { userId: 'x' } }).success, false);
+  assert.equal(emailChangeVerifySchema.safeParse({ body: { token: TOKEN } }).success, true);
+  assert.equal(emailChangeVerifySchema.safeParse({ body: { token: 'bad' } }).success, true);
+  assert.equal(emailChangeVerifySchema.safeParse({ body: {} }).success, true);
+  assert.equal(emailChangeVerifySchema.safeParse({ body: { token: TOKEN, userId: 'x' } }).success, false);
+  assert.equal(deactivateSchema.safeParse({ body: { confirmation: 'DEACTIVATE' } }).success, true);
+  assert.equal(deactivateSchema.safeParse({ body: { confirmation: 'deactivate' } }).success, false);
 });

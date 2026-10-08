@@ -56,6 +56,10 @@ function toPublicUser(user) {
     },
     authIdentities: toPublicAuthIdentities(user.authIdentities),
     emailVerified: user.emailVerified,
+    pendingEmailChange:
+      user.pendingEmail && user.pendingEmailChangeExpiresAt
+        ? { email: user.pendingEmail, expiresAt: user.pendingEmailChangeExpiresAt }
+        : null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

@@ -65,7 +65,7 @@ function auditProfileRenderBindings(source) {
     .map((match) => normalizeJsx(match[0]));
   expect(preferenceRows).toHaveLength(4);
   const dietaryRows = preferenceRows.filter((row) => row.includes('label="Dietary Preferences"'));
-  const allergyRows = preferenceRows.filter((row) => row.includes('label="Allergies"'));
+  const allergyRows = preferenceRows.filter((row) => row.includes('label="Allergies & Ingredients to Avoid"'));
   expect(dietaryRows).toHaveLength(1);
   expect(allergyRows).toHaveLength(1);
   expect(dietaryRows[0]).toContain("value={dietaryPreferences.join(', ') || 'None'}");
@@ -144,8 +144,8 @@ describe('Profile uses authoritative account and domain sources', () => {
 describe('Profile actions are real and accessible', () => {
   it('routes only to existing supported destinations registered by RootNavigator', () => {
     const targets = [...code.matchAll(/navigation\.navigate\('([^']+)'\)/g)].map((match) => match[1]);
-    expect(new Set(targets)).toEqual(new Set(['Settings', 'Notifications', 'AccountDetails', 'MealPlan', 'CookingHistory']));
-    for (const route of ['Settings', 'Notifications', 'AccountDetails', 'MealPlan', 'CookingHistory']) {
+    expect(new Set(targets)).toEqual(new Set(['Settings', 'AccountDetails', 'MealPlan', 'CookingHistory']));
+    for (const route of ['Settings', 'AccountDetails', 'MealPlan', 'CookingHistory']) {
       expect(code).toMatch(new RegExp(`navigation\\.navigate\\('${route}'\\)`));
       expect(navigator).toMatch(new RegExp(`<Stack\\.Screen name="${route}" component=\\{[A-Za-z]+Screen\\} \\/>`));
     }
@@ -154,7 +154,7 @@ describe('Profile actions are real and accessible', () => {
   it('routes both real preference summaries to AccountDetails', () => {
     const { preferences } = auditProfileRenderBindings(code);
     expect(preferences).toMatch(/label="Dietary Preferences"[\s\S]*?navigate\('AccountDetails'\)/);
-    expect(preferences).toMatch(/label="Allergies"[\s\S]*?navigate\('AccountDetails'\)/);
+    expect(preferences).toMatch(/label="Allergies & Ingredients to Avoid"[\s\S]*?navigate\('AccountDetails'\)/);
     expect(preferences).not.toMatch(/Cooking Level|Coming soon|showUnavailable/);
   });
 
@@ -169,16 +169,16 @@ describe('Profile actions are real and accessible', () => {
     expect(code).toMatch(/accessibilityRole="header">Profile/);
     for (const label of [
       'Settings',
-      'Notifications',
       'Edit profile and preferences',
       'Edit dietary preferences',
-      'Edit allergies',
+      'Edit allergies and ingredients to avoid',
       'Open meal plan',
       'Open settings',
       'Log out',
     ]) {
       expect(code).toContain(`accessibilityLabel="${label}"`);
     }
+    expect(code).toMatch(/accessibilityLabel=\{`Notifications, \$\{unreadCount\} unread`\}/);
   });
 
   it('turns only the authoritative Cooked stat into an accessible Cooking History affordance', () => {

@@ -9,6 +9,10 @@ const {
   generateEmailVerificationToken,
   hashEmailVerificationToken,
 } = require('../../shared/security/email-verification-token');
+const {
+  generateEmailChangeToken,
+  hashEmailChangeToken,
+} = require('../../shared/security/email-change-token');
 const emailService = require('../../shared/email/email.service');
 const { loadEnv } = require('../../config/env');
 const { AppError } = require('../../shared/errors/app-error');
@@ -123,7 +127,10 @@ async function sendRegistrationVerificationEmail(user) {
 }
 
 async function issueTokensForUser(user) {
-  const { session, refreshToken } = await sessionService.createSession(user._id);
+  const { session, refreshToken } = await sessionService.createSession(
+    user._id,
+    userService.effectiveSessionGeneration(user)
+  );
   const accessToken = signAccessToken({
     userId: user._id,
     role: user.role,
@@ -173,24 +180,53 @@ async function login({ email, password }) {
     });
   }
 
-  // The bcrypt comparison above used a snapshot of passwordHash. Create the
-  // session provisionally, then atomically query for that exact digest. This
-  // closes the change/reset race in both directions:
+  // The bcrypt comparison above used a snapshot of passwordHash. First claim
+  // the exact observed account state (including generation); a deactivated
+  // account is reactivated by that CAS and advances generation before any
+  // session is created. Then create the session at the committed generation
+  // and fence it against the same hash/email/active/deactivation/generation
+  // state. This closes credential, deactivation, and reactivation races:
   //
   //  - credential replacement before this post-create check makes the query
   //    miss, so the provisional session is revoked and no token is signed;
-  //  - credential replacement after this check necessarily sees the already-
-  //    created session in its existing revoke-all sweep.
+  //  - credential replacement after this check advances generation, making
+  //    the already-created session stale even if physical cleanup is delayed.
   //
   // A pre-create re-read alone is insufficient because replacement could win
   // after that read but before session persistence.
   const expectedPasswordHash = user.passwordHash;
-  const { session, refreshToken } = await sessionService.createSession(user._id);
+  const observedGeneration = userService.effectiveSessionGeneration(user);
+  const preparedUser = user.deactivatedAt
+    ? await userService.completePasswordLogin({
+      userId: user._id,
+      passwordHash: expectedPasswordHash,
+      email: user.email,
+      deactivatedAt: user.deactivatedAt,
+      sessionGeneration: observedGeneration,
+    })
+    : user;
+  if (!preparedUser) {
+    throw invalidCredentialsError();
+  }
+  const securityGeneration = userService.effectiveSessionGeneration(preparedUser);
+  const { session, refreshToken } = await sessionService.createSession(
+    preparedUser._id,
+    securityGeneration
+  );
   let currentUser;
   try {
+    if (user.deactivatedAt) {
+      await sessionService.revokeAllSessionsBeforeGeneration(
+        preparedUser._id,
+        securityGeneration
+      );
+    }
     currentUser = await userService.getUserIfPasswordHashMatches(
-      user._id,
-      expectedPasswordHash
+      preparedUser._id,
+      expectedPasswordHash,
+      preparedUser.email,
+      null,
+      securityGeneration
     );
   } catch (error) {
     await revokeProvisionalSession(session._id);
@@ -297,10 +333,62 @@ async function verifyAndConsumeGoogleCredential({ idToken, challengeId, intent, 
   return identity;
 }
 
-async function issueSocialLogin(user) {
+async function issueSocialLogin(user, identity) {
   enforceSocialLoginPolicy(user);
-  const tokens = await issueTokensForUser(user);
-  return { user, ...tokens };
+  let currentUser;
+  const observedGeneration = userService.effectiveSessionGeneration(user);
+  try {
+    currentUser = user.deactivatedAt
+      ? await userService.completeSocialLogin({
+        userId: user._id,
+        email: user.email,
+        deactivatedAt: user.deactivatedAt,
+        sessionGeneration: observedGeneration,
+        provider: identity.provider,
+        subject: identity.subject,
+      })
+      : user;
+  } catch (error) {
+    throw error;
+  }
+  if (!currentUser) {
+    throw socialLoginUnavailableError();
+  }
+  const securityGeneration = userService.effectiveSessionGeneration(currentUser);
+  const { session, refreshToken } = await sessionService.createSession(
+    currentUser._id,
+    securityGeneration
+  );
+  try {
+    if (user.deactivatedAt) {
+      await sessionService.revokeAllSessionsBeforeGeneration(
+        currentUser._id,
+        securityGeneration
+      );
+    }
+    const reread = await userService.getUserByAuthIdentity(identity.provider, identity.subject);
+    currentUser = reread
+      && String(reread._id) === String(currentUser._id)
+      && reread.email === currentUser.email
+      && reread.status === 'active'
+      && !reread.deactivatedAt
+      && userService.effectiveSessionGeneration(reread) === securityGeneration
+      ? reread
+      : null;
+  } catch (error) {
+    await revokeProvisionalSession(session._id);
+    throw error;
+  }
+  if (!currentUser) {
+    await revokeProvisionalSession(session._id);
+    throw socialLoginUnavailableError();
+  }
+  const accessToken = signAccessToken({
+    userId: currentUser._id,
+    role: currentUser.role,
+    sessionId: session._id,
+  });
+  return { user: currentUser, accessToken, refreshToken };
 }
 
 /**
@@ -320,7 +408,7 @@ async function googleLogin({ idToken, challengeId }) {
   });
   let user = await userService.getUserByAuthIdentity(identity.provider, identity.subject);
   if (user) {
-    return issueSocialLogin(user);
+    return issueSocialLogin(user, identity);
   }
 
   if (identity.emailVerified !== true || !identity.email) {
@@ -352,7 +440,7 @@ async function googleLogin({ idToken, challengeId }) {
       identity.subject
     );
     if (identityWinner) {
-      return issueSocialLogin(identityWinner);
+      return issueSocialLogin(identityWinner, identity);
     }
     if (await userService.getUserByEmail(identity.email)) {
       throw accountLinkRequiredError();
@@ -360,7 +448,7 @@ async function googleLogin({ idToken, challengeId }) {
     throw error;
   }
 
-  return issueSocialLogin(user);
+  return issueSocialLogin(user, identity);
 }
 
 /**
@@ -476,7 +564,16 @@ async function refresh(rawRefreshToken) {
   }
 
   const user = await userService.getUserById(session.userId);
-  if (!user || user.status !== 'active') {
+  const sessionGeneration = Number.isInteger(session.securityGeneration)
+    && session.securityGeneration >= 0
+    ? session.securityGeneration
+    : 0;
+  if (
+    !user
+    || user.status !== 'active'
+    || user.deactivatedAt
+    || userService.effectiveSessionGeneration(user) !== sessionGeneration
+  ) {
     throw refreshTokenInvalid();
   }
 
@@ -487,9 +584,23 @@ async function refresh(rawRefreshToken) {
     throw refreshTokenInvalid();
   }
 
+  const currentUser = await userService.getUserById(rotated.session.userId);
+  if (
+    !currentUser
+    || currentUser.status !== 'active'
+    || currentUser.deactivatedAt
+    || userService.effectiveSessionGeneration(currentUser) !== sessionGeneration
+    || (Number.isInteger(rotated.session.securityGeneration)
+      && rotated.session.securityGeneration >= 0
+      ? rotated.session.securityGeneration
+      : 0) !== sessionGeneration
+  ) {
+    throw refreshTokenInvalid();
+  }
+
   const accessToken = signAccessToken({
-    userId: user._id,
-    role: user.role,
+    userId: currentUser._id,
+    role: currentUser.role,
     sessionId: rotated.session._id,
   });
 
@@ -502,22 +613,17 @@ async function refresh(rawRefreshToken) {
  * SessionService, matching the module-boundary rule (AuthService never touches
  * a repository directly).
  *
- * Order is LOCKED: atomically persist the new hash and invalidate outstanding
- * password-reset credentials FIRST (via userService.changePassword), THEN
- * revoke every session for the user, the current one included. Persisting first
- * kills the old password before the sweep, so a concurrent login racing with
- * the old credentials cannot mint a session that outlives the change. If the
- * revoke throws afterwards, the new password and reset-token invalidation still
- * stand (no rollback) and the failure surfaces as a 500. The login path's
- * post-session credential fence handles an old-password comparison that began
- * before this persistence step but resumes after this sweep.
+ * Order is locked: the password replacement and generation advance commit in
+ * one User write before generation-bounded Session cleanup. Generation equality
+ * is the validity decision; cleanup failure cannot preserve an older session,
+ * and a delayed cleanup cannot match a session at the committed generation.
  *
  * No replacement session is created and no tokens are issued: the caller must
  * sign in again.
  */
 async function changePassword({ userId, currentPassword, newPassword }) {
-  await userService.changePassword({ userId, currentPassword, newPassword });
-  await sessionService.revokeAllSessionsForUser(userId);
+  const changed = await userService.changePassword({ userId, currentPassword, newPassword });
+  await sessionService.revokeAllSessionsBeforeGeneration(userId, changed.sessionGeneration);
   return { passwordChanged: true };
 }
 
@@ -556,8 +662,11 @@ async function forgotPassword(email) {
 }
 
 async function resetPassword({ rawToken, newPassword }) {
-  const { userId } = await userService.resetPasswordWithToken({ rawToken, newPassword });
-  await sessionService.revokeAllSessionsForUser(userId);
+  const { userId, sessionGeneration } = await userService.resetPasswordWithToken({
+    rawToken,
+    newPassword,
+  });
+  await sessionService.revokeAllSessionsBeforeGeneration(userId, sessionGeneration);
   return { passwordReset: true };
 }
 
@@ -613,12 +722,81 @@ async function resendVerification(email) {
   return { verificationEmailRequested: true };
 }
 
+function logEmailChangeDeliveryFailure(stage, error) {
+  const details = { event: 'email_change_delivery_failed', stage, errorName: error?.name || 'Error' };
+  if (Number.isInteger(error?.providerStatus)) details.providerStatus = error.providerStatus;
+  if (typeof error?.providerRequestId === 'string') details.providerRequestId = error.providerRequestId;
+  console.error('[auth] email-change delivery failed', details);
+}
+
+async function requestEmailChange({ userId, newEmail, currentPassword }) {
+  const { emailVerificationTtlMinutes, emailChangeVerificationUrl } = loadEnv();
+  const rawToken = generateEmailChangeToken();
+  const tokenHash = hashEmailChangeToken(rawToken);
+  const expiresAt = new Date(Date.now() + emailVerificationTtlMinutes * 60 * 1000);
+  const pending = await userService.prepareEmailChange({
+    userId,
+    newEmail,
+    currentPassword,
+    tokenHash,
+    expiresAt,
+  });
+  const verifyUrl = buildAuthLinkUrl(emailChangeVerificationUrl, rawToken);
+  await Promise.all([
+    emailService.sendEmailChangeVerificationEmail({
+      to: pending.pendingEmail,
+      verifyUrl,
+      expiresInMinutes: emailVerificationTtlMinutes,
+    }),
+    emailService.sendEmailChangeNotice({
+      to: pending.currentEmail,
+      pendingEmail: pending.pendingEmail,
+    }),
+  ]);
+  return { pendingEmailChange: { email: pending.pendingEmail, expiresAt } };
+}
+
+async function cancelEmailChange(userId) {
+  await userService.cancelEmailChange(userId);
+  return { pendingEmailChange: null };
+}
+
+async function verifyEmailChange(rawToken) {
+  const changed = await userService.verifyEmailChangeWithToken(rawToken);
+  await sessionService.revokeAllSessionsBeforeGeneration(
+    changed.userId,
+    changed.sessionGeneration
+  );
+  try {
+    await emailService.sendEmailChangeCompletedEmail({
+      to: changed.previousEmail,
+      email: changed.email,
+    });
+  } catch (error) {
+    logEmailChangeDeliveryFailure('completion', error);
+  }
+  return { emailChanged: true };
+}
+
+async function deactivate(userId) {
+  const deactivated = await userService.deactivate({ userId });
+  await sessionService.revokeAllSessionsBeforeGeneration(
+    userId,
+    deactivated.sessionGeneration
+  );
+  return { deactivated: true };
+}
+
 async function logout(sessionId) {
   await sessionService.revokeSession(sessionId);
 }
 
 async function logoutAll(userId) {
-  const revokedCount = await sessionService.revokeAllSessionsForUser(userId);
+  const sessionGeneration = await userService.advanceSessionGeneration(userId);
+  const revokedCount = await sessionService.revokeAllSessionsBeforeGeneration(
+    userId,
+    sessionGeneration
+  );
   return { revokedCount };
 }
 
@@ -633,6 +811,10 @@ module.exports = {
   resetPassword,
   verifyEmail,
   resendVerification,
+  requestEmailChange,
+  cancelEmailChange,
+  verifyEmailChange,
+  deactivate,
   googleLogin,
   googleLink,
 };

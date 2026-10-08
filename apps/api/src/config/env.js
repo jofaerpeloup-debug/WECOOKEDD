@@ -37,6 +37,7 @@ function buildAuthLinkUrlSchema(envVarName) {
 
 const passwordResetUrlSchema = buildAuthLinkUrlSchema('PASSWORD_RESET_URL');
 const emailVerificationUrlSchema = buildAuthLinkUrlSchema('EMAIL_VERIFICATION_URL');
+const emailChangeVerificationUrlSchema = buildAuthLinkUrlSchema('EMAIL_CHANGE_VERIFICATION_URL');
 
 // Only a plain `http:` base is downgraded in production — `https:` already
 // satisfies it and `wecooked:` was never an http(s) URL to begin with, so it
@@ -111,6 +112,7 @@ const envSchema = z
     EMAIL_VERIFICATION_URL: emailVerificationUrlSchema,
     // Bounded 5 minutes .. 7 days; default 1440 (24 hours).
     EMAIL_VERIFICATION_TTL_MINUTES: z.coerce.number().int().min(5).max(10080).default(1440),
+    EMAIL_CHANGE_VERIFICATION_URL: emailChangeVerificationUrlSchema,
     GOOGLE_OAUTH_CLIENT_IDS: googleOAuthClientIdsSchema,
     // Recipe uploads are optional. Partial or absent provider configuration
     // never prevents the API from booting; the upload endpoint checks that all
@@ -146,6 +148,14 @@ const envSchema = z
           'EMAIL_VERIFICATION_URL must use https (or the wecooked mobile scheme) in production',
       });
     }
+    if (value.NODE_ENV === 'production' && requiresHttpsUpgrade(value.EMAIL_CHANGE_VERIFICATION_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_CHANGE_VERIFICATION_URL'],
+        message:
+          'EMAIL_CHANGE_VERIFICATION_URL must use https (or the wecooked mobile scheme) in production',
+      });
+    }
   });
 
 const TEST_EMAIL_DEFAULTS = {
@@ -154,6 +164,7 @@ const TEST_EMAIL_DEFAULTS = {
   EMAIL_FROM_NAME: 'WeCooked',
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
   EMAIL_VERIFICATION_URL: 'http://localhost:5173/verify-email',
+  EMAIL_CHANGE_VERIFICATION_URL: 'wecooked://verify-email-change',
 };
 
 const TEST_GOOGLE_DEFAULTS = {
@@ -205,6 +216,7 @@ function parseEnv(source) {
     passwordResetTtlMinutes: parsed.PASSWORD_RESET_TTL_MINUTES,
     emailVerificationUrl: parsed.EMAIL_VERIFICATION_URL,
     emailVerificationTtlMinutes: parsed.EMAIL_VERIFICATION_TTL_MINUTES,
+    emailChangeVerificationUrl: parsed.EMAIL_CHANGE_VERIFICATION_URL,
     googleOAuthClientIds: parsed.GOOGLE_OAUTH_CLIENT_IDS,
     cloudinary: {
       cloudName: parsed.CLOUDINARY_CLOUD_NAME,

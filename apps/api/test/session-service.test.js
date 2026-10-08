@@ -19,13 +19,37 @@ test('createSession stores only the SHA-256 digest and returns the raw token onc
     return { _id: 'session-1', ...args };
   });
 
-  const { session, refreshToken } = await sessionService.createSession('user-1');
+  const { session, refreshToken } = await sessionService.createSession('user-1', 7);
 
   assert.equal(captured.userId, 'user-1');
   assert.equal(captured.refreshTokenHash, hashRefreshToken(refreshToken));
   assert.notEqual(captured.refreshTokenHash, refreshToken);
   assert.ok(captured.expiresAt instanceof Date);
+  assert.equal(captured.securityGeneration, 7);
+  assert.equal('securityIssuedAt' in captured, false);
   assert.equal(session._id, 'session-1');
+});
+
+test('a skewed application clock cannot supply session-security ordering', async (t) => {
+  const skewedApplicationExpiry = new Date('2099-01-01T00:00:00.000Z');
+  let captured;
+  t.mock.method(sessionRepository, 'createSession', async (args) => {
+    captured = args;
+    return {
+      _id: 'session-1',
+      ...args,
+      securityIssuedAt: new Date('2026-10-08T01:00:00.000Z'),
+    };
+  });
+
+  const originalDateNow = Date.now;
+  Date.now = () => skewedApplicationExpiry.getTime();
+  t.after(() => { Date.now = originalDateNow; });
+  const { session } = await sessionService.createSession('user-1', 4);
+
+  assert.equal(captured.expiresAt.getUTCFullYear(), 2099);
+  assert.equal('securityIssuedAt' in captured, false);
+  assert.equal(session.securityIssuedAt.getUTCFullYear(), 2026);
 });
 
 test('findActiveSessionByRefreshToken hashes the raw token and delegates to the repository, with no side effect', async (t) => {
@@ -96,29 +120,21 @@ test('revokeSession delegates to the repository with the session id', async (t) 
   assert.equal(capturedId, 'session-1');
 });
 
-test('revokeAllSessionsForUser returns the number of sessions revoked', async (t) => {
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 3);
-
-  const count = await sessionService.revokeAllSessionsForUser('user-1');
-  assert.equal(count, 3);
-});
-
-test('revokeAllSessionsForUserCreatedBy preserves and forwards the stable cutoff', async (t) => {
+test('revokeAllSessionsBeforeGeneration forwards only the committed generation boundary', async (t) => {
   let captured;
   t.mock.method(
     sessionRepository,
-    'revokeAllForUserCreatedBy',
-    async (userId, createdAtCutoff, now) => {
-      captured = { userId, createdAtCutoff, now };
+    'revokeAllForUserBeforeGeneration',
+    async (userId, securityGeneration, now) => {
+      captured = { userId, securityGeneration, now };
       return 2;
     }
   );
-  const cutoff = new Date('2026-09-21T01:00:00.000Z');
 
-  const count = await sessionService.revokeAllSessionsForUserCreatedBy('user-1', cutoff);
+  const count = await sessionService.revokeAllSessionsBeforeGeneration('user-1', 9);
 
   assert.equal(count, 2);
   assert.equal(captured.userId, 'user-1');
-  assert.equal(captured.createdAtCutoff, cutoff);
+  assert.equal(captured.securityGeneration, 9);
   assert.ok(captured.now instanceof Date);
 });

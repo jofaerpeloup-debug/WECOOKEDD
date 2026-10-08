@@ -232,10 +232,10 @@ test('updateCurrentUserSchema trims preference entries', () => {
   assert.deepEqual(result.data.body.preferences.allergies, ['Peanuts']);
 });
 
-test('updateCurrentUserSchema keeps duplicate preference entries as-is (no dedupe)', () => {
+test('updateCurrentUserSchema deduplicates preferences case-insensitively with first spelling winning', () => {
   const result = parseSelf({ preferences: { dietaryPreferences: ['Vegan', 'Vegan', 'vegan'] } });
   assert.equal(result.success, true);
-  assert.deepEqual(result.data.body.preferences.dietaryPreferences, ['Vegan', 'Vegan', 'vegan']);
+  assert.deepEqual(result.data.body.preferences.dietaryPreferences, ['Vegan']);
 });
 
 test('updateCurrentUserSchema accepts empty preference arrays (clear semantics)', () => {
@@ -245,8 +245,21 @@ test('updateCurrentUserSchema accepts empty preference arrays (clear semantics)'
 
 test('updateCurrentUserSchema enforces the 20-entry array cap', () => {
   assert.equal(parseSelf({ preferences: { allergies: Array(20).fill('x') } }).success, true);
-  assert.equal(parseSelf({ preferences: { allergies: Array(21).fill('x') } }).success, false);
-  assert.equal(parseSelf({ preferences: { dietaryPreferences: Array(21).fill('x') } }).success, false);
+  const twentyUniquePlusDuplicate = [
+    ...Array.from({ length: 20 }, (_, index) => `Value ${index}`),
+    ' value 0 ',
+  ];
+  const accepted = parseSelf({ preferences: { allergies: twentyUniquePlusDuplicate } });
+  assert.equal(accepted.success, true);
+  assert.equal(accepted.data.body.preferences.allergies.length, 20);
+  assert.equal(
+    parseSelf({
+      preferences: {
+        dietaryPreferences: Array.from({ length: 21 }, (_, index) => `Value ${index}`),
+      },
+    }).success,
+    false
+  );
 });
 
 test('updateCurrentUserSchema enforces the 50-character entry cap', () => {

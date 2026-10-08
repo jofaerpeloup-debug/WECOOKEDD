@@ -20,7 +20,7 @@ const FAQS = [
   {
     id: 'preferences',
     q: 'How do I change my dietary preferences?',
-    a: 'Open Profile, choose Edit profile, then update Dietary Preferences or Allergies and save your changes.',
+    a: 'Open Profile, choose Edit profile, then update Dietary Preferences or Allergies & Ingredients to Avoid and save your changes. These notes do not automatically filter recipes or guarantee allergy safety.',
   },
   {
     id: 'pending',

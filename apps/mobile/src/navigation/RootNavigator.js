@@ -31,6 +31,7 @@ import PrivacyScreen from '../screens/PrivacyScreen';
 import LicensesScreen from '../screens/LicensesScreen';
 import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import VerifyEmailScreen from '../screens/VerifyEmailScreen';
+import VerifyEmailChangeScreen from '../screens/VerifyEmailChangeScreen';
 
 // Deep-link routes only. `wecooked://reset-password?token=...` and
 // `wecooked://verify-email?token=...` map by REGISTERED route name — both
@@ -47,6 +48,7 @@ const linking = {
     screens: {
       ResetPassword: 'reset-password',
       VerifyEmail: 'verify-email',
+      VerifyEmailChange: 'verify-email-change',
     },
   },
 };
@@ -189,6 +191,11 @@ export default function RootNavigator() {
               component={VerifyEmailScreen}
               navigationKey="verify-authed"
             />
+            <Stack.Screen
+              name="VerifyEmailChange"
+              component={VerifyEmailChangeScreen}
+              navigationKey="verify-change-authed"
+            />
           </>
         ) : (
           // --- unauthenticated stack ---
@@ -206,6 +213,11 @@ export default function RootNavigator() {
               name="VerifyEmail"
               component={VerifyEmailScreen}
               navigationKey="verify-guest"
+            />
+            <Stack.Screen
+              name="VerifyEmailChange"
+              component={VerifyEmailChangeScreen}
+              navigationKey="verify-change-guest"
             />
           </>
         )}

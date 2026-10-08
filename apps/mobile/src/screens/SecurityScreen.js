@@ -12,6 +12,7 @@ import { isAvailable as isGoogleAvailable } from '../auth/googleAuthFlow';
 import {
   getAuthErrorMessage,
   getAuthFieldErrors,
+  getEmailValidationError,
   getLegacyPasswordValidationError,
   getNewPasswordValidationError,
 } from '../api/errorMessages';
@@ -19,12 +20,101 @@ import {
 export default function SecurityScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const { user, signOut, signOutEverywhere, linkGoogle } = useAuth();
+  const { user, signOut, signOutEverywhere, linkGoogle, refreshUser, deactivate } = useAuth();
 
   const mountedRef = useRef(true);
   useEffect(() => () => {
     mountedRef.current = false;
   }, []);
+  const ownerRef = useRef(user?.id || null);
+  const generationRef = useRef(0);
+  const accountOperationRef = useRef(null);
+  useEffect(() => {
+    const ownerId = user?.id || null;
+    if (ownerRef.current !== ownerId) {
+      ownerRef.current = ownerId;
+      generationRef.current += 1;
+      accountOperationRef.current = null;
+    }
+  }, [user?.id]);
+  const beginAccountOperation = (kind) => {
+    if (!ownerRef.current || accountOperationRef.current) return null;
+    const operation = { kind, ownerId: ownerRef.current, generation: generationRef.current };
+    accountOperationRef.current = operation;
+    return operation;
+  };
+  const ownsAccountOperation = (operation) => mountedRef.current
+    && accountOperationRef.current === operation
+    && ownerRef.current === operation.ownerId
+    && generationRef.current === operation.generation;
+  const finishAccountOperation = (operation) => {
+    if (ownsAccountOperation(operation)) accountOperationRef.current = null;
+  };
+
+  const [newEmail, setNewEmail] = useState('');
+  const [emailPassword, setEmailPassword] = useState('');
+  const [emailChangeError, setEmailChangeError] = useState(null);
+  const [emailChangeBusy, setEmailChangeBusy] = useState(false);
+  const handleEmailChange = async () => {
+    const emailError = getEmailValidationError(newEmail);
+    const passwordError = getLegacyPasswordValidationError(emailPassword, 'Current password');
+    if (emailError || passwordError) {
+      setEmailChangeError(emailError || passwordError);
+      return;
+    }
+    const operation = beginAccountOperation('email-change');
+    if (!operation) return;
+    setEmailChangeBusy(true);
+    setEmailChangeError(null);
+    try {
+      await authService.requestEmailChange({ newEmail, currentPassword: emailPassword });
+      if (!ownsAccountOperation(operation)) return;
+      await refreshUser();
+      if (ownsAccountOperation(operation)) {
+        setNewEmail('');
+        setEmailPassword('');
+      }
+    } catch (err) {
+      if (ownsAccountOperation(operation)) setEmailChangeError(getAuthErrorMessage(err));
+    } finally {
+      if (ownsAccountOperation(operation)) setEmailChangeBusy(false);
+      finishAccountOperation(operation);
+    }
+  };
+  const handleCancelEmailChange = async () => {
+    const operation = beginAccountOperation('email-change-cancel');
+    if (!operation) return;
+    setEmailChangeBusy(true);
+    setEmailChangeError(null);
+    try {
+      await authService.cancelEmailChange();
+      if (ownsAccountOperation(operation)) await refreshUser();
+    } catch (err) {
+      if (ownsAccountOperation(operation)) setEmailChangeError(getAuthErrorMessage(err));
+    } finally {
+      if (ownsAccountOperation(operation)) setEmailChangeBusy(false);
+      finishAccountOperation(operation);
+    }
+  };
+
+  const [deactivateConfirmation, setDeactivateConfirmation] = useState('');
+  const [deactivateError, setDeactivateError] = useState(null);
+  const [deactivateBusy, setDeactivateBusy] = useState(false);
+  const handleDeactivate = async () => {
+    if (deactivateConfirmation !== 'DEACTIVATE') return;
+    const operation = beginAccountOperation('deactivate');
+    if (!operation) return;
+    setDeactivateBusy(true);
+    setDeactivateError(null);
+    try {
+      await deactivate();
+    } catch (err) {
+      if (ownsAccountOperation(operation)) setDeactivateError(getAuthErrorMessage(err));
+    } finally {
+      if (ownsAccountOperation(operation)) setDeactivateBusy(false);
+      finishAccountOperation(operation);
+    }
+  };
 
   // --- change password: the only real credential mutation this screen owns.
   // POST /auth/change-password revokes EVERY session for this user on
@@ -152,6 +242,30 @@ export default function SecurityScreen({ navigation }) {
       <TopBar mode="back" title="Security" onBack={() => navigation.goBack()} />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <Text style={styles.groupTitle}>EMAIL CHANGE</Text>
+        <View style={styles.card}>
+          <View style={styles.formCard}>
+            <Text style={styles.rowLabel}>Current email</Text>
+            <Text style={styles.rowSub}>{user?.email}</Text>
+            <Text style={styles.rowSub}>
+              Email changes require your current WeCooked password. Accounts that sign in only
+              with Google cannot change their email in WeCooked.
+            </Text>
+            {user?.pendingEmailChange ? (
+              <View style={styles.pendingRow}>
+                <Text style={styles.rowSub}>Pending: {user.pendingEmailChange.email}</Text>
+                <Pressable onPress={handleCancelEmailChange} disabled={emailChangeBusy} accessibilityRole="button">
+                  <Text style={styles.linkAction}>Cancel request</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            <Input label="New Email" icon="mail-outline" value={newEmail} onChangeText={setNewEmail} autoCapitalize="none" keyboardType="email-address" editable={!emailChangeBusy} />
+            <Input label="Current Password" icon="lock-closed-outline" value={emailPassword} onChangeText={setEmailPassword} secureTextEntry editable={!emailChangeBusy} />
+            {emailChangeError ? <Text style={styles.fieldError}>{emailChangeError}</Text> : null}
+            <Button title="Send verification link" onPress={handleEmailChange} loading={emailChangeBusy} disabled={emailChangeBusy} />
+          </View>
+        </View>
+
         <Text style={styles.groupTitle}>CHANGE PASSWORD</Text>
         <Input
           label="Current Password"
@@ -306,6 +420,16 @@ export default function SecurityScreen({ navigation }) {
             <Ionicons name="log-out-outline" size={18} color={colors.error} />
           </Pressable>
         </View>
+
+        <Text style={[styles.groupTitle, { marginTop: spacing.xl }]}>DEACTIVATE ACCOUNT</Text>
+        <View style={styles.card}>
+          <View style={styles.formCard}>
+            <Text style={styles.rowSub}>Deactivation is reversible. Sign in normally to reactivate your account. Type DEACTIVATE to continue.</Text>
+            <Input label="Confirmation" value={deactivateConfirmation} onChangeText={setDeactivateConfirmation} autoCapitalize="characters" editable={!deactivateBusy} />
+            {deactivateError ? <Text style={styles.fieldError}>{deactivateError}</Text> : null}
+            <Button title="Deactivate Account" variant="outline" onPress={handleDeactivate} loading={deactivateBusy} disabled={deactivateBusy || deactivateConfirmation !== 'DEACTIVATE'} />
+          </View>
+        </View>
       </ScrollView>
     </View>
   );
@@ -329,6 +453,8 @@ function makeStyles(colors) {
       borderColor: colors.hairline,
       overflow: 'hidden',
     },
+    formCard: { padding: spacing.md, gap: spacing.sm },
+    pendingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md },
     rowLabel: {
       fontFamily: typography.body.medium,

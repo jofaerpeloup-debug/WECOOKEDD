@@ -12,12 +12,20 @@ function refreshTokenExpiryDate() {
  * returns it along with the one-time raw refresh token (only the SHA-256
  * digest is ever persisted).
  */
-async function createSession(userId) {
+async function createSession(userId, securityGeneration) {
+  if (!Number.isInteger(securityGeneration) || securityGeneration < 0) {
+    throw new TypeError('createSession requires a non-negative integer securityGeneration.');
+  }
   const refreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(refreshToken);
   const expiresAt = refreshTokenExpiryDate();
 
-  const session = await sessionRepository.createSession({ userId, refreshTokenHash, expiresAt });
+  const session = await sessionRepository.createSession({
+    userId,
+    refreshTokenHash,
+    expiresAt,
+    securityGeneration,
+  });
   return { session, refreshToken };
 }
 
@@ -61,12 +69,12 @@ async function revokeSession(sessionId) {
   await sessionRepository.revokeById(sessionId, new Date());
 }
 
-function revokeAllSessionsForUser(userId) {
-  return sessionRepository.revokeAllForUser(userId, new Date());
-}
-
-function revokeAllSessionsForUserCreatedBy(userId, createdAtCutoff) {
-  return sessionRepository.revokeAllForUserCreatedBy(userId, createdAtCutoff, new Date());
+function revokeAllSessionsBeforeGeneration(userId, securityGeneration) {
+  return sessionRepository.revokeAllForUserBeforeGeneration(
+    userId,
+    securityGeneration,
+    new Date()
+  );
 }
 
 module.exports = {
@@ -75,6 +83,5 @@ module.exports = {
   rotateSession,
   getActiveSessionById,
   revokeSession,
-  revokeAllSessionsForUser,
-  revokeAllSessionsForUserCreatedBy,
+  revokeAllSessionsBeforeGeneration,
 };
