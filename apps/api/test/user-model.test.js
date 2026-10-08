@@ -64,6 +64,30 @@ test('email verification credentials are hidden and the digest has a unique spar
   assert.equal(expiryIndex, undefined, 'verification expiry must never be a TTL index on User');
 });
 
+test('ACCOUNT2 adds lifecycle fields plus a non-negative integer session generation defaulting to zero', async () => {
+  assert.ok(User.schema.path('pendingEmail'));
+  assert.equal(User.schema.path('pendingEmailChangeTokenHash').options.select, false);
+  assert.ok(User.schema.path('pendingEmailChangeExpiresAt'));
+  assert.ok(User.schema.path('deactivatedAt'));
+  const generationPath = User.schema.path('sessionGeneration');
+  assert.equal(generationPath.instance, 'Number');
+  assert.equal(generationPath.options.default, 0);
+  assert.equal(generationPath.options.min, 0);
+  const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
+  assert.equal(user.sessionGeneration, 0);
+  user.sessionGeneration = 1.5;
+  await assert.rejects(() => user.validate());
+  const indexes = User.schema.indexes();
+  const digestIndex = indexes.find(([spec]) => spec.pendingEmailChangeTokenHash === 1);
+  assert.ok(digestIndex);
+  assert.equal(digestIndex[1].unique, true);
+  assert.equal(digestIndex[1].sparse, true);
+  assert.equal(indexes.some(([spec]) => spec.pendingEmail === 1), false);
+  assert.equal(indexes.some(([spec]) => spec.pendingEmailChangeExpiresAt === 1), false);
+  assert.equal(indexes.some(([spec]) => spec.deactivatedAt === 1), false);
+  assert.equal(indexes.some(([spec]) => spec.sessionGeneration === 1), false);
+});
+
 test('emailVerified defaults to false on a new user', () => {
   const user = new User({ name: 'Ada', email: 'ada@example.com', passwordHash: 'hash' });
   assert.equal(user.emailVerified, false);
@@ -279,6 +303,24 @@ test('owner serializer emits full canonical notification preferences while admin
     enabled: false, push: false, email: false, suggestions: true, digest: true, reminders: false,
   });
   assert.equal('preferences' in toAdminUserSummary(user), false);
+});
+
+test('owner serializer exposes pending email status without leaking ACCOUNT2 digest or deactivation state', () => {
+  const expiresAt = new Date('2026-10-09T00:00:00.000Z');
+  const user = new User({
+    name: 'Ada', email: 'ada@example.com', passwordHash: 'hash',
+    pendingEmail: 'new@example.com', pendingEmailChangeTokenHash: 'secret-digest',
+    pendingEmailChangeExpiresAt: expiresAt, deactivatedAt: new Date(),
+  });
+  const owner = toPublicUser(user);
+  assert.deepEqual(owner.pendingEmailChange, { email: 'new@example.com', expiresAt });
+  assert.equal('pendingEmailChangeTokenHash' in owner, false);
+  assert.equal('deactivatedAt' in owner, false);
+  assert.equal('sessionGeneration' in owner, false);
+  const admin = toAdminUserSummary(user);
+  assert.equal('pendingEmailChange' in admin, false);
+  assert.equal('deactivatedAt' in admin, false);
+  assert.equal('sessionGeneration' in admin, false);
 });
 
 test('profile fields have frozen defaults and reject partial or insecure avatar state', async () => {

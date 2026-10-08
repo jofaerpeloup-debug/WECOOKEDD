@@ -29,6 +29,28 @@ export function AuthProvider({ children }) {
   const [status, setStatus] = useState('restoring');
   const [user, setUser] = useState(null);
   const mountedRef = useRef(true);
+  const authStateRef = useRef({ ownerId: null, generation: 0 });
+
+  const captureSession = useCallback(() => ({
+    ownerId: authStateRef.current.ownerId,
+    generation: authStateRef.current.generation,
+    localSessionRevision: authService.getLocalSessionRevision(),
+  }), []);
+
+  const ownsSession = useCallback((session) => (
+    session
+    && authStateRef.current.ownerId === session.ownerId
+    && authStateRef.current.generation === session.generation
+  ), []);
+
+  const installAuthState = useCallback((nextUser, nextStatus) => {
+    authStateRef.current = {
+      ownerId: nextUser?.id || null,
+      generation: authStateRef.current.generation + 1,
+    };
+    setUser(nextUser);
+    setStatus(nextStatus);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -36,8 +58,7 @@ export function AuthProvider({ children }) {
     // A refresh rejected mid-session (expired/revoked) flips us to signed-out.
     authService.setOnSessionExpired(() => {
       if (!mountedRef.current) return;
-      setUser(null);
-      setStatus('unauthenticated');
+      installAuthState(null, 'unauthenticated');
     });
 
     (async () => {
@@ -45,16 +66,13 @@ export function AuthProvider({ children }) {
         const restored = await authService.restoreSession();
         if (!mountedRef.current) return;
         if (restored) {
-          setUser(restored);
-          setStatus('authenticated');
+          installAuthState(restored, 'authenticated');
         } else {
-          setUser(null);
-          setStatus('unauthenticated');
+          installAuthState(null, 'unauthenticated');
         }
       } catch {
         if (!mountedRef.current) return;
-        setUser(null);
-        setStatus('unauthenticated');
+        installAuthState(null, 'unauthenticated');
       }
     })();
 
@@ -62,16 +80,15 @@ export function AuthProvider({ children }) {
       mountedRef.current = false;
       authService.setOnSessionExpired(null);
     };
-  }, []);
+  }, [installAuthState]);
 
   const signIn = useCallback(async ({ email, password }) => {
     const u = await authService.login({ email, password });
     if (mountedRef.current) {
-      setUser(u);
-      setStatus('authenticated');
+      installAuthState(u, 'authenticated');
     }
     return u;
-  }, []);
+  }, [installAuthState]);
 
   // Google sign-in. All orchestration (single-flight, challenge, native call,
   // backend exchange) lives in googleAuthFlow; this context only reconciles the
@@ -80,45 +97,43 @@ export function AuthProvider({ children }) {
   const signInWithGoogle = useCallback(async () => {
     const u = await googleAuthFlow.signInWithGoogle();
     if (mountedRef.current) {
-      setUser(u);
-      setStatus('authenticated');
+      installAuthState(u, 'authenticated');
     }
     return u;
-  }, []);
+  }, [installAuthState]);
 
   const signUp = useCallback(async ({ name, email, password }) => {
     const u = await authService.register({ name, email, password });
     if (mountedRef.current) {
-      setUser(u);
-      setStatus('authenticated');
+      installAuthState(u, 'authenticated');
     }
     return u;
-  }, []);
+  }, [installAuthState]);
 
   const signOut = useCallback(async () => {
+    const session = captureSession();
     await authService.logout();
-    if (mountedRef.current) {
-      setUser(null);
-      setStatus('unauthenticated');
+    if (mountedRef.current && ownsSession(session)) {
+      installAuthState(null, 'unauthenticated');
     }
     // Best-effort Google provider cleanup, AFTER the auth-state flip and
     // deliberately NOT awaited — a slow/hung native clear must never delay
     // visible logout. clearNativeState never throws.
     void googleAuthFlow.clearNativeState();
-  }, []);
+  }, [captureSession, installAuthState, ownsSession]);
 
   const signOutEverywhere = useCallback(async () => {
+    const session = captureSession();
     await authService.logoutAll();
-    if (mountedRef.current) {
-      setUser(null);
-      setStatus('unauthenticated');
+    if (mountedRef.current && ownsSession(session)) {
+      installAuthState(null, 'unauthenticated');
     }
     void googleAuthFlow.clearNativeState();
-  }, []);
+  }, [captureSession, installAuthState, ownsSession]);
 
   const refreshUser = useCallback(async () => {
     const u = await authService.fetchCurrentUser();
-    if (mountedRef.current) setUser(u);
+    if (mountedRef.current) setUser((prev) => reconcileUser(prev, u));
     return u;
   }, []);
 
@@ -129,13 +144,26 @@ export function AuthProvider({ children }) {
   // signed out) must stop appearing authenticated, but hitting /auth/logout
   // again would just be a pointless request against an already-dead session.
   // A no-op if there was no local session to begin with.
-  const endLocalSession = useCallback(async () => {
-    await authService.clearLocalSession();
-    if (mountedRef.current) {
-      setUser(null);
-      setStatus('unauthenticated');
-    }
-  }, []);
+  const endLocalSession = useCallback(async (session = captureSession()) => {
+    if (!ownsSession(session)) return false;
+    const cleared = await authService.clearLocalSession(session.localSessionRevision);
+    if (!cleared || !mountedRef.current || !ownsSession(session)) return false;
+    installAuthState(null, 'unauthenticated');
+    return true;
+  }, [captureSession, installAuthState, ownsSession]);
+
+  const verifyEmailChange = useCallback(async (token) => {
+    const session = captureSession();
+    const result = await authService.verifyEmailChange(token);
+    await endLocalSession(session);
+    return result;
+  }, [captureSession, endLocalSession]);
+
+  const deactivate = useCallback(async () => {
+    const session = captureSession();
+    await authService.deactivateAccount();
+    if (await endLocalSession(session)) void googleAuthFlow.clearNativeState();
+  }, [captureSession, endLocalSession]);
 
   // Reconcile the context with a server-authoritative public-user payload that
   // a self-mutation already returned (PATCH /users/me responds with the same
@@ -176,6 +204,9 @@ export function AuthProvider({ children }) {
     signOutEverywhere,
     refreshUser,
     endLocalSession,
+    captureSession,
+    verifyEmailChange,
+    deactivate,
     syncUser,
     linkGoogle,
   };

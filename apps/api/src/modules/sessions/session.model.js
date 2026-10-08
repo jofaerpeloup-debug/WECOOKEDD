@@ -23,6 +23,18 @@ const sessionSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    securityGeneration: {
+      type: Number,
+      required: true,
+      min: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: 'Security generation must be an integer.',
+      },
+    },
+    securityIssuedAt: {
+      type: Date,
+    },
     lastUsedAt: {
       type: Date,
       default: null,

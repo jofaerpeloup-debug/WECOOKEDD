@@ -398,7 +398,7 @@ test('PATCH /api/v1/users/:userId rejects a role-only body with 400 and never wr
     updated = true;
     return userDoc();
   });
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     revoked = true;
     return 0;
   });
@@ -426,7 +426,7 @@ test('PATCH /api/v1/users/:userId rejects a combined role + status body atomical
     updated = true;
     return userDoc({ status: 'suspended' });
   });
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     revoked = true;
     return 0;
   });
@@ -448,12 +448,12 @@ test('PATCH /api/v1/users/:userId suspending an active user persists status THEN
     directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
   });
   const order = [];
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     order.push('update');
     return userDoc({ id, status: desiredStatus });
   });
   let revokedFor;
-  t.mock.method(sessionRepository, 'revokeAllForUser', async (userId) => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async (userId) => {
     order.push('revoke');
     revokedFor = String(userId);
     return 3;
@@ -486,17 +486,17 @@ test('PATCH /api/v1/users/:userId suspending an active user persists status THEN
   });
 });
 
-test('PATCH /api/v1/users/:userId reactivating a suspended user revokes sessions BEFORE persisting active', async (t) => {
+test('PATCH /api/v1/users/:userId reactivation persists the generation advance before cleanup', async (t) => {
   mockContext(t, {
     caller: adminDoc(),
     directory: { [TARGET_USER_ID]: userDoc({ status: 'suspended' }) },
   });
   const order = [];
-  t.mock.method(sessionRepository, 'revokeAllForUserCreatedBy', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     order.push('revoke');
     return 2;
   });
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     order.push('update');
     return userDoc({ id, status: desiredStatus });
   });
@@ -508,10 +508,10 @@ test('PATCH /api/v1/users/:userId reactivating a suspended user revokes sessions
 
   assert.equal(res.status, 200);
   assert.equal(res.body.data.user.status, 'active');
-  assert.deepEqual(order, ['revoke', 'update']);
+  assert.deepEqual(order, ['update', 'revoke']);
 });
 
-test('PATCH /api/v1/users/:userId reactivation is aborted (user stays suspended) if revocation fails', async (t) => {
+test('PATCH /api/v1/users/:userId cleanup failure cannot undo recovery', async (t) => {
   mockContext(t, {
     caller: adminDoc(),
     directory: { [TARGET_USER_ID]: userDoc({ status: 'suspended' }) },
@@ -521,7 +521,7 @@ test('PATCH /api/v1/users/:userId reactivation is aborted (user stays suspended)
     updateCalled = true;
     return userDoc({ status: 'active' });
   });
-  t.mock.method(sessionRepository, 'revokeAllForUserCreatedBy', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     throw new Error('session store unavailable');
   });
 
@@ -533,7 +533,7 @@ test('PATCH /api/v1/users/:userId reactivation is aborted (user stays suspended)
   assert.equal(res.status, 500);
   assert.equal(res.body.error.code, 'INTERNAL_SERVER_ERROR');
   assert.equal(res.body.error.message.includes('session store'), false); // no raw internals
-  assert.equal(updateCalled, false);
+  assert.equal(updateCalled, true);
 });
 
 test('PATCH /api/v1/users/:userId passes only expected and desired status to the CAS write', async (t) => {
@@ -542,11 +542,11 @@ test('PATCH /api/v1/users/:userId passes only expected and desired status to the
     directory: { [TARGET_ADMIN_ID]: userDoc({ id: TARGET_ADMIN_ID, role: 'admin', status: 'active' }) },
   });
   let capturedWrite;
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     capturedWrite = { expectedStatus, desiredStatus };
     return userDoc({ id, role: 'admin', status: desiredStatus });
   });
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 1);
 
   const res = await request(app)
     .patch(`/api/v1/users/${TARGET_ADMIN_ID}`)
@@ -566,11 +566,11 @@ test('PATCH /api/v1/users/:userId active -> active is a no-op with no session re
     directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
   });
   let revoked = false;
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     revoked = true;
     return 0;
   });
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     userDoc({ id, status: desiredStatus })
   );
 
@@ -590,12 +590,12 @@ test('PATCH status records partial_failure when suspension persists but revocati
     directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
   });
   let persisted = false;
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) => {
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) => {
     persisted = true;
     return userDoc({ id, status: desiredStatus });
   });
   const infrastructureError = new Error('private session store details');
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     throw infrastructureError;
   });
   let auditEvent;
@@ -631,10 +631,10 @@ test('PATCH status remains successful and is not replayed when audit persistence
     caller: adminDoc(),
     directory: { [TARGET_USER_ID]: userDoc({ status: 'active' }) },
   });
-  const update = t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  const update = t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     userDoc({ id, status: desiredStatus })
   );
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 1);
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 1);
   const internal = 'MongoServerError mongodb://private-uri';
   auditLogRepository.create.mock.mockImplementation(async () => {
     throw new Error(internal);
@@ -689,7 +689,7 @@ test('PATCH /api/v1/users/:userId self-protection cannot be bypassed by upper-ca
     updated = true;
     return adminDoc({ role: 'user' });
   });
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 0);
 
   const res = await request(app)
     .patch(`/api/v1/users/${ADMIN_ID.toUpperCase()}`)
@@ -706,8 +706,8 @@ test('PATCH /api/v1/users/:userId still works when a different target id is uppe
     caller: adminDoc(),
     directory: { [TARGET_USER_ID]: userDoc({ role: 'user', status: 'active' }) },
   });
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => 0);
-  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, desiredStatus) =>
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => 0);
+  t.mock.method(userRepository, 'updateStatusIfCurrent', async (id, expectedStatus, expectedGeneration, desiredStatus) =>
     userDoc({ id: String(id), status: desiredStatus })
   );
 
@@ -759,7 +759,7 @@ test('a demoted admin holding a stale admin access token is still rejected (role
   // DB role is now 'user'; the token still claims 'admin'.
   mockContext(t, { caller: userDoc({ id: ADMIN_ID, role: 'user' }) });
   let revoked = false;
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     revoked = true;
     return 0;
   });
@@ -990,7 +990,7 @@ test('PATCH /api/v1/users/me is rejected for a suspended user (blocked by authen
 test('PATCH /api/v1/users/me never revokes sessions', async (t) => {
   mockContext(t, { caller: userDoc({ id: USER_ID, role: 'user' }) });
   let revoked = false;
-  t.mock.method(sessionRepository, 'revokeAllForUser', async () => {
+  t.mock.method(sessionRepository, 'revokeAllForUserBeforeGeneration', async () => {
     revoked = true;
     return 0;
   });

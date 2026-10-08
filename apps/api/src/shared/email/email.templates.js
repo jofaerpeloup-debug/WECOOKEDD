@@ -113,7 +113,39 @@ function buildPasswordResetEmail({ resetUrl, expiresInMinutes }) {
   };
 }
 
+function buildEmailChangeVerificationEmail({ verifyUrl, expiresInMinutes }) {
+  const expiryText = formatExpiryDuration(expiresInMinutes);
+  const purpose = 'Confirm this address to finish changing the email on your WeCooked account.';
+  const ignoreCopy = 'If you did not request this change, you can ignore this email.';
+  return {
+    subject: 'Confirm your new WeCooked email address',
+    text: ['WeCooked', '', 'Confirm your new email', '', purpose, '', `Confirm Email Change: ${verifyUrl}`, `This link expires in ${expiryText}.`, '', ignoreCopy].join('\n'),
+    html: buildEmailHtml({ heading: 'Confirm your new email', purpose, actionLabel: 'Confirm Email Change', actionUrl: verifyUrl, fallbackCopy: 'If the button does not work, use the link below.', expiryText, ignoreCopy }),
+  };
+}
+
+function buildEmailChangeNotice({ pendingEmail }) {
+  const safeEmail = escapeHtml(pendingEmail);
+  return {
+    subject: 'A change to your WeCooked email was requested',
+    text: `A request was made to change your WeCooked email to ${pendingEmail}. Your current email remains active until the new address is confirmed.`,
+    html: `<p>A request was made to change your WeCooked email to <strong>${safeEmail}</strong>.</p><p>Your current email remains active until the new address is confirmed.</p>`,
+  };
+}
+
+function buildEmailChangeCompletedEmail({ email }) {
+  const safeEmail = escapeHtml(email);
+  return {
+    subject: 'Your WeCooked email was changed',
+    text: `Your WeCooked email was changed to ${email}. If you did not make this change, contact support.`,
+    html: `<p>Your WeCooked email was changed to <strong>${safeEmail}</strong>.</p><p>If you did not make this change, contact support.</p>`,
+  };
+}
+
 module.exports = {
   buildPasswordResetEmail,
   buildVerificationEmail,
+  buildEmailChangeVerificationEmail,
+  buildEmailChangeNotice,
+  buildEmailChangeCompletedEmail,
 };

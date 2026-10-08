@@ -32,6 +32,7 @@ function fakeUser(overrides = {}) {
     email: 'ada@example.com',
     role: 'user',
     status: 'active',
+    sessionGeneration: 0,
     passwordHash: 'captured-password-hash',
     authIdentities: [],
     ...overrides,
@@ -67,7 +68,7 @@ function mockGoogleCredential(t, { identity = fakeGoogleIdentity(), calls } = {}
 }
 
 function fakeSession(overrides = {}) {
-  return { _id: 'session-1', userId: 'user-1', ...overrides };
+  return { _id: 'session-1', userId: 'user-1', securityGeneration: 0, ...overrides };
 }
 
 test('register creates the user and issues tokens tied to a new session', async (t) => {
@@ -263,8 +264,9 @@ test('login racing behind password change revokes its provisional session and ol
   });
   t.mock.method(userService, 'changePassword', async () => {
     credentialHash = 'new-password-hash';
+    return { sessionGeneration: 1 };
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 1);
 
   const staleLogin = authService.login({ email: 'ada@example.com', password: 'old-password' });
   await createEntered.promise;
@@ -324,9 +326,9 @@ test('login racing behind password reset revokes its provisional session and old
   });
   t.mock.method(userService, 'resetPasswordWithToken', async () => {
     credentialHash = 'reset-password-hash';
-    return { userId: 'user-1' };
+    return { userId: 'user-1', sessionGeneration: 1 };
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 1);
 
   const staleLogin = authService.login({ email: 'ada@example.com', password: 'old-password' });
   await createEntered.promise;
@@ -470,12 +472,14 @@ test('googleLogin blocks suspended and Admin identity owners before issuing a se
 
 test('googleLogin provisions an explicit normal social user and reuses ordinary session issuance', async (t) => {
   mockGoogleCredential(t);
-  t.mock.method(userService, 'getUserByAuthIdentity', async () => null);
+  let createdUser = null;
+  t.mock.method(userService, 'getUserByAuthIdentity', async () => createdUser);
   t.mock.method(userService, 'getUserByEmail', async () => null);
   let createdWith;
   t.mock.method(userService, 'createSocialUser', async (args) => {
     createdWith = args;
-    return fakeUser({ authIdentities: [args.authIdentity], emailVerified: true });
+    createdUser = fakeUser({ authIdentities: [args.authIdentity], emailVerified: true });
+    return createdUser;
   });
   t.mock.method(sessionService, 'createSession', async () => ({
     session: fakeSession(),
@@ -884,7 +888,12 @@ test('refresh succeeds: checks the user first, then rotates, and returns a fresh
 
   const result = await authService.refresh('old-token');
 
-  assert.deepEqual(calls, ['findActiveSessionByRefreshToken', 'getUserById', 'rotateSession']);
+  assert.deepEqual(calls, [
+    'findActiveSessionByRefreshToken',
+    'getUserById',
+    'rotateSession',
+    'getUserById',
+  ]);
   assert.equal(result.refreshToken, 'new-raw-token');
   const payload = verifyAccessToken(result.accessToken);
   assert.equal(payload.sub, 'user-1');
@@ -908,6 +917,41 @@ test('refresh rejects with AUTH_REFRESH_TOKEN_INVALID when the atomic rotation l
   );
 });
 
+test('refresh rejects a stale generation before rotation', async (t) => {
+  t.mock.method(sessionService, 'findActiveSessionByRefreshToken', async () =>
+    fakeSession({ securityGeneration: 4 })
+  );
+  t.mock.method(userService, 'getUserById', async () =>
+    fakeUser({ sessionGeneration: 5 })
+  );
+  const rotate = t.mock.method(sessionService, 'rotateSession', async () => null);
+
+  await assert.rejects(
+    () => authService.refresh('stale-token'),
+    { code: 'AUTH_REFRESH_TOKEN_INVALID', statusCode: 401 }
+  );
+  assert.equal(rotate.mock.callCount(), 0);
+});
+
+test('refresh rejects when generation advances during rotation and returns no replacement token', async (t) => {
+  t.mock.method(sessionService, 'findActiveSessionByRefreshToken', async () =>
+    fakeSession({ securityGeneration: 4 })
+  );
+  let userRead = 0;
+  t.mock.method(userService, 'getUserById', async () =>
+    fakeUser({ sessionGeneration: userRead++ === 0 ? 4 : 5 })
+  );
+  t.mock.method(sessionService, 'rotateSession', async () => ({
+    session: fakeSession({ securityGeneration: 4 }),
+    refreshToken: 'must-not-be-returned',
+  }));
+
+  await assert.rejects(
+    () => authService.refresh('racing-token'),
+    { code: 'AUTH_REFRESH_TOKEN_INVALID', statusCode: 401 }
+  );
+});
+
 test('logout revokes the given session', async (t) => {
   let capturedId;
   t.mock.method(sessionService, 'revokeSession', async (id) => {
@@ -919,23 +963,36 @@ test('logout revokes the given session', async (t) => {
 });
 
 test("logoutAll revokes all of the user's sessions and reports the count", async (t) => {
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 4);
+  const calls = [];
+  t.mock.method(userService, 'advanceSessionGeneration', async (userId) => {
+    calls.push(['advance', userId]);
+    return 8;
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (...args) => {
+    calls.push(['cleanup', ...args]);
+    return 4;
+  });
 
   const result = await authService.logoutAll('user-1');
   assert.equal(result.revokedCount, 4);
+  assert.deepEqual(calls, [
+    ['advance', 'user-1'],
+    ['cleanup', 'user-1', 8],
+  ]);
 });
 
 // ---------------------------------------------------------------------------
-// changePassword — orchestration (persist first, THEN revoke every session)
+// changePassword — orchestration (persist/advance first, THEN bounded cleanup)
 // ---------------------------------------------------------------------------
 
 test('changePassword persists the new password FIRST, then revokes every session (order matters)', async (t) => {
   const calls = [];
   t.mock.method(userService, 'changePassword', async () => {
     calls.push('userService.changePassword');
+    return { sessionGeneration: 3 };
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
-    calls.push('sessionService.revokeAllSessionsForUser');
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
+    calls.push('sessionService.revokeAllSessionsBeforeGeneration');
     return 3;
   });
 
@@ -945,14 +1002,14 @@ test('changePassword persists the new password FIRST, then revokes every session
     newPassword: 'a-new-password',
   });
 
-  assert.deepEqual(calls, ['userService.changePassword', 'sessionService.revokeAllSessionsForUser']);
+  assert.deepEqual(calls, ['userService.changePassword', 'sessionService.revokeAllSessionsBeforeGeneration']);
   assert.deepEqual(result, { passwordChanged: true });
 });
 
 test('changePassword revokes sessions for the authenticated user id', async (t) => {
-  t.mock.method(userService, 'changePassword', async () => {});
+  t.mock.method(userService, 'changePassword', async () => ({ sessionGeneration: 3 }));
   let revokedFor;
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async (userId) => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (userId) => {
     revokedFor = userId;
     return 1;
   });
@@ -974,7 +1031,7 @@ test('changePassword does NOT revoke sessions when the credential change fails',
     });
   });
   let revokeCalled = false;
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     revokeCalled = true;
     return 0;
   });
@@ -995,8 +1052,8 @@ test('changePassword does NOT revoke sessions when the credential change fails',
 });
 
 test('changePassword propagates a session-revocation failure unchanged (password already persisted — no rollback)', async (t) => {
-  t.mock.method(userService, 'changePassword', async () => {});
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
+  t.mock.method(userService, 'changePassword', async () => ({ sessionGeneration: 3 }));
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
     throw new Error('session store unavailable');
   });
 
@@ -1012,8 +1069,8 @@ test('changePassword propagates a session-revocation failure unchanged (password
 });
 
 test('changePassword returns exactly { passwordChanged: true } and issues no tokens', async (t) => {
-  t.mock.method(userService, 'changePassword', async () => {});
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 2);
+  t.mock.method(userService, 'changePassword', async () => ({ sessionGeneration: 3 }));
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 2);
 
   const result = await authService.changePassword({
     userId: 'user-1',
@@ -1087,10 +1144,10 @@ test('resetPassword replaces credentials FIRST, then revokes every session, and 
   const calls = [];
   t.mock.method(userService, 'resetPasswordWithToken', async () => {
     calls.push('resetPasswordWithToken');
-    return { userId: 'user-1' };
+    return { userId: 'user-1', sessionGeneration: 2 };
   });
-  t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => {
-    calls.push('revokeAllSessionsForUser');
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
+    calls.push('revokeAllSessionsBeforeGeneration');
     return 2;
   });
 
@@ -1099,7 +1156,7 @@ test('resetPassword replaces credentials FIRST, then revokes every session, and 
     newPassword: 'brand-new-secret',
   });
 
-  assert.deepEqual(calls, ['resetPasswordWithToken', 'revokeAllSessionsForUser']);
+  assert.deepEqual(calls, ['resetPasswordWithToken', 'revokeAllSessionsBeforeGeneration']);
   assert.deepEqual(result, { passwordReset: true });
   assert.equal('accessToken' in result, false);
   assert.equal('refreshToken' in result, false);
@@ -1112,7 +1169,7 @@ test('resetPassword does not revoke sessions when token consumption fails', asyn
       code: 'AUTH_PASSWORD_RESET_TOKEN_INVALID',
     });
   });
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 0);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 0);
 
   await assert.rejects(
     () =>
@@ -1127,7 +1184,7 @@ test('resetPassword does not revoke sessions when token consumption fails', asyn
 
 test('verifyEmail consumes the token and never revokes sessions', async (t) => {
   t.mock.method(userService, 'verifyEmailWithToken', async () => ({ userId: 'user-1' }));
-  const revoke = t.mock.method(sessionService, 'revokeAllSessionsForUser', async () => 1);
+  const revoke = t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => 1);
 
   const result = await authService.verifyEmail('A'.repeat(43));
 
@@ -1205,4 +1262,202 @@ test('resendVerification hides email delivery failure and logs no recipient, tok
   assert.equal(serialized.includes('#token='), false);
   assert.equal(serialized.includes('provider failed'), false);
   assert.ok(serialized.includes('503'));
+});
+
+test('email change stores only a digest, sends both notices, and returns no raw token', async (t) => {
+  let prepared;
+  t.mock.method(userService, 'prepareEmailChange', async (args) => {
+    prepared = args;
+    return {
+      currentEmail: 'old@example.com',
+      pendingEmail: 'new@example.com',
+      expiresAt: args.expiresAt,
+    };
+  });
+  let verification;
+  let notice;
+  t.mock.method(emailService, 'sendEmailChangeVerificationEmail', async (args) => { verification = args; });
+  t.mock.method(emailService, 'sendEmailChangeNotice', async (args) => { notice = args; });
+
+  const result = await authService.requestEmailChange({
+    userId: 'user-1',
+    newEmail: ' NEW@example.com ',
+    currentPassword: 'current-secret',
+  });
+
+  assert.match(prepared.tokenHash, /^[a-f0-9]{64}$/);
+  assert.equal('rawToken' in prepared, false);
+  assert.equal(verification.to, 'new@example.com');
+  assert.equal(notice.to, 'old@example.com');
+  assert.match(new URL(verification.verifyUrl).search, /^\?token=[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(result.pendingEmailChange.email, 'new@example.com');
+  assert.equal(JSON.stringify(result).includes('token='), false);
+});
+
+test('email-change cancellation delegates only the authenticated user and returns null status', async (t) => {
+  let cancelledUserId;
+  t.mock.method(userService, 'cancelEmailChange', async (userId) => { cancelledUserId = userId; });
+  assert.deepEqual(await authService.cancelEmailChange('user-1'), { pendingEmailChange: null });
+  assert.equal(cancelledUserId, 'user-1');
+});
+
+test('email-change verification commits before generation cleanup and completion mail failure cannot roll it back', async (t) => {
+  const calls = [];
+  t.mock.method(userService, 'verifyEmailChangeWithToken', async () => {
+    calls.push('commit');
+    return {
+      userId: 'user-1',
+      previousEmail: 'old@example.com',
+      email: 'new@example.com',
+      sessionGeneration: 6,
+    };
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (_id, generation) => {
+    assert.equal(generation, 6);
+    calls.push('revoke');
+  });
+  t.mock.method(emailService, 'sendEmailChangeCompletedEmail', async () => {
+    calls.push('mail');
+    throw new Error('provider unavailable');
+  });
+  t.mock.method(console, 'error', () => {});
+
+  assert.deepEqual(await authService.verifyEmailChange('x'.repeat(43)), { emailChanged: true });
+  assert.deepEqual(calls, ['commit', 'revoke', 'mail']);
+});
+
+test('email-change cleanup failure leaves the advanced generation authoritative', async (t) => {
+  t.mock.method(userService, 'verifyEmailChangeWithToken', async () => ({
+    userId: 'user-1', previousEmail: 'old@example.com', email: 'new@example.com',
+    sessionGeneration: 6,
+  }));
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (_id, generation) => {
+    assert.equal(generation, 6);
+    throw new Error('session store unavailable');
+  });
+  const completionMail = t.mock.method(emailService, 'sendEmailChangeCompletedEmail', async () => {});
+
+  await assert.rejects(() => authService.verifyEmailChange('x'.repeat(43)), /session store unavailable/);
+  assert.equal(completionMail.mock.callCount(), 0);
+});
+
+test('email-change cleanup failure recovers through a new-email login at the committed generation', async (t) => {
+  const committed = fakeUser({ email: 'new@example.com', sessionGeneration: 6 });
+  t.mock.method(userService, 'verifyEmailChangeWithToken', async () => ({
+    userId: committed._id,
+    previousEmail: 'old@example.com',
+    email: committed.email,
+    sessionGeneration: committed.sessionGeneration,
+  }));
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async () => {
+    throw new Error('session cleanup delayed');
+  });
+  await assert.rejects(
+    () => authService.verifyEmailChange('x'.repeat(43)),
+    /session cleanup delayed/
+  );
+
+  t.mock.restoreAll();
+  t.mock.method(userService, 'verifyCredentials', async (email) => {
+    assert.equal(email, 'new@example.com');
+    return committed;
+  });
+  t.mock.method(userService, 'getUserIfPasswordHashMatches', async (...args) => {
+    assert.equal(args[4], 6);
+    return committed;
+  });
+  let boundGeneration;
+  t.mock.method(sessionService, 'createSession', async (_userId, securityGeneration) => {
+    boundGeneration = securityGeneration;
+    return {
+      session: fakeSession({ securityGeneration }),
+      refreshToken: 'new-generation-refresh',
+    };
+  });
+
+  const login = await authService.login({ email: 'new@example.com', password: 'correct' });
+  assert.equal(boundGeneration, 6);
+  assert.equal(login.refreshToken, 'new-generation-refresh');
+});
+
+test('deactivation wins in Mongo before generation-bounded cleanup and issues no replacement token', async (t) => {
+  const calls = [];
+  t.mock.method(userService, 'deactivate', async ({ userId }) => {
+    assert.equal(userId, 'user-1');
+    calls.push('persist');
+    return { userId, sessionGeneration: 7 };
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (userId, generation) => {
+    assert.equal(userId, 'user-1');
+    assert.equal(generation, 7);
+    calls.push('revoke');
+  });
+  const result = await authService.deactivate('user-1');
+  assert.deepEqual(calls, ['persist', 'revoke']);
+  assert.deepEqual(result, { deactivated: true });
+  assert.equal('accessToken' in result, false);
+});
+
+test('password reactivation binds the new session and post-session fence to the committed generation', async (t) => {
+  const observed = new Date('2026-10-08T00:00:00.000Z');
+  t.mock.method(userService, 'verifyCredentials', async () => fakeUser({
+    deactivatedAt: observed,
+    sessionGeneration: 4,
+  }));
+  t.mock.method(userService, 'completePasswordLogin', async () => fakeUser({
+    deactivatedAt: undefined,
+    sessionGeneration: 5,
+  }));
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (_id, generation) => {
+    assert.equal(generation, 5);
+  });
+  let fenceArgs;
+  t.mock.method(userService, 'getUserIfPasswordHashMatches', async (...args) => {
+    fenceArgs = args;
+    return fakeUser();
+  });
+  t.mock.method(sessionService, 'createSession', async () => ({ session: fakeSession(), refreshToken: 'fresh' }));
+  const result = await authService.login({ email: 'ada@example.com', password: 'correct' });
+  assert.deepEqual(fenceArgs, ['user-1', 'captured-password-hash', 'ada@example.com', null, 5]);
+  assert.equal(result.user.deactivatedAt, undefined);
+});
+
+test('Google reactivation has password-login parity and binds the committed generation', async (t) => {
+  mockGoogleCredential(t);
+  const deactivatedAt = new Date('2026-10-08T00:00:00.000Z');
+  const deactivated = fakeUser({
+    deactivatedAt,
+    sessionGeneration: 3,
+    authIdentities: [{ provider: 'google', subject: 'google-subject-1' }],
+  });
+  const reactivated = fakeUser({
+    deactivatedAt: undefined,
+    sessionGeneration: 4,
+    authIdentities: deactivated.authIdentities,
+  });
+  let identityRead = 0;
+  t.mock.method(userService, 'getUserByAuthIdentity', async () =>
+    identityRead++ === 0 ? deactivated : reactivated
+  );
+  t.mock.method(userService, 'completeSocialLogin', async (args) => {
+    assert.equal(args.deactivatedAt, deactivatedAt);
+    assert.equal(args.sessionGeneration, 3);
+    return reactivated;
+  });
+  t.mock.method(sessionService, 'revokeAllSessionsBeforeGeneration', async (_id, generation) => {
+    assert.equal(generation, 4);
+  });
+  let boundGeneration;
+  t.mock.method(sessionService, 'createSession', async (_id, securityGeneration) => {
+    boundGeneration = securityGeneration;
+    return {
+      session: fakeSession({ securityGeneration }),
+      refreshToken: 'google-reactivated-refresh',
+    };
+  });
+
+  const result = await authService.googleLogin({ idToken: 'token', challengeId: 'challenge' });
+  assert.equal(boundGeneration, 4);
+  assert.equal(result.user.sessionGeneration, 4);
+  assert.equal(result.refreshToken, 'google-reactivated-refresh');
 });

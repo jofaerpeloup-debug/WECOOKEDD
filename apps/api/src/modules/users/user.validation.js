@@ -77,15 +77,22 @@ const preferenceEntrySchema = z
   );
 
 // No .default([]) — an omitted array leaves the stored value untouched. A
-// supplied array (including []) replaces that array wholesale. Duplicates are
-// intentionally preserved: this endpoint stores exactly what the client sent,
-// after per-entry trimming only.
+// supplied array (including []) replaces that array wholesale. Comparison is
+// case-insensitive; the first trimmed spelling wins and order is preserved.
 const preferenceListSchema = z
   .array(preferenceEntrySchema)
-  .max(
-    MAX_PREFERENCE_ENTRIES,
-    `A maximum of ${MAX_PREFERENCE_ENTRIES} preference entries is allowed.`
-  );
+  .transform((values) => {
+    const seen = new Set();
+    return values.filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  })
+  .refine((values) => values.length <= MAX_PREFERENCE_ENTRIES, {
+    message: `A maximum of ${MAX_PREFERENCE_ENTRIES} preference entries is allowed.`,
+  });
 
 // `enabled` is REQUIRED when `notifications` is present, so `{ notifications: {} }`
 // is rejected natively. Presence is by key, never truthiness — `enabled: false`

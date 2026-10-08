@@ -5,6 +5,10 @@ const auditService = require('../audit/audit.service');
 const { hashPassword, comparePassword } = require('../../shared/security/password');
 const { hashPasswordResetToken } = require('../../shared/security/password-reset-token');
 const { hashEmailVerificationToken } = require('../../shared/security/email-verification-token');
+const {
+  hashEmailChangeToken,
+  EMAIL_CHANGE_TOKEN_PATTERN,
+} = require('../../shared/security/email-change-token');
 const { AppError } = require('../../shared/errors/app-error');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
@@ -23,6 +27,12 @@ const SORT_MAP = {
 
 function normalizeEmail(email) {
   return email.trim().toLowerCase();
+}
+
+function effectiveSessionGeneration(user) {
+  return Number.isInteger(user?.sessionGeneration) && user.sessionGeneration >= 0
+    ? user.sessionGeneration
+    : 0;
 }
 
 // Escapes regex metacharacters so a free-text admin search is always a literal
@@ -111,8 +121,50 @@ async function verifyCredentials(email, password) {
   return user;
 }
 
-function getUserIfPasswordHashMatches(userId, passwordHash) {
-  return userRepository.findByIdWithPasswordHash(userId, passwordHash);
+function getUserIfPasswordHashMatches(
+  userId,
+  passwordHash,
+  email,
+  deactivatedAt,
+  sessionGeneration
+) {
+  return userRepository.findByIdWithPasswordHash(
+    userId,
+    passwordHash,
+    email,
+    deactivatedAt,
+    sessionGeneration
+  );
+}
+
+function completePasswordLogin({ userId, passwordHash, email, deactivatedAt, sessionGeneration }) {
+  if (!deactivatedAt) {
+    return getUserIfPasswordHashMatches(
+      userId,
+      passwordHash,
+      email,
+      null,
+      sessionGeneration
+    );
+  }
+  return userRepository.reactivatePasswordLoginIfCurrent({
+    id: userId,
+    passwordHash,
+    email,
+    deactivatedAt,
+    sessionGeneration,
+  });
+}
+
+function completeSocialLogin({ userId, email, deactivatedAt, sessionGeneration, provider, subject }) {
+  return userRepository.completeSocialLogin({
+    id: userId,
+    email,
+    deactivatedAt,
+    sessionGeneration,
+    provider,
+    subject,
+  });
 }
 
 function getUserById(id) {
@@ -194,22 +246,10 @@ async function listUsers({ search, role, status, sort, page, limit }) {
  * authenticate). `targetUserId` is the validated :userId path param — target
  * identity only, never a source of authority.
  *
- * Session/status ordering (see docs/architecture/admin-users-backend-api.md):
- *
- *   suspended -> active : revoke every session BEFORE status flips back to
- *     'active', so a session left unrevoked by an earlier failed suspension
- *     (or a login race) cannot spring back to life. This runs while the user
- *     is still 'suspended', so no login/refresh can mint a session in
- *     parallel. If revocation throws, the error propagates and the user is
- *     NOT reactivated.
- *
- *   active -> suspended : revoke every session AFTER 'suspended' is
- *     persisted. Once committed, login throws AUTH_ACCOUNT_SUSPENDED and
- *     refresh refuses to rotate, so the sweep is race-free. If revocation
- *     throws, the error propagates but the user stays suspended (User.status
- *     is authoritative for authenticate/refresh regardless) — no rollback.
- *
- *   active -> active : no session action.
+ * A winning suspension or recovery transition advances sessionGeneration in
+ * the same User write. The later Session cleanup is bounded strictly below
+ * that committed generation, so it cannot remove a current/newer session and
+ * its timing is never part of the validity decision.
  *
  * Cross-module revocation goes through SessionService only; this module
  * never imports the Session model or repository.
@@ -255,20 +295,13 @@ async function adminUpdateUser({ actingUserId, actingUserRole, targetUserId, pat
   for (let attempt = 0; attempt < MAX_STATUS_CAS_ATTEMPTS; attempt += 1) {
     const fromStatus = target.status;
     const statusChanged = update.status !== fromStatus;
-    const reactivating = update.status === 'active' && fromStatus === 'suspended';
-    // Fires for a winning active->suspended transition and for an initial
-    // suspended->suspended mop-up. A request that loses a suspension CAS exits
-    // on the authoritative reload below and never reaches this side effect.
+    const observedGeneration = effectiveSessionGeneration(target);
     const suspending = update.status === 'suspended';
-
-    if (reactivating) {
-      const sessionCutoff = new Date();
-      await sessionService.revokeAllSessionsForUserCreatedBy(targetId, sessionCutoff);
-    }
 
     const updated = await userRepository.updateStatusIfCurrent(
       targetId,
       fromStatus,
+      observedGeneration,
       update.status
     );
 
@@ -284,9 +317,12 @@ async function adminUpdateUser({ actingUserId, actingUserRole, targetUserId, pat
       continue;
     }
 
-    if (suspending) {
+    if (statusChanged || suspending) {
       try {
-        await sessionService.revokeAllSessionsForUser(targetId);
+        await sessionService.revokeAllSessionsBeforeGeneration(
+          targetId,
+          effectiveSessionGeneration(updated)
+        );
       } catch (error) {
         if (statusChanged) {
           await auditService.record({
@@ -412,11 +448,9 @@ async function persistAvatarIfCurrent({ userId, observedRevision, avatar }) {
  * This function owns credential policy only: load the hash, verify the current
  * password, reject a same-password no-op, hash the new password, and persist it
  * through a credential-replacement write that atomically invalidates every
- * outstanding password-reset token. It does NOT revoke sessions —
- * `AuthService.changePassword` orchestrates that AFTER this resolves, so the
- * new hash is always persisted before the all-sessions sweep (persist first;
- * if the later revoke throws, the password change still stands — documented
- * residual, same "no rollback" stance as `adminUpdateUser` active->suspended).
+ * outstanding password-reset token and advances sessionGeneration. It does
+ * not clean Session rows; AuthService performs generation-bounded cleanup
+ * after this authoritative write.
  */
 async function changePassword({ userId, currentPassword, newPassword }) {
   const user = await userRepository.findByIdWithPassword(userId);
@@ -458,11 +492,17 @@ async function changePassword({ userId, currentPassword, newPassword }) {
   }
 
   const newPasswordHash = await hashPassword(newPassword);
-  const result = await userRepository.replacePasswordById(userId, newPasswordHash);
-  if (!result || result.matchedCount === 0) {
+  const updated = await userRepository.replacePasswordById(
+    userId,
+    user.passwordHash,
+    effectiveSessionGeneration(user),
+    newPasswordHash
+  );
+  if (!updated) {
     // Deleted between the lookup above and this write.
     throw sessionInvalidError();
   }
+  return { sessionGeneration: effectiveSessionGeneration(updated) };
 }
 
 /**
@@ -511,7 +551,10 @@ async function resetPasswordWithToken({ rawToken, newPassword }) {
     });
   }
 
-  return { userId: String(user._id) };
+  return {
+    userId: String(user._id),
+    sessionGeneration: effectiveSessionGeneration(user),
+  };
 }
 
 /**
@@ -581,10 +624,114 @@ async function verifyEmailWithToken({ rawToken }) {
   return { userId: String(user._id) };
 }
 
+function emailAlreadyExistsError() {
+  return new AppError('An account with this email already exists.', {
+    statusCode: 409,
+    code: 'USER_EMAIL_ALREADY_EXISTS',
+  });
+}
+
+function emailChangeTokenInvalidError() {
+  return new AppError('Email change token is invalid or expired.', {
+    statusCode: 400,
+    code: 'AUTH_EMAIL_CHANGE_TOKEN_INVALID',
+  });
+}
+
+async function prepareEmailChange({ userId, newEmail, currentPassword, tokenHash, expiresAt }) {
+  const user = await userRepository.findByIdWithPassword(userId);
+  if (!user || user.status !== 'active' || user.deactivatedAt) throw sessionInvalidError();
+  if (typeof user.passwordHash !== 'string' || user.passwordHash.trim().length === 0) {
+    throw new AppError('Email change requires a WeCooked password.', {
+      statusCode: 400,
+      code: 'AUTH_EMAIL_CHANGE_PASSWORD_UNAVAILABLE',
+    });
+  }
+
+  const valid = await comparePassword(currentPassword, user.passwordHash);
+  if (!valid) {
+    throw new AppError('Current password is incorrect.', {
+      statusCode: 400,
+      code: 'AUTH_CURRENT_PASSWORD_INVALID',
+    });
+  }
+
+  const normalizedEmail = normalizeEmail(newEmail);
+  if (normalizedEmail === user.email || await userRepository.findByEmail(normalizedEmail)) {
+    throw emailAlreadyExistsError();
+  }
+
+  const updated = await userRepository.setPendingEmailChange({
+    userId,
+    passwordHash: user.passwordHash,
+    currentEmail: user.email,
+    pendingEmail: normalizedEmail,
+    tokenHash,
+    expiresAt,
+  });
+  if (!updated) throw sessionInvalidError();
+  return { currentEmail: user.email, pendingEmail: normalizedEmail, expiresAt };
+}
+
+async function cancelEmailChange(userId) {
+  const user = await userRepository.clearPendingEmailChange(userId);
+  if (!user) throw sessionInvalidError();
+}
+
+async function verifyEmailChangeWithToken(rawToken) {
+  if (typeof rawToken !== 'string' || !EMAIL_CHANGE_TOKEN_PATTERN.test(rawToken)) {
+    throw emailChangeTokenInvalidError();
+  }
+  const tokenHash = hashEmailChangeToken(rawToken);
+  const pending = await userRepository.findPendingEmailChangeByTokenHash(tokenHash);
+  if (!pending || !pending.pendingEmail || !pending.pendingEmailChangeExpiresAt) {
+    throw emailChangeTokenInvalidError();
+  }
+
+  let changed;
+  try {
+    changed = await userRepository.verifyPendingEmailChange({
+      userId: pending._id,
+      tokenHash,
+      pendingEmail: pending.pendingEmail,
+      now: new Date(),
+    });
+  } catch (error) {
+    if (error?.code !== DUPLICATE_KEY_ERROR_CODE) throw error;
+    await userRepository.invalidatePendingEmailChange({ userId: pending._id, tokenHash });
+    throw emailAlreadyExistsError();
+  }
+  if (!changed) throw emailChangeTokenInvalidError();
+  return {
+    userId: String(changed._id),
+    previousEmail: pending.email,
+    email: pending.pendingEmail,
+    sessionGeneration: effectiveSessionGeneration(changed),
+  };
+}
+
+async function deactivate({ userId }) {
+  const user = await userRepository.deactivateIfActive({ userId });
+  if (!user) throw sessionInvalidError();
+  return {
+    userId: String(user._id),
+    sessionGeneration: effectiveSessionGeneration(user),
+  };
+}
+
+async function advanceSessionGeneration(userId) {
+  const user = await userRepository.advanceSessionGenerationForActiveUser(userId);
+  if (!user) throw sessionInvalidError();
+  return effectiveSessionGeneration(user);
+}
+
 module.exports = {
   registerUser,
   verifyCredentials,
+  effectiveSessionGeneration,
+  completePasswordLogin,
   getUserIfPasswordHashMatches,
+  completeSocialLogin,
   getUserById,
   getPublicUsersByIds,
   getUserByAuthIdentity,
@@ -601,4 +748,9 @@ module.exports = {
   startEmailVerification,
   prepareEmailVerification,
   verifyEmailWithToken,
+  prepareEmailChange,
+  cancelEmailChange,
+  verifyEmailChangeWithToken,
+  deactivate,
+  advanceSessionGeneration,
 };

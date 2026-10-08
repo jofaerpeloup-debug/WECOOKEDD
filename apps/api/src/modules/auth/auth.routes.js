@@ -22,6 +22,10 @@ const {
   resendVerificationSchema,
   socialChallengeSchema,
   googleSocialSchema,
+  emailChangeSchema,
+  emailChangeCancelSchema,
+  emailChangeVerifySchema,
+  deactivateSchema,
 } = require('./auth.validation');
 
 const router = Router();
@@ -137,6 +141,33 @@ router.post(
   authRateLimiter,
   validate(changePasswordSchema),
   authController.changePassword
+);
+router.post(
+  '/email-change',
+  authenticate,
+  authRateLimiter,
+  validate(emailChangeSchema),
+  authController.requestEmailChange
+);
+router.post(
+  '/email-change/cancel',
+  authenticate,
+  validate(emailChangeCancelSchema),
+  authController.cancelEmailChange
+);
+router.post(
+  '/email-change/verify',
+  authRateLimiter,
+  validate(emailChangeVerifySchema),
+  noStore,
+  authController.verifyEmailChange
+);
+router.post(
+  '/deactivate',
+  authenticate,
+  authRateLimiter,
+  validate(deactivateSchema),
+  authController.deactivate
 );
 
 module.exports = router;

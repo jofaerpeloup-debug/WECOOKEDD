@@ -111,7 +111,7 @@ describe('Linked Accounts reflects real server state, never a fake linked/unlink
 
   it('links via the real AuthContext.linkGoogle(), never a local-only toggle', () => {
     expect(raw).toMatch(/import \{ useAuth \} from '\.\.\/context\/AuthContext'/);
-    expect(code).toMatch(/const \{ user, signOut, signOutEverywhere, linkGoogle \} = useAuth\(\)/);
+    expect(code).toMatch(/const \{ user, signOut, signOutEverywhere, linkGoogle, refreshUser, deactivate \} = useAuth\(\)/);
     expect(code).toMatch(/await linkGoogle\(\)/);
   });
 
@@ -183,5 +183,32 @@ describe('the Security route registration is unchanged', () => {
   it('AccountDetailScreen still hands off to Security for the real change-password flow', () => {
     const accountDetail = fs.readFileSync(path.join(SRC, 'screens/AccountDetailScreen.js'), 'utf8');
     expect(accountDetail).toMatch(/onRightActionPress=\{\(\) => navigation\.navigate\('Security'\)\}/);
+  });
+});
+
+describe('ACCOUNT2 account mutations are owner, operation, and generation fenced', () => {
+  it('captures owner and generation and rejects stale email/deactivation completions', () => {
+    expect(code).toMatch(/const operation = \{ kind, ownerId: ownerRef\.current, generation: generationRef\.current \}/);
+    expect(code).toMatch(/accountOperationRef\.current === operation/);
+    expect(code).toMatch(/ownerRef\.current === operation\.ownerId/);
+    expect(code).toMatch(/generationRef\.current === operation\.generation/);
+    expect(code).toMatch(/beginAccountOperation\('email-change'\)/);
+    expect(code).toMatch(/beginAccountOperation\('email-change-cancel'\)/);
+    expect(code).toMatch(/beginAccountOperation\('deactivate'\)/);
+  });
+
+  it('uses server-authoritative refresh and AuthContext deactivation, never local identity writes', () => {
+    expect(code).toMatch(/await refreshUser\(\)/);
+    expect(code).toMatch(/await deactivate\(\)/);
+    expect(code).not.toMatch(/setUser|setIsLoggedIn|AsyncStorage|SecureStore/);
+  });
+});
+
+describe('ACCOUNT2 provider-only email-change copy', () => {
+  it('does not claim a Google-only account can add a password in this release', () => {
+    expect(code).toMatch(/Accounts that sign in only\s+with Google cannot change their email in WeCooked\./);
+    const messages = read('api/errorMessages.js');
+    expect(messages).toMatch(/account has no WeCooked password/);
+    expect(messages).not.toMatch(/Add a WeCooked password before changing/);
   });
 });

@@ -42,8 +42,23 @@ describe('MOBILE-PROFILE2 Account Details source contract', () => {
   it('sends only owned profile fields during save', () => {
     const call = raw.match(/updateProfile\(\{([^;]+?)\}\);/s);
     expect(call).not.toBeNull();
-    expect(call[1]).toMatch(/name: trimmedName, bio, cookingLevel/);
-    expect(call[1]).toMatch(/dietaryPreferences: dietary, allergies/);
+    expect(call[1]).toMatch(/name: trimmedName,\s*bio,\s*cookingLevel/);
+    expect(call[1]).toMatch(/dietaryPreferences: normalizePreferenceValues\(dietary\)/);
+    expect(call[1]).toMatch(/allergies: normalizePreferenceValues\(allergies\)/);
     expect(call[1]).not.toMatch(/avatarUrl|assetId|role|status|email|userId/);
+  });
+
+  it('normalizes legacy duplicate preferences on hydration and save', () => {
+    expect(raw).toMatch(/normalizePreferenceValues\(user\?\.preferences\?\.dietaryPreferences \?\? \[\]\)/);
+    expect(raw).toMatch(/dietaryPreferences: normalizePreferenceValues\(dietary\)/);
+    expect(raw).toMatch(/allergies: normalizePreferenceValues\(allergies\)/);
+  });
+
+  it('uses sibling edit/remove actions with labels instead of nested Pressables', () => {
+    expect(raw).toMatch(/accessibilityLabel=\{`Edit \$\{item\}`\}/);
+    expect(raw).toMatch(/accessibilityLabel=\{`Remove \$\{item\}`\}/);
+    expect(raw).toMatch(/accessibilityLabel=\{`Save edit for \$\{item\}`\}/);
+    expect(raw).toMatch(/accessibilityLabel=\{`Add \$\{title\}`\}/);
+    expect(raw).not.toMatch(/<Pressable key=\{item\}[\s\S]*?<Pressable/);
   });
 });

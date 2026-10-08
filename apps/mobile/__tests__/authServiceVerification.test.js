@@ -21,6 +21,11 @@ jest.mock('../src/api/client', () => {
   };
 });
 jest.mock('../src/api/tokenStore');
+jest.mock('../src/auth/googleAuthFlow', () => ({
+  signInWithGoogle: jest.fn(),
+  linkGoogleAccount: jest.fn(),
+  clearNativeState: jest.fn(async () => {}),
+}));
 
 const { api } = require('../src/api/client');
 const tokenStore = require('../src/api/tokenStore');
@@ -31,6 +36,7 @@ beforeEach(() => {
   tokenStore.setAccessToken.mockReturnValue(undefined);
   tokenStore.setRefreshToken.mockResolvedValue(true);
   tokenStore.clearSession.mockResolvedValue(undefined);
+  tokenStore.getRefreshToken.mockResolvedValue(null);
 });
 
 describe('authService.verifyEmail', () => {
@@ -100,5 +106,126 @@ describe('authService.resendVerification', () => {
     api.post.mockResolvedValue(RESEND_RESPONSE);
     const result = await authService.resendVerification('unknown@example.com');
     expect(result).toBe(RESEND_RESPONSE);
+  });
+});
+
+describe('ACCOUNT2 auth service calls', () => {
+  it('uses exact authenticated request and cancel bodies', async () => {
+    api.post.mockResolvedValue({ pendingEmailChange: null });
+    await authService.requestEmailChange({ newEmail: 'new@example.com', currentPassword: 'secret' });
+    expect(api.post).toHaveBeenCalledWith('/auth/email-change', {
+      body: { newEmail: 'new@example.com', currentPassword: 'secret' },
+    });
+    await authService.cancelEmailChange();
+    expect(api.post).toHaveBeenLastCalledWith('/auth/email-change/cancel', { body: {} });
+  });
+
+  it('verifies email change unauthenticated without touching local token state itself', async () => {
+    api.post.mockResolvedValue({ emailChanged: true });
+    await authService.verifyEmailChange('C'.repeat(43));
+    expect(api.post).toHaveBeenCalledWith('/auth/email-change/verify', {
+      auth: false,
+      body: { token: 'C'.repeat(43) },
+    });
+    expect(tokenStore.clearSession).not.toHaveBeenCalled();
+  });
+
+  it('sends only the exact deactivation confirmation and leaves cleanup to AuthContext', async () => {
+    api.post.mockResolvedValue({ deactivated: true });
+    await authService.deactivateAccount();
+    expect(api.post).toHaveBeenCalledWith('/auth/deactivate', { body: { confirmation: 'DEACTIVATE' } });
+    expect(tokenStore.clearSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('ACCOUNT2 stale-success auth transitions', () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const React = require('react');
+  const TestRenderer = require('react-test-renderer');
+  const { act } = TestRenderer;
+  const { AuthProvider, useAuth } = require('../src/context/AuthContext');
+
+  function deferred() {
+    let resolve;
+    const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+    return { promise, resolve };
+  }
+
+  async function renderProvider() {
+    let current;
+    function Capture() {
+      current = useAuth();
+      return null;
+    }
+    let renderer;
+    await act(async () => {
+      renderer = TestRenderer.create(
+        React.createElement(AuthProvider, null, React.createElement(Capture))
+      );
+      await Promise.resolve();
+    });
+    return { get current() { return current; }, renderer };
+  }
+
+  async function signIn(provider, user, email) {
+    api.post.mockResolvedValueOnce({
+      user,
+      accessToken: `access-${user.id}`,
+      refreshToken: `refresh-${user.id}`,
+    });
+    api.get.mockResolvedValueOnce({ user });
+    await act(async () => {
+      await provider.current.signIn({ email, password: 'Password1!' });
+    });
+  }
+
+  it('does not let stale A deactivation clear a newer B account/session', async () => {
+    const provider = await renderProvider();
+    const userA = { id: 'A', email: 'a@example.com' };
+    const userB = { id: 'B', email: 'b@example.com' };
+    await signIn(provider, userA, userA.email);
+    const response = deferred();
+    api.post.mockImplementationOnce(() => response.promise);
+
+    let staleCompletion;
+    await act(async () => {
+      staleCompletion = provider.current.deactivate();
+      await Promise.resolve();
+    });
+    await signIn(provider, userB, userB.email);
+    await act(async () => {
+      response.resolve({ deactivated: true });
+      await staleCompletion;
+    });
+
+    expect(provider.current.user).toBe(userB);
+    expect(provider.current.isLoggedIn).toBe(true);
+    expect(tokenStore.clearSession).not.toHaveBeenCalled();
+    await act(async () => provider.renderer.unmount());
+  });
+
+  it('does not let stale A email-change verification clear a newer B account/session', async () => {
+    const provider = await renderProvider();
+    const userA = { id: 'A', email: 'a@example.com' };
+    const userB = { id: 'B', email: 'b@example.com' };
+    await signIn(provider, userA, userA.email);
+    const response = deferred();
+    api.post.mockImplementationOnce(() => response.promise);
+
+    let staleCompletion;
+    await act(async () => {
+      staleCompletion = provider.current.verifyEmailChange('C'.repeat(43));
+      await Promise.resolve();
+    });
+    await signIn(provider, userB, userB.email);
+    await act(async () => {
+      response.resolve({ emailChanged: true });
+      await staleCompletion;
+    });
+
+    expect(provider.current.user).toBe(userB);
+    expect(provider.current.isLoggedIn).toBe(true);
+    expect(tokenStore.clearSession).not.toHaveBeenCalled();
+    await act(async () => provider.renderer.unmount());
   });
 });

@@ -1,7 +1,16 @@
+const mongoose = require('mongoose');
 const Session = require('./session.model');
 
-function createSession({ userId, refreshTokenHash, expiresAt }) {
-  return Session.create({ userId, refreshTokenHash, expiresAt });
+function createSession({ userId, refreshTokenHash, expiresAt, securityGeneration }) {
+  const sessionId = new mongoose.Types.ObjectId();
+  return Session.findOneAndUpdate(
+    { _id: sessionId },
+    {
+      $setOnInsert: { userId, refreshTokenHash, expiresAt, securityGeneration },
+      $currentDate: { securityIssuedAt: true },
+    },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+  );
 }
 
 function findActiveById(id) {
@@ -38,21 +47,16 @@ function revokeById(id, now) {
   );
 }
 
-async function revokeAllForUser(userId, now) {
-  const result = await Session.updateMany(
-    { userId, revokedAt: null, expiresAt: { $gt: now } },
-    { $set: { revokedAt: now } }
-  );
-  return result.modifiedCount;
-}
-
-async function revokeAllForUserCreatedBy(userId, createdAtCutoff, now) {
+async function revokeAllForUserBeforeGeneration(userId, securityGeneration, now) {
   const result = await Session.updateMany(
     {
       userId,
       revokedAt: null,
       expiresAt: { $gt: now },
-      createdAt: { $lte: createdAtCutoff },
+      $or: [
+        { securityGeneration: { $lt: securityGeneration } },
+        { securityGeneration: { $exists: false } },
+      ],
     },
     { $set: { revokedAt: now } }
   );
@@ -65,6 +69,5 @@ module.exports = {
   findActiveByHash,
   rotateByHash,
   revokeById,
-  revokeAllForUser,
-  revokeAllForUserCreatedBy,
+  revokeAllForUserBeforeGeneration,
 };

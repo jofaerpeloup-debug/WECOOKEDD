@@ -13,6 +13,10 @@ function sessionInvalid() {
   });
 }
 
+function effectiveGeneration(value) {
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
 /**
  * Verifies the Authorization: Bearer <access-token> header, then confirms
  * the session it names is still active, belongs to the same user the token
@@ -78,7 +82,13 @@ async function authenticate(req, res, next) {
     // confirmed they agree, but this keeps the lookup anchored to data we
     // just read from MongoDB rather than the caller-supplied token.
     const user = await userService.getUserById(session.userId);
-    if (!user || user.status !== 'active') {
+    if (
+      !user
+      || user.status !== 'active'
+      || user.deactivatedAt
+      || effectiveGeneration(session.securityGeneration)
+        !== effectiveGeneration(user.sessionGeneration)
+    ) {
       throw sessionInvalid();
     }
 
