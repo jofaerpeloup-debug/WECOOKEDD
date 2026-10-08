@@ -52,6 +52,26 @@ const listRecipes = asyncHandler(async (req, res) => {
   });
 });
 
+const listSmartCollections = asyncHandler(async (req, res) => {
+  const smartCollections = await recipeService.listSmartCollections();
+  sendSuccess(res, { smartCollections });
+});
+
+const getSmartCollection = asyncHandler(async (req, res) => {
+  const { groupKey } = req.validated.params;
+  const { page, limit } = req.validated.query;
+  const { smartCollection, items, total } = await recipeService.getSmartCollection({
+    groupKey,
+    page,
+    limit,
+  });
+  sendSuccess(res, {
+    smartCollection,
+    recipes: items.map(toPublicRecipe),
+    pagination: toPagination({ page, limit, total }),
+  });
+});
+
 const getRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
@@ -112,6 +132,8 @@ const importRecipeUrl = asyncHandler(async (req, res) => {
 
 module.exports = {
   listRecipes,
+  listSmartCollections,
+  getSmartCollection,
   getRecipe,
   createRecipe,
   createDraft,

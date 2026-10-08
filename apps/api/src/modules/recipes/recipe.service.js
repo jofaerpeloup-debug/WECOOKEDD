@@ -32,6 +32,14 @@ const SORT_MAP = {
   updatedDesc: { updatedAt: -1 },
 };
 
+const SMART_COLLECTIONS = Object.freeze([
+  Object.freeze({ key: 'quick-meals', name: 'Quick Meals' }),
+  Object.freeze({ key: 'balanced-meals', name: 'Balanced Meals' }),
+  Object.freeze({ key: 'weekend-cooking', name: 'Weekend Cooking' }),
+  Object.freeze({ key: 'dinner-ideas', name: 'Dinner Ideas' }),
+  Object.freeze({ key: 'breakfast', name: 'Breakfast' }),
+]);
+
 function notFoundError() {
   return new AppError('Recipe not found.', { statusCode: 404, code: 'RECIPE_NOT_FOUND' });
 }
@@ -669,6 +677,69 @@ function totalTimeExpression(bucket) {
   };
 }
 
+function matchesSmartCollection(recipe, groupKey) {
+  const totalTimeMinutes = (recipe.prepTimeMinutes ?? 0) + recipe.cookTimeMinutes;
+  if (groupKey === 'quick-meals') return totalTimeMinutes <= 30;
+  if (groupKey === 'weekend-cooking') return totalTimeMinutes >= 60;
+  if (groupKey === 'dinner-ideas') return recipe.category === 'dinner';
+  if (groupKey === 'breakfast') return recipe.category === 'breakfast';
+  if (groupKey === 'balanced-meals') {
+    const nutrition = recipe.nutrition;
+    return nutrition != null
+      && nutrition.caloriesKcal <= 650
+      && nutrition.proteinGrams >= 15
+      && nutrition.fiberGrams >= 5
+      && nutrition.sugarGrams <= 20;
+  }
+  return false;
+}
+
+async function listSmartCollections() {
+  const summaries = new Map(SMART_COLLECTIONS.map(({ key }) => [key, {
+    recipeCount: 0,
+    coverCandidatesSeen: 0,
+    coverImageUrls: [],
+  }]));
+  for await (const recipe of recipeRepository.streamSmartCollectionCandidates()) {
+    if (!isUsableForNonAdmin(recipe)) continue;
+    for (const { key } of SMART_COLLECTIONS) {
+      if (!matchesSmartCollection(recipe, key)) continue;
+      const summary = summaries.get(key);
+      summary.recipeCount += 1;
+      if (summary.coverCandidatesSeen < 4) {
+        summary.coverCandidatesSeen += 1;
+        if (recipe.imageUrl != null) summary.coverImageUrls.push(recipe.imageUrl);
+      }
+    }
+  }
+  return SMART_COLLECTIONS.map(({ key, name }) => ({
+    key,
+    name,
+    recipeCount: summaries.get(key).recipeCount,
+    coverImageUrls: summaries.get(key).coverImageUrls,
+  }));
+}
+
+async function getSmartCollection({ groupKey, page, limit }) {
+  const definition = SMART_COLLECTIONS.find(({ key }) => key === groupKey);
+  if (!definition) throw new AppError('Invalid smart collection key.', { statusCode: 400, code: 'VALIDATION_ERROR' });
+  const skip = (page - 1) * limit;
+  const items = [];
+  let total = 0;
+  for await (const recipe of recipeRepository.streamSmartCollectionCandidates()) {
+    if (!isUsableForNonAdmin(recipe) || !matchesSmartCollection(recipe, groupKey)) continue;
+    if (total >= skip && items.length < limit) items.push(toNonAdminView(recipe));
+    total += 1;
+  }
+  return {
+    smartCollection: { ...definition },
+    items,
+    total,
+    page,
+    limit,
+  };
+}
+
 async function listRecipes({
   search,
   publicationStatus,
@@ -962,6 +1033,8 @@ module.exports = {
   findUsableRecipeById,
   getRecipeById,
   listRecipes,
+  listSmartCollections,
+  getSmartCollection,
   updateRecipe,
   getRecipePublishReadiness,
   publishRecipe,

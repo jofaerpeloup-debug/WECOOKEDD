@@ -47,12 +47,14 @@ describe('CollectionDetail dispatches on collectionType with no fabricated fallb
     expect(code).toMatch(/route\?\.params\?\.collectionType \|\| 'favorites'/);
   });
 
-  it('dispatches to a Favorites branch, a real user-collection branch, and an unsupported branch', () => {
+  it('dispatches to Favorites, user, strict smart, and unsupported branches', () => {
     expect(code).toMatch(/function FavoritesCollectionDetail\(/);
     expect(code).toMatch(/function UserCollectionDetail\(/);
+    expect(code).toMatch(/function SmartCollectionDetail\(/);
     expect(code).toMatch(/function UnsupportedCollectionDetail\(/);
     expect(code).toMatch(/if \(collectionType === 'favorites'\)/);
     expect(code).toMatch(/if \(collectionType === 'user'\)/);
+    expect(code).toMatch(/if \(collectionType === 'smart'\)/);
     expect(code).toMatch(/collectionId=\{route\?\.params\?\.collectionId\}/);
   });
 
@@ -70,16 +72,54 @@ describe('CollectionDetail dispatches on collectionType with no fabricated fallb
     expect(code).not.toMatch(/\bvibe\b/i);
   });
 
-  it('holds no authentication, session, or token state of its own', () => {
+  it('observes AuthContext identity for smart ownership but holds no token material', () => {
     expect(code).not.toMatch(/SecureStore|expo-secure-store|tokenStore/);
     expect(code).not.toMatch(/accessToken|refreshToken|idToken/);
-    expect(code).not.toMatch(/useAuth\(/);
+    expect(raw).toMatch(/import \{ useAuth \} from '\.\.\/context\/AuthContext'/);
   });
 
   it('never replaces or resets into MainTabs', () => {
     expect(code).not.toMatch(/navigation\s*\.\s*replace\s*\(/);
     expect(code).not.toMatch(/navigation\s*\.\s*reset\s*\(/);
     expect(code).not.toMatch(/MainTabs/);
+  });
+});
+
+describe('CollectionDetail smart branch owns strict paginated race-safe state', () => {
+  const start = code.indexOf('function SmartCollectionDetail');
+  const end = code.indexOf('function UnsupportedCollectionDetail', start);
+  const smart = code.slice(start, end);
+
+  it('requests only group key plus page/limit and has no client predicates', () => {
+    expect(smart).toMatch(/getSmartCollection\(requestGroupKey,\s*\{\s*page: 1,\s*limit: SMART_COLLECTION_PAGE_LIMIT/);
+    expect(smart).toMatch(/page: targetPage/);
+    expect(smart).not.toMatch(/caloriesKcal|proteinGrams|fiberGrams|sugarGrams|category ===|dietaryTags/);
+  });
+
+  it('guards every operation by mount, account, group, session, generation, and operation token', () => {
+    expect(smart).toMatch(/!mountedRef\.current/);
+    expect(smart).toMatch(/session !== sessionRef\.current/);
+    expect(smart).toMatch(/generation !== generationRef\.current/);
+    expect(smart).toMatch(/requestOwnerId !== authUserIdRef\.current/);
+    expect(smart).toMatch(/requestGroupKey !== groupKeyRef\.current/);
+    expect(smart).toMatch(/pageOneToken !== pageOneTokenRef\.current/);
+    expect(smart).toMatch(/token !== moreTokenRef\.current/);
+  });
+
+  it('supports initial loading/error/retry, strict empty, retained refresh, and load-more retry', () => {
+    expect(smart).toMatch(/status === 'loading'/);
+    expect(smart).toMatch(/status === 'error'/);
+    expect(smart).toMatch(/Retry loading smart collection/);
+    expect(smart).toMatch(/No recipes in this smart collection yet\./);
+    expect(smart).toMatch(/retainRows: true/);
+    expect(smart).toMatch(/Retry loading more recipes/);
+  });
+
+  it('deduplicates appended recipe ids and never renders membership controls', () => {
+    expect(smart).toMatch(/new Set\(recipesRef\.current\.map\(\(\{ id \}\) => id\)\)/);
+    expect(smart).not.toMatch(/FavoriteHeart|removeRecipeFromCollection|trash-outline/);
+    expect(smart).toMatch(/recipeId: recipe\.id/);
+    expect(smart).toMatch(/initialRecipe: recipe/);
   });
 });
 

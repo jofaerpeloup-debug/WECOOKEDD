@@ -115,6 +115,46 @@ function tokenFor({ id, role, sessionId }) {
   return signAccessToken({ userId: id, role, sessionId });
 }
 
+test('smart collection routes require auth, return frozen summaries/details, and reject unknown inputs', async (t) => {
+  const actor = { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID };
+  mockAuth(t, actor);
+  t.mock.method(recipeRepository, 'streamSmartCollectionCandidates', () => [
+    fakeRecipeDoc({ title: 'Adobo Dinner', category: 'dinner' }),
+  ]);
+  const token = tokenFor(actor);
+
+  const unauthorized = await request(app).get('/api/v1/recipes/smart-collections');
+  assert.equal(unauthorized.status, 401);
+
+  const cards = await request(app)
+    .get('/api/v1/recipes/smart-collections')
+    .set('Authorization', `Bearer ${token}`);
+  assert.equal(cards.status, 200);
+  assert.deepEqual(cards.body.data.smartCollections.map(({ key }) => key), [
+    'quick-meals', 'balanced-meals', 'weekend-cooking', 'dinner-ideas', 'breakfast',
+  ]);
+  assert.equal(cards.body.data.smartCollections[3].recipeCount, 1);
+
+  const detail = await request(app)
+    .get('/api/v1/recipes/smart-collections/dinner-ideas?page=1&limit=1')
+    .set('Authorization', `Bearer ${token}`);
+  assert.equal(detail.status, 200);
+  assert.deepEqual(detail.body.data.smartCollection, { key: 'dinner-ideas', name: 'Dinner Ideas' });
+  assert.equal(detail.body.data.recipes[0].title, 'Adobo Dinner');
+  assert.deepEqual(detail.body.data.pagination, { page: 1, limit: 1, total: 1, totalPages: 1 });
+
+  for (const path of [
+    '/api/v1/recipes/smart-collections/healthy-meals',
+    '/api/v1/recipes/smart-collections/Quick%20Meals',
+    '/api/v1/recipes/smart-collections/dinner-ideas?sort=titleAsc',
+    '/api/v1/recipes/smart-collections?category=dinner',
+  ]) {
+    const rejected = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+    assert.equal(rejected.status, 400, path);
+    assert.equal(rejected.body.error.code, 'VALIDATION_ERROR', path);
+  }
+});
+
 test('POST /api/v1/recipes/duplicate-check is Moderator-only and validates the saved Draft form strictly', async (t) => {
   const updatedAt = new Date('2026-09-29T00:00:00.000Z');
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });

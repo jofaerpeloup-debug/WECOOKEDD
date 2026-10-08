@@ -6,6 +6,14 @@ const { consumerPublicationFilter } = require('./recipe.visibility');
 // per-recipe usability but never forwards to the client.
 const INGREDIENT_SUMMARY_FIELDS = 'name isActive';
 const DUPLICATE_COMPARISON_FIELDS = '_id title ingredients instructions publicationStatus isActive updatedAt';
+const SMART_COLLECTION_CANDIDATE_FIELDS = [
+  '_id', 'title', 'description', 'region', 'category', 'difficulty',
+  'prepTimeMinutes', 'cookTimeMinutes', 'servings', 'nutrition',
+  'nutritionProvenance', 'ingredients', 'instructions', 'dietaryTags',
+  'imageUrl', 'imageAssetId', 'publicationStatus', 'isActive',
+  'createdAt', 'updatedAt',
+].join(' ');
+const SMART_COLLECTION_BATCH_SIZE = 100;
 
 function withIngredientSummaries(query) {
   return query.populate('ingredients.ingredientId', INGREDIENT_SUMMARY_FIELDS);
@@ -87,6 +95,16 @@ function countByFilter(filter) {
   return Recipe.countDocuments(filter);
 }
 
+function streamSmartCollectionCandidates() {
+  return withIngredientSummaries(Recipe.find({
+    isActive: true,
+    ...consumerPublicationFilter(),
+  }, SMART_COLLECTION_CANDIDATE_FIELDS)
+    .sort({ title: 1, _id: 1 })
+    .lean())
+    .cursor({ batchSize: SMART_COLLECTION_BATCH_SIZE });
+}
+
 function duplicateLifecycleFilters(excludeId) {
   const withoutSelf = excludeId ? { _id: { $ne: excludeId } } : {};
   return [
@@ -144,6 +162,7 @@ module.exports = {
   restoreById,
   findMany,
   countByFilter,
+  streamSmartCollectionCandidates,
   findDuplicateCandidates,
   hasActiveConsumerRecipeUsingIngredient,
 };

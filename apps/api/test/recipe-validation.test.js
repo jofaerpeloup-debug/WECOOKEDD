@@ -7,6 +7,9 @@ const {
   createDraftSchema,
   updateRecipeSchema,
   listRecipesSchema,
+  listSmartCollectionsSchema,
+  getSmartCollectionSchema,
+  SMART_COLLECTION_KEYS,
   recipeParamsSchema,
   duplicateCheckSchema,
   publishRecipeSchema,
@@ -17,6 +20,31 @@ const {
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
 const OTHER_INGREDIENT_ID = '507f1f77bcf86cd799439012';
 const RECIPE_ID = '507f1f77bcf86cd799439099';
+
+test('smart collection validation freezes keys and strict query shapes', () => {
+  assert.deepEqual(SMART_COLLECTION_KEYS, [
+    'quick-meals', 'balanced-meals', 'weekend-cooking', 'dinner-ideas', 'breakfast',
+  ]);
+  assert.equal(listSmartCollectionsSchema.safeParse({ query: {} }).success, true);
+  for (const query of [{ sort: 'titleAsc' }, { category: 'dinner' }, { predicate: 'anything' }]) {
+    assert.equal(listSmartCollectionsSchema.safeParse({ query }).success, false);
+  }
+
+  for (const groupKey of SMART_COLLECTION_KEYS) {
+    const parsed = getSmartCollectionSchema.safeParse({ params: { groupKey }, query: {} });
+    assert.equal(parsed.success, true, groupKey);
+    assert.deepEqual(parsed.data.query, { page: 1, limit: 20 });
+  }
+  for (const groupKey of ['healthy-meals', 'Balanced Meals', 'dinner', '']) {
+    assert.equal(getSmartCollectionSchema.safeParse({ params: { groupKey }, query: {} }).success, false);
+  }
+  assert.equal(getSmartCollectionSchema.safeParse({
+    params: { groupKey: 'quick-meals' }, query: { page: '2', limit: '100' },
+  }).success, true);
+  for (const query of [{ page: '0' }, { limit: '101' }, { sort: 'titleAsc' }, { userId: RECIPE_ID }]) {
+    assert.equal(getSmartCollectionSchema.safeParse({ params: { groupKey: 'quick-meals' }, query }).success, false);
+  }
+});
 
 function validPayload(overrides = {}) {
   return {

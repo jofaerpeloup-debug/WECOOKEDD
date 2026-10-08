@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +8,12 @@ import { useTheme } from '../theme/ThemeContext';
 import RecipeImage from '../components/RecipeImage';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCollections } from '../context/CollectionsContext';
+import { useAuth } from '../context/AuthContext';
+import { getRecipeErrorMessage } from '../api/recipeErrors';
+import {
+  listSmartCollections,
+  SMART_COLLECTION_DEFINITIONS,
+} from '../api/recipeService';
 
 // Teammate-inspired "My Collections" browser over WeCooked's real API state.
 // Favorites and user collections stay separate backend domains; detail screens
@@ -16,6 +22,8 @@ export default function SavedScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
+  const { status: authStatus, user } = useAuth();
+  const authUserId = authStatus === 'authenticated' && user ? user.id : null;
   const {
     favorites,
     status: favoritesStatus,
@@ -35,28 +43,97 @@ export default function SavedScreen({ navigation }) {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [smartCollections, setSmartCollections] = useState([]);
+  const [smartOwnerId, setSmartOwnerId] = useState(null);
+  const [smartStatus, setSmartStatus] = useState('idle');
+  const [smartError, setSmartError] = useState(null);
   const createPendingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const smartSessionRef = useRef(0);
+  const smartGenerationRef = useRef(0);
+  const smartDataRef = useRef([]);
+  const authUserIdRef = useRef(authUserId);
+  const initialSmartFocusRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      smartSessionRef.current += 1;
+      smartGenerationRef.current += 1;
+    };
+  }, []);
+
+  const loadSmartCards = useCallback(async (generation, session, ownerId) => {
+    const stale = () => !mountedRef.current
+      || generation !== smartGenerationRef.current
+      || session !== smartSessionRef.current
+      || ownerId !== authUserIdRef.current;
+    try {
+      const { smartCollections: fetched } = await listSmartCollections();
+      if (stale()) return;
+      smartDataRef.current = fetched;
+      setSmartCollections(fetched);
+      setSmartOwnerId(ownerId);
+      setSmartError(null);
+      setSmartStatus('ready');
+    } catch (err) {
+      if (stale()) return;
+      setSmartError(getRecipeErrorMessage(err));
+      setSmartStatus(smartDataRef.current.length > 0 ? 'ready' : 'error');
+    }
+  }, []);
+
+  const reloadSmartCollections = useCallback(() => {
+    const ownerId = authUserIdRef.current;
+    if (!ownerId) return Promise.resolve();
+    const generation = ++smartGenerationRef.current;
+    const session = smartSessionRef.current;
+    setSmartError(null);
+    if (smartDataRef.current.length === 0) setSmartStatus('loading');
+    return loadSmartCards(generation, session, ownerId);
+  }, [loadSmartCards]);
+
+  useEffect(() => {
+    authUserIdRef.current = authUserId;
+    smartSessionRef.current += 1;
+    smartGenerationRef.current += 1;
+    smartDataRef.current = [];
+    setSmartCollections([]);
+    setSmartOwnerId(authUserId);
+    setSmartError(null);
+    if (!authUserId) {
+      setSmartStatus('idle');
+      return;
+    }
+    setSmartStatus('loading');
+    loadSmartCards(smartGenerationRef.current, smartSessionRef.current, authUserId);
+  }, [authUserId, loadSmartCards]);
 
   useFocusEffect(
     useCallback(() => {
       reloadFavorites();
       reloadCollections();
-    }, [reloadFavorites, reloadCollections])
+      if (initialSmartFocusRef.current) initialSmartFocusRef.current = false;
+      else reloadSmartCollections();
+    }, [reloadFavorites, reloadCollections, reloadSmartCollections])
   );
 
   const refreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([reloadFavorites(), reloadCollections()]);
+      await Promise.all([reloadFavorites(), reloadCollections(), reloadSmartCollections()]);
     } finally {
       setRefreshing(false);
     }
-  }, [reloadFavorites, reloadCollections]);
+  }, [reloadFavorites, reloadCollections, reloadSmartCollections]);
 
   const openFavorites = () =>
     navigation.navigate('CollectionDetail', { collectionType: 'favorites' });
   const openCollection = (collectionId) =>
     navigation.navigate('CollectionDetail', { collectionType: 'user', collectionId });
+  const openSmartCollection = (groupKey) =>
+    navigation.navigate('CollectionDetail', { collectionType: 'smart', groupKey });
 
   const startCreate = () => {
     setCreateError(null);
@@ -85,8 +162,13 @@ export default function SavedScreen({ navigation }) {
   };
 
   const favoritesCover = favorites.slice(0, 4);
+  const smartTrusted = Boolean(authUserId && smartOwnerId === authUserId);
+  const visibleSmartCollections = smartTrusted && smartCollections.length > 0
+    ? smartCollections
+    : SMART_COLLECTION_DEFINITIONS.map(({ key, name }) => ({ key, name }));
   const cards = [
     { id: 'favorites', type: 'favorites', name: 'Favorites', recipeCount: favorites.length },
+    ...visibleSmartCollections.map((collection) => ({ ...collection, id: collection.key, type: 'smart' })),
     ...collections.map((collection) => ({ ...collection, type: 'user' })),
   ];
 
@@ -123,9 +205,23 @@ export default function SavedScreen({ navigation }) {
       );
     }
 
+    if (item.type === 'smart' && (!smartTrusted || smartStatus === 'loading' || smartStatus === 'idle')) {
+      return <ActivityIndicator
+        color={colors.sageDeep}
+        accessibilityRole="progressbar"
+        accessibilityLabel={`Loading ${item.name}`}
+        accessibilityState={{ busy: true }}
+      />;
+    }
     const covers = item.coverImageUrls || [];
     if (covers.length === 0) {
-      return <Ionicons name="albums-outline" size={18} color={colors.inkFaint} />;
+      return (
+        <Ionicons
+          name={item.type === 'smart' && smartStatus === 'error' ? 'cloud-offline-outline' : 'albums-outline'}
+          size={18}
+          color={colors.inkFaint}
+        />
+      );
     }
     if (covers.length === 1) {
       return <RecipeImage source={covers[0]} style={styles.coverFull} />;
@@ -142,17 +238,27 @@ export default function SavedScreen({ navigation }) {
   const renderCard = ({ item }) => (
     <Pressable
       style={styles.card}
-      onPress={() => (item.type === 'favorites' ? openFavorites() : openCollection(item.id))}
+      onPress={() => {
+        if (item.type === 'favorites') openFavorites();
+        else if (item.type === 'smart') openSmartCollection(item.key);
+        else openCollection(item.id);
+      }}
+      disabled={item.type === 'smart' && (!smartTrusted || smartStatus !== 'ready')}
       accessibilityRole="button"
-      accessibilityLabel={`${item.name}, ${item.recipeCount} ${item.recipeCount === 1 ? 'recipe' : 'recipes'}`}
+      accessibilityLabel={item.recipeCount == null
+        ? item.name
+        : `${item.name}, ${item.recipeCount} ${item.recipeCount === 1 ? 'recipe' : 'recipes'}`}
+      accessibilityState={{ disabled: item.type === 'smart' && (!smartTrusted || smartStatus !== 'ready') }}
     >
       <View style={styles.cardImg}>{renderCover(item)}</View>
       <Text style={styles.cardTitle} numberOfLines={1}>
         {item.name}
       </Text>
-      <Text style={styles.cardCount}>
-        {item.recipeCount} {item.recipeCount === 1 ? 'recipe' : 'recipes'}
-      </Text>
+      {item.recipeCount != null ? (
+        <Text style={styles.cardCount}>
+          {item.recipeCount} {item.recipeCount === 1 ? 'recipe' : 'recipes'}
+        </Text>
+      ) : null}
     </Pressable>
   );
 
@@ -273,6 +379,18 @@ export default function SavedScreen({ navigation }) {
               >
                 <Ionicons name="refresh" size={14} color={colors.sageDeep} />
                 <Text style={styles.retryText}>Collections: {collectionsError} Tap to retry.</Text>
+              </Pressable>
+            ) : null}
+            {smartError ? (
+              <Pressable
+                style={styles.retryRow}
+                onPress={reloadSmartCollections}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Smart collections: ${smartError}. Tap to retry.`}
+              >
+                <Ionicons name="refresh" size={14} color={colors.sageDeep} />
+                <Text style={styles.retryText}>Smart collections: {smartError} Tap to retry.</Text>
               </Pressable>
             ) : null}
           </>

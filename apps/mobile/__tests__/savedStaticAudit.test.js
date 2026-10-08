@@ -2,10 +2,10 @@
 //
 // Saved is the pinned teammate "My Collections" grid/header shell (bae924b) —
 // a collections BROWSER. It shows the real system collection "Favorites"
-// (backed exclusively by FavoritesContext/the real API) first, followed by
+// first, followed by the five server-defined smart collections, then
 // the user's real, backend-persisted Collections (M5A — CollectionsContext/
-// collectionService/collection.routes.js). There are no hardcoded "smart"
-// collections and no AsyncStorage-backed local collections. The mobile
+// collectionService/collection.routes.js). There are no client predicates or
+// AsyncStorage-backed local collections. The mobile
 // workspace has no RN renderer (see jest.config.js), so these invariants are
 // encoded as source assertions.
 //
@@ -39,14 +39,15 @@ if (createStart === -1 || createEnd === -1 || createEnd <= createStart) {
   throw new Error('savedStaticAudit: could not locate the collection create handler');
 }
 const createCode = savedCode.slice(createStart, createEnd);
-const createControlStart = savedCode.indexOf('<Pressable\n                  style={styles.createBtn}');
+const createControlStyle = savedCode.indexOf('style={styles.createBtn}');
+const createControlStart = savedCode.lastIndexOf('<Pressable', createControlStyle);
 const createControlEnd = savedCode.indexOf('</Pressable>', createControlStart);
-if (createControlStart === -1 || createControlEnd === -1 || createControlEnd <= createControlStart) {
+if (createControlStyle === -1 || createControlStart === -1 || createControlEnd === -1 || createControlEnd <= createControlStart) {
   throw new Error('savedStaticAudit: could not locate the collection create control');
 }
 const createControlCode = savedCode.slice(createControlStart, createControlEnd);
 
-describe('Saved keeps real Favorites + real Collections as the only data sources', () => {
+describe('Saved keeps Favorites, smart collections, and user Collections server-authoritative', () => {
   it('imports no mock-data layer or teammate mock/local providers', () => {
     expect(code).not.toMatch(/data\/mockData/);
     expect(code).not.toMatch(/\bmockData\b/);
@@ -71,18 +72,19 @@ describe('Saved keeps real Favorites + real Collections as the only data sources
     expect(code).toMatch(/reloadCollections/);
   });
 
-  it('reloads both Favorites and Collections on focus', () => {
+  it('reloads Favorites, Collections, and smart cards on focus', () => {
     expect(code).toMatch(/useFocusEffect\(/);
     expect(code).toMatch(/reloadFavorites\(\)/);
     expect(code).toMatch(/reloadCollections\(\)/);
+    expect(code).toMatch(/reloadSmartCollections\(\)/);
   });
 
-  it('uses the pinned two-column FlatList and refreshes both real sources on pull', () => {
+  it('uses the pinned two-column FlatList and waits for all three independent sources on pull', () => {
     expect(raw).toMatch(/import \{[^}]*FlatList[^}]*\} from 'react-native'/);
     expect(savedCode).toMatch(/<FlatList/);
     expect(savedCode).toMatch(/numColumns=\{2\}/);
     expect(savedCode).toMatch(/onRefresh=\{refreshAll\}/);
-    expect(savedCode).toMatch(/await Promise\.all\(\[reloadFavorites\(\), reloadCollections\(\)\]\)/);
+    expect(savedCode).toMatch(/await Promise\.all\(\[reloadFavorites\(\), reloadCollections\(\), reloadSmartCollections\(\)\]\)/);
   });
 
   it('keeps both real load failures visible and retries only their failed source', () => {
@@ -93,9 +95,10 @@ describe('Saved keeps real Favorites + real Collections as the only data sources
     expect(savedCode).toMatch(/\{collectionsError \? \([\s\S]*?onPress=\{reloadCollections\}[\s\S]*?Collections: \{collectionsError\}/);
   });
 
-  it('never fabricates hardcoded smart collections or a recipe list of its own', () => {
+  it('never duplicates smart predicates or fabricates a recipe list of its own', () => {
     expect(code).not.toMatch(/Quick Meals|Healthy Meals|Weekend Cooking|Dinner Ideas|\bBreakfast\b/);
     expect(code).not.toMatch(/const\s+(recipes|RECIPES|COLLECTIONS)\s*=\s*\[/);
+    expect(code).not.toMatch(/caloriesKcal|proteinGrams|fiberGrams|sugarGrams|prepTimeMinutes|cookTimeMinutes/);
   });
 
   it('renders card covers from backend imageUrl / coverImageUrls only', () => {
@@ -155,6 +158,11 @@ describe('Saved is only the collections-browser shell — no nested Favorites vi
     );
     expect(code).not.toMatch(/collectionType:\s*'user'[\s\S]{0,80}(recipes):\s*\[/);
   });
+
+  it('a smart card navigates with only its immutable key', () => {
+    expect(code).toMatch(/navigation\.navigate\('CollectionDetail',\s*\{\s*collectionType:\s*'smart',\s*groupKey\s*\}\)/);
+    expect(code).not.toMatch(/collectionType:\s*'smart'[\s\S]{0,100}(predicate|recipes|recipeCount|coverImageUrls):/);
+  });
 });
 
 describe('Saved stays a stack destination with the real navigation contract', () => {
@@ -174,10 +182,28 @@ describe('Saved stays a stack destination with the real navigation contract', ()
     for (const t of targets) expect(['CollectionDetail', 'List']).toContain(t);
   });
 
-  it('holds no authentication, session, or token state of its own', () => {
+  it('observes AuthContext identity only for stale-response ownership and holds no token material', () => {
     expect(code).not.toMatch(/SecureStore|expo-secure-store|tokenStore/);
     expect(code).not.toMatch(/accessToken|refreshToken|idToken/);
-    expect(code).not.toMatch(/useAuth\(/);
+    expect(raw).toMatch(/import \{ useAuth \} from '\.\.\/context\/AuthContext'/);
+    expect(code).toMatch(/ownerId !== authUserIdRef\.current/);
+    expect(code).toMatch(/generation !== smartGenerationRef\.current/);
+    expect(code).toMatch(/!mountedRef\.current/);
+  });
+});
+
+describe('Saved smart-card states are independent and honest', () => {
+  it('uses strict smart service data, stable placeholder positions, and no count while unavailable', () => {
+    expect(raw).toMatch(/listSmartCollections/);
+    expect(code).toMatch(/SMART_COLLECTION_DEFINITIONS\.map/);
+    expect(code).toMatch(/item\.recipeCount == null/);
+    expect(code).toMatch(/disabled=\{item\.type === 'smart'/);
+  });
+
+  it('retains independent smart errors with an accessible retry', () => {
+    expect(code).toMatch(/Smart collections: \{smartError\} Tap to retry\./);
+    expect(code).toMatch(/onPress=\{reloadSmartCollections\}/);
+    expect(code).not.toMatch(/favoritesError \|\| collectionsError \|\| smartError/);
   });
 });
 

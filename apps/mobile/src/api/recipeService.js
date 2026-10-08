@@ -40,6 +40,14 @@ const NUTRITION_KEYS = Object.freeze([
   'carbohydrateGrams', 'fatGrams', 'sugarGrams', 'fiberGrams',
 ]);
 const NUTRIENT_KEYS = NUTRITION_KEYS.slice(2);
+export const SMART_COLLECTION_DEFINITIONS = Object.freeze([
+  Object.freeze({ key: 'quick-meals', name: 'Quick Meals' }),
+  Object.freeze({ key: 'balanced-meals', name: 'Balanced Meals' }),
+  Object.freeze({ key: 'weekend-cooking', name: 'Weekend Cooking' }),
+  Object.freeze({ key: 'dinner-ideas', name: 'Dinner Ideas' }),
+  Object.freeze({ key: 'breakfast', name: 'Breakfast' }),
+]);
+const SMART_COLLECTION_BY_KEY = new Map(SMART_COLLECTION_DEFINITIONS.map((entry) => [entry.key, entry]));
 
 function malformedNutritionError() {
   const error = new Error('This recipe has malformed authoritative nutrition data.');
@@ -74,6 +82,101 @@ export function parseRecipeNutrition(value) {
 export function parseRecipe(recipe) {
   if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe)) return recipe;
   return { ...recipe, nutrition: parseRecipeNutrition(recipe.nutrition) };
+}
+
+function malformedSmartCollectionError() {
+  const error = new Error('The smart collection response was malformed.');
+  error.code = 'SMART_COLLECTION_RESPONSE_MALFORMED';
+  return error;
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(value, expected) {
+  if (!isRecord(value)) return false;
+  const actual = Object.keys(value).sort();
+  const keys = [...expected].sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+}
+
+function parseSmartCollectionIdentity(value, expectedKey) {
+  if (!hasExactKeys(value, ['key', 'name'])) throw malformedSmartCollectionError();
+  const definition = SMART_COLLECTION_BY_KEY.get(value.key);
+  if (!definition || definition.name !== value.name || (expectedKey && value.key !== expectedKey)) {
+    throw malformedSmartCollectionError();
+  }
+  return { key: definition.key, name: definition.name };
+}
+
+function parseSmartCollectionSummary(value, expected) {
+  if (!hasExactKeys(value, ['key', 'name', 'recipeCount', 'coverImageUrls'])) {
+    throw malformedSmartCollectionError();
+  }
+  const identity = parseSmartCollectionIdentity({ key: value.key, name: value.name }, expected.key);
+  if (!Number.isSafeInteger(value.recipeCount) || value.recipeCount < 0 || !Array.isArray(value.coverImageUrls)
+    || value.coverImageUrls.length > 4
+    || value.coverImageUrls.some((url) => typeof url !== 'string' || !url.startsWith('https://'))) {
+    throw malformedSmartCollectionError();
+  }
+  return { ...identity, recipeCount: value.recipeCount, coverImageUrls: [...value.coverImageUrls] };
+}
+
+function parseSmartPagination(value, requestedPage, requestedLimit) {
+  if (!hasExactKeys(value, ['page', 'limit', 'total', 'totalPages'])) throw malformedSmartCollectionError();
+  const { page, limit, total, totalPages } = value;
+  if (!Number.isSafeInteger(page) || page !== requestedPage
+    || !Number.isSafeInteger(limit) || limit !== requestedLimit
+    || !Number.isSafeInteger(total) || total < 0
+    || !Number.isSafeInteger(totalPages) || totalPages !== Math.ceil(total / limit)) {
+    throw malformedSmartCollectionError();
+  }
+  return { page, limit, total, totalPages };
+}
+
+export function listSmartCollections() {
+  return api.get('/recipes/smart-collections').then((data) => {
+    if (!hasExactKeys(data, ['smartCollections']) || !Array.isArray(data.smartCollections)
+      || data.smartCollections.length !== SMART_COLLECTION_DEFINITIONS.length) {
+      throw malformedSmartCollectionError();
+    }
+    return {
+      smartCollections: data.smartCollections.map((value, index) => (
+        parseSmartCollectionSummary(value, SMART_COLLECTION_DEFINITIONS[index])
+      )),
+    };
+  });
+}
+
+export function getSmartCollection(groupKey, { page = 1, limit = 20 } = {}) {
+  if (!SMART_COLLECTION_BY_KEY.has(groupKey)
+    || !Number.isSafeInteger(page) || page < 1
+    || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    return Promise.reject(malformedSmartCollectionError());
+  }
+  return api.get(`/recipes/smart-collections/${encodeURIComponent(groupKey)}`, {
+    query: { page, limit },
+  }).then((data) => {
+    if (!hasExactKeys(data, ['smartCollection', 'recipes', 'pagination']) || !Array.isArray(data.recipes)) {
+      throw malformedSmartCollectionError();
+    }
+    const smartCollection = parseSmartCollectionIdentity(data.smartCollection, groupKey);
+    const pagination = parseSmartPagination(data.pagination, page, limit);
+    const expectedPageLength = Math.max(
+      0,
+      Math.min(limit, pagination.total - ((page - 1) * limit))
+    );
+    if (data.recipes.length !== expectedPageLength) {
+      throw malformedSmartCollectionError();
+    }
+    const recipes = data.recipes.map((recipe) => {
+      if (!isRecord(recipe) || typeof recipe.id !== 'string' || !recipe.id) throw malformedSmartCollectionError();
+      return parseRecipe(recipe);
+    });
+    if (new Set(recipes.map(({ id }) => id)).size !== recipes.length) throw malformedSmartCollectionError();
+    return { smartCollection, recipes, pagination };
+  });
 }
 
 function buildQuery(params) {
