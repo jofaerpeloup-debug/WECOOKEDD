@@ -15,6 +15,8 @@ const {
 const {
   recipeParamsSchema,
   listRecipesSchema,
+  listSmartCollectionsSchema,
+  getSmartCollectionSchema,
   createRecipeSchema,
   createDraftSchema,
   duplicateCheckSchema,
@@ -26,6 +28,20 @@ const {
 } = require('./recipe.validation');
 
 const router = Router();
+
+router.get(
+  '/smart-collections',
+  authenticate,
+  validate(listSmartCollectionsSchema),
+  recipeController.listSmartCollections
+);
+
+router.get(
+  '/smart-collections/:groupKey',
+  authenticate,
+  validate(getSmartCollectionSchema),
+  recipeController.getSmartCollection
+);
 
 router.post(
   '/duplicate-check',

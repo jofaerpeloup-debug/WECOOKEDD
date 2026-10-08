@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   Pressable,
   RefreshControl,
   ActivityIndicator,
@@ -19,8 +20,11 @@ import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCollections } from '../context/CollectionsContext';
+import { useAuth } from '../context/AuthContext';
 import * as collectionService from '../api/collectionService';
 import { getCollectionErrorMessage } from '../api/collectionErrors';
+import { getRecipeErrorMessage } from '../api/recipeErrors';
+import { getSmartCollection, SMART_COLLECTION_DEFINITIONS } from '../api/recipeService';
 import { recipeTimeLabel } from '../utils/recipe';
 import { categoryLabel, regionLabel, difficultyLabel } from '../api/recipeOptions';
 
@@ -42,6 +46,7 @@ import { categoryLabel, regionLabel, difficultyLabel } from '../api/recipeOption
 // consistent with this screen's Favorites branch (via FavoritesContext),
 // which also has no infinite-scroll/load-more UI of its own.
 const USER_COLLECTION_RECIPE_LIMIT = 100;
+const SMART_COLLECTION_PAGE_LIMIT = 20;
 
 // Short classifier line: category, then region (both optional canonical slugs,
 // absent on legacy records), then difficulty as a last resort. `cuisine` is
@@ -125,6 +130,7 @@ function makeStyles(colors) {
     rowTitle: { fontFamily: typography.body.semibold, fontSize: 13.5, color: colors.ink },
     rowMeta: { fontFamily: typography.body.fontFamily, fontSize: 11.5, color: colors.inkFaint, marginTop: 4 },
     rowRemove: { padding: 6 },
+    listFooter: { paddingVertical: spacing.lg, alignItems: 'center', gap: spacing.sm },
   });
 }
 
@@ -486,6 +492,271 @@ function UserCollectionDetail({ navigation, collectionId }) {
   );
 }
 
+function SmartCollectionDetail({ navigation, groupKey }) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
+  const insets = useSafeAreaInsets();
+  const { status: authStatus, user } = useAuth();
+  const authUserId = authStatus === 'authenticated' && user ? user.id : null;
+  const stableDefinition = SMART_COLLECTION_DEFINITIONS.find(({ key }) => key === groupKey);
+
+  const [smartCollection, setSmartCollection] = useState(null);
+  const [recipes, setRecipes] = useState([]);
+  const [pagination, setPagination] = useState(null);
+  const [ownerId, setOwnerId] = useState(null);
+  const [acceptedGroupKey, setAcceptedGroupKey] = useState(null);
+  const [status, setStatus] = useState('loading');
+  const [error, setError] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(null);
+
+  const mountedRef = useRef(true);
+  const authUserIdRef = useRef(authUserId);
+  const groupKeyRef = useRef(groupKey);
+  const sessionRef = useRef(0);
+  const generationRef = useRef(0);
+  const pageOneTokenRef = useRef(0);
+  const pageOnePendingRef = useRef(false);
+  const moreTokenRef = useRef(0);
+  const morePendingRef = useRef(false);
+  const acceptedRef = useRef(false);
+  const recipesRef = useRef([]);
+  const paginationRef = useRef(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionRef.current += 1;
+      generationRef.current += 1;
+      pageOneTokenRef.current += 1;
+      pageOnePendingRef.current = false;
+      moreTokenRef.current += 1;
+      morePendingRef.current = false;
+    };
+  }, []);
+
+  const loadPageOne = useCallback(async ({ retainRows = false } = {}) => {
+    const requestOwnerId = authUserIdRef.current;
+    const requestGroupKey = groupKeyRef.current;
+    if (!requestOwnerId || !requestGroupKey || pageOnePendingRef.current) return;
+    const session = sessionRef.current;
+    const generation = ++generationRef.current;
+    const pageOneToken = ++pageOneTokenRef.current;
+    pageOnePendingRef.current = true;
+    moreTokenRef.current += 1;
+    morePendingRef.current = false;
+    setLoadingMore(false);
+    setMoreError(null);
+    setError(null);
+    if (retainRows && acceptedRef.current) setRefreshing(true);
+    else setStatus('loading');
+
+    const stale = () => !mountedRef.current
+      || session !== sessionRef.current
+      || generation !== generationRef.current
+      || pageOneToken !== pageOneTokenRef.current
+      || requestOwnerId !== authUserIdRef.current
+      || requestGroupKey !== groupKeyRef.current;
+    try {
+      const result = await getSmartCollection(requestGroupKey, {
+        page: 1,
+        limit: SMART_COLLECTION_PAGE_LIMIT,
+      });
+      if (stale()) return;
+      recipesRef.current = result.recipes;
+      paginationRef.current = result.pagination;
+      acceptedRef.current = true;
+      setSmartCollection(result.smartCollection);
+      setRecipes(result.recipes);
+      setPagination(result.pagination);
+      setOwnerId(requestOwnerId);
+      setAcceptedGroupKey(requestGroupKey);
+      setStatus('ready');
+      setError(null);
+    } catch (err) {
+      if (stale()) return;
+      setError(getRecipeErrorMessage(err));
+      setStatus(acceptedRef.current ? 'ready' : 'error');
+    } finally {
+      if (!stale()) {
+        pageOnePendingRef.current = false;
+        setRefreshing(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    authUserIdRef.current = authUserId;
+    groupKeyRef.current = groupKey;
+    sessionRef.current += 1;
+    generationRef.current += 1;
+    pageOneTokenRef.current += 1;
+    pageOnePendingRef.current = false;
+    moreTokenRef.current += 1;
+    morePendingRef.current = false;
+    recipesRef.current = [];
+    paginationRef.current = null;
+    acceptedRef.current = false;
+    setSmartCollection(null);
+    setRecipes([]);
+    setPagination(null);
+    setOwnerId(authUserId);
+    setAcceptedGroupKey(groupKey);
+    setError(null);
+    setMoreError(null);
+    setRefreshing(false);
+    setLoadingMore(false);
+    if (!authUserId) {
+      setStatus('loading');
+      return;
+    }
+    setStatus('loading');
+    loadPageOne();
+  }, [authUserId, groupKey, loadPageOne]);
+
+  const onRefresh = useCallback(() => loadPageOne({ retainRows: true }), [loadPageOne]);
+
+  const loadMore = useCallback(async () => {
+    const current = paginationRef.current;
+    if (!current || current.page >= current.totalPages || morePendingRef.current || pageOnePendingRef.current || refreshing) return;
+    const requestOwnerId = authUserIdRef.current;
+    const requestGroupKey = groupKeyRef.current;
+    const session = sessionRef.current;
+    const generation = generationRef.current;
+    const targetPage = current.page + 1;
+    const token = ++moreTokenRef.current;
+    morePendingRef.current = true;
+    setLoadingMore(true);
+    setMoreError(null);
+
+    const stale = () => !mountedRef.current
+      || session !== sessionRef.current
+      || generation !== generationRef.current
+      || token !== moreTokenRef.current
+      || requestOwnerId !== authUserIdRef.current
+      || requestGroupKey !== groupKeyRef.current;
+    try {
+      const result = await getSmartCollection(requestGroupKey, {
+        page: targetPage,
+        limit: SMART_COLLECTION_PAGE_LIMIT,
+      });
+      if (stale()) return;
+      const seen = new Set(recipesRef.current.map(({ id }) => id));
+      const appended = result.recipes.filter(({ id }) => !seen.has(id));
+      const nextRecipes = [...recipesRef.current, ...appended];
+      recipesRef.current = nextRecipes;
+      paginationRef.current = result.pagination;
+      setRecipes(nextRecipes);
+      setPagination(result.pagination);
+      setSmartCollection(result.smartCollection);
+    } catch (err) {
+      if (stale()) return;
+      setMoreError(getRecipeErrorMessage(err));
+    } finally {
+      if (!stale()) {
+        morePendingRef.current = false;
+        setLoadingMore(false);
+      }
+    }
+  }, [refreshing]);
+
+  const openRecipe = (recipe) => navigation.navigate('RecipeDetail', {
+    recipeSource: 'api',
+    recipeId: recipe.id,
+    initialRecipe: recipe,
+  });
+  const trusted = Boolean(authUserId && ownerId === authUserId && acceptedGroupKey === groupKey);
+  const visibleRecipes = trusted ? recipes : [];
+  const visiblePagination = trusted ? pagination : null;
+  const title = (trusted && smartCollection?.name) || stableDefinition.name;
+  const header = <Header
+    styles={styles}
+    colors={colors}
+    insets={insets}
+    title={title}
+    count={status === 'ready' && visiblePagination ? visiblePagination.total : null}
+    onBack={() => navigation.goBack()}
+  />;
+
+  if (!trusted || (status === 'loading' && visibleRecipes.length === 0)) {
+    return <View style={styles.root}>{header}<View
+      style={styles.centerWrap}
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={`Loading ${title}`}
+      accessibilityState={{ busy: true }}
+    >
+      <ActivityIndicator color={colors.sageDeep} />
+    </View></View>;
+  }
+
+  if (status === 'error' && visibleRecipes.length === 0) {
+    return <View style={styles.root}>{header}<View style={styles.centerWrap}>
+      <Ionicons name="cloud-offline-outline" size={28} color={colors.inkFaint} />
+      <Text style={styles.errorText}>{error || 'Couldn\u2019t load this smart collection.'}</Text>
+      <Pressable
+        style={styles.retryBtn}
+        onPress={() => loadPageOne()}
+        accessibilityRole="button"
+        accessibilityLabel="Retry loading smart collection"
+      >
+        <Ionicons name="refresh" size={14} color={colors.sageDeep} />
+        <Text style={styles.retryText}>Retry</Text>
+      </Pressable>
+    </View></View>;
+  }
+
+  if (visiblePagination?.total === 0) {
+    return <View style={styles.root}>{header}<ScrollView
+      contentContainerStyle={styles.emptyScroll}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.sageDeep} colors={[colors.sageDeep]} />}
+    ><View style={styles.emptyWrap}>
+      <Text style={styles.empty}>No recipes in this smart collection yet.</Text>
+      {error ? <Pressable style={styles.retryBtn} onPress={onRefresh} accessibilityRole="button"><Text style={styles.retryText}>Retry</Text></Pressable> : null}
+    </View></ScrollView></View>;
+  }
+
+  return <View style={styles.root}>{header}<FlatList
+    data={visibleRecipes}
+    keyExtractor={(recipe) => recipe.id}
+    contentContainerStyle={styles.scroll}
+    showsVerticalScrollIndicator={false}
+    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.sageDeep} colors={[colors.sageDeep]} />}
+    onEndReached={loadMore}
+    onEndReachedThreshold={0.4}
+    renderItem={({ item: recipe }) => <View style={styles.row}>
+      <Pressable
+        style={styles.rowMain}
+        onPress={() => openRecipe(recipe)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${recipe.title}`}
+      >
+        <RecipeImage source={recipe.imageUrl} style={styles.thumb} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.rowTitle} numberOfLines={1}>{recipe.title}</Text>
+          <Text style={styles.rowMeta}>{[recipeTimeLabel(recipe), metaLabel(recipe)].filter(Boolean).join(' \u00b7 ')}</Text>
+        </View>
+      </Pressable>
+    </View>}
+    ListHeaderComponent={error ? <Pressable style={styles.retryBtn} onPress={onRefresh} accessibilityRole="button" accessibilityLabel="Retry refreshing smart collection">
+      <Ionicons name="refresh" size={14} color={colors.sageDeep} /><Text style={styles.retryText}>{error} Retry</Text>
+    </Pressable> : null}
+    ListFooterComponent={loadingMore || moreError ? <View style={styles.listFooter}>
+      {loadingMore ? <ActivityIndicator
+        color={colors.sageDeep}
+        accessibilityRole="progressbar"
+        accessibilityLabel="Loading more recipes"
+        accessibilityState={{ busy: true }}
+      /> : null}
+      {moreError ? <Pressable style={styles.retryBtn} onPress={loadMore} accessibilityRole="button" accessibilityLabel="Retry loading more recipes">
+        <Ionicons name="refresh" size={14} color={colors.sageDeep} /><Text style={styles.retryText}>{moreError} Retry</Text>
+      </Pressable> : null}
+    </View> : null}
+  /></View>;
+}
+
 // ---------------------------------------------------------------------------
 // Unsupported branch — forward-compatible guard for any future/unknown
 // collectionType. Nothing is ever fabricated here.
@@ -520,6 +791,12 @@ export default function CollectionDetailScreen({ navigation, route }) {
   }
   if (collectionType === 'user') {
     return <UserCollectionDetail navigation={navigation} collectionId={route?.params?.collectionId} />;
+  }
+  if (collectionType === 'smart') {
+    const groupKey = route?.params?.groupKey;
+    if (SMART_COLLECTION_DEFINITIONS.some(({ key }) => key === groupKey)) {
+      return <SmartCollectionDetail navigation={navigation} groupKey={groupKey} />;
+    }
   }
   return <UnsupportedCollectionDetail navigation={navigation} />;
 }

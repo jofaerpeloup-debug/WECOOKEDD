@@ -89,47 +89,230 @@ function completeStoredRecipe(overrides = {}) {
   return recipe;
 }
 
-function evaluateMongoExpression(expression, document) {
+function smartRecipe(id, title, overrides = {}) {
+  const recipe = completeStoredRecipe({
+    _id: id,
+    title,
+    publicationStatus: 'published',
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID, 'Chicken') }],
+    ...overrides,
+  });
+  if (recipe.nutrition != null && recipe.nutritionProvenance === undefined) {
+    recipe.nutritionProvenance = { sourceKind: 'manual', sourceLabel: 'Reviewed panel' };
+  }
+  return recipe;
+}
+
+function balancedNutrition(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    basis: 'perServing',
+    caloriesKcal: 650,
+    proteinGrams: 15,
+    carbohydrateGrams: 50,
+    fatGrams: 20,
+    sugarGrams: 20,
+    fiberGrams: 5,
+    ...overrides,
+  };
+}
+
+test('smart repository streams a projected public candidate universe in title and _id order with a bounded batch', (t) => {
+  const calls = {};
+  const cursor = { kind: 'cursor' };
+  const query = {
+    sort(value) { calls.sort = value; return this; },
+    lean() { calls.lean = true; return this; },
+    populate(path, fields) { calls.populate = { path, fields }; return this; },
+    cursor(options) { calls.cursor = options; return cursor; },
+  };
+  t.mock.method(Recipe, 'find', (filter, projection) => {
+    calls.find = { filter, projection };
+    return query;
+  });
+
+  assert.equal(recipeRepository.streamSmartCollectionCandidates(), cursor);
+  assert.deepEqual(calls.find.filter, {
+    isActive: true,
+    $or: [{ publicationStatus: 'published' }, { publicationStatus: { $exists: false } }],
+  });
+  assert.match(calls.find.projection, /nutritionProvenance/);
+  assert.match(calls.find.projection, /imageAssetId/);
+  assert.deepEqual(calls.sort, { title: 1, _id: 1 });
+  assert.deepEqual(calls.populate, { path: 'ingredients.ingredientId', fields: 'name isActive' });
+  assert.equal(calls.lean, true);
+  assert.deepEqual(calls.cursor, { batchSize: 100 });
+});
+
+test('duration smart groups preserve inclusive 30/60 boundaries and missing prep as zero', async (t) => {
+  const universe = [
+    smartRecipe('q1', 'Quick boundary', { prepTimeMinutes: undefined, cookTimeMinutes: 30 }),
+    smartRecipe('q2', 'Too slow', { prepTimeMinutes: 1, cookTimeMinutes: 30 }),
+    smartRecipe('w1', 'Weekend boundary', { prepTimeMinutes: undefined, cookTimeMinutes: 60 }),
+    smartRecipe('w2', 'Too quick', { prepTimeMinutes: 1, cookTimeMinutes: 58 }),
+  ];
+  t.mock.method(recipeRepository, 'streamSmartCollectionCandidates', () => universe);
+
+  const quick = await recipeService.getSmartCollection({ groupKey: 'quick-meals', page: 1, limit: 20 });
+  const weekend = await recipeService.getSmartCollection({ groupKey: 'weekend-cooking', page: 1, limit: 20 });
+  assert.deepEqual(quick.items.map(({ _id }) => _id), ['q1']);
+  assert.deepEqual(weekend.items.map(({ _id }) => _id), ['w1']);
+});
+
+test('smart reads reuse canonical public completeness for URLs, provenance, quantities, and lifecycle', async (t) => {
+  const valid = smartRecipe('valid', 'A valid dinner', {
+    category: 'dinner', imageUrl: 'https://images.example.com/valid.jpg',
+  });
+  const invalid = [
+    smartRecipe('http', 'B HTTP image', { category: 'dinner', imageUrl: 'http://images.example.com/a.jpg' }),
+    smartRecipe('localhost', 'C localhost image', { category: 'dinner', imageUrl: 'https://localhost/a.jpg' }),
+    smartRecipe('private', 'D private image', { category: 'dinner', imageUrl: 'https://192.168.1.4/a.jpg' }),
+    smartRecipe('credentials', 'E credential image', { category: 'dinner', imageUrl: 'https://user:pass@example.com/a.jpg' }),
+    smartRecipe('missing-provenance', 'F missing provenance', {
+      category: 'dinner', nutrition: balancedNutrition(), nutritionProvenance: null,
+    }),
+    smartRecipe('invalid-provenance', 'G invalid provenance', {
+      category: 'dinner', nutrition: balancedNutrition(),
+      nutritionProvenance: { sourceKind: 'manual', sourceLabel: 'Panel', sourceUrl: 'https://127.0.0.1/panel' },
+    }),
+    smartRecipe('infinite', 'H infinite quantity', {
+      category: 'dinner', ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), quantity: Infinity, unit: 'piece' }],
+    }),
+    smartRecipe('draft', 'I draft', { category: 'dinner', publicationStatus: 'draft' }),
+    smartRecipe('incomplete', 'J incomplete', { category: 'dinner', instructions: [] }),
+    smartRecipe('inactive-recipe', 'K inactive recipe', { category: 'dinner', isActive: false }),
+    smartRecipe('inactive-ingredient', 'L inactive ingredient', {
+      category: 'dinner', ingredients: [{ ingredientId: inactiveIngredient(CHICKEN_ID), quantity: 1, unit: 'piece' }],
+    }),
+  ];
+  t.mock.method(recipeRepository, 'streamSmartCollectionCandidates', () => [valid, ...invalid]);
+
+  const [summaryDinner] = (await recipeService.listSmartCollections()).filter(({ key }) => key === 'dinner-ideas');
+  const detailDinner = await recipeService.getSmartCollection({ groupKey: 'dinner-ideas', page: 1, limit: 20 });
+  assert.equal(summaryDinner.recipeCount, 1);
+  assert.deepEqual(summaryDinner.coverImageUrls, ['https://images.example.com/valid.jpg']);
+  assert.equal(detailDinner.total, 1);
+  assert.deepEqual(detailDinner.items.map(({ _id }) => _id), ['valid']);
+});
+
+test('Balanced Meals excludes missing, malformed, wrong-version, wrong-basis, non-finite, and threshold failures', async (t) => {
+  const cases = [
+    smartRecipe('balanced', 'A balanced', { nutrition: balancedNutrition() }),
+    smartRecipe('missing', 'B missing'),
+    smartRecipe('partial', 'C partial', { nutrition: { schemaVersion: 1, basis: 'perServing', caloriesKcal: 500 } }),
+    smartRecipe('version', 'D version', { nutrition: balancedNutrition({ schemaVersion: 2 }) }),
+    smartRecipe('basis', 'E basis', { nutrition: balancedNutrition({ basis: 'perRecipe' }) }),
+    smartRecipe('nan', 'F NaN', { nutrition: balancedNutrition({ proteinGrams: Number.NaN }) }),
+    smartRecipe('infinite', 'G infinity', { nutrition: balancedNutrition({ caloriesKcal: Number.POSITIVE_INFINITY }) }),
+    smartRecipe('calories', 'H calories', { nutrition: balancedNutrition({ caloriesKcal: 651 }) }),
+    smartRecipe('protein', 'I protein', { nutrition: balancedNutrition({ proteinGrams: 14.9 }) }),
+    smartRecipe('fiber', 'J fiber', { nutrition: balancedNutrition({ fiberGrams: 4.9 }) }),
+    smartRecipe('sugar', 'K sugar', { nutrition: balancedNutrition({ sugarGrams: 20.1 }) }),
+  ];
+  t.mock.method(recipeRepository, 'streamSmartCollectionCandidates', () => cases);
+
+  const balanced = await recipeService.getSmartCollection({ groupKey: 'balanced-meals', page: 1, limit: 20 });
+  assert.equal(balanced.total, 1);
+  assert.deepEqual(balanced.items.map(({ _id }) => _id), ['balanced']);
+});
+
+test('summary and detail traverse the same canonical universe once per request and retain only the requested ordered page', async (t) => {
+  const universe = [
+    smartRecipe('0001', 'Alpha', { prepTimeMinutes: undefined, cookTimeMinutes: 20, imageUrl: 'https://example.com/1.jpg' }),
+    smartRecipe('0002', 'Same', { prepTimeMinutes: undefined, cookTimeMinutes: 20, imageUrl: null }),
+    smartRecipe('0003', 'Same', { prepTimeMinutes: undefined, cookTimeMinutes: 20, imageUrl: 'https://example.com/3.jpg' }),
+    smartRecipe('0004', 'Same', { prepTimeMinutes: undefined, cookTimeMinutes: 20, imageUrl: 'https://example.com/4.jpg' }),
+    smartRecipe('0005', 'Zulu', { prepTimeMinutes: undefined, cookTimeMinutes: 20, imageUrl: 'https://example.com/5.jpg' }),
+    smartRecipe('0006', 'Zulu invalid', { prepTimeMinutes: undefined, cookTimeMinutes: 20, imageUrl: 'https://localhost/not-public.jpg' }),
+  ];
+  let traversals = 0;
+  t.mock.method(recipeRepository, 'streamSmartCollectionCandidates', () => {
+    traversals += 1;
+    return universe;
+  });
+
+  const [summary] = await recipeService.listSmartCollections();
+  assert.equal(traversals, 1);
+  const second = await recipeService.getSmartCollection({ groupKey: 'quick-meals', page: 2, limit: 2 });
+  assert.equal(traversals, 2);
+  assert.equal(summary.recipeCount, 5);
+  assert.deepEqual(summary.coverImageUrls, [
+    'https://example.com/1.jpg', 'https://example.com/3.jpg', 'https://example.com/4.jpg',
+  ]);
+  assert.equal(second.total, summary.recipeCount);
+  assert.deepEqual(second.items.map(({ _id }) => _id), ['0003', '0004']);
+});
+
+function evaluateMongoExpression(expression, document, variables = {}) {
   if (typeof expression === 'string' && expression.startsWith('$')) {
-    return document[expression.slice(1)];
+    const source = expression.startsWith('$$') ? variables : document;
+    const path = expression.replace(/^\$\$?/u, '').split('.');
+    return path.reduce((value, key) => value?.[key], source);
   }
   if (Array.isArray(expression)) {
-    return expression.map((entry) => evaluateMongoExpression(entry, document));
+    return expression.map((entry) => evaluateMongoExpression(entry, document, variables));
   }
   if (!expression || typeof expression !== 'object') return expression;
+  if ('$type' in expression) {
+    const value = evaluateMongoExpression(expression.$type, document, variables);
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'array';
+    return typeof value;
+  }
+  if ('$objectToArray' in expression) {
+    const value = evaluateMongoExpression(expression.$objectToArray, document, variables);
+    return Object.entries(value).map(([k, v]) => ({ k, v }));
+  }
+  if ('$map' in expression) {
+    const input = evaluateMongoExpression(expression.$map.input, document, variables);
+    return input.map((value) => evaluateMongoExpression(
+      expression.$map.in,
+      document,
+      { ...variables, [expression.$map.as]: value },
+    ));
+  }
+  if ('$setEquals' in expression) {
+    const [left, right] = evaluateMongoExpression(expression.$setEquals, document, variables);
+    return left.length === right.length && left.every((value) => right.includes(value));
+  }
   if ('$ifNull' in expression) {
-    const [value, fallback] = evaluateMongoExpression(expression.$ifNull, document);
+    const [value, fallback] = evaluateMongoExpression(expression.$ifNull, document, variables);
     return value === null || value === undefined ? fallback : value;
   }
   if ('$add' in expression) {
-    const operands = evaluateMongoExpression(expression.$add, document);
+    const operands = evaluateMongoExpression(expression.$add, document, variables);
     if (!operands.every((value) => typeof value === 'number' && Number.isFinite(value))) {
       throw new TypeError('$add only supports numeric operands in this test evaluator');
     }
     return operands.reduce((sum, value) => sum + value, 0);
   }
   if ('$isNumber' in expression) {
-    const value = evaluateMongoExpression(expression.$isNumber, document);
+    const value = evaluateMongoExpression(expression.$isNumber, document, variables);
     return typeof value === 'number' && Number.isFinite(value);
   }
   if ('$and' in expression) {
-    const results = expression.$and.map((entry) => evaluateMongoExpression(entry, document));
+    const results = expression.$and.map((entry) => evaluateMongoExpression(entry, document, variables));
     return results.every(Boolean);
+  }
+  if ('$or' in expression) {
+    return expression.$or.some((entry) => evaluateMongoExpression(entry, document, variables));
   }
   if ('$cond' in expression) {
     const [condition, whenTrue, whenFalse] = expression.$cond;
-    return evaluateMongoExpression(condition, document)
-      ? evaluateMongoExpression(whenTrue, document)
-      : evaluateMongoExpression(whenFalse, document);
+    return evaluateMongoExpression(condition, document, variables)
+      ? evaluateMongoExpression(whenTrue, document, variables)
+      : evaluateMongoExpression(whenFalse, document, variables);
   }
   for (const [operator, compare] of [
+    ['$eq', (left, right) => Object.is(left, right) || left === right],
+    ['$ne', (left, right) => left !== right],
     ['$lt', (left, right) => left < right],
     ['$lte', (left, right) => left <= right],
     ['$gte', (left, right) => left >= right],
     ['$gt', (left, right) => left > right],
   ]) {
     if (operator in expression) {
-      const [left, right] = evaluateMongoExpression(expression[operator], document);
+      const [left, right] = evaluateMongoExpression(expression[operator], document, variables);
       return compare(left, right);
     }
   }

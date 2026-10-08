@@ -362,6 +362,14 @@ const sortSchema = z
   .default('titleAsc');
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(20);
+const SMART_COLLECTION_KEYS = Object.freeze([
+  'quick-meals',
+  'balanced-meals',
+  'weekend-cooking',
+  'dinner-ideas',
+  'breakfast',
+]);
+const smartCollectionKeySchema = z.enum(SMART_COLLECTION_KEYS, 'Invalid smart collection key.');
 const expectedUpdatedAtSchema = z
   .string()
   .datetime({ offset: true, message: 'expectedUpdatedAt must be an ISO-8601 timestamp.' });
@@ -410,6 +418,15 @@ const listRecipesSchema = z.object({
         });
       }
     }),
+});
+
+const listSmartCollectionsSchema = z.object({
+  query: z.object({}).strict(),
+});
+
+const getSmartCollectionSchema = z.object({
+  params: z.object({ groupKey: smartCollectionKeySchema }).strict(),
+  query: z.object({ page: pageSchema, limit: limitSchema }).strict(),
 });
 
 const filipinoCuisineConfirmationSchema = z.literal(true, {
@@ -604,6 +621,9 @@ const lifecycleRecipeSchema = z.object({
 module.exports = {
   recipeParamsSchema,
   listRecipesSchema,
+  listSmartCollectionsSchema,
+  getSmartCollectionSchema,
+  SMART_COLLECTION_KEYS,
   createRecipeSchema,
   createDraftSchema,
   updateRecipeSchema,
