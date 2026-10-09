@@ -102,6 +102,10 @@ module.exports = () => {
 
   return {
     ...base,
+    android: {
+      ...base.android,
+      googleServicesFile: './google-services.json',
+    },
     plugins,
   };
 };
