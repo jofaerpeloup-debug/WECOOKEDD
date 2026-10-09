@@ -44,13 +44,14 @@ describe('MOBILE-NOTIF1 static contract', () => {
 
   it('freezes exact empty copy, anchored operations, and fixed safe action mapping', () => {
     const dropdown = read('components/NotificationsDropdown.js');
+    const action = read('navigation/notificationAction.js');
     expect(dropdown).toContain("You're all caught up. Real activity — saves, cooked dishes, cook reminders — will show up here.");
     expect(dropdown).toMatch(/const anchorId = notifications\[0\]\.id/);
     expect(dropdown).toMatch(/markAllRead\(anchorId\)/);
     expect(dropdown).toMatch(/archiveAll\(anchorId\)/);
-    expect(dropdown).toMatch(/action\?\.kind === 'recipe'/);
-    expect(dropdown).toMatch(/action\?\.kind === 'communityPost'/);
-    expect(dropdown).toMatch(/action\?\.kind === 'mealPlan'/);
+    expect(action).toMatch(/action\?\.kind === 'recipe'/);
+    expect(action).toMatch(/action\?\.kind === 'communityPost'/);
+    expect(action).toMatch(/action\?\.kind === 'mealPlan'/);
     expect(dropdown).not.toMatch(/navigation\.navigate\(notification\.action|action\.route|action\.url/);
   });
 

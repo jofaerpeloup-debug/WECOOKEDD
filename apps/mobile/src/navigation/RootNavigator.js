@@ -3,6 +3,7 @@ import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { navigationRef } from './navigationRef';
 
 import LandingScreen from '../screens/LandingScreen';
 import LoginScreen from '../screens/LoginScreen';
@@ -33,9 +34,9 @@ import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import VerifyEmailScreen from '../screens/VerifyEmailScreen';
 import VerifyEmailChangeScreen from '../screens/VerifyEmailChangeScreen';
 
-// Deep-link routes only. `wecooked://reset-password?token=...` and
-// `wecooked://verify-email?token=...` map by REGISTERED route name — both
-// names exist in BOTH the authenticated and unauthenticated stacks below (see
+// Deep-link routes only. ResetPassword, VerifyEmail, and VerifyEmailChange
+// map by REGISTERED route name — all three routes exist in the authenticated
+// and unauthenticated stacks below (see
 // each stack's own comment), so this single config resolves correctly
 // regardless of which stack is currently mounted. React Navigation extracts
 // `?token=...` into route.params automatically; no custom parse function is
@@ -74,7 +75,7 @@ export default function RootNavigator() {
   };
 
   return (
-    <NavigationContainer theme={navTheme} linking={linking}>
+    <NavigationContainer ref={navigationRef} theme={navTheme} linking={linking}>
       {/*
         NOT keyed off isLoggedIn. A whole-Navigator React `key` here was tried
         and reverted: on remount, React Navigation rehydrates the previous
@@ -84,7 +85,7 @@ export default function RootNavigator() {
         survived the "reset" and became the sole/active route again. A plain
         re-render (no key) goes through getStateForRouteNamesChange instead,
         which additionally drops routes whose `navigationKey` changed since
-        the last render — see the two ResetPassword/VerifyEmail screens below,
+        the last render — see the three auth deep-link screens below,
         which use exactly that to get discarded on every auth-state flip.
       */}
       <Stack.Navigator
@@ -177,7 +178,7 @@ export default function RootNavigator() {
               getStateForRouteNamesChange sees this route's key change and
               removes it, instead of matching it by name and keeping it
               mounted/focused across the swap. Without this, a ResetPassword
-              (or VerifyEmail) pushed while on one side of the swap survives
+              (or either verification route) pushed while on one side of the swap survives
               into the other side as the sole remaining — and therefore
               active — route.
             */}

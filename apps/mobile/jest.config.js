@@ -18,6 +18,8 @@ module.exports = {
   moduleNameMapper: {
     '^react-native$': '<rootDir>/test/mocks/react-native.js',
     '^expo-secure-store$': '<rootDir>/test/mocks/expo-secure-store.js',
+    '^expo-constants$': '<rootDir>/test/mocks/expo-constants.js',
+    '^expo-notifications$': '<rootDir>/test/mocks/expo-notifications.js',
     '^expo-modules-core$': '<rootDir>/test/mocks/expo-modules-core.js',
     // babel-preset-expo's inline-env plugin rewrites `process.env.EXPO_PUBLIC_*`
     // to a named import from this ESM virtual module; Jest's default

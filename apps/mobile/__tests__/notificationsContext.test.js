@@ -1,6 +1,11 @@
 const React = require('react');
 
 let mockAuth;
+jest.mock('react-native', () => ({
+  Platform: { OS: 'ios', select: (spec) => spec?.ios ?? spec?.native ?? spec?.default },
+  AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
+  Linking: { openSettings: jest.fn() },
+}));
 jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../src/api/notificationService', () => ({
   listNotifications: jest.fn(),
@@ -9,10 +14,23 @@ jest.mock('../src/api/notificationService', () => ({
   archiveAllNotifications: jest.fn(),
   updateNotificationPreference: jest.fn(),
 }));
+jest.mock('../src/api/pushInstallationService', () => ({
+  registerPushInstallation: jest.fn(), unregisterPushInstallation: jest.fn(),
+}));
+jest.mock('../src/notifications/pushInstallationStore', () => ({
+  createInstallationRecord: jest.fn(), incrementAndPersist: jest.fn(),
+  loadInstallationRecord: jest.fn(async () => ({ kind: 'missing' })),
+  saveInstallationRecord: jest.fn(),
+}));
+jest.mock('../src/navigation/navigationRef', () => ({
+  navigationRef: { isReady: jest.fn(() => true), navigate: jest.fn() },
+}));
 
 const service = require('../src/api/notificationService');
 const { act, cleanup, render, waitFor } = require('@testing-library/react-native');
 const { NotificationsProvider, useNotifications } = require('../src/context/NotificationsContext');
+const { NativePushProvider } = require('../src/context/NativePushContext');
+const NativeNotifications = require('expo-notifications');
 
 const A = '507f1f77bcf86cd799439001';
 const B = '507f1f77bcf86cd799439002';
@@ -65,6 +83,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   current = null;
   mockAuth = { user: user(A), isLoggedIn: true, syncUser: jest.fn() };
+  NativeNotifications.unregisterForNotificationsAsync.mockResolvedValue(undefined);
+  NativeNotifications.getLastNotificationResponseAsync.mockResolvedValue(null);
 });
 afterEach(() => cleanup());
 
@@ -74,6 +94,60 @@ it('malformed-success/service failure is unavailable, never an empty-success inb
   await waitFor(() => expect(current.status).toBe('error'));
   expect(current.notifications).toEqual([]);
   expect(current.error).toMatch(/unavailable/i);
+});
+
+it('real NotificationsProvider ownership never lets the default push=true value prompt a push=false user', async () => {
+  service.listNotifications.mockResolvedValue(page([]));
+  mockAuth = {
+    user: user(A, { push: false }),
+    isLoggedIn: true,
+    isReady: true,
+    sessionIdentity: { ownerId: A, generation: 1, localSessionRevision: 1 },
+    syncUser: jest.fn(),
+  };
+  render(
+    <NotificationsProvider>
+      <NativePushProvider><Probe /></NativePushProvider>
+    </NotificationsProvider>
+  );
+  await waitFor(() => expect(current.status).toBe('ready'));
+  expect(current.preferences.push).toBe(false);
+  expect(NativeNotifications.getPermissionsAsync).not.toHaveBeenCalled();
+  expect(NativeNotifications.requestPermissionsAsync).not.toHaveBeenCalled();
+  expect(NativeNotifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+});
+
+it('a same-user new auth session cannot reuse the prior session preference while ownership resets', async () => {
+  service.listNotifications.mockResolvedValue(page([]));
+  NativeNotifications.getPermissionsAsync.mockResolvedValue({ status: 'denied', granted: false, canAskAgain: false });
+  mockAuth = {
+    user: user(A, { push: true }),
+    isLoggedIn: true,
+    isReady: true,
+    sessionIdentity: { ownerId: A, generation: 1, localSessionRevision: 1 },
+    syncUser: jest.fn(),
+  };
+  const view = render(
+    <NotificationsProvider>
+      <NativePushProvider><Probe /></NativePushProvider>
+    </NotificationsProvider>
+  );
+  await waitFor(() => expect(current.status).toBe('ready'));
+  await waitFor(() => expect(NativeNotifications.getPermissionsAsync).toHaveBeenCalledTimes(1));
+
+  mockAuth = {
+    ...mockAuth,
+    user: user(A, { push: false }),
+    sessionIdentity: { ownerId: A, generation: 2, localSessionRevision: 2 },
+  };
+  view.rerender(
+    <NotificationsProvider>
+      <NativePushProvider><Probe /></NativePushProvider>
+    </NotificationsProvider>
+  );
+  await waitFor(() => expect(current.preferences.push).toBe(false));
+  expect(NativeNotifications.getPermissionsAsync).toHaveBeenCalledTimes(1);
+  expect(NativeNotifications.requestPermissionsAsync).not.toHaveBeenCalled();
 });
 
 it('an older list cannot overwrite a confirmed read mutation and triggers an owned page-one reload', async () => {

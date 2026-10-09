@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useNotifications } from '../context/NotificationsContext';
+import { actionDestination } from '../navigation/notificationAction';
 
 const EMPTY_COPY = "You're all caught up. Real activity — saves, cooked dishes, cook reminders — will show up here.";
 const MARK_READ_DELAY_MS = 250;
@@ -19,19 +20,6 @@ function relativeTime(value, now = Date.now()) {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return days < 7 ? `${days}d ago` : new Date(value).toLocaleDateString();
-}
-
-function actionDestination(action) {
-  if (action?.kind === 'recipe') {
-    return ['RecipeDetail', { recipeSource: 'api', recipeId: action.recipeId }];
-  }
-  if (action?.kind === 'communityPost') {
-    return ['MainTabs', { screen: 'Community', params: { postId: action.postId } }];
-  }
-  if (action?.kind === 'mealPlan') {
-    return ['MealPlan', { entryId: action.entryId }];
-  }
-  return null;
 }
 
 export default function NotificationsDropdown({ visible, onClose, topOffset, navigation }) {

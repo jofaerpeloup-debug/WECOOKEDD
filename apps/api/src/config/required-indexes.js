@@ -1,6 +1,7 @@
 const User = require('../modules/users/user.model');
 const ModeratorApplication = require('../modules/moderator-applications/moderator-application.model');
 const Notification = require('../modules/notifications/notification.model');
+const PushInstallation = require('../modules/push-installations/push-installation.model');
 
 /**
  * Read-only startup verification of the security-relevant database indexes the
@@ -108,6 +109,34 @@ const NOTIFICATION_REQUIRED_INDEXES = Object.freeze([
   }),
 ]);
 
+const PUSH_INSTALLATION_REQUIRED_INDEXES = Object.freeze([
+  Object.freeze({
+    name: 'uniq_push_installation_id',
+    key: Object.freeze([Object.freeze(['installationId', 1])]),
+    unique: true,
+    partialFilterExpression: null,
+    expireAfterSeconds: null,
+  }),
+  Object.freeze({
+    name: 'uniq_active_expo_push_token',
+    key: Object.freeze([Object.freeze(['provider', 1]), Object.freeze(['expoPushToken', 1])]),
+    unique: true,
+    partialFilterExpression: Object.freeze({ status: 'active', expoPushToken: { $type: 'string' } }),
+    expireAfterSeconds: null,
+  }),
+  Object.freeze({
+    name: 'push_installation_recipient_delivery',
+    key: Object.freeze([
+      Object.freeze(['recipientId', 1]),
+      Object.freeze(['status', 1]),
+      Object.freeze(['sessionId', 1]),
+    ]),
+    unique: false,
+    partialFilterExpression: null,
+    expireAfterSeconds: null,
+  }),
+]);
+
 // Key order is meaningful for an index key specification but NOT for the
 // partial filter expression, so filters are compared through a recursively
 // key-sorted canonical form.
@@ -147,6 +176,13 @@ function indexVerificationError(collectionName, name, reason) {
       `Required index "${name}" on collection "${collectionName}" ${reason}. ` +
         'Run "npm run migrate:notifications-v1" and then the explicit --apply form ' +
         'against an approved non-production database. This verifier never creates, repairs, or drops indexes.'
+    );
+  }
+  if (collectionName === PushInstallation.collection.collectionName) {
+    return new Error(
+      `Required index "${name}" on collection "${collectionName}" ${reason}. ` +
+        'Run "npm run migrate:notifications-v2" and then the explicit --apply form ' +
+        'against an approved isolated non-production database. This verifier never creates, repairs, or drops indexes.'
     );
   }
   return new Error(
@@ -259,6 +295,9 @@ async function verifyRequiredIndexes(options = {}) {
   const notificationCollection =
     options.notificationCollection ??
     (Object.hasOwn(options, 'collection') ? null : Notification.collection);
+  const pushInstallationCollection =
+    options.pushInstallationCollection ??
+    (Object.hasOwn(options, 'collection') ? null : PushInstallation.collection);
 
   let verified = await verifyCollectionIndexes(collection, REQUIRED_INDEXES);
   if (moderatorApplicationCollection) {
@@ -270,9 +309,15 @@ async function verifyRequiredIndexes(options = {}) {
   if (notificationCollection) {
     verified += await verifyCollectionIndexes(notificationCollection, NOTIFICATION_REQUIRED_INDEXES);
   }
+  if (pushInstallationCollection) {
+    verified += await verifyCollectionIndexes(
+      pushInstallationCollection,
+      PUSH_INSTALLATION_REQUIRED_INDEXES
+    );
+  }
 
   logger.log(
-    moderatorApplicationCollection || notificationCollection
+    moderatorApplicationCollection || notificationCollection || pushInstallationCollection
       ? `[database] verified ${verified} required index(es) across security-critical collections`
       : `[database] verified ${verified} required index(es) on "${collection.collectionName}"`
   );
@@ -282,6 +327,7 @@ module.exports = {
   REQUIRED_INDEXES,
   MODERATOR_APPLICATION_REQUIRED_INDEXES,
   NOTIFICATION_REQUIRED_INDEXES,
+  PUSH_INSTALLATION_REQUIRED_INDEXES,
   verifyCollectionIndexes,
   verifyRequiredIndexes,
 };

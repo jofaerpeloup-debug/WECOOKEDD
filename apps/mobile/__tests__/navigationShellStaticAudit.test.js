@@ -198,8 +198,8 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
   });
 });
 
-describe('deep-link routes — ResetPassword / VerifyEmail reachable regardless of auth state', () => {
-  it('registers ResetPassword and VerifyEmail in BOTH the authenticated and unauthenticated stacks', () => {
+describe('auth deep-link routes are reachable regardless of auth state', () => {
+  it('registers all three auth deep-link routes in the authenticated and unauthenticated stacks', () => {
     const counts = {};
     for (const name of stack) counts[name] = (counts[name] || 0) + 1;
     expect(counts.ResetPassword).toBe(2);
@@ -207,14 +207,14 @@ describe('deep-link routes — ResetPassword / VerifyEmail reachable regardless 
     expect(counts.VerifyEmailChange).toBe(2);
   });
 
-  it('maps both routes to their real screens', () => {
+  it('maps all three auth deep-link routes to their real screens', () => {
     expect(rootNav).toMatch(/name="ResetPassword"\s+component=\{ResetPasswordScreen\}/);
     expect(rootNav).toMatch(/name="VerifyEmail"\s+component=\{VerifyEmailScreen\}/);
     expect(rootNav).toMatch(/name="VerifyEmailChange"\s+component=\{VerifyEmailChangeScreen\}/);
   });
 
-  it('NavigationContainer carries a linking config for exactly these two routes, on the wecooked:// scheme', () => {
-    expect(rootNavRaw).toMatch(/<NavigationContainer\s+theme=\{navTheme\}\s+linking=\{linking\}>/);
+  it('NavigationContainer carries a linking config for exactly these auth routes, on the wecooked:// scheme', () => {
+    expect(rootNavRaw).toMatch(/<NavigationContainer\s+ref=\{navigationRef\}\s+theme=\{navTheme\}\s+linking=\{linking\}>/);
     const linkingBlock = rootNavRaw.match(/const linking = \{[\s\S]*?\n\};/);
     expect(linkingBlock).not.toBeNull();
     expect(linkingBlock[0]).toMatch(/prefixes:\s*\['wecooked:\/\/'\]/);
@@ -280,9 +280,13 @@ describe('no nested duplicate route names (React Navigation same-name warning)',
         .filter((f) => f.endsWith('.js') && f !== 'NotificationsDropdown.js')
         .map((f) => fs.readFileSync(path.join(SRC, d, f), 'utf8'))
     );
-    for (const src of files) {
-      expect(stripComments(src)).not.toMatch(/(navigate|push|replace)\(\s*['"]Community['"]|screen:\s*['"]Community['"]/);
-    }
+    const matches = files.flatMap((src) =>
+      stripComments(src).match(/(navigate|push|replace)\(\s*['"]Community['"]|screen:\s*['"]Community['"]/g) || []
+    );
+    expect(matches).toEqual(["screen: 'Community'"]);
+    expect(read('navigation/notificationAction.js')).toMatch(
+      /return \['MainTabs', \{ screen: 'Community', params: \{ postId: action\.postId \} \}]/
+    );
   });
 });
 

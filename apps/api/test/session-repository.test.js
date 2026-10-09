@@ -91,6 +91,44 @@ test('findActiveByHash queries by hash, unrevoked, and unexpired — with no sid
   assert.ok(capturedFilter.expiresAt.$gt instanceof Date);
 });
 
+test('findActiveByIdsForUser requires the current generation in addition to owner and liveness', async (t) => {
+  let capturedFilter;
+  let selected;
+  t.mock.method(Session, 'find', (filter) => {
+    capturedFilter = filter;
+    return {
+      select(projection) {
+        selected = projection;
+        return Promise.resolve([{ _id: 'session-1', userId: 'user-1' }]);
+      },
+    };
+  });
+  const now = new Date();
+  await sessionRepository.findActiveByIdsForUser(['session-1', 'session-2'], 'user-1', 4, now);
+  assert.deepEqual(capturedFilter, {
+    _id: { $in: ['session-1', 'session-2'] },
+    userId: 'user-1',
+    revokedAt: null,
+    expiresAt: { $gt: now },
+    $or: [{ securityGeneration: 4 }],
+  });
+  assert.equal(selected, '_id userId');
+});
+
+test('findActiveByIdsForUser treats a missing legacy generation as generation zero only', async (t) => {
+  let capturedFilter;
+  t.mock.method(Session, 'find', (filter) => {
+    capturedFilter = filter;
+    return { select: () => Promise.resolve([]) };
+  });
+  const now = new Date();
+  await sessionRepository.findActiveByIdsForUser(['legacy-session'], 'user-1', 0, now);
+  assert.deepEqual(capturedFilter.$or, [
+    { securityGeneration: 0 },
+    { securityGeneration: { $exists: false } },
+  ]);
+});
+
 test('a delayed generation cleanup revokes only legacy and older generations', async (t) => {
   let capturedFilter;
   let capturedUpdate;

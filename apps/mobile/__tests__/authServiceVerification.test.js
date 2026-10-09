@@ -3,6 +3,8 @@
 // touch the session — verifying an email changes no credential. client +
 // tokenStore are mocked so no real network / SecureStore is involved.
 
+let mockAuthAdapter;
+
 jest.mock('../src/api/client', () => {
   class ApiError extends Error {
     constructor(message, opts = {}) {
@@ -17,7 +19,7 @@ jest.mock('../src/api/client', () => {
   return {
     api: { post: jest.fn(), get: jest.fn(), patch: jest.fn(), del: jest.fn(), request: jest.fn() },
     ApiError,
-    setAuthAdapter: jest.fn(),
+    setAuthAdapter: jest.fn((adapter) => { mockAuthAdapter = adapter; }),
   };
 });
 jest.mock('../src/api/tokenStore');
@@ -30,9 +32,11 @@ jest.mock('../src/auth/googleAuthFlow', () => ({
 const { api } = require('../src/api/client');
 const tokenStore = require('../src/api/tokenStore');
 const authService = require('../src/api/authService');
+const { setBeforePushLogout } = require('../src/notifications/nativePushLifecycle');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  setBeforePushLogout(null);
   tokenStore.setAccessToken.mockReturnValue(undefined);
   tokenStore.setRefreshToken.mockResolvedValue(true);
   tokenStore.clearSession.mockResolvedValue(undefined);
@@ -226,6 +230,80 @@ describe('ACCOUNT2 stale-success auth transitions', () => {
     expect(provider.current.user).toBe(userB);
     expect(provider.current.isLoggedIn).toBe(true);
     expect(tokenStore.clearSession).not.toHaveBeenCalled();
+    await act(async () => provider.renderer.unmount());
+  });
+
+  it.each([
+    ['signOut', '/auth/logout'],
+    ['signOutEverywhere', '/auth/logout-all'],
+  ])('does not let timed-out %s cleanup log out a relogged account', async (method, endpoint) => {
+    const provider = await renderProvider();
+    const userA = { id: 'A', email: 'a@example.com' };
+    const userB = { id: 'B', email: 'b@example.com' };
+    await signIn(provider, userA, userA.email);
+    const cleanup = deferred();
+    setBeforePushLogout(() => cleanup.promise);
+
+    let staleCompletion;
+    await act(async () => {
+      staleCompletion = provider.current[method]();
+      await Promise.resolve();
+    });
+    await signIn(provider, userB, userB.email);
+    await act(async () => {
+      cleanup.resolve();
+      await staleCompletion;
+    });
+
+    expect(provider.current.user).toBe(userB);
+    expect(provider.current.isLoggedIn).toBe(true);
+    expect(api.post.mock.calls.some(([path]) => path === endpoint)).toBe(false);
+    await act(async () => provider.renderer.unmount());
+  });
+
+  it.each([
+    ['verifyEmailChange', 'C'.repeat(43), '/auth/email-change/verify'],
+    ['deactivate', undefined, '/auth/deactivate'],
+  ])('runs owned push cleanup before %s invalidates the session', async (method, argument, endpoint) => {
+    const provider = await renderProvider();
+    const user = { id: 'A', email: 'a@example.com' };
+    await signIn(provider, user, user.email);
+    const order = [];
+    setBeforePushLogout(async () => { order.push('push-cleanup'); });
+    api.post.mockImplementationOnce(async (path) => {
+      order.push(path);
+      return method === 'verifyEmailChange' ? { emailChanged: true } : { deactivated: true };
+    });
+
+    await act(async () => {
+      await provider.current[method](argument);
+    });
+
+    expect(order).toEqual(['push-cleanup', endpoint]);
+    expect(provider.current.isLoggedIn).toBe(false);
+    await act(async () => provider.renderer.unmount());
+  });
+
+  it('session expiry performs local-only push cleanup before exposing unauthenticated state', async () => {
+    const provider = await renderProvider();
+    const user = { id: 'A', email: 'a@example.com' };
+    await signIn(provider, user, user.email);
+    const cleanupOptions = [];
+    setBeforePushLogout(async (options) => { cleanupOptions.push(options); });
+    tokenStore.getRefreshToken.mockResolvedValue('refresh-A');
+    const { ApiError } = require('../src/api/client');
+    api.post.mockRejectedValueOnce(new ApiError('expired', {
+      code: 'AUTH_SESSION_INVALID', status: 401,
+    }));
+
+    await act(async () => {
+      await mockAuthAdapter.refreshAccessToken();
+      await Promise.resolve();
+    });
+
+    expect(cleanupOptions).toEqual([{ localOnly: true }]);
+    expect(provider.current.user).toBeNull();
+    expect(provider.current.isLoggedIn).toBe(false);
     await act(async () => provider.renderer.unmount());
   });
 });
