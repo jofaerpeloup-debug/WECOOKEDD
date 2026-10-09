@@ -436,7 +436,16 @@ Current blockers: none for source implementation. Runtime/release prerequisites 
 
 These are implementation/runtime/release gates, not unresolved auth or storage contract decisions. They must not be reported as passed until executed.
 
-## 15. Milestone path
+## 15. Engineering closure update
+
+Closure status as of 2026-10-09:
+
+- Android Firebase client configuration and matching FCM V1 credentials are configured; Expo Push Security is enabled, and server Authorization bearer-token validation passed. Private service-account, APNs, and Expo access secrets remain untracked.
+- Android EAS development build / physical push runtime: **DEFERRED BY PROJECT DECISION — NOT PASSED — NOT CLAIMED AS PASS**. Remaining physical-device/runtime acceptance is consolidated into QA-RUNTIME1 after product milestones are complete.
+- iOS/APNs provisioning/runtime: **DEFERRED BY PROJECT DECISION — NOT PASSED — NOT CLAIMED AS PASS**. Apple Developer credentials are unavailable.
+- EAS CLI reported `expo-dev-client` unavailable during development-build setup. This is not declared a dependency defect: prior workspace resolution found `expo-dev-client@57.0.18`. Final declaration/build diagnosis is deferred to QA-RUNTIME1.
+
+## 16. Milestone path
 
 `docs/milestones/MOBILE-NOTIF2-native-push-foundation.md`
 
