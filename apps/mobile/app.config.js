@@ -63,6 +63,15 @@ module.exports = () => {
       { photosPermission: 'Allow WeCooked to select a profile photo.' },
     ],
     [
+      'expo-notifications',
+      {
+        icon: './assets/notification-icon.png',
+        color: '#4A5D4E',
+        defaultChannel: 'general',
+        enableBackgroundRemoteNotifications: false,
+      },
+    ],
+    [
       'expo-build-properties',
       {
         ios: {
@@ -93,6 +102,10 @@ module.exports = () => {
 
   return {
     ...base,
+    android: {
+      ...base.android,
+      googleServicesFile: './google-services.json',
+    },
     plugins,
   };
 };

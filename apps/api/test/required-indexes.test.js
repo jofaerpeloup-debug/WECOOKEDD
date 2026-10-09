@@ -7,6 +7,7 @@ const {
   REQUIRED_INDEXES,
   MODERATOR_APPLICATION_REQUIRED_INDEXES,
   NOTIFICATION_REQUIRED_INDEXES,
+  PUSH_INSTALLATION_REQUIRED_INDEXES,
   verifyRequiredIndexes,
 } = require('../src/config/required-indexes');
 const {
@@ -58,6 +59,43 @@ function validNotificationIndexes() {
     ...(required.expireAfterSeconds !== null ? { expireAfterSeconds: required.expireAfterSeconds } : {}),
   }));
 }
+
+function validPushInstallationIndexes() {
+  return PUSH_INSTALLATION_REQUIRED_INDEXES.map((required) => ({
+    name: required.name,
+    key: Object.fromEntries(required.key),
+    ...(required.unique ? { unique: true } : {}),
+    ...(required.partialFilterExpression ? { partialFilterExpression: required.partialFilterExpression } : {}),
+  }));
+}
+
+test('startup verifies the exact three PushInstallation indexes read-only', async () => {
+  await verifyRequiredIndexes({
+    collection: fakeCollection([{ name: '_id_', key: { _id: 1 } }, validIndex()]),
+    pushInstallationCollection: fakeCollection(validPushInstallationIndexes(), { collectionName: 'pushinstallations' }),
+    logger: silentLogger,
+  });
+  assert.equal(PUSH_INSTALLATION_REQUIRED_INDEXES.length, 3);
+});
+
+test('startup rejects PushInstallation partial, uniqueness, key-order, sparse, and TTL drift', async () => {
+  const mutations = [
+    (indexes) => { indexes[0].unique = false; },
+    (indexes) => { indexes[1].partialFilterExpression = { status: 'active' }; },
+    (indexes) => { indexes[2].key = { status: 1, recipientId: 1, sessionId: 1 }; },
+    (indexes) => { indexes[0].sparse = true; },
+    (indexes) => { indexes[2].expireAfterSeconds = 60; },
+  ];
+  for (const mutate of mutations) {
+    const indexes = validPushInstallationIndexes();
+    mutate(indexes);
+    await assert.rejects(() => verifyRequiredIndexes({
+      collection: fakeCollection([{ name: '_id_', key: { _id: 1 } }, validIndex()]),
+      pushInstallationCollection: fakeCollection(indexes, { collectionName: 'pushinstallations' }),
+      logger: silentLogger,
+    }), /Required index/);
+  }
+});
 
 test('startup verifies the exact four migration-owned Notification indexes read-only', async () => {
   const notificationCollection = fakeCollection(validNotificationIndexes(), { collectionName: 'notifications' });

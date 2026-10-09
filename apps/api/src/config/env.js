@@ -124,6 +124,7 @@ const envSchema = z
     CLOUDINARY_AVATAR_FOLDER: z.string().trim().max(255).optional().default('wecooked/avatars'),
     OPENAI_API_KEY: z.string().trim().optional().default(''),
     OPENAI_MODEL: z.string().trim().optional().default(''),
+    EXPO_PUSH_ACCESS_TOKEN: z.string().trim().max(2048).optional().default(''),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === 'production' && !hasExplicitMongoDatabase(value.MONGODB_URI)) {
@@ -229,6 +230,7 @@ function parseEnv(source) {
       apiKey: parsed.OPENAI_API_KEY,
       model: parsed.OPENAI_MODEL,
     },
+    expoPushAccessToken: parsed.EXPO_PUSH_ACCESS_TOKEN,
   };
 }
 

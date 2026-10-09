@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1083519022975",
+    "project_id": "wecooked-mobile-push",
+    "storage_bucket": "wecooked-mobile-push.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1083519022975:android:6d955b4a05a753cead0c4a",
+        "android_client_info": {
+          "package_name": "com.wecooked.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyOo33RlWYm4VSIzYp7xIq8zRQLmNRCCE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

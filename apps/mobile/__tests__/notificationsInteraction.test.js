@@ -8,6 +8,7 @@ jest.mock('react-native', () => {
     interpolate() { return this.value; }
   }
   return {
+    Platform: { OS: 'ios', select: (spec) => spec.ios ?? spec.native ?? spec.default },
     ActivityIndicator: host('ActivityIndicator'),
     Modal: host('Modal'),
     Pressable: host('Pressable'),
@@ -40,6 +41,9 @@ jest.mock('@react-navigation/native', () => ({ useNavigation: () => mockNavigati
 let mockNotifications;
 let mockNavigation;
 jest.mock('../src/context/NotificationsContext', () => ({ useNotifications: () => mockNotifications }));
+jest.mock('../src/context/NativePushContext', () => ({
+  useNativePush: () => ({ status: 'registered', error: null, retry: jest.fn(), openSettings: jest.fn() }),
+}));
 
 const { act, cleanup, fireEvent, render } = require('@testing-library/react-native');
 const Dropdown = require('../src/components/NotificationsDropdown').default;

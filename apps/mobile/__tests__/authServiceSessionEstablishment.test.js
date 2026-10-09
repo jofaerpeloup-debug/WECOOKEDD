@@ -27,6 +27,12 @@ const loginResponse = {
   refreshToken: 'refresh',
 };
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   tokenStore.setAccessToken.mockReturnValue(undefined);
@@ -58,6 +64,27 @@ describe('authService session establishment identity fallback', () => {
     await expect(
       authService.login({ email: 'cook@example.com', password: 'password' })
     ).resolves.toEqual(loginResponse.user);
+    expect(tokenStore.clearSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('authService logout revision fencing', () => {
+  it.each([
+    ['logout', '/auth/logout'],
+    ['logoutAll', '/auth/logout-all'],
+  ])('%s cannot clear tokens installed while its server request is delayed', async (method, endpoint) => {
+    const oldRequest = deferred();
+    api.post.mockImplementation((path) => (
+      path === endpoint ? oldRequest.promise : Promise.resolve(loginResponse)
+    ));
+    api.get.mockResolvedValue({ user: loginResponse.user });
+
+    const oldLogout = authService[method]();
+    await Promise.resolve();
+    await authService.login({ email: 'new@example.com', password: 'Password1!' });
+    oldRequest.resolve({ loggedOut: true });
+
+    await expect(oldLogout).resolves.toBe(false);
     expect(tokenStore.clearSession).not.toHaveBeenCalled();
   });
 });

@@ -45,11 +45,24 @@ describe('app.config.js — credential-free (both unset)', () => {
     expect(c.android).not.toHaveProperty('edgeToEdgeEnabled');
   });
 
-  it('adds build properties but no Google config plugin', () => {
+  it('adds image-picker, secured notification, and build properties but no Google config plugin', () => {
     const c = loadConfig({});
 
     expect(c.plugins).toEqual([
       ...appJson.plugins,
+      [
+        'expo-image-picker',
+        { photosPermission: 'Allow WeCooked to select a profile photo.' },
+      ],
+      [
+        'expo-notifications',
+        {
+          icon: './assets/notification-icon.png',
+          color: '#4A5D4E',
+          defaultChannel: 'general',
+          enableBackgroundRemoteNotifications: false,
+        },
+      ],
       [
         'expo-build-properties',
         {

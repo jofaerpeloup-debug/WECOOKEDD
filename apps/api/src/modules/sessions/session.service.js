@@ -65,6 +65,18 @@ function getActiveSessionById(sessionId) {
   return sessionRepository.findActiveById(sessionId);
 }
 
+function getActiveSessionsByIdsForUser(sessionIds, userId, securityGeneration) {
+  if (!Number.isInteger(securityGeneration) || securityGeneration < 0) {
+    throw new TypeError('getActiveSessionsByIdsForUser requires a non-negative integer securityGeneration.');
+  }
+  return sessionRepository.findActiveByIdsForUser(
+    sessionIds,
+    userId,
+    securityGeneration,
+    new Date()
+  );
+}
+
 async function revokeSession(sessionId) {
   await sessionRepository.revokeById(sessionId, new Date());
 }
@@ -82,6 +94,7 @@ module.exports = {
   findActiveSessionByRefreshToken,
   rotateSession,
   getActiveSessionById,
+  getActiveSessionsByIdsForUser,
   revokeSession,
   revokeAllSessionsBeforeGeneration,
 };

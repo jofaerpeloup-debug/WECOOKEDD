@@ -1,9 +1,10 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useNotifications } from '../context/NotificationsContext';
 import TopBar from '../components/TopBar';
+import { useNativePush } from '../context/NativePushContext';
 
 const SETTINGS = Object.freeze([
   { key: 'push', label: 'Push Notifications', subtitle: 'Alerts on this device' },
@@ -22,6 +23,7 @@ export default function NotificationsScreen({ navigation }) {
     preferenceError,
     setPreference,
   } = useNotifications();
+  const nativePush = useNativePush();
 
   return (
     <View style={styles.root}>
@@ -51,6 +53,17 @@ export default function NotificationsScreen({ navigation }) {
             );
           })}
         </View>
+        {preferences.push && nativePush.status === 'denied' ? (
+          <Pressable
+            onPress={nativePush.openSettings}
+            accessibilityRole="button"
+            accessibilityLabel="Open device settings"
+            style={styles.settingsButton}
+          >
+            <Text style={styles.settingsButtonText}>Open device settings</Text>
+          </Pressable>
+        ) : null}
+        {nativePush.error ? <Text style={styles.error} accessibilityRole="alert">{nativePush.error}</Text> : null}
         {preferenceError ? (
           <Text style={styles.error} accessibilityRole="alert">{preferenceError}</Text>
         ) : null}
@@ -84,6 +97,8 @@ function makeStyles(colors) {
       fontFamily: typography.body.medium, fontSize: typography.sizes.sm,
       color: colors.error, marginTop: spacing.lg, textAlign: 'center',
     },
+    settingsButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.md },
+    settingsButtonText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.sageDeep },
   });
 }
 

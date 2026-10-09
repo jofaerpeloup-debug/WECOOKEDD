@@ -31,6 +31,7 @@ import { CookHistoryProvider } from './src/context/CookHistoryContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { SearchHistoryProvider } from './src/context/SearchHistoryContext';
 import { NotificationsProvider } from './src/context/NotificationsContext';
+import { NativePushProvider } from './src/context/NativePushContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -75,7 +76,8 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <NotificationsProvider>
-            <SearchHistoryProvider>
+            <NativePushProvider>
+              <SearchHistoryProvider>
               <FavoritesProvider>
                 <CollectionsProvider>
                   <ShoppingListProvider>
@@ -85,7 +87,8 @@ export default function App() {
                   </ShoppingListProvider>
                 </CollectionsProvider>
               </FavoritesProvider>
-            </SearchHistoryProvider>
+              </SearchHistoryProvider>
+            </NativePushProvider>
           </NotificationsProvider>
         </AuthProvider>
       </ThemeProvider>

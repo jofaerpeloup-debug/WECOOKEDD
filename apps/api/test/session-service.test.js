@@ -109,6 +109,27 @@ test('getActiveSessionById delegates to the repository', async (t) => {
   assert.equal(session._id, 'session-1');
 });
 
+test('getActiveSessionsByIdsForUser delegates with a current server time', async (t) => {
+  let captured;
+  t.mock.method(sessionRepository, 'findActiveByIdsForUser', async (ids, userId, securityGeneration, now) => {
+    captured = { ids, userId, securityGeneration, now };
+    return [{ _id: 'session-1', userId }];
+  });
+  const result = await sessionService.getActiveSessionsByIdsForUser(['session-1'], 'user-1', 7);
+  assert.equal(result.length, 1);
+  assert.deepEqual(captured.ids, ['session-1']);
+  assert.equal(captured.userId, 'user-1');
+  assert.equal(captured.securityGeneration, 7);
+  assert.ok(captured.now instanceof Date);
+});
+
+test('getActiveSessionsByIdsForUser rejects an invalid generation', async () => {
+  assert.throws(
+    () => sessionService.getActiveSessionsByIdsForUser(['session-1'], 'user-1', -1),
+    /non-negative integer securityGeneration/
+  );
+});
+
 test('revokeSession delegates to the repository with the session id', async (t) => {
   let capturedId;
   t.mock.method(sessionRepository, 'revokeById', async (id) => {

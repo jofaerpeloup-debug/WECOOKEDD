@@ -10,6 +10,7 @@ const REQUIRED_EMAIL_ENV = {
   EMAIL_FROM_NAME: 'WeCooked Test',
   PASSWORD_RESET_URL: 'http://localhost:5173/reset-password',
   EMAIL_VERIFICATION_URL: 'http://localhost:5173/verify-email',
+  EMAIL_CHANGE_VERIFICATION_URL: 'wecooked://verify-email-change',
   GOOGLE_OAUTH_CLIENT_IDS: 'test-web-client-1.apps.googleusercontent.com',
 };
 
@@ -96,6 +97,38 @@ test('parseEnv keeps OpenAI configuration optional, trimmed, and server-only', (
   assert.deepEqual(configured.openai, { apiKey: 'secret-key', model: 'selected-model' });
   assert.equal('openaiApiKey' in configured, false);
   assert.equal('openaiModel' in configured, false);
+});
+
+test('parseEnv keeps the Expo Push Security token optional, trimmed, and server-only', () => {
+  const absent = parseEnv({
+    NODE_ENV: 'test',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_notif2_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+  });
+  assert.equal(absent.expoPushAccessToken, '');
+
+  const configured = parseEnv({
+    NODE_ENV: 'test',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked_notif2_test',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    EXPO_PUSH_ACCESS_TOKEN: '  server-only-expo-token  ',
+  });
+  assert.equal(configured.expoPushAccessToken, 'server-only-expo-token');
+  assert.equal('expo' in configured, false);
+});
+
+test('parseEnv preserves ACCOUNT2 email-change links alongside the NOTIF2 push token', () => {
+  const result = parseEnv({
+    ...REQUIRED_EMAIL_ENV,
+    NODE_ENV: 'production',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017/wecooked',
+    JWT_ACCESS_SECRET: VALID_JWT_ACCESS_SECRET,
+    PASSWORD_RESET_URL: 'https://example.com/reset-password',
+    EMAIL_VERIFICATION_URL: 'https://example.com/verify-email',
+    EXPO_PUSH_ACCESS_TOKEN: ' expo-server-token ',
+  });
+  assert.equal(result.emailChangeVerificationUrl, 'wecooked://verify-email-change');
+  assert.equal(result.expoPushAccessToken, 'expo-server-token');
 });
 
 test('parseEnv treats a blank optional Cloudinary folder as the safe default', () => {

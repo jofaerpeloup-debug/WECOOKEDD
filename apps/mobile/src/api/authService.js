@@ -388,7 +388,7 @@ export async function logout() {
   // Authoritative: local WeCooked session is now cleared. Provider-side (Google)
   // logout hygiene is not this module's concern — the React auth boundary
   // (AuthContext) triggers it best-effort, detached, after the state flip.
-  await clearLocalSession(sessionRevision);
+  return clearLocalSession(sessionRevision);
 }
 
 export async function logoutAll() {
@@ -398,7 +398,7 @@ export async function logoutAll() {
   } catch {
     // Best effort — see logout().
   }
-  await clearLocalSession(sessionRevision);
+  return clearLocalSession(sessionRevision);
 }
 
 // --- startup session restore ----------------------------------------

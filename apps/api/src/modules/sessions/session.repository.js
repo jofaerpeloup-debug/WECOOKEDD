@@ -17,6 +17,18 @@ function findActiveById(id) {
   return Session.findOne({ _id: id, revokedAt: null, expiresAt: { $gt: new Date() } });
 }
 
+function findActiveByIdsForUser(ids, userId, securityGeneration, now) {
+  const generationFilter = [{ securityGeneration }];
+  if (securityGeneration === 0) generationFilter.push({ securityGeneration: { $exists: false } });
+  return Session.find({
+    _id: { $in: ids },
+    userId,
+    revokedAt: null,
+    expiresAt: { $gt: now },
+    $or: generationFilter,
+  }).select('_id userId');
+}
+
 // Non-mutating lookup by refresh-token hash, used to check the owning user
 // before committing to a rotation — deliberately separate from rotateByHash
 // so a pre-flight check never has a side effect.
@@ -66,6 +78,7 @@ async function revokeAllForUserBeforeGeneration(userId, securityGeneration, now)
 module.exports = {
   createSession,
   findActiveById,
+  findActiveByIdsForUser,
   findActiveByHash,
   rotateByHash,
   revokeById,
