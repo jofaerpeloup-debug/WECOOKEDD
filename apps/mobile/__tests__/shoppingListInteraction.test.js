@@ -12,6 +12,19 @@ jest.mock('react-native', () => {
     Alert: { alert: jest.fn() },
     KeyboardAvoidingView: host('KeyboardAvoidingView'),
     Modal,
+    PanResponder: {
+      create: (handlers) => ({
+        panHandlers: {
+          onStartShouldSetResponder: handlers.onStartShouldSetPanResponder,
+          onMoveShouldSetResponder: handlers.onMoveShouldSetPanResponder,
+          onResponderGrant: handlers.onPanResponderGrant,
+          onResponderMove: handlers.onPanResponderMove,
+          onResponderRelease: handlers.onPanResponderRelease,
+          onResponderTerminate: handlers.onPanResponderTerminate,
+          onResponderTerminationRequest: handlers.onPanResponderTerminationRequest,
+        },
+      }),
+    },
     Platform: { OS: 'ios', select: (values) => values.ios || values.default },
     Pressable: host('Pressable'),
     RefreshControl: host('RefreshControl'),
@@ -43,19 +56,31 @@ jest.mock('../src/theme/ThemeContext', () => ({
 }));
 
 let focusedEffect;
+let mockBlurEffect;
 jest.mock('@react-navigation/native', () => ({
   useFocusEffect: (callback) => {
     const React = require('react');
     focusedEffect = callback;
-    React.useEffect(callback, [callback]);
+    React.useEffect(() => {
+      mockBlurEffect = callback();
+      return () => {
+        mockBlurEffect?.();
+        mockBlurEffect = undefined;
+      };
+    }, [callback]);
   },
 }));
 
-let mockAuth = { status: 'authenticated', user: { id: 'user-a' } };
+let mockAuth = {
+  status: 'authenticated',
+  user: { id: 'user-a' },
+  sessionIdentity: { ownerId: 'user-a', generation: 1, localSessionRevision: 1 },
+};
 jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../src/api/shoppingListService', () => ({
   addItem: jest.fn(),
   addRecipe: jest.fn(),
+  clearCheckedItems: jest.fn(),
   clearItems: jest.fn(),
   getShoppingList: jest.fn(),
   removeItem: jest.fn(),
@@ -63,12 +88,15 @@ jest.mock('../src/api/shoppingListService', () => ({
 }));
 jest.mock('../src/api/shoppingListErrors', () => ({
   getShoppingListErrorMessage: (error) => error?.message || 'Shopping request failed.',
-  isItemAlreadyGone: () => false,
+  isAmbiguousShoppingMutationOutcome: (error) =>
+    error?.kind === 'network' || error?.status >= 500 || error?.code === 'INVALID_RESPONSE',
+  isItemAlreadyGone: (error) => error?.code === 'SHOPPING_LIST_ITEM_NOT_FOUND',
+  isShoppingListStale: (error) => error?.code === 'SHOPPING_LIST_STALE',
 }));
 
 const { act, cleanup, fireEvent, render, waitFor } = require('@testing-library/react-native');
 const shoppingListService = require('../src/api/shoppingListService');
-const { ShoppingListProvider } = require('../src/context/ShoppingListContext');
+const { ShoppingListProvider, useShoppingList } = require('../src/context/ShoppingListContext');
 const ShoppingItemEditModal = require('../src/components/ShoppingItemEditModal').default;
 const IngredientPickerModal = require('../src/components/IngredientPickerModal').default;
 const ShoppingListScreen = require('../src/screens/ShoppingListScreen').default;
@@ -102,9 +130,17 @@ function list(items) {
   return { id: 'list-1', items, createdAt: null, updatedAt: null };
 }
 
+let observedShoppingList;
+
+function ShoppingListObserver() {
+  observedShoppingList = useShoppingList();
+  return null;
+}
+
 function renderScreen() {
   return render(
     <ShoppingListProvider>
+      <ShoppingListObserver />
       <ShoppingListScreen navigation={{ goBack: jest.fn() }} />
     </ShoppingListProvider>
   );
@@ -142,8 +178,14 @@ async function settle(request, method, value) {
 
 beforeEach(() => {
   jest.resetAllMocks();
-  mockAuth = { status: 'authenticated', user: { id: 'user-a' } };
+  mockAuth = {
+    status: 'authenticated',
+    user: { id: 'user-a' },
+    sessionIdentity: { ownerId: 'user-a', generation: 1, localSessionRevision: 1 },
+  };
   focusedEffect = undefined;
+  mockBlurEffect = undefined;
+  observedShoppingList = undefined;
 });
 
 afterEach(() => cleanup());
@@ -374,7 +416,11 @@ it('ignores an old owner response and does not close a newly opened owner modal'
   fireEvent.changeText(view.getByLabelText('Quantity'), '8');
   fireEvent(view.getByLabelText('Save item changes'), 'accessibilityTap');
 
-  mockAuth = { status: 'authenticated', user: { id: 'user-b' } };
+  mockAuth = {
+    status: 'authenticated',
+    user: { id: 'user-b' },
+    sessionIdentity: { ownerId: 'user-b', generation: 2, localSessionRevision: 2 },
+  };
   view.rerender(
     <ShoppingListProvider>
       <ShoppingListScreen navigation={{ goBack: jest.fn() }} />
@@ -388,6 +434,95 @@ it('ignores an old owner response and does not close a newly opened owner modal'
   expect(view.getAllByText('Beans')).toHaveLength(2);
   expect(view.getByText('Edit Shopping Item')).toBeOnTheScreen();
   expect(view.queryByText('8 kg')).toBeNull();
+});
+
+it('invalidates an in-flight mutation when the same user starts a new auth session', async () => {
+  const oldMutation = deferred();
+  const newLoad = deferred();
+  const newMutation = deferred();
+  const beans = item({
+    id: 'item-b', ingredientId: 'ingredient-b',
+    ingredient: { id: 'ingredient-b', name: 'Beans' }, category: 'legume',
+    quantity: 1, unit: 'can',
+  });
+  shoppingListService.getShoppingList.mockResolvedValue(list([item()]));
+  shoppingListService.updateItem
+    .mockReturnValueOnce(oldMutation.promise)
+    .mockReturnValueOnce(newMutation.promise);
+
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Check Rice'));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1));
+  const readsBeforeSessionChange = shoppingListService.getShoppingList.mock.calls.length;
+  shoppingListService.getShoppingList.mockReturnValueOnce(newLoad.promise);
+
+  mockAuth = {
+    status: 'authenticated',
+    user: { id: 'user-a' },
+    sessionIdentity: { ownerId: 'user-a', generation: 2, localSessionRevision: 2 },
+  };
+  view.rerender(
+    <ShoppingListProvider>
+      <ShoppingListObserver />
+      <ShoppingListScreen navigation={{ goBack: jest.fn() }} />
+    </ShoppingListProvider>
+  );
+  expect(view.queryByText('Rice')).toBeNull();
+  await waitFor(() => expect(shoppingListService.getShoppingList)
+    .toHaveBeenCalledTimes(readsBeforeSessionChange + 1));
+  await settle(newLoad, 'resolve', list([beans]));
+  await waitFor(() => expect(view.getByLabelText('Check Beans')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Check Beans'));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledTimes(2));
+
+  await settle(oldMutation, 'resolve', list([{ ...item(), isChecked: true }]));
+  expect(view.queryByText('Rice')).toBeNull();
+  expect(view.getByLabelText('Check Beans').props.accessibilityState.disabled).toBe(true);
+  await settle(newMutation, 'resolve', list([{ ...beans, isChecked: true }]));
+  expect(view.getByLabelText('Uncheck Beans')).toBeOnTheScreen();
+});
+
+it.each([
+  ['resolve', 'resolve'], ['reject', 'resolve'],
+  ['resolve', 'reject'], ['reject', 'reject'],
+])('keeps the newer session GET in charge when old GET %ss and new GET %ss', async (oldOutcome, newOutcome) => {
+  const oldLoad = deferred();
+  const newLoad = deferred();
+  const beans = item({ id: 'item-b', ingredientId: 'ingredient-b',
+    ingredient: { id: 'ingredient-b', name: 'Beans' }, category: 'legume' });
+  shoppingListService.getShoppingList
+    .mockReturnValueOnce(oldLoad.promise)
+    .mockReturnValueOnce(newLoad.promise);
+  const view = render(<ShoppingListProvider><ShoppingListObserver /></ShoppingListProvider>);
+  await waitFor(() => expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(1));
+
+  mockAuth = { status: 'authenticated', user: { id: 'user-a' },
+    sessionIdentity: { ownerId: 'user-a', generation: 2, localSessionRevision: 2 } };
+  view.rerender(<ShoppingListProvider><ShoppingListObserver /></ShoppingListProvider>);
+  await waitFor(() => expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(2));
+  await settle(oldLoad, oldOutcome, oldOutcome === 'resolve' ? list([item()]) : new Error('old failure'));
+  expect(observedShoppingList.status).toBe('loading');
+  expect(observedShoppingList.items).toHaveLength(0);
+  await act(async () => observedShoppingList.reload());
+  expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(2);
+
+  await settle(newLoad, newOutcome,
+    newOutcome === 'resolve' ? list([beans]) : new Error('Current failure'));
+  if (newOutcome === 'resolve') {
+    expect(observedShoppingList.items).toEqual([beans]);
+    expect(observedShoppingList.error).toBeNull();
+    expect(observedShoppingList.status).toBe('ready');
+  } else {
+    expect(observedShoppingList.items).toHaveLength(0);
+    expect(observedShoppingList.error).toBe('Current failure');
+    expect(observedShoppingList.status).toBe('error');
+  }
+  shoppingListService.getShoppingList.mockResolvedValue(list([beans]));
+  await act(async () => observedShoppingList.reload());
+  expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(3);
+  expect(observedShoppingList.items).toEqual([beans]);
+  expect(observedShoppingList.status).toBe('ready');
 });
 
 it('does not let an unmounted edit response affect a remounted screen or its open modal', async () => {
@@ -424,6 +559,344 @@ it('does not let an unmounted edit response affect a remounted screen or its ope
   expect(freshView.getByText('Edit Shopping Item')).toBeOnTheScreen();
   expect(freshView.getByLabelText('Quantity').props.value).toBe('1');
   expect(freshView.queryByText('6 kg')).toBeNull();
+});
+
+it.each([
+  [1, 'Clear 1 checked item'],
+  [2, 'Clear 2 checked items'],
+])('shows the exact count-aware Clear Checked label for %i checked rows with no confirmation', async (count, label) => {
+  const rows = [item({ isChecked: true })];
+  if (count === 2) {
+    rows.push(item({
+      id: 'item-b', ingredientId: 'ingredient-b',
+      ingredient: { id: 'ingredient-b', name: 'Beans' }, category: 'legume',
+      quantity: 1, unit: 'can', isChecked: true,
+    }));
+  }
+  shoppingListService.getShoppingList.mockResolvedValue(list(rows));
+  shoppingListService.clearCheckedItems.mockResolvedValue(list([]));
+  const view = renderScreen();
+
+  await waitFor(() => expect(view.getByLabelText(label)).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText(label));
+
+  await waitFor(() => expect(shoppingListService.clearCheckedItems).toHaveBeenCalledTimes(1));
+  expect(require('react-native').Alert.alert).not.toHaveBeenCalled();
+  await waitFor(() => expect(view.queryByLabelText(label)).toBeNull());
+});
+
+it('hides Clear Checked at zero while preserving confirmed Clear All in Edit mode', async () => {
+  shoppingListService.getShoppingList.mockResolvedValue(list([item()]));
+  shoppingListService.clearItems.mockResolvedValue(list([]));
+  const view = renderScreen();
+
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  expect(view.queryByText(/Clear \d+ checked items?/)).toBeNull();
+  fireEvent.press(view.getByLabelText('Edit shopping list'));
+  fireEvent.press(view.getByLabelText('Clear shopping list'));
+
+  const clearAlert = require('react-native').Alert.alert.mock.calls.at(-1);
+  expect(clearAlert[0]).toBe('Clear shopping list?');
+  await act(async () => clearAlert[2][1].onPress());
+  expect(shoppingListService.clearItems).toHaveBeenCalledTimes(1);
+});
+
+it('reveals Delete only after a horizontal left swipe and deletes only after explicit activation', async () => {
+  const rice = item();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.removeItem.mockResolvedValue(list([]));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+
+  const swipe = view.getByTestId('shopping-item-item-a-swipe');
+  expect(swipe.props.onMoveShouldSetResponder({}, { dx: -6, dy: 40 })).toBe(false);
+  expect(view.queryByLabelText('Delete Rice')).toBeNull();
+  expect(swipe.props.onMoveShouldSetResponder({}, { dx: -60, dy: 3 })).toBe(true);
+  act(() => {
+    swipe.props.onResponderGrant({}, { dx: -60, dy: 3, vx: -1 });
+    swipe.props.onResponderMove({}, { dx: -60, dy: 3, vx: -1 });
+    swipe.props.onResponderRelease({}, { dx: -60, dy: 3, vx: -1 });
+  });
+
+  expect(view.getByLabelText('Delete Rice')).toBeOnTheScreen();
+  expect(shoppingListService.removeItem).not.toHaveBeenCalled();
+  fireEvent.press(view.getByLabelText('Delete Rice'));
+  await waitFor(() => expect(shoppingListService.removeItem).toHaveBeenCalledWith('item-a'));
+});
+
+it('keeps checkbox taps usable when a vertical gesture does not claim the row', async () => {
+  const rice = item();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.updateItem.mockResolvedValue(list([{ ...rice, isChecked: true }]));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+
+  const swipe = view.getByTestId('shopping-item-item-a-swipe');
+  expect(swipe.props.onMoveShouldSetResponder({}, { dx: -8, dy: 48 })).toBe(false);
+  fireEvent.press(view.getByLabelText('Check Rice'));
+
+  await waitFor(() => expect(shoppingListService.updateItem)
+    .toHaveBeenCalledWith('item-a', { isChecked: true }));
+  expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen();
+});
+
+it('does not let a delayed mounted refresh overwrite a newer successful mutation', async () => {
+  const rice = item();
+  const refresh = deferred();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.updateItem.mockResolvedValue(list([{ ...rice, isChecked: true }]));
+  const view = renderScreen();
+
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const readsBeforeRefresh = shoppingListService.getShoppingList.mock.calls.length;
+  shoppingListService.getShoppingList.mockReturnValueOnce(refresh.promise);
+  const refreshControl = view.UNSAFE_getByType('ScrollView').props.refreshControl;
+  let refreshPromise;
+  act(() => {
+    refreshPromise = refreshControl.props.onRefresh();
+  });
+  await waitFor(() => expect(shoppingListService.getShoppingList)
+    .toHaveBeenCalledTimes(readsBeforeRefresh + 1));
+
+  fireEvent.press(view.getByLabelText('Check Rice'));
+  await waitFor(() => expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen());
+
+  await act(async () => {
+    refresh.resolve(list([rice]));
+    await refreshPromise;
+  });
+  expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen();
+  expect(view.queryByLabelText('Check Rice')).toBeNull();
+});
+
+it('serializes same-frame conflicting mounted actions before React can rerender', async () => {
+  const rice = item();
+  const mutation = deferred();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.updateItem.mockReturnValue(mutation.promise);
+  const view = renderScreen();
+
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const checkbox = view.getByLabelText('Check Rice');
+  act(() => {
+    fireEvent.press(checkbox);
+    fireEvent.press(checkbox);
+  });
+
+  expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1);
+  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { isChecked: true });
+  await settle(mutation, 'resolve', list([{ ...rice, isChecked: true }]));
+  expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen();
+});
+
+it('keeps mutations blocked after failed reconciliation until mounted authoritative recovery succeeds', async () => {
+  const rice = item();
+  const stale = Object.assign(new Error('stale'), { code: 'SHOPPING_LIST_STALE', status: 409 });
+  const failedRecovery = deferred();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.updateItem
+    .mockRejectedValueOnce(stale)
+    .mockResolvedValueOnce(list([rice]));
+  const view = renderScreen();
+
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const readsBeforeMutation = shoppingListService.getShoppingList.mock.calls.length;
+  shoppingListService.getShoppingList
+    .mockReturnValueOnce(failedRecovery.promise)
+    .mockResolvedValueOnce(list([{ ...rice, isChecked: true }]));
+  fireEvent.press(view.getByLabelText('Check Rice'));
+  await waitFor(() => expect(shoppingListService.getShoppingList)
+    .toHaveBeenCalledTimes(readsBeforeMutation + 1));
+  await settle(failedRecovery, 'reject', new Error('recovery offline'));
+
+  await waitFor(() => expect(view.getByText('recovery offline Tap to retry.')).toBeOnTheScreen());
+  expect(view.getByLabelText('Check Rice').props.accessibilityState.disabled).toBe(true);
+  let blockedResult;
+  await act(async () => {
+    blockedResult = await observedShoppingList.setChecked('item-a', true);
+  });
+  expect(blockedResult).toEqual({
+    ok: false,
+    error: 'Refresh your shopping list before making another change.',
+  });
+  expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1);
+
+  fireEvent.press(view.getByLabelText('recovery offline. Retry loading shopping list'));
+  await waitFor(() => expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen());
+  expect(view.getByLabelText('Uncheck Rice').props.accessibilityState.disabled).toBe(false);
+
+  fireEvent.press(view.getByLabelText('Uncheck Rice'));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledTimes(2));
+});
+
+it('does not let stale owner recovery overwrite state or unlock a newer owner mutation', async () => {
+  const rice = item();
+  const beans = item({
+    id: 'item-b', ingredientId: 'ingredient-b',
+    ingredient: { id: 'ingredient-b', name: 'Beans' }, category: 'legume',
+    quantity: 1, unit: 'can',
+  });
+  const stale = Object.assign(new Error('stale'), { code: 'SHOPPING_LIST_STALE', status: 409 });
+  const oldRecovery = deferred();
+  const newOwnerLoad = deferred();
+  const newOwnerMutation = deferred();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.updateItem
+    .mockRejectedValueOnce(stale)
+    .mockReturnValueOnce(newOwnerMutation.promise);
+  const view = renderScreen();
+
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const readsBeforeMutation = shoppingListService.getShoppingList.mock.calls.length;
+  shoppingListService.getShoppingList
+    .mockReturnValueOnce(oldRecovery.promise)
+    .mockReturnValueOnce(newOwnerLoad.promise);
+  fireEvent.press(view.getByLabelText('Check Rice'));
+  await waitFor(() => expect(shoppingListService.getShoppingList)
+    .toHaveBeenCalledTimes(readsBeforeMutation + 1));
+
+  mockAuth = {
+    status: 'authenticated',
+    user: { id: 'user-b' },
+    sessionIdentity: { ownerId: 'user-b', generation: 2, localSessionRevision: 2 },
+  };
+  view.rerender(
+    <ShoppingListProvider>
+      <ShoppingListScreen navigation={{ goBack: jest.fn() }} />
+    </ShoppingListProvider>
+  );
+  await waitFor(() => expect(shoppingListService.getShoppingList)
+    .toHaveBeenCalledTimes(readsBeforeMutation + 2));
+  await settle(newOwnerLoad, 'resolve', list([beans]));
+  await waitFor(() => expect(view.getByLabelText('Check Beans')).toBeOnTheScreen());
+
+  fireEvent.press(view.getByLabelText('Check Beans'));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledTimes(2));
+  await settle(oldRecovery, 'resolve', list([{ ...rice, isChecked: true }]));
+
+  expect(view.getByText('Beans')).toBeOnTheScreen();
+  expect(view.queryByText('Rice')).toBeNull();
+  expect(view.getByLabelText('Check Beans').props.accessibilityState.disabled).toBe(true);
+  fireEvent.press(view.getByLabelText('Check Beans'));
+  expect(shoppingListService.updateItem).toHaveBeenCalledTimes(2);
+
+  await settle(newOwnerMutation, 'resolve', list([{ ...beans, isChecked: true }]));
+  expect(view.getByLabelText('Uncheck Beans')).toBeOnTheScreen();
+});
+
+it('reconciles SHOPPING_LIST_STALE without replay and requires a new explicit action', async () => {
+  const rice = item();
+  const stale = Object.assign(new Error('stale'), { code: 'SHOPPING_LIST_STALE', status: 409 });
+  shoppingListService.getShoppingList.mockImplementation(() => Promise.resolve(
+    shoppingListService.updateItem.mock.calls.length > 0
+      ? list([{ ...rice, isChecked: true }])
+      : list([rice])
+  ));
+  shoppingListService.updateItem
+    .mockRejectedValueOnce(stale)
+    .mockResolvedValueOnce(list([rice]));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const readsBeforeMutation = shoppingListService.getShoppingList.mock.calls.length;
+
+  fireEvent.press(view.getByLabelText('Check Rice'));
+  await waitFor(() => expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen());
+  expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1);
+  expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(readsBeforeMutation + 1);
+
+  fireEvent.press(view.getByLabelText('Uncheck Rice'));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledTimes(2));
+});
+
+it('reconciles an ambiguous destructive outcome without replaying the delete', async () => {
+  const rice = item();
+  const network = Object.assign(new Error('offline'), { code: 'NETWORK_ERROR', kind: 'network' });
+  shoppingListService.getShoppingList.mockImplementation(() => Promise.resolve(
+    shoppingListService.removeItem.mock.calls.length > 0 ? list([]) : list([rice])
+  ));
+  shoppingListService.removeItem.mockRejectedValue(network);
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const readsBeforeMutation = shoppingListService.getShoppingList.mock.calls.length;
+
+  const swipe = view.getByTestId('shopping-item-item-a-swipe');
+  act(() => {
+    swipe.props.onResponderGrant({}, { dx: -70, dy: 2, vx: -1 });
+    swipe.props.onResponderMove({}, { dx: -70, dy: 2, vx: -1 });
+    swipe.props.onResponderRelease({}, { dx: -70, dy: 2, vx: -1 });
+  });
+  fireEvent.press(view.getByLabelText('Delete Rice'));
+
+  await waitFor(() => expect(view.getByText('Your shopping list is empty')).toBeOnTheScreen());
+  expect(shoppingListService.removeItem).toHaveBeenCalledTimes(1);
+  expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(readsBeforeMutation + 1);
+});
+
+it('keeps a row visible after definitive delete failure and allows an explicit retry', async () => {
+  const rice = item();
+  const failure = Object.assign(new Error('Delete rejected'), {
+    code: 'VALIDATION_ERROR', status: 400,
+  });
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.removeItem.mockRejectedValueOnce(failure).mockResolvedValueOnce(list([]));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  const readsBeforeDelete = shoppingListService.getShoppingList.mock.calls.length;
+  fireEvent.press(view.getByLabelText('Edit shopping list'));
+  fireEvent.press(view.getByLabelText('Remove Rice'));
+  await waitFor(() => expect(require('react-native').Alert.alert)
+    .toHaveBeenCalledWith('Could not remove item', 'Delete rejected'));
+  expect(view.getByText('Rice')).toBeOnTheScreen();
+  expect(view.getByLabelText('Remove Rice')).toBeOnTheScreen();
+  expect(shoppingListService.removeItem).toHaveBeenCalledTimes(1);
+  expect(shoppingListService.getShoppingList).toHaveBeenCalledTimes(readsBeforeDelete);
+  fireEvent.press(view.getByLabelText('Remove Rice'));
+  await waitFor(() => expect(view.getByText('Your shopping list is empty')).toBeOnTheScreen());
+  expect(shoppingListService.removeItem).toHaveBeenCalledTimes(2);
+});
+
+it.each(['checked', 'remove', 'clearChecked'])('suppresses a stale %s error after blur and alerts on a new focused action', async (action) => {
+  const rice = item({ isChecked: action === 'clearChecked' });
+  const first = deferred();
+  const failure = new Error('Current failure');
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  const method = action === 'checked' ? shoppingListService.updateItem
+    : action === 'remove' ? shoppingListService.removeItem
+      : shoppingListService.clearCheckedItems;
+  method.mockReturnValueOnce(first.promise).mockRejectedValueOnce(failure);
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByText('Rice')).toBeOnTheScreen());
+  const pressAction = () => {
+    if (action === 'checked') fireEvent.press(view.getByLabelText('Check Rice'));
+    if (action === 'remove') fireEvent.press(view.getByLabelText('Remove Rice'));
+    if (action === 'clearChecked') fireEvent.press(view.getByLabelText('Clear 1 checked item'));
+  };
+  if (action === 'remove') fireEvent.press(view.getByLabelText('Edit shopping list'));
+  pressAction();
+  await waitFor(() => expect(method).toHaveBeenCalledTimes(1));
+  act(() => mockBlurEffect());
+  await settle(first, 'reject', new Error('Old failure'));
+  expect(require('react-native').Alert.alert).not.toHaveBeenCalled();
+  act(() => { mockBlurEffect = focusedEffect(); });
+  pressAction();
+  await waitFor(() => expect(method).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(require('react-native').Alert.alert)
+    .toHaveBeenCalledWith(expect.any(String), 'Current failure'));
+});
+
+it('does not alert after the screen unmounts while its provider finishes a mutation', async () => {
+  const rice = item();
+  const request = deferred();
+  shoppingListService.getShoppingList.mockResolvedValue(list([rice]));
+  shoppingListService.updateItem.mockReturnValue(request.promise);
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Check Rice')).toBeOnTheScreen());
+  fireEvent.press(view.getByLabelText('Check Rice'));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1));
+  view.rerender(<ShoppingListProvider><ShoppingListObserver /></ShoppingListProvider>);
+  await settle(request, 'reject', new Error('Old screen failure'));
+  expect(require('react-native').Alert.alert).not.toHaveBeenCalled();
+  expect(observedShoppingList.items).toEqual([rice]);
 });
 
 describe('locked substitute picker', () => {

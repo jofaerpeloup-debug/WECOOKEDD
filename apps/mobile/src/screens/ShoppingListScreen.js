@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { useTheme } from '../theme/ThemeContext';
 import { useShoppingList } from '../context/ShoppingListContext';
 import IngredientPickerModal from '../components/IngredientPickerModal';
 import ShoppingItemEditModal from '../components/ShoppingItemEditModal';
+import SwipeToDelete from '../components/SwipeToDelete';
 import { formatQuantity } from '../utils/recipe';
 import { unitLabel } from '../api/recipeOptions';
 import { groupShoppingListItems } from '../utils/shoppingListGrouping';
@@ -116,6 +117,7 @@ export default function ShoppingListScreen({ navigation }) {
     updateItem,
     setChecked,
     removeItem,
+    clearChecked,
     clear,
   } = useShoppingList();
 
@@ -123,12 +125,31 @@ export default function ShoppingListScreen({ navigation }) {
   const [editing, setEditing] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [selectedEditItem, setSelectedEditItem] = useState(null);
+  const mountedRef = useRef(true);
+  const focusRef = useRef(0);
+  const focusedRef = useRef(false);
+  const checkedCount = items.filter((item) => item.isChecked === true).length;
+  const clearCheckedLabel = `Clear ${checkedCount} checked ${checkedCount === 1 ? 'item' : 'items'}`;
 
   useFocusEffect(
     useCallback(() => {
+      focusedRef.current = true;
+      focusRef.current += 1;
       reload();
+      return () => {
+        focusedRef.current = false;
+        focusRef.current += 1;
+      };
     }, [reload])
   );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const mayAlert = useCallback((focus) =>
+    mountedRef.current && focusedRef.current && focusRef.current === focus, []);
 
   useEffect(() => {
     if (editing && items.length === 0) setEditing(false);
@@ -152,14 +173,22 @@ export default function ShoppingListScreen({ navigation }) {
   }, [reload]);
 
   const onToggle = useCallback(async (item) => {
+    const focus = focusRef.current;
     const result = await setChecked(item.id, !item.isChecked);
-    if (!result.ok && result.error) Alert.alert('Could not update item', result.error);
-  }, [setChecked]);
+    if (!result.ok && result.error && mayAlert(focus)) Alert.alert('Could not update item', result.error);
+  }, [mayAlert, setChecked]);
 
   const onRemove = useCallback(async (item) => {
+    const focus = focusRef.current;
     const result = await removeItem(item.id);
-    if (!result.ok && result.error) Alert.alert('Could not remove item', result.error);
-  }, [removeItem]);
+    if (!result.ok && result.error && mayAlert(focus)) Alert.alert('Could not remove item', result.error);
+  }, [mayAlert, removeItem]);
+
+  const onClearChecked = useCallback(async () => {
+    const focus = focusRef.current;
+    const result = await clearChecked();
+    if (!result.ok && result.error && mayAlert(focus)) Alert.alert('Could not clear checked items', result.error);
+  }, [clearChecked]);
 
   const confirmClear = useCallback(() => {
     Alert.alert('Clear shopping list?', 'This removes every item from your shopping list.', [
@@ -168,8 +197,9 @@ export default function ShoppingListScreen({ navigation }) {
         text: 'Clear List',
         style: 'destructive',
         onPress: async () => {
+          const focus = focusRef.current;
           const result = await clear();
-          if (!result.ok && result.error) Alert.alert('Could not clear list', result.error);
+          if (!result.ok && result.error && mayAlert(focus)) Alert.alert('Could not clear list', result.error);
         },
       },
     ]);
@@ -201,6 +231,19 @@ export default function ShoppingListScreen({ navigation }) {
               accessibilityState={{ disabled: isMutating }}
             >
               <Text style={[styles.clear, isMutating && styles.actionDisabled]}>Clear</Text>
+            </Pressable>
+          ) : checkedCount > 0 ? (
+            <Pressable
+              hitSlop={8}
+              onPress={onClearChecked}
+              disabled={isMutating}
+              accessibilityRole="button"
+              accessibilityLabel={clearCheckedLabel}
+              accessibilityState={{ disabled: isMutating, busy: isMutating }}
+            >
+              <Text style={[styles.clear, isMutating && styles.actionDisabled]}>
+                {clearCheckedLabel}
+              </Text>
             </Pressable>
           ) : null}
           <Pressable
@@ -294,18 +337,32 @@ export default function ShoppingListScreen({ navigation }) {
           sections.map(({ category, label, rows }) => (
             <View key={category ?? 'category-unavailable'} style={styles.group}>
               <Text style={styles.groupLabel} accessibilityRole="header">{label}</Text>
-              {rows.map((item) => (
-                <ItemRow
-                  key={item.id}
-                  item={item}
-                  editing={editing}
-                  disabled={isMutating}
-                  pending={isItemPending(item.id)}
-                  onToggle={() => onToggle(item)}
-                  onRemove={() => onRemove(item)}
-                  onEdit={() => setSelectedEditItem(item)}
-                />
-              ))}
+              {rows.map((item) => {
+                const row = (
+                  <ItemRow
+                    item={item}
+                    editing={editing}
+                    disabled={isMutating}
+                    pending={isItemPending(item.id)}
+                    onToggle={() => onToggle(item)}
+                    onRemove={() => onRemove(item)}
+                    onEdit={() => setSelectedEditItem(item)}
+                  />
+                );
+                return editing ? (
+                  <React.Fragment key={item.id}>{row}</React.Fragment>
+                ) : (
+                  <SwipeToDelete
+                    key={item.id}
+                    itemName={itemPrimaryText(item)}
+                    disabled={isMutating}
+                    onDelete={() => onRemove(item)}
+                    testID={`shopping-item-${item.id}-swipe`}
+                  >
+                    {row}
+                  </SwipeToDelete>
+                );
+              })}
             </View>
           ))
         )}

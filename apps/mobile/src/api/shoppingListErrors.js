@@ -19,7 +19,16 @@ const FALLBACK = 'WeCooked is having trouble right now. Please try again shortly
  */
 export function isItemAlreadyGone(err) {
   if (!(err instanceof ApiError)) return false;
-  return err.code === 'SHOPPING_LIST_ITEM_NOT_FOUND' || err.status === 404;
+  return err.code === 'SHOPPING_LIST_ITEM_NOT_FOUND';
+}
+
+export function isShoppingListStale(err) {
+  return err instanceof ApiError && err.code === 'SHOPPING_LIST_STALE';
+}
+
+export function isAmbiguousShoppingMutationOutcome(err) {
+  return err instanceof ApiError
+    && (err.isNetworkError || err.status >= 500 || err.code === 'INVALID_RESPONSE');
 }
 
 export function getShoppingListErrorMessage(err, fallback = FALLBACK) {
@@ -39,6 +48,10 @@ export function getShoppingListErrorMessage(err, fallback = FALLBACK) {
       return 'That item is no longer on your list.';
     case 'SHOPPING_LIST_ITEM_ALREADY_EXISTS':
       return 'You already have that ingredient in that unit.';
+    case 'SHOPPING_LIST_STALE':
+      return 'Your shopping list changed elsewhere. Review the latest list and try again.';
+    case 'INVALID_RESPONSE':
+      return 'WeCooked returned an invalid shopping list. Your current list was kept.';
     case 'INGREDIENT_NOT_FOUND':
     case 'INGREDIENT_INACTIVE':
       return 'That ingredient isn’t available anymore.';

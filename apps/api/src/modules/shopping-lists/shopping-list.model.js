@@ -56,7 +56,7 @@ const shoppingListSchema = new mongoose.Schema(
       },
     },
   },
-  { timestamps: true }
+  { timestamps: true, optimisticConcurrency: true }
 );
 
 const ShoppingList = mongoose.model('ShoppingList', shoppingListSchema);

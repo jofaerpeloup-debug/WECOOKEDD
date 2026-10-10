@@ -66,6 +66,7 @@ for (const [method, path] of [
   ['get', '/api/v1/shopping-list'],
   ['post', '/api/v1/shopping-list/items'],
   ['patch', `/api/v1/shopping-list/items/${CHICKEN_ID}`],
+  ['delete', '/api/v1/shopping-list/items/checked'],
   ['delete', `/api/v1/shopping-list/items/${CHICKEN_ID}`],
   ['delete', '/api/v1/shopping-list/items'],
   ['post', `/api/v1/shopping-list/recipes/${RECIPE_ID}`],
@@ -523,6 +524,113 @@ test('DELETE /api/v1/shopping-list/items clears every item for the current user'
 
   assert.equal(response.status, 200);
   assert.equal(response.body.data.shoppingList.items.length, 0);
+});
+
+test('DELETE /api/v1/shopping-list/items/checked precedes the item-id route and removes only checked rows', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t, 'Garlic');
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: true },
+    { ingredientId: GARLIC_ID, quantity: 2, unit: 'clove', isChecked: false },
+  ]);
+  let capturedUserId;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (userId) => {
+    capturedUserId = userId;
+    return list;
+  });
+  mockNoSave(t);
+
+  const response = await request(app)
+    .delete('/api/v1/shopping-list/items/checked')
+    .set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedUserId, USER_ID);
+  assert.equal(response.body.data.shoppingList.items.length, 1);
+  assert.equal(response.body.data.shoppingList.items[0].ingredientId, GARLIC_ID);
+});
+
+test('DELETE /api/v1/shopping-list/items/checked is a zero-checked 200 OCC no-op with an authoritative response', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+
+  const response = await request(app)
+    .delete('/api/v1/shopping-list/items/checked')
+    .set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.shoppingList.items.length, 1);
+  assert.equal(response.body.data.shoppingList.items[0].ingredientId, CHICKEN_ID);
+  assert.equal(response.body.data.shoppingList.items[0].isChecked, false);
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('DELETE /api/v1/shopping-list/items/checked maps a stale zero-checked OCC write to 409 without retry', async (t) => {
+  mockAuth(t);
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false },
+  ]);
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async () => {
+    throw new ShoppingList.base.Error.VersionError(list, list.__v ?? 0, ['items']);
+  });
+
+  const response = await request(app)
+    .delete('/api/v1/shopping-list/items/checked')
+    .set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'SHOPPING_LIST_STALE');
+  assert.equal(JSON.stringify(response.body).includes('__v'), false);
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('DELETE /api/v1/shopping-list/items/checked remains scoped to the authenticated owner', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  const ownerA = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: true },
+  ], USER_ID);
+  const ownerB = buildList([], OTHER_USER_ID);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (userId) =>
+    userId === USER_ID ? ownerA : ownerB
+  );
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => list);
+
+  const response = await request(app)
+    .delete('/api/v1/shopping-list/items/checked')
+    .set('Authorization', `Bearer ${otherUserToken()}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.data.shoppingList.items.length, 0);
+  assert.equal(ownerA.items.length, 1);
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(save.mock.calls[0].arguments[0], ownerB);
+});
+
+test('Mongoose VersionError is returned as 409 SHOPPING_LIST_STALE without __v leakage', async (t) => {
+  mockAuth(t);
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: true },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  t.mock.method(shoppingListRepository, 'save', async () => {
+    throw new ShoppingList.base.Error.VersionError(list, list.__v ?? 0, ['items']);
+  });
+
+  const response = await request(app)
+    .delete('/api/v1/shopping-list/items/checked')
+    .set('Authorization', `Bearer ${token()}`);
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'SHOPPING_LIST_STALE');
+  assert.equal(JSON.stringify(response.body).includes('__v'), false);
 });
 
 test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable ingredients', async (t) => {

@@ -10,7 +10,12 @@ import React, {
 
 import { useAuth } from './AuthContext';
 import * as shoppingListService from '../api/shoppingListService';
-import { getShoppingListErrorMessage, isItemAlreadyGone } from '../api/shoppingListErrors';
+import {
+  getShoppingListErrorMessage,
+  isAmbiguousShoppingMutationOutcome,
+  isItemAlreadyGone,
+  isShoppingListStale,
+} from '../api/shoppingListErrors';
 
 // ---------------------------------------------------------------------------
 // The SINGLE authoritative Shopping List state, backed entirely by the Express
@@ -29,18 +34,16 @@ import { getShoppingListErrorMessage, isItemAlreadyGone } from '../api/shoppingL
 // never modifies it) and is strictly user-scoped, using the same proven design
 // as FavoritesProvider:
 //
-//   - `sessionRef` is bumped on every auth/user identity change and invalidates
-//     every outstanding GET AND every outstanding mutation for the old user.
+//   - `sessionRef` is bumped on every auth session identity change and invalidates
+//     every outstanding GET AND every outstanding mutation for the old session.
 //   - `listGenRef` is bumped on every (re)load and on every mutation, and
 //     decides which GET result may apply. It is DELIBERATELY separate from
 //     `sessionRef` so a focus / pull reload can never strand an in-flight
 //     mutation, and so a mutation's authoritative response always supersedes an
 //     older GET.
-//   - The loaded state is tagged with the user id it belongs to (`ownerId`).
-//     `items` / `list` / `status` are exposed as empty / loading the instant
-//     `ownerId !== currentAuthenticatedUserId`, so User A's items cannot render
-//     for even one frame under User B (a render happens before the clearing
-//     effect runs).
+//   - The loaded state is tagged with its auth session (`ownerSessionKey`).
+//     `items` / `list` / `status` are exposed as empty / loading on an account
+//     or session change, including a new session for the same user.
 //
 // The Shopping List is one Mongo document with embedded items, so mutations are
 // SERIALIZED — a synchronous ref lock (`mutatingRef`) guarantees two taps that
@@ -70,28 +73,38 @@ function normalizeList(raw) {
 }
 
 export function ShoppingListProvider({ children }) {
-  const { status: authStatus, user } = useAuth();
-  const authUserId = authStatus === 'authenticated' && user ? user.id : null;
+  const { status: authStatus, user, sessionIdentity } = useAuth();
+  const authUserId = authStatus === 'authenticated' && user
+    && sessionIdentity?.ownerId === user.id ? user.id : null;
+  const authSessionKey = authUserId
+    ? JSON.stringify([
+      authUserId,
+      sessionIdentity.generation,
+      sessionIdentity.localSessionRevision,
+    ])
+    : null;
 
   // { id, items, createdAt, updatedAt } | null
   const [list, setList] = useState(null);
-  // The user id `list` was loaded / cleared for. Compared against `authUserId`
-  // at render time to gate exposure (cross-user leak guard).
-  const [ownerId, setOwnerId] = useState(null);
+  // The auth session `list` was loaded / cleared for. Gate at render time so
+  // a previous session's rows cannot appear during a same-user session change.
+  const [ownerSessionKey, setOwnerSessionKey] = useState(null);
   // 'idle' (no session) | 'loading' (initial load) | 'ready' | 'error' (initial load failed, nothing to show)
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState(null);
-  // { type: 'addItem' | 'addRecipe' | 'updateItem' | 'setChecked' | 'removeItem' | 'clear', itemId?: string } | null
+  // { type: 'addItem' | 'addRecipe' | 'updateItem' | 'setChecked' | 'removeItem' | 'clearChecked' | 'clear', itemId?: string } | null
   const [pendingAction, setPendingAction] = useState(null);
+  const [reconciliationRequired, setReconciliationRequired] = useState(false);
 
   // --- refs: latest values readable inside async closures --------------------
   const mountedRef = useRef(true);
-  const sessionRef = useRef(0); // bumped ONLY on auth/user identity change
+  const sessionRef = useRef(0); // bumped ONLY on auth session identity change
   const listGenRef = useRef(0); // bumped on every (re)load AND every mutation
-  const loadingRef = useRef(false); // a GET is in flight
+  const loadingRef = useRef(null); // identity of the active GET
   const mutatingRef = useRef(false); // synchronous one-mutation-at-a-time lock
   const statusRef = useRef(status);
   const authUserIdRef = useRef(authUserId);
+  const reconciliationRequiredRef = useRef(false);
 
   useEffect(() => {
     statusRef.current = status;
@@ -106,14 +119,18 @@ export function ShoppingListProvider({ children }) {
 
   // --- GET (initial load + reload) -----------------------------------------
   const load = useCallback(async (listGen, session) => {
+    const request = { listGen, session };
+    loadingRef.current = request;
     const stale = () =>
-      listGen !== listGenRef.current || session !== sessionRef.current || !mountedRef.current;
+      loadingRef.current !== request || listGen !== listGenRef.current
+      || session !== sessionRef.current || !mountedRef.current;
 
-    loadingRef.current = true;
     try {
       const fresh = await shoppingListService.getShoppingList();
       if (stale()) return;
       setList(normalizeList(fresh));
+      reconciliationRequiredRef.current = false;
+      setReconciliationRequired(false);
       setError(null);
       setStatus('ready');
       statusRef.current = 'ready';
@@ -130,11 +147,11 @@ export function ShoppingListProvider({ children }) {
         statusRef.current = 'error';
       }
     } finally {
-      loadingRef.current = false;
+      if (loadingRef.current === request) loadingRef.current = null;
     }
   }, []);
 
-  // --- react to auth: wipe previous user, then load current user ------------
+  // --- react to auth: wipe previous session, then load current session ------
   useEffect(() => {
     authUserIdRef.current = authUserId;
 
@@ -142,18 +159,19 @@ export function ShoppingListProvider({ children }) {
     // outstanding mutation belonging to the previous user.
     sessionRef.current += 1;
     listGenRef.current += 1;
+    loadingRef.current = null;
     const session = sessionRef.current;
     const listGen = listGenRef.current;
 
-    // Clear the previous user's state IMMEDIATELY — before any load starts.
-    // `ownerId` is set to the current user in the same batch, so once this
-    // commits `list` (null) genuinely belongs to `authUserId`. Any render
-    // BEFORE this effect runs is covered by the `trusted` gate further down.
+    // Clear the previous session's state before any load starts. The render
+    // before this effect runs is covered by the `trusted` gate further down.
     mutatingRef.current = false;
+    reconciliationRequiredRef.current = false;
     setList(null);
     setPendingAction(null);
+    setReconciliationRequired(false);
     setError(null);
-    setOwnerId(authUserId);
+    setOwnerSessionKey(authSessionKey);
 
     if (!authUserId) {
       setStatus('idle');
@@ -164,7 +182,7 @@ export function ShoppingListProvider({ children }) {
     setStatus('loading');
     statusRef.current = 'loading';
     load(listGen, session);
-  }, [authUserId, load]);
+  }, [authSessionKey, authUserId, load]);
 
   // --- manual reload (screen focus / pull-to-refresh) ----------------------
   // Bumps ONLY listGenRef — never sessionRef. Skipped while a GET or a mutation
@@ -183,11 +201,45 @@ export function ShoppingListProvider({ children }) {
     return load(listGen, session);
   }, [load]);
 
+  const reconcileAfterMutation = useCallback(async (session) => {
+    listGenRef.current += 1;
+    const listGen = listGenRef.current;
+    const request = { listGen, session };
+    loadingRef.current = request;
+    const stale = () =>
+      loadingRef.current !== request || listGen !== listGenRef.current
+      || session !== sessionRef.current || !mountedRef.current;
+
+    try {
+      const fresh = await shoppingListService.getShoppingList();
+      if (stale()) return { ok: false, superseded: true };
+      setList(normalizeList(fresh));
+      reconciliationRequiredRef.current = false;
+      setReconciliationRequired(false);
+      setError(null);
+      setStatus('ready');
+      statusRef.current = 'ready';
+      return { ok: true };
+    } catch (err) {
+      if (stale()) return { ok: false, superseded: true };
+      const message = getShoppingListErrorMessage(err);
+      reconciliationRequiredRef.current = true;
+      setReconciliationRequired(true);
+      setError(message);
+      return { ok: false, error: message, err };
+    } finally {
+      if (loadingRef.current === request) loadingRef.current = null;
+    }
+  }, []);
+
   // --- one mutation at a time ---------------------------------------------
   const runMutation = useCallback(
-    async (action, fn) => {
+    async (action, fn, { destructive = false, idempotentDelete = false } = {}) => {
       if (!authUserIdRef.current) {
         return { ok: false, error: 'Your session has expired. Please log in again.' };
+      }
+      if (reconciliationRequiredRef.current) {
+        return { ok: false, error: 'Refresh your shopping list before making another change.' };
       }
       // Synchronous lock: a second tap before re-render cannot start a request.
       if (mutatingRef.current) return { ok: false, busy: true };
@@ -215,6 +267,21 @@ export function ShoppingListProvider({ children }) {
           return { ok: false, superseded: true };
         }
         const message = getShoppingListErrorMessage(err);
+        const alreadyGone = idempotentDelete && isItemAlreadyGone(err);
+        const mustReconcile = alreadyGone
+          || isShoppingListStale(err)
+          || (destructive && isAmbiguousShoppingMutationOutcome(err));
+
+        if (mustReconcile) {
+          const reconciled = await reconcileAfterMutation(session);
+          if (reconciled.superseded) return reconciled;
+          if (alreadyGone && reconciled.ok) {
+            return { ok: true, idempotent: true };
+          }
+          if (!reconciled.ok) {
+            return { ok: false, error: reconciled.error || message, err };
+          }
+        }
         // If we never had a usable list (mutation raced the initial load and
         // that load was discarded), recover it rather than leaving the provider
         // stuck on 'loading'/'error'.
@@ -234,7 +301,7 @@ export function ShoppingListProvider({ children }) {
         }
       }
     },
-    [load]
+    [load, reconcileAfterMutation]
   );
 
   // Manual add of ONE canonical ingredient. A thin runMutation wrapper — it
@@ -275,30 +342,29 @@ export function ShoppingListProvider({ children }) {
   );
 
   const removeItem = useCallback(
-    async (itemId) => {
-      const result = await runMutation({ type: 'removeItem', itemId }, () =>
-        shoppingListService.removeItem(itemId)
-      );
-      if (!result.ok && result.err && isItemAlreadyGone(result.err)) {
-        // The backend confirms no such item exists. Drop exactly that item from
-        // the current list locally — a pure, self-guarding updater that does not
-        // depend on the mutation-lock release timing — then kick a best-effort
-        // full reconcile.
-        setList((prev) =>
-          prev && Array.isArray(prev.items) && prev.items.some((it) => it.id === itemId)
-            ? { ...prev, items: prev.items.filter((it) => it.id !== itemId) }
-            : prev
-        );
-        reload();
-        return { ok: true, idempotent: true };
-      }
-      return result;
-    },
-    [runMutation, reload]
+    (itemId) => runMutation(
+      { type: 'removeItem', itemId },
+      () => shoppingListService.removeItem(itemId),
+      { destructive: true, idempotentDelete: true }
+    ),
+    [runMutation]
+  );
+
+  const clearChecked = useCallback(
+    () => runMutation(
+      { type: 'clearChecked' },
+      () => shoppingListService.clearCheckedItems(),
+      { destructive: true }
+    ),
+    [runMutation]
   );
 
   const clear = useCallback(
-    () => runMutation({ type: 'clear' }, () => shoppingListService.clearItems()),
+    () => runMutation(
+      { type: 'clear' },
+      () => shoppingListService.clearItems(),
+      { destructive: true }
+    ),
     [runMutation]
   );
 
@@ -306,7 +372,7 @@ export function ShoppingListProvider({ children }) {
   // `list` may briefly still hold the previous user's data on the render where
   // `authUserId` has already flipped but the clearing effect hasn't run yet.
   // `trusted` is false for that render, so nothing leaks.
-  const trusted = !!authUserId && ownerId === authUserId;
+  const trusted = !!authSessionKey && ownerSessionKey === authSessionKey;
 
   const items = useMemo(() => {
     if (!trusted || !list || !Array.isArray(list.items)) return EMPTY_ITEMS;
@@ -317,7 +383,7 @@ export function ShoppingListProvider({ children }) {
   // current user — the screen must read as "still loading", not "empty".
   const effectiveStatus = !authUserId ? 'idle' : trusted ? status : 'loading';
 
-  const isMutating = trusted && !!pendingAction;
+  const isMutating = trusted && (!!pendingAction || reconciliationRequired);
 
   const isItemPending = useCallback(
     (itemId) => trusted && !!pendingAction && pendingAction.itemId === itemId,
@@ -341,6 +407,7 @@ export function ShoppingListProvider({ children }) {
       updateItem,
       setChecked,
       removeItem,
+      clearChecked,
       clear,
     }),
     [
@@ -358,6 +425,7 @@ export function ShoppingListProvider({ children }) {
       updateItem,
       setChecked,
       removeItem,
+      clearChecked,
       clear,
     ]
   );

@@ -23,19 +23,88 @@
 // docs/architecture/mobile-shopping-list-integration.md. Zero Firestore
 // involvement.
 
-import { api } from './client';
+import { INGREDIENT_CATEGORIES } from '@wecooked/contracts';
+import { ApiError, api } from './client';
+import { RECIPE_UNITS } from './recipeOptions';
 
-function normalizeList(raw) {
-  const r = raw || {};
-  return {
-    id: r.id ?? null,
-    items: Array.isArray(r.items) ? r.items : [],
-    createdAt: r.createdAt ?? null,
-    updatedAt: r.updatedAt ?? null,
-  };
+const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
+const CATEGORIES = new Set(INGREDIENT_CATEGORIES);
+const UNITS = new Set(RECIPE_UNITS);
+
+function record(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const unwrap = (data) => normalizeList(data && data.shoppingList);
+function exact(value, keys) {
+  return record(value)
+    && Object.keys(value).sort().join('|') === [...keys].sort().join('|');
+}
+
+function objectId(value) {
+  return typeof value === 'string' && OBJECT_ID_RE.test(value);
+}
+
+function timestamp(value) {
+  return typeof value === 'string'
+    && !Number.isNaN(Date.parse(value))
+    && new Date(value).toISOString() === value;
+}
+
+function invalidResponse() {
+  return new ApiError('The shopping list response was malformed.', {
+    kind: 'api',
+    code: 'INVALID_RESPONSE',
+    status: 502,
+  });
+}
+
+function validIngredient(value, ingredientId) {
+  return exact(value, ['id', 'name'])
+    && objectId(value.id)
+    && value.id === ingredientId
+    && typeof value.name === 'string'
+    && value.name.trim() === value.name
+    && value.name.length > 0;
+}
+
+function validItem(item) {
+  if (!exact(item, [
+    'id', 'ingredient', 'ingredientId', 'isAvailable', 'category',
+    'quantity', 'unit', 'isChecked',
+  ])
+    || !objectId(item.id)
+    || !objectId(item.ingredientId)
+    || typeof item.isAvailable !== 'boolean'
+    || typeof item.isChecked !== 'boolean'
+    || !UNITS.has(item.unit)) return false;
+
+  if (item.ingredient !== null && !validIngredient(item.ingredient, item.ingredientId)) return false;
+  if (item.ingredient === null && item.isAvailable) return false;
+  if (item.isAvailable) {
+    if (item.ingredient === null || (item.category !== null && !CATEGORIES.has(item.category))) return false;
+  } else if (item.category !== null) {
+    return false;
+  }
+
+  return item.unit === 'toTaste'
+    ? item.quantity === null
+    : typeof item.quantity === 'number' && Number.isFinite(item.quantity) && item.quantity > 0;
+}
+
+export function parseShoppingListResponse(data) {
+  const list = data?.shoppingList;
+  if (!exact(data, ['shoppingList'])
+    || !exact(list, ['id', 'items', 'createdAt', 'updatedAt'])
+    || !objectId(list.id)
+    || !Array.isArray(list.items)
+    || !list.items.every(validItem)
+    || new Set(list.items.map((item) => item.id)).size !== list.items.length
+    || !timestamp(list.createdAt)
+    || !timestamp(list.updatedAt)) {
+    throw invalidResponse();
+  }
+  return list;
+}
 
 /**
  * GET /api/v1/shopping-list
@@ -46,7 +115,7 @@ const unwrap = (data) => normalizeList(data && data.shoppingList);
  *   quantity: number|null, unit, isChecked }`.
  */
 export function getShoppingList() {
-  return api.get('/shopping-list').then(unwrap);
+  return api.get('/shopping-list').then(parseShoppingListResponse);
 }
 
 /**
@@ -62,7 +131,7 @@ export function getShoppingList() {
  *   - SHOPPING_LIST_LIMIT_EXCEEDED (400) — post-merge count would exceed 200
  */
 export function addRecipe(recipeId) {
-  return api.post(`/shopping-list/recipes/${encodeURIComponent(recipeId)}`).then(unwrap);
+  return api.post(`/shopping-list/recipes/${encodeURIComponent(recipeId)}`).then(parseShoppingListResponse);
 }
 
 /**
@@ -88,7 +157,7 @@ export function addRecipe(recipeId) {
 export function addItem({ ingredientId, unit, quantity } = {}) {
   const body =
     unit === 'toTaste' ? { ingredientId, unit } : { ingredientId, unit, quantity };
-  return api.post('/shopping-list/items', { body }).then(unwrap);
+  return api.post('/shopping-list/items', { body }).then(parseShoppingListResponse);
 }
 
 /**
@@ -103,7 +172,8 @@ export function addItem({ ingredientId, unit, quantity } = {}) {
  *   - VALIDATION_ERROR (400)
  */
 export function updateItem(itemId, patch) {
-  return api.patch(`/shopping-list/items/${encodeURIComponent(itemId)}`, { body: patch }).then(unwrap);
+  return api.patch(`/shopping-list/items/${encodeURIComponent(itemId)}`, { body: patch })
+    .then(parseShoppingListResponse);
 }
 
 /**
@@ -116,7 +186,16 @@ export function updateItem(itemId, patch) {
  *   (idempotent: treat as removed).
  */
 export function removeItem(itemId) {
-  return api.del(`/shopping-list/items/${encodeURIComponent(itemId)}`).then(unwrap);
+  return api.del(`/shopping-list/items/${encodeURIComponent(itemId)}`).then(parseShoppingListResponse);
+}
+
+/**
+ * DELETE /api/v1/shopping-list/items/checked
+ * Removes only rows currently stored as checked and returns the complete list.
+ * No body and no client-derived count or owner/list selector.
+ */
+export function clearCheckedItems() {
+  return api.del('/shopping-list/items/checked').then(parseShoppingListResponse);
 }
 
 /**
@@ -126,5 +205,5 @@ export function removeItem(itemId) {
  * @returns {Promise<object>} the full (now empty) list.
  */
 export function clearItems() {
-  return api.del('/shopping-list/items').then(unwrap);
+  return api.del('/shopping-list/items').then(parseShoppingListResponse);
 }
