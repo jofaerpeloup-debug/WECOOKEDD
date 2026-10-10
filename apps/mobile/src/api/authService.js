@@ -18,6 +18,7 @@
 
 import { api, setAuthAdapter, ApiError } from './client';
 import * as tokenStore from './tokenStore';
+import { Buffer } from 'buffer';
 
 // Notifies the React layer that the session ended non-interactively (a refresh
 // was definitively rejected). Set by AuthContext while mounted.
@@ -231,6 +232,17 @@ export function resetPassword({ token, newPassword }) {
 // just be a pointless extra request against an already-dead session.
 export function getLocalSessionRevision() {
   return localSessionRevision;
+}
+
+// A local discriminator only. The API still validates the signed token and session generation.
+export function getLocalSessionId() {
+  try {
+    const token = tokenStore.getAccessToken();
+    const parts = token?.split('.');
+    if (parts?.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return /^[0-9a-f]{24}$/i.test(payload.sessionId) ? payload.sessionId : null;
+  } catch { return null; }
 }
 
 export function clearLocalSession(expectedRevision) {

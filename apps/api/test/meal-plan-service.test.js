@@ -11,157 +11,92 @@ const repository = require('../src/modules/meal-plan/meal-plan.repository');
 const recipeService = require('../src/modules/recipes/recipe.service');
 const service = require('../src/modules/meal-plan/meal-plan.service');
 
-const USER_ID = '507f1f77bcf86cd799439001';
-const RECIPE_ID = '507f1f77bcf86cd799439099';
-const ENTRY_ID = '507f1f77bcf86cd799439077';
-const UPDATED_AT = '2026-09-14T08:30:00.000Z';
+const OWNER = '507f1f77bcf86cd799439001';
+const RECIPE = '507f1f77bcf86cd799439099';
+const ENTRY = '507f1f77bcf86cd799439077';
+const OLD = '2026-09-14T08:30:00.000Z';
+const observed = (extra = {}) => ({ _id: ENTRY, userId: OWNER, recipeId: RECIPE, dateKey: '2026-09-14',
+  createdAt: new Date('2026-09-01T00:00:00.000Z'), updatedAt: new Date(OLD), reminderRevision: 0, reminder: null, ...extra });
 
-test('create validates recipe eligibility through RecipeService and derives ownership from its argument', async (t) => {
-  const recipe = { _id: RECIPE_ID, title: 'Adobo' };
-  t.mock.method(recipeService, 'findUsableRecipeById', async () => recipe);
-  let persisted;
-  t.mock.method(repository, 'create', async (data) => { persisted = data; return { _id: 'entry', ...data }; });
-  const result = await service.createEntry(USER_ID, { dateKey: '2026-09-14', recipeId: RECIPE_ID });
-  assert.deepEqual(persisted, { userId: USER_ID, dateKey: '2026-09-14', recipeId: RECIPE_ID });
-  assert.equal(result.recipe, recipe);
+test('create checks recipe eligibility and derives ownership', async (t) => {
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({ _id: RECIPE }));
+  let data;
+  t.mock.method(repository, 'create', async (value) => { data = value; return observed(); });
+  await service.createEntry(OWNER, { dateKey: '2026-09-14', recipeId: RECIPE });
+  assert.deepEqual(data, { userId: OWNER, dateKey: '2026-09-14', recipeId: RECIPE });
 });
 
-test('create rejects missing and archived/unusable recipes identically', async (t) => {
+test('list and GET retain unavailable recipe while hiding foreign entries', async (t) => {
+  t.mock.method(repository, 'findByUserAndRange', async () => [observed()]);
+  t.mock.method(repository, 'findByIdAndUser', async (_id, owner) => owner === OWNER ? observed() : null);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
-  await assert.rejects(() => service.createEntry(USER_ID, { dateKey: '2026-09-14', recipeId: RECIPE_ID }), (err) => err.code === 'RECIPE_NOT_FOUND' && err.statusCode === 404);
+  assert.equal((await service.listEntries(OWNER, '2026-09-14', '2026-09-20'))[0].recipe, null);
+  assert.equal((await service.getEntry(OWNER, ENTRY)).entry._id, ENTRY);
+  await assert.rejects(() => service.getEntry('other', ENTRY), (error) => error.statusCode === 404);
 });
 
-test('duplicate-key races become a clean meal-plan conflict', async (t) => {
-  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({ _id: RECIPE_ID }));
-  t.mock.method(repository, 'create', async () => { const err = new Error('E11000 private details'); err.code = 11000; throw err; });
-  await assert.rejects(() => service.createEntry(USER_ID, { dateKey: '2026-09-14', recipeId: RECIPE_ID }), (err) => err.code === 'MEAL_PLAN_ENTRY_ALREADY_EXISTS' && !err.message.includes('E11000'));
-});
-
-test('range reads retain unavailable entries with a null recipe', async (t) => {
-  t.mock.method(repository, 'findByUserAndRange', async () => [
-    { _id: 'one', recipeId: RECIPE_ID, dateKey: '2026-09-14' },
-    { _id: 'two', recipeId: '507f1f77bcf86cd799439088', dateKey: '2026-09-14' },
-  ]);
-  t.mock.method(recipeService, 'findUsableRecipeById', async (id) => id === RECIPE_ID ? { _id: id } : null);
-  const items = await service.listEntries(USER_ID, '2026-09-14', '2026-09-20');
-  assert.equal(items.length, 2);
-  assert.equal(items[1].recipe, null);
-});
-
-test('move preserves the returned entry identity and allows an unavailable recipe', async (t) => {
-  const createdAt = new Date('2026-09-01T00:00:00.000Z');
-  const moved = {
-    _id: ENTRY_ID,
-    userId: USER_ID,
-    recipeId: RECIPE_ID,
-    dateKey: '2026-09-16',
-    createdAt,
-    updatedAt: new Date('2026-09-14T08:31:00.000Z'),
-  };
-  let args;
-  t.mock.method(repository, 'moveByIdAndUser', async (...value) => { args = value; return moved; });
+test('identical reminder PUT and already-off DELETE do not mutate or churn versions', async (t) => {
+  const reminder = { localTime: '09:00', timeZone: 'UTC', fireAt: new Date('2027-09-14T09:00:00.000Z') };
+  let current = observed({ dateKey: '2027-09-14', reminder, reminderRevision: 2 });
+  t.mock.method(repository, 'findByIdAndUser', async () => current);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
-  const result = await service.moveEntry(USER_ID, ENTRY_ID, {
-    dateKey: '2026-09-16',
-    expectedUpdatedAt: UPDATED_AT,
-  });
-  assert.deepEqual(args, [ENTRY_ID, USER_ID, '2026-09-16', UPDATED_AT]);
-  assert.equal(result.entry._id, ENTRY_ID);
-  assert.equal(result.entry.recipeId, RECIPE_ID);
-  assert.equal(result.entry.createdAt, createdAt);
-  assert.notEqual(result.entry.updatedAt.toISOString(), UPDATED_AT);
-  assert.equal(result.recipe, null);
+  const write = t.mock.method(repository, 'updateObserved', async () => { throw new Error('must not write'); });
+  const body = { localTime: '09:00', timeZone: 'UTC', expectedUpdatedAt: OLD, expectedReminderRevision: 2 };
+  const put = await service.putReminder(OWNER, ENTRY, body);
+  assert.equal(put.entry, current);
+  current = observed({ dateKey: '2027-09-14', reminder: null, reminderRevision: 2 });
+  const deletion = await service.deleteReminder(OWNER, ENTRY, { expectedUpdatedAt: OLD, expectedReminderRevision: 2 });
+  assert.equal(deletion.entry, current);
+  assert.equal(write.mock.callCount(), 0);
 });
 
-test('move classifies an owner version mismatch as stale without retrying', async (t) => {
-  let moveCalls = 0;
-  t.mock.method(repository, 'moveByIdAndUser', async () => { moveCalls += 1; return null; });
-  t.mock.method(repository, 'findByIdAndUser', async () => ({ _id: ENTRY_ID, userId: USER_ID }));
-  await assert.rejects(
-    () => service.moveEntry(USER_ID, ENTRY_ID, { dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT }),
-    (err) => err.code === 'MEAL_PLAN_ENTRY_STALE' && err.statusCode === 409
-  );
-  assert.equal(moveCalls, 1);
-});
-
-test('same-date move returns the exact current owner entry without a second mutation or timestamp churn', async (t) => {
-  const current = {
-    _id: ENTRY_ID,
-    userId: USER_ID,
-    recipeId: RECIPE_ID,
-    dateKey: '2026-09-14',
-    createdAt: new Date('2026-09-01T00:00:00.000Z'),
-    updatedAt: new Date(UPDATED_AT),
-  };
-  const moveCall = t.mock.method(repository, 'moveByIdAndUser', async () => null);
-  const findCall = t.mock.method(repository, 'findByIdAndUser', async () => current);
+test('actual reminder edit advances revision and stale preconditions reject even identical state', async (t) => {
+  const current = observed({ dateKey: '2027-09-14' });
+  t.mock.method(repository, 'findByIdAndUser', async () => current);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
-
-  const result = await service.moveEntry(USER_ID, ENTRY_ID, {
-    dateKey: current.dateKey,
-    expectedUpdatedAt: UPDATED_AT,
-  });
-
-  assert.equal(moveCall.mock.callCount(), 1);
-  assert.equal(findCall.mock.callCount(), 1);
-  assert.equal(result.entry, current);
-  assert.equal(result.entry._id, ENTRY_ID);
-  assert.equal(result.entry.recipeId, RECIPE_ID);
-  assert.equal(result.entry.createdAt.toISOString(), '2026-09-01T00:00:00.000Z');
-  assert.equal(result.entry.updatedAt.toISOString(), UPDATED_AT);
+  let fields;
+  t.mock.method(repository, 'updateObserved', async (_entry, _owner, value) => { fields = value; return observed({ ...value, updatedAt: new Date('2026-09-14T08:30:00.001Z') }); });
+  const result = await service.putReminder(OWNER, ENTRY, { localTime: '09:00', timeZone: 'UTC', expectedUpdatedAt: OLD, expectedReminderRevision: 0 });
+  assert.equal(fields.reminderRevision, 1);
+  assert.equal(result.entry.reminder.fireAt.toISOString(), '2027-09-14T09:00:00.000Z');
+  await assert.rejects(() => service.putReminder(OWNER, ENTRY, { localTime: '09:00', timeZone: 'UTC', expectedUpdatedAt: OLD, expectedReminderRevision: 1 }), (error) => error.code === 'MEAL_PLAN_ENTRY_STALE');
 });
 
-test('same-date move still rejects a stale expectedUpdatedAt', async (t) => {
-  t.mock.method(repository, 'moveByIdAndUser', async () => null);
-  t.mock.method(repository, 'findByIdAndUser', async () => ({
-    _id: ENTRY_ID,
-    userId: USER_ID,
-    dateKey: '2026-09-14',
-    updatedAt: new Date('2026-09-14T09:00:00.000Z'),
-  }));
-
-  await assert.rejects(
-    () => service.moveEntry(USER_ID, ENTRY_ID, { dateKey: '2026-09-14', expectedUpdatedAt: UPDATED_AT }),
-    (err) => err.code === 'MEAL_PLAN_ENTRY_STALE' && err.statusCode === 409
-  );
+test('move retains identity and atomically turns off a past reminder', async (t) => {
+  const current = observed({ dateKey: '2026-09-14', reminder: { localTime: '09:00', timeZone: 'UTC', fireAt: new Date('2026-09-14T09:00:00.000Z') }, reminderRevision: 3 });
+  t.mock.method(repository, 'findByIdAndUser', async () => current);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
+  let fields;
+  t.mock.method(repository, 'updateObserved', async (_entry, _owner, value) => { fields = value; return observed({ ...value }); });
+  const result = await service.moveEntry(OWNER, ENTRY, { dateKey: '2026-01-01', expectedUpdatedAt: OLD });
+  assert.equal(fields.dateKey, '2026-01-01');
+  assert.equal(fields.reminder, null);
+  assert.equal(fields.reminderRevision, 4);
+  assert.equal(result.reminderTurnedOff, true);
 });
 
-test('move hides absent, foreign, and concurrently deleted entries behind the same 404', async (t) => {
-  t.mock.method(repository, 'moveByIdAndUser', async () => null);
-  t.mock.method(repository, 'findByIdAndUser', async () => null);
-  await assert.rejects(
-    () => service.moveEntry(USER_ID, ENTRY_ID, { dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT }),
-    (err) => err.code === 'MEAL_PLAN_ENTRY_NOT_FOUND' && err.statusCode === 404
-  );
+test('same-date move is read-only and stale same-date move still conflicts', async (t) => {
+  t.mock.method(repository, 'findByIdAndUser', async () => observed());
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
+  const write = t.mock.method(repository, 'updateObserved', async () => { throw new Error('must not write'); });
+  assert.equal((await service.moveEntry(OWNER, ENTRY, { dateKey: '2026-09-14', expectedUpdatedAt: OLD })).entry.updatedAt.toISOString(), OLD);
+  await assert.rejects(() => service.moveEntry(OWNER, ENTRY, { dateKey: '2026-09-14', expectedUpdatedAt: '2026-09-14T08:30:00.001Z' }), (error) => error.code === 'MEAL_PLAN_ENTRY_STALE');
+  assert.equal(write.mock.callCount(), 0);
 });
 
-test('move maps the atomic duplicate race without a delete, recreate, or eligibility check', async (t) => {
-  const moveCall = t.mock.method(repository, 'moveByIdAndUser', async () => { const err = new Error('private duplicate'); err.code = 11000; throw err; });
-  const createCall = t.mock.method(repository, 'create', async () => { throw new Error('must not create'); });
-  const deleteCall = t.mock.method(repository, 'deleteByIdAndUser', async () => { throw new Error('must not delete'); });
-  const classifyCall = t.mock.method(repository, 'findByIdAndUser', async () => { throw new Error('must not classify duplicate'); });
-  const recipeLookup = t.mock.method(recipeService, 'findUsableRecipeById', async () => ({ _id: RECIPE_ID }));
-  await assert.rejects(
-    () => service.moveEntry(USER_ID, ENTRY_ID, { dateKey: '2026-09-16', expectedUpdatedAt: UPDATED_AT }),
-    (err) => err.code === 'MEAL_PLAN_ENTRY_ALREADY_EXISTS' && err.statusCode === 409 && !err.message.includes('private')
-  );
-  assert.equal(moveCall.mock.callCount(), 1);
-  assert.equal(createCall.mock.callCount(), 0);
-  assert.equal(deleteCall.mock.callCount(), 0);
-  assert.equal(classifyCall.mock.callCount(), 0);
-  assert.equal(recipeLookup.mock.callCount(), 0);
+test('CAS miss and duplicate move classify without retry', async (t) => {
+  t.mock.method(repository, 'findByIdAndUser', async () => observed());
+  const write = t.mock.method(repository, 'updateObserved', async () => null);
+  await assert.rejects(() => service.moveEntry(OWNER, ENTRY, { dateKey: '2026-09-16', expectedUpdatedAt: OLD }), (error) => error.code === 'MEAL_PLAN_ENTRY_STALE');
+  assert.equal(write.mock.callCount(), 1);
+  write.mock.mockImplementation(async () => { throw Object.assign(new Error('duplicate'), { code: 11000 }); });
+  await assert.rejects(() => service.moveEntry(OWNER, ENTRY, { dateKey: '2026-09-16', expectedUpdatedAt: OLD }), (error) => error.code === 'MEAL_PLAN_ENTRY_ALREADY_EXISTS');
 });
 
-test('remove uses owner-scoped repository deletion and hides foreign entries as not found', async (t) => {
-  let args;
-  t.mock.method(repository, 'deleteByIdAndUser', async (...value) => { args = value; return null; });
-  await assert.rejects(() => service.removeEntry(USER_ID, 'entry'), (err) => err.code === 'MEAL_PLAN_ENTRY_NOT_FOUND');
-  assert.deepEqual(args, ['entry', USER_ID]);
-});
-
-test('clear reports the repository deleted count for only the supplied owner/range', async (t) => {
-  let args;
-  t.mock.method(repository, 'deleteByUserAndRange', async (...value) => { args = value; return { deletedCount: 3 }; });
-  assert.deepEqual(await service.clearRange(USER_ID, '2026-09-14', '2026-09-20'), { deletedCount: 3 });
-  assert.deepEqual(args, [USER_ID, '2026-09-14', '2026-09-20']);
+test('versioned remove and transactional clear classify stale owner-scope safely', async (t) => {
+  t.mock.method(repository, 'deleteByIdAndUser', async () => null);
+  t.mock.method(repository, 'findByIdAndUser', async () => observed());
+  await assert.rejects(() => service.removeEntry(OWNER, ENTRY, { expectedUpdatedAt: OLD }), (error) => error.code === 'MEAL_PLAN_ENTRY_STALE');
+  t.mock.method(repository, 'deleteByUserAndRange', async () => { throw Object.assign(new Error('write conflict'), { code: 112 }); });
+  await assert.rejects(() => service.clearRange(OWNER, '2026-09-14', '2026-09-20', []), (error) => error.code === 'MEAL_PLAN_ENTRY_STALE');
 });

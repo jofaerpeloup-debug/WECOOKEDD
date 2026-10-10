@@ -97,11 +97,13 @@ describe('shopping-list and deferred boundaries', () => {
     expect(dates).toMatch(/new Date\(year, monthIndex, day, 12/);
   });
 
-  it('Meal Plan sources contain no local persistence, slots, reminders, mock recipes, or UTC date generation', () => {
+  it('Meal Plan sources keep server authority and avoid local persistence, slots, and mock recipes', () => {
     for (const source of [screen, moveSheet, service]) {
-      expect(source).not.toMatch(/AsyncStorage|mock(?:Recipe|Data)|toISOString|Date\.UTC|86400000/i);
-      expect(source).not.toMatch(/mealType|reminder|expo-notifications/i);
+      expect(source).not.toMatch(/AsyncStorage|mock(?:Recipe|Data)|Date\.UTC|86400000/i);
+      expect(source).not.toMatch(/mealType|expo-notifications/i);
     }
+    expect(screen).not.toMatch(/toISOString/);
+    expect(moveSheet).not.toMatch(/toISOString/);
   });
 });
 

@@ -18,3 +18,7 @@ export function validNativeNotificationData(data) {
     && Object.keys(data).sort().join('|') === ['kind', 'notificationId', 'version'].sort().join('|')
     && data.version === 1 && data.kind === 'notification' && OBJECT_ID.test(data.notificationId);
 }
+
+export function isLocalReminderDiscriminator(data) {
+  return !!data && typeof data === 'object' && !Array.isArray(data) && data.kind === 'mealPlanReminder';
+}

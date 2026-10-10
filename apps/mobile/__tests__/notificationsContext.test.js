@@ -7,6 +7,10 @@ jest.mock('react-native', () => ({
   Linking: { openSettings: jest.fn() },
 }));
 jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
+jest.mock('../src/context/MealReminderContext', () => ({
+  useMealReminders: () => ({ handleLocalTap: jest.fn(), mayShowLocal: jest.fn(async () => false) }),
+}));
+jest.mock('../src/notifications/mealReminderSessionStore', () => ({ PREFIX: 'wecooked.meal4.v1.' }));
 jest.mock('../src/api/notificationService', () => ({
   listNotifications: jest.fn(),
   markNotificationRead: jest.fn(),

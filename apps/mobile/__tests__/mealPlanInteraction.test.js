@@ -65,7 +65,9 @@ jest.mock('@react-navigation/native', () => ({
 }));
 
 let mockUser = { id: 'user-a' };
+const mockReminderReconcile = jest.fn();
 jest.mock('../src/context/AuthContext', () => ({ useAuth: () => ({ user: mockUser }) }));
+jest.mock('../src/context/MealReminderContext', () => ({ useMealReminders: () => ({ state: { kind: 'pending' }, reconcile: mockReminderReconcile, manualRetry: jest.fn(), requestPermission: jest.fn(), openSettings: jest.fn() }) }));
 jest.mock('../src/context/ShoppingListContext', () => ({
   useShoppingList: () => ({ addRecipe: jest.fn(), isMutating: false }),
 }));
@@ -850,7 +852,7 @@ it('keeps existing add, remove, Recipe Detail, and focus reload wiring live', as
   fireEvent.press(view.getByLabelText('Complete add meal'));
   await waitFor(() => expect(getMealPlan.mock.calls.length).toBeGreaterThanOrEqual(2));
   fireEvent.press(view.getByLabelText('Remove Chicken Adobo'));
-  await waitFor(() => expect(removeMealPlanEntry).toHaveBeenCalledWith('entry-1'));
+  await waitFor(() => expect(removeMealPlanEntry).toHaveBeenCalledWith('entry-1', '2026-09-14T08:30:00.000Z'));
   await act(async () => mockFocusedEffect());
   expect(getMealPlan.mock.calls.length).toBeGreaterThanOrEqual(3);
 });

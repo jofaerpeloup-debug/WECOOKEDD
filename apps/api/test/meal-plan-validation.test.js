@@ -5,6 +5,7 @@ const {
   listMealPlanSchema,
   createMealPlanEntrySchema,
   moveMealPlanEntrySchema,
+  putReminderSchema, deleteReminderSchema, removeMealPlanEntrySchema, clearMealPlanSchema,
 } = require('../src/modules/meal-plan/meal-plan.validation');
 
 const RECIPE_ID = '507f1f77bcf86cd799439099';
@@ -15,6 +16,20 @@ test('dateKey accepts real calendar dates including leap day without transformin
   assert.equal(isValidDateKey('2024-02-29'), true);
   const parsed = createMealPlanEntrySchema.parse({ body: { dateKey: '2024-02-29', recipeId: RECIPE_ID } });
   assert.equal(parsed.body.dateKey, '2024-02-29');
+});
+
+test('reminder and delete amendments require exact bodies and sorted complete snapshots', () => {
+  const path = { params: { entryId: ENTRY_ID }, query: {} };
+  const version = { expectedUpdatedAt: UPDATED_AT, expectedReminderRevision: 0 };
+  assert.equal(putReminderSchema.safeParse({ ...path, body: { ...version, localTime: '09:00', timeZone: 'UTC' } }).success, true);
+  assert.equal(putReminderSchema.safeParse({ ...path, body: { ...version, localTime: '09:00', timeZone: 'UTC', fireAt: UPDATED_AT } }).success, false);
+  assert.equal(deleteReminderSchema.safeParse({ ...path, body: version }).success, true);
+  assert.equal(deleteReminderSchema.safeParse({ ...path, body: { ...version, ownerId: ENTRY_ID } }).success, false);
+  assert.equal(removeMealPlanEntrySchema.safeParse({ ...path, body: { expectedUpdatedAt: UPDATED_AT } }).success, true);
+  assert.equal(removeMealPlanEntrySchema.safeParse({ ...path, body: {} }).success, false);
+  const query = { startDate: '2026-09-14', endDate: '2026-09-20' };
+  assert.equal(clearMealPlanSchema.safeParse({ query, body: { expectedEntries: [] } }).success, true);
+  assert.equal(clearMealPlanSchema.safeParse({ query, body: { expectedEntries: [{ id: ENTRY_ID, expectedUpdatedAt: UPDATED_AT }, { id: ENTRY_ID, expectedUpdatedAt: UPDATED_AT }] } }).success, false);
 });
 
 test('dateKey rejects malformed and impossible dates', () => {

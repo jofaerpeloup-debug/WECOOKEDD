@@ -10,6 +10,15 @@ const mealPlanEntrySchema = new mongoose.Schema(
       validate: { validator: isValidDateKey, message: 'dateKey must be a real YYYY-MM-DD calendar date.' },
     },
     recipeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Recipe', required: true },
+    reminder: {
+      type: new mongoose.Schema({
+        localTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+        timeZone: { type: String, required: true },
+        fireAt: { type: Date, required: true },
+      }, { _id: false, strict: 'throw' }),
+      default: null,
+    },
+    reminderRevision: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
   },
   { timestamps: true }
 );

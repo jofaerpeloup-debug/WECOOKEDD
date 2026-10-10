@@ -5,6 +5,8 @@ let mockAuth;
 let mockPreferences;
 const mockReload = jest.fn();
 const mockNavigate = jest.fn();
+const mockHandleLocalTap = jest.fn();
+const mockMayShowLocal = jest.fn(async () => false);
 let mockAppStateListener;
 let mockNotificationReceivedListener;
 let mockNotificationResponseListener;
@@ -19,6 +21,8 @@ jest.mock('react-native', () => ({
   Linking: { openSettings: jest.fn() },
 }));
 jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
+jest.mock('../src/context/MealReminderContext', () => ({ useMealReminders: () => ({ handleLocalTap: mockHandleLocalTap, mayShowLocal: mockMayShowLocal }) }));
+jest.mock('../src/notifications/mealReminderSessionStore', () => ({ PREFIX: 'wecooked.meal4.v1.' }));
 jest.mock('../src/context/NotificationsContext', () => ({
   useNotifications: () => ({
     preferences: mockPreferences,
@@ -151,6 +155,30 @@ it('does not inspect or request OS permission from an untrusted notification-con
   expect(Notifications.getPermissionsAsync).not.toHaveBeenCalled();
   expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
   expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+  renderer.unmount();
+});
+
+it('routes full local responses through the single listener and cold-start path without inbox navigation', async () => {
+  mockAuth = loggedInAuth();
+  mockPreferences = { push: false };
+  mockHandleLocalTap.mockResolvedValue(true);
+  const local = (suffix) => ({ actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
+    notification: { date: 1810362000, request: { identifier: `wecooked.meal4.v1.${suffix.repeat(43)}`,
+      trigger: { type: 'calendar' }, content: { data: { kind: 'mealPlanReminder' } } } } });
+  const cold = local('A');
+  Notifications.getLastNotificationResponseAsync.mockResolvedValueOnce(cold).mockResolvedValue(null);
+  let renderer;
+  await act(async () => {
+    renderer = TestRenderer.create(<NativePushProvider><PushProbe /></NativePushProvider>);
+    await Promise.resolve(); await Promise.resolve();
+  });
+  expect(Notifications.addNotificationResponseReceivedListener).toHaveBeenCalledTimes(1);
+  expect(mockHandleLocalTap).toHaveBeenCalledWith(cold, expect.any(Function));
+  const warm = local('B');
+  await act(async () => { mockNotificationResponseListener(warm); await Promise.resolve(); await Promise.resolve(); });
+  expect(mockHandleLocalTap).toHaveBeenCalledWith(warm, expect.any(Function));
+  expect(markNotificationRead).not.toHaveBeenCalled();
+  expect(mockNavigate).not.toHaveBeenCalled();
   renderer.unmount();
 });
 

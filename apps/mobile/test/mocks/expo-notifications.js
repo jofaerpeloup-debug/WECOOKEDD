@@ -1,5 +1,8 @@
 module.exports = {
+  DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
   AndroidImportance: { DEFAULT: 3 },
+  IosAuthorizationStatus: { NOT_DETERMINED: 0, DENIED: 1, AUTHORIZED: 2, PROVISIONAL: 3, EPHEMERAL: 4 },
+  SchedulableTriggerInputTypes: { DATE: 'date', CALENDAR: 'calendar' },
   getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
   setNotificationChannelAsync: jest.fn(),
@@ -11,4 +14,8 @@ module.exports = {
   getLastNotificationResponseAsync: jest.fn(async () => null),
   clearLastNotificationResponseAsync: jest.fn(),
   setNotificationHandler: jest.fn(),
+  getAllScheduledNotificationsAsync: jest.fn(async () => []),
+  getNextTriggerDateAsync: jest.fn(),
+  scheduleNotificationAsync: jest.fn(),
+  cancelScheduledNotificationAsync: jest.fn(),
 };

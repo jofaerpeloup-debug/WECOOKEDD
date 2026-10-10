@@ -1,12 +1,17 @@
 let beforeLogout = null;
+let beforeReminderLogout = null;
 
 export function setBeforePushLogout(handler) {
   beforeLogout = typeof handler === 'function' ? handler : null;
 }
 
+export function setBeforeReminderLogout(handler) {
+  beforeReminderLogout = typeof handler === 'function' ? handler : null;
+}
+
 export async function runBeforePushLogout(options = {}) {
-  if (!beforeLogout) return;
-  await beforeLogout(options);
+  const reminder = beforeReminderLogout?.(options);
+  await Promise.allSettled([beforeLogout?.(options), reminder]);
 }
 
 export function responseKey(response) {

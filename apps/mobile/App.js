@@ -32,6 +32,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { SearchHistoryProvider } from './src/context/SearchHistoryContext';
 import { NotificationsProvider } from './src/context/NotificationsContext';
 import { NativePushProvider } from './src/context/NativePushContext';
+import { MealReminderProvider } from './src/context/MealReminderContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -76,6 +77,7 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <NotificationsProvider>
+            <MealReminderProvider>
             <NativePushProvider>
               <SearchHistoryProvider>
               <FavoritesProvider>
@@ -89,6 +91,7 @@ export default function App() {
               </FavoritesProvider>
               </SearchHistoryProvider>
             </NativePushProvider>
+            </MealReminderProvider>
           </NotificationsProvider>
         </AuthProvider>
       </ThemeProvider>

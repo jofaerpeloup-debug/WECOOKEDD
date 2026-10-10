@@ -72,9 +72,29 @@ const moveMealPlanEntrySchema = z.object({
 const entryParamsSchema = z.object({
   params: z.object({ entryId: objectIdSchema }).strict(),
   query: z.object({}).strict(),
+  body: z.union([z.undefined(), z.object({}).strict()]),
 });
 
-const clearMealPlanSchema = z.object({ query: rangeQuerySchema });
+const entryVersionSchema = z.object({ expectedUpdatedAt: expectedUpdatedAtSchema }).strict();
+const removeMealPlanEntrySchema = z.object({
+  params: z.object({ entryId: objectIdSchema }).strict(),
+  query: z.object({}).strict(),
+  body: entryVersionSchema,
+});
+const expectedEntrySchema = z.object({ id: objectIdSchema, expectedUpdatedAt: expectedUpdatedAtSchema }).strict();
+const clearMealPlanSchema = z.object({
+  query: rangeQuerySchema,
+  body: z.object({ expectedEntries: z.array(expectedEntrySchema).superRefine((items, ctx) => {
+    for (let i = 1; i < items.length; i += 1) {
+      if (items[i - 1].id >= items[i].id) ctx.addIssue({ code: 'custom', message: 'expectedEntries must have unique ascending IDs.' });
+    }
+  }) }).strict(),
+});
+const reminderVersionSchema = z.number().int().nonnegative().refine(Number.isSafeInteger);
+const reminderBase = { expectedUpdatedAt: expectedUpdatedAtSchema, expectedReminderRevision: reminderVersionSchema };
+const reminderPath = { params: z.object({ entryId: objectIdSchema }).strict(), query: z.object({}).strict() };
+const putReminderSchema = z.object({ ...reminderPath, body: z.object({ ...reminderBase, localTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timeZone: z.string().min(1).max(128) }).strict() });
+const deleteReminderSchema = z.object({ ...reminderPath, body: z.object(reminderBase).strict() });
 
 module.exports = {
   MAX_RANGE_DAYS,
@@ -85,4 +105,7 @@ module.exports = {
   moveMealPlanEntrySchema,
   entryParamsSchema,
   clearMealPlanSchema,
+  removeMealPlanEntrySchema,
+  putReminderSchema,
+  deleteReminderSchema,
 };
