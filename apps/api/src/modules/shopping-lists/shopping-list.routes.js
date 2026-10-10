@@ -14,6 +14,7 @@ const router = Router();
 router.get('/', authenticate, shoppingListController.getShoppingList);
 router.post('/items', authenticate, validate(createItemSchema), shoppingListController.addItem);
 router.patch('/items/:itemId', authenticate, validate(patchItemSchema), shoppingListController.patchItem);
+router.delete('/items/checked', authenticate, shoppingListController.clearCheckedItems);
 router.delete('/items/:itemId', authenticate, validate(itemParamsSchema), shoppingListController.removeItem);
 router.delete('/items', authenticate, shoppingListController.clearItems);
 router.post(

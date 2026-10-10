@@ -42,6 +42,43 @@ function invalidQuantityError(message) {
   return new AppError(message, { statusCode: 400, code: 'VALIDATION_ERROR' });
 }
 
+function staleError() {
+  return new AppError('Shopping list changed. Reload and try again.', {
+    statusCode: 409,
+    code: 'SHOPPING_LIST_STALE',
+  });
+}
+
+function isVersionError(err) {
+  return err instanceof ShoppingList.base.Error.VersionError;
+}
+
+async function saveOrThrowStale(list) {
+  try {
+    await shoppingListRepository.save(list);
+  } catch (err) {
+    if (isVersionError(err)) {
+      throw staleError();
+    }
+    throw err;
+  }
+}
+
+async function saveAdditiveWithOneRetry(userId, list, applyPayload) {
+  try {
+    await shoppingListRepository.save(list);
+    return list;
+  } catch (err) {
+    if (!isVersionError(err)) throw err;
+  }
+
+  const latest = await shoppingListRepository.findOrCreateByUserId(userId);
+  applyPayload(latest);
+  assertWithinLimit(latest.items);
+  await saveOrThrowStale(latest);
+  return latest;
+}
+
 // Verified via IngredientService only — ShoppingListService never imports
 // the Ingredient model/repository directly (cross-module boundary rule).
 async function assertActiveIngredient(ingredientId) {
@@ -121,11 +158,14 @@ async function addItem(userId, { ingredientId, quantity, unit }) {
   await assertActiveIngredient(ingredientId);
 
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
-  mergeItemInto(list.items, { ingredientId, quantity, unit });
-  assertWithinLimit(list.items);
+  const applyPayload = (target) => {
+    mergeItemInto(target.items, { ingredientId, quantity, unit });
+    assertWithinLimit(target.items);
+  };
+  applyPayload(list);
 
-  await shoppingListRepository.save(list);
-  return toResult(list);
+  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload);
+  return toResult(saved);
 }
 
 // Strict/partial: validates the resulting prospective item (not merely each
@@ -168,7 +208,7 @@ async function patchItem(userId, itemId, patch) {
     item.isChecked = patch.isChecked;
   }
 
-  await shoppingListRepository.save(list);
+  await saveOrThrowStale(list);
   return toResult(list);
 }
 
@@ -183,14 +223,36 @@ async function removeItem(userId, itemId) {
   }
 
   item.deleteOne();
-  await shoppingListRepository.save(list);
+  await saveOrThrowStale(list);
+  return toResult(list);
+}
+
+async function clearCheckedItems(userId) {
+  const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  const checkedIds = list.items
+    .filter((item) => item.isChecked === true)
+    .map((item) => String(item._id));
+
+  if (checkedIds.length === 0) {
+    // An unchanged document would make Mongoose save() a database no-op and
+    // leave no OCC linearization point. Force an identity write of the items
+    // snapshot so optimisticConcurrency emits one atomic {_id, __v} update;
+    // a mutation committed before that update becomes SHOPPING_LIST_STALE.
+    list.markModified('items');
+    await saveOrThrowStale(list);
+    return toResult(list);
+  }
+
+  const checkedIdSet = new Set(checkedIds);
+  list.items = list.items.filter((item) => !checkedIdSet.has(String(item._id)));
+  await saveOrThrowStale(list);
   return toResult(list);
 }
 
 async function clearItems(userId) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
   list.items = [];
-  await shoppingListRepository.save(list);
+  await saveOrThrowStale(list);
   return toResult(list);
 }
 
@@ -208,13 +270,20 @@ async function addRecipeIngredients(userId, recipeId) {
   }
 
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
-  for (const usage of recipe.ingredients) {
-    mergeItemInto(list.items, { ingredientId: usage.ingredient.id, quantity: usage.quantity, unit: usage.unit });
-  }
-  assertWithinLimit(list.items);
+  const applyPayload = (target) => {
+    for (const usage of recipe.ingredients) {
+      mergeItemInto(target.items, {
+        ingredientId: usage.ingredient.id,
+        quantity: usage.quantity,
+        unit: usage.unit,
+      });
+    }
+    assertWithinLimit(target.items);
+  };
+  applyPayload(list);
 
-  await shoppingListRepository.save(list);
-  return toResult(list);
+  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload);
+  return toResult(saved);
 }
 
 module.exports = {
@@ -222,6 +291,7 @@ module.exports = {
   addItem,
   patchItem,
   removeItem,
+  clearCheckedItems,
   clearItems,
   addRecipeIngredients,
 };

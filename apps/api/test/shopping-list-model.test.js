@@ -109,3 +109,8 @@ test('item isChecked defaults to false', () => {
 test('timestamps are enabled on the ShoppingList document', () => {
   assert.equal(ShoppingList.schema.options.timestamps, true);
 });
+
+test('document optimistic concurrency uses the existing Mongoose version key', () => {
+  assert.equal(ShoppingList.schema.options.optimisticConcurrency, true);
+  assert.equal(ShoppingList.schema.options.versionKey, '__v');
+});

@@ -635,3 +635,249 @@ test('addItem propagates an unexpected IngredientService/database failure instea
     }
   );
 });
+
+function versionError(list) {
+  return new ShoppingList.base.Error.VersionError(list, list.__v ?? 0, ['items']);
+}
+
+test('clearCheckedItems removes only checked rows from one authoritative snapshot', async (t) => {
+  mockAllIngredientsActive(t);
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: true },
+    { ingredientId: GARLIC_ID, quantity: 2, unit: 'clove', isChecked: false },
+    { ingredientId: SALT_ID, unit: 'toTaste', isChecked: true },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+
+  const result = await shoppingListService.clearCheckedItems(USER_ID);
+
+  assert.deepEqual(result.shoppingList.items.map((row) => String(row.ingredientId)), [GARLIC_ID]);
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('clearCheckedItems removes all checked rows and returns an empty list', async (t) => {
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: true },
+    { ingredientId: SALT_ID, unit: 'toTaste', isChecked: true },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockNoSave(t);
+
+  const result = await shoppingListService.clearCheckedItems(USER_ID);
+
+  assert.equal(result.shoppingList.items.length, 0);
+});
+
+test('clearCheckedItems zero-checked succeeds through an OCC write without deleting unrelated items', async (t) => {
+  mockAllIngredientsActive(t);
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => {
+    assert.equal(value.isModified('items'), true);
+    return value;
+  });
+
+  const result = await shoppingListService.clearCheckedItems(USER_ID);
+
+  assert.equal(result.shoppingList.items.length, 1);
+  assert.equal(String(result.shoppingList.items[0].ingredientId), CHICKEN_ID);
+  assert.equal(result.shoppingList.items[0].isChecked, false);
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('clearCheckedItems zero-checked emits an atomic version predicate and returns its authoritative snapshot', async (t) => {
+  mockAllIngredientsActive(t);
+  const list = ShoppingList.hydrate({
+    _id: '507f1f77bcf86cd799439101',
+    userId: USER_ID,
+    items: [{
+      _id: '507f1f77bcf86cd799439111',
+      ingredientId: CHICKEN_ID,
+      quantity: 1,
+      unit: 'kg',
+      isChecked: false,
+    }],
+    __v: 7,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  });
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const stored = {
+    __v: 7,
+    items: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false }],
+  };
+  const updateOne = t.mock.method(ShoppingList.collection, 'updateOne', async (filter, update) => {
+    assert.equal(String(filter._id), String(list._id));
+    assert.equal(filter.__v, 7);
+    assert.equal(update.$inc.__v, 1);
+    assert.equal(update.$set.items.length, 1);
+    assert.equal(String(update.$set.items[0].ingredientId), CHICKEN_ID);
+    assert.equal(update.$set.items[0].isChecked, false);
+    // The compare-and-swap matches and is the Clear Checked linearization
+    // point. A second writer may then commit legitimately before this request
+    // serializes its response; that later write must not invalidate success.
+    stored.items = update.$set.items.map((item) => ({ ...item }));
+    stored.__v += update.$inc.__v;
+    stored.items.push({ ingredientId: GARLIC_ID, quantity: 2, unit: 'clove', isChecked: false });
+    stored.__v += 1;
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+  });
+
+  const result = await shoppingListService.clearCheckedItems(USER_ID);
+
+  assert.equal(updateOne.mock.callCount(), 1);
+  assert.equal(result.shoppingList.__v, 8);
+  assert.equal(result.shoppingList.items.length, 1);
+  assert.equal(String(result.shoppingList.items[0].ingredientId), CHICKEN_ID);
+  assert.equal(stored.__v, 9);
+  assert.equal(stored.items.length, 2);
+});
+
+for (const concurrentMutation of [
+  {
+    name: 'check',
+    apply(state) { state.items[0].isChecked = true; },
+    assertPreserved(state) { assert.equal(state.items[0].isChecked, true); },
+  },
+  {
+    name: 'add',
+    apply(state) {
+      state.items.push({ ingredientId: GARLIC_ID, quantity: 2, unit: 'clove', isChecked: false });
+    },
+    assertPreserved(state) { assert.equal(state.items.length, 2); },
+  },
+  {
+    name: 'edit',
+    apply(state) { state.items[0].quantity = 3; },
+    assertPreserved(state) { assert.equal(state.items[0].quantity, 3); },
+  },
+]) {
+  test(`clearCheckedItems zero-checked detects a concurrent ${concurrentMutation.name} at the atomic version check without retry`, async (t) => {
+    const list = ShoppingList.hydrate({
+      _id: '507f1f77bcf86cd799439102',
+      userId: USER_ID,
+      items: [{
+        _id: '507f1f77bcf86cd799439112',
+        ingredientId: CHICKEN_ID,
+        quantity: 1,
+        unit: 'kg',
+        isChecked: false,
+      }],
+      __v: 11,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const stored = {
+      __v: 11,
+      items: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false }],
+    };
+    const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+    const updateOne = t.mock.method(ShoppingList.collection, 'updateOne', async (filter) => {
+      // Commit the competing mutation immediately before the real Mongoose
+      // compare-and-swap generated by save(). The stale filter must miss.
+      concurrentMutation.apply(stored);
+      stored.__v += 1;
+      assert.equal(filter.__v, 11);
+      return { acknowledged: true, matchedCount: filter.__v === stored.__v ? 1 : 0, modifiedCount: 0 };
+    });
+
+    await assert.rejects(
+      () => shoppingListService.clearCheckedItems(USER_ID),
+      (err) => err instanceof AppError && err.statusCode === 409 && err.code === 'SHOPPING_LIST_STALE'
+    );
+
+    assert.equal(find.mock.callCount(), 1);
+    assert.equal(updateOne.mock.callCount(), 1);
+    assert.equal(stored.__v, 12);
+    concurrentMutation.assertPreserved(stored);
+  });
+}
+
+test('non-commutative VersionError maps to SHOPPING_LIST_STALE without retry', async (t) => {
+  const list = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: true },
+  ]);
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async () => {
+    throw versionError(list);
+  });
+
+  await assert.rejects(
+    () => shoppingListService.clearCheckedItems(USER_ID),
+    (err) => err instanceof AppError && err.statusCode === 409 && err.code === 'SHOPPING_LIST_STALE'
+  );
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('addItem retries exactly once after VersionError and reapplies the payload once to fresh state', async (t) => {
+  mockAllIngredientsActive(t);
+  const stale = buildList([]);
+  const latest = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 10, unit: 'kg', isChecked: true },
+  ]);
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    find.mock.callCount() === 0 ? stale : latest
+  );
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => {
+    if (save.mock.callCount() === 0) throw versionError(value);
+    return value;
+  });
+
+  const result = await shoppingListService.addItem(USER_ID, {
+    ingredientId: CHICKEN_ID, quantity: 2, unit: 'kg',
+  });
+
+  assert.equal(find.mock.callCount(), 2);
+  assert.equal(save.mock.callCount(), 2);
+  assert.equal(result.shoppingList.items[0].quantity, 12);
+  assert.equal(result.shoppingList.items[0].isChecked, false);
+});
+
+test('addRecipeIngredients retries exactly once after VersionError and applies every usage once', async (t) => {
+  const stale = buildList([]);
+  const latest = buildList([
+    { ingredientId: GARLIC_ID, quantity: 1, unit: 'clove', isChecked: false },
+  ]);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
+    ingredients: [
+      { ingredient: { id: GARLIC_ID }, quantity: 2, unit: 'clove' },
+      { ingredient: { id: SALT_ID }, quantity: null, unit: 'toTaste' },
+    ],
+  }));
+  mockAllIngredientsActive(t);
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    find.mock.callCount() === 0 ? stale : latest
+  );
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => {
+    if (save.mock.callCount() === 0) throw versionError(value);
+    return value;
+  });
+
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID);
+
+  assert.equal(find.mock.callCount(), 2);
+  assert.equal(save.mock.callCount(), 2);
+  assert.equal(result.shoppingList.items[0].quantity, 3);
+  assert.equal(result.shoppingList.items.filter((row) => String(row.ingredientId) === SALT_ID).length, 1);
+});
+
+test('additive operations do not retry unknown save outcomes', async (t) => {
+  mockAllIngredientsActive(t);
+  const list = buildList([]);
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const unknown = new Error('connection reset after write');
+  const save = t.mock.method(shoppingListRepository, 'save', async () => { throw unknown; });
+
+  await assert.rejects(
+    () => shoppingListService.addItem(USER_ID, {
+      ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg',
+    }),
+    (err) => err === unknown
+  );
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 1);
+});

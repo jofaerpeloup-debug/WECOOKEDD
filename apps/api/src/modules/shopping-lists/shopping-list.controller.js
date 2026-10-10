@@ -25,6 +25,11 @@ const removeItem = asyncHandler(async (req, res) => {
   sendSuccess(res, { shoppingList: toPublicShoppingList(result) });
 });
 
+const clearCheckedItems = asyncHandler(async (req, res) => {
+  const result = await shoppingListService.clearCheckedItems(req.auth.userId);
+  sendSuccess(res, { shoppingList: toPublicShoppingList(result) });
+});
+
 const clearItems = asyncHandler(async (req, res) => {
   const result = await shoppingListService.clearItems(req.auth.userId);
   sendSuccess(res, { shoppingList: toPublicShoppingList(result) });
@@ -41,6 +46,7 @@ module.exports = {
   addItem,
   patchItem,
   removeItem,
+  clearCheckedItems,
   clearItems,
   addRecipeIngredients,
 };
