@@ -1,5 +1,9 @@
 # WeCooked — MOBILE-MEAL4 Meal Plan Reminders
 
+## Owner source-integration decision (2026-10-12)
+
+The owner authorizes merging the reviewed MEAL4 source into `main` before native acceptance. Android and iOS physical notification, inventory, delivery, and tap acceptance is deferred to final integration and APK testing: **NOT RUN — NOT CLAIMED AS PASS**. The isolated Mongo OCC/Clear Week, NOTIF2 provider/device, and production release gates remain pending. This decision authorizes source integration only; it does not authorize production deployment, database migration, or a claim of runtime acceptance. Earlier QA evidence and the frozen product and scheduling contract below remain as recorded.
+
 ## Final implementation status (2026-10-11)
 
 **Implementation: COMPLETE. Independent code review: PASS.** The final independent second-fix re-review closed all six implementation findings: delivered-tap provenance, queued manual retry ownership, preference-disable scheduling races, subsecond `fireAt` rejection, wrong-entry-ID rejection, and Android one-off repeat validation. Its two remaining HIGH findings were closed without reopening the frozen architecture.
