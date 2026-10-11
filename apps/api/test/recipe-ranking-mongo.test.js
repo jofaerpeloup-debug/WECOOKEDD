@@ -29,6 +29,7 @@ const silentLogger = { log() {} };
 const atlasExecFile = promisify(execFile);
 const QA_PROJECT_ID = '6acb1e1905708eb667a03f01';
 const QA_CLUSTER_NAME = 'wecooked-rank1-qa';
+const QA_ROLE_DATABASE = 'admin';
 let physicalBackfillPassed = false;
 const ACTIONS = Object.freeze({
   recipes: ['find', 'insert', 'update', 'remove', 'createIndex', 'listIndexes'],
@@ -170,8 +171,10 @@ function requireTargetConfiguration({ selectedUri = uri,
     && configuration.authenticatedUser.user && typeof configuration.authenticatedUser.db === 'string'
     && configuration.authenticatedUser.db,
   'Expected authenticated user is required');
+  // A role's defining database is distinct from the database in its privilege resources.
+  const roleDatabase = mode === 'ranking' ? QA_ROLE_DATABASE : selectedDatabase;
   assert.ok(JSON.stringify(configuration.effectiveGrants)
-    === JSON.stringify([{ database: selectedDatabase, role: expectedRole(mode) }]),
+    === JSON.stringify([{ database: roleDatabase, role: expectedRole(mode) }]),
   'Expected grants must contain only the mode-specific RANK1 custom role');
   return configuration;
 }
@@ -321,7 +324,7 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
     serverVersion: '8.0.0',
     requiredFcv: '8.0',
     authenticatedUser: { user: 'rank1-qa', db: 'admin' },
-    effectiveGrants: [{ database: 'wecooked-rank1-isolated', role: 'rank1_normal_role' }],
+    effectiveGrants: [{ database: QA_ROLE_DATABASE, role: 'rank1_normal_role' }],
   };
   assert.doesNotThrow(() => requireTargetConfiguration({ selectedUri: target,
     path: 'synthetic', configuration, mode: 'ranking' }));
@@ -359,7 +362,7 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
   /Distinct normal and failure/);
   assert.throws(() => requireTargetConfiguration({ selectedUri: target,
     path: 'synthetic', configuration: { ...configuration,
-      effectiveGrants: [{ database: configuration.connectedDatabase, role: 'readWrite' }] },
+      effectiveGrants: [{ database: QA_ROLE_DATABASE, role: 'readWrite' }] },
     mode: 'ranking' }), /mode-specific RANK1 custom role/);
   assert.throws(() => requireTargetConfiguration({ selectedUri: target,
     path: 'synthetic', configuration: { ...configuration, effectiveGrants: [
@@ -413,7 +416,7 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
     build: { version: '8.0.0' },
     status: { authInfo: {
       authenticatedUsers: [{ user: 'rank1-qa', db: 'admin' }],
-      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'rank1_normal_role' }],
+      authenticatedUserRoles: [{ db: QA_ROLE_DATABASE, role: 'rank1_normal_role' }],
       authenticatedUserPrivileges: Object.entries(ACTIONS).map(([collection, actions]) => ({
         resource: { db: configuration.connectedDatabase, collection }, actions,
       })),
@@ -434,7 +437,7 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
   }), /Authenticated roles differ/);
   assert.throws(() => assertConnectedTarget(configuration, { ...runtime,
     status: { authInfo: { ...runtime.status.authInfo,
-      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'readWrite' }],
+      authenticatedUserRoles: [{ db: QA_ROLE_DATABASE, role: 'readWrite' }],
     } },
   }), /Authenticated roles differ/);
   assert.throws(() => assertConnectedTarget(configuration, { ...runtime,
@@ -527,7 +530,7 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
   for (const [badRuntime, message] of [
     [{ ...runtime, databaseName: 'wecooked-dev' }, /Connected database differs/],
     [{ ...runtime, status: { authInfo: { ...runtime.status.authInfo,
-      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'readWrite' }],
+      authenticatedUserRoles: [{ db: QA_ROLE_DATABASE, role: 'readWrite' }],
     } } }, /Authenticated roles differ/],
     [{ ...runtime, status: { authInfo: { ...runtime.status.authInfo,
       authenticatedUserPrivileges: [{ resource: { db: configuration.connectedDatabase,
@@ -559,6 +562,56 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
     assert.equal(fixtureReads, 0, 'Connected checks precede fixture reads');
     assert.equal(fixtureWrites, 0, 'Connected checks precede fixture writes');
   }
+});
+
+test('Atlas admin custom role has only isolated RANK1 collection privileges', () => {
+  const database = 'rank1-isolated-test';
+  const target = `mongodb://qa.example.test:27017/${database}`;
+  const configuration = {
+    atlasProjectId: QA_PROJECT_ID,
+    connectedDatabase: database,
+    normalDatabase: database,
+    failureDatabase: 'rank1-failure-isolated-test',
+    deploymentIdentity: { setName: 'qa-replica', hosts: ['qa.example.test:27017'], me: null },
+    serverVersion: '8.0.34',
+    requiredFcv: '8.0',
+    authenticatedUser: { user: 'rank1_normal_runner', db: 'admin' },
+    effectiveGrants: [{ database: QA_ROLE_DATABASE, role: 'rank1_normal_role' }],
+  };
+  const roles = [{ db: QA_ROLE_DATABASE, role: 'rank1_normal_role' }];
+  const privileges = Object.entries(ACTIONS).map(([collection, actions]) => ({
+    resource: { db: database, collection }, actions,
+  }));
+  const runtime = {
+    databaseName: database,
+    hello: { setName: 'qa-replica', hosts: ['qa.example.test:27017'] },
+    build: { version: '8.0.34' },
+    status: { authInfo: {
+      authenticatedUsers: [configuration.authenticatedUser],
+      authenticatedUserRoles: roles,
+      authenticatedUserPrivileges: privileges,
+    } },
+    atlasHosts: ['qa.example.test:27017'],
+  };
+  assert.doesNotThrow(() => requireTargetConfiguration({ selectedUri: target,
+    path: 'synthetic', configuration, mode: 'ranking' }));
+  assert.doesNotThrow(() => assertConnectedTarget(configuration, runtime));
+  assert.throws(() => requireTargetConfiguration({ selectedUri: target,
+    path: 'synthetic', configuration: { ...configuration,
+      effectiveGrants: [{ database, role: 'rank1_normal_role' }] }, mode: 'ranking' }),
+  /mode-specific RANK1 custom role/);
+  assert.throws(() => assertConnectedTarget(configuration, { ...runtime,
+    status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserRoles: [{ db: database, role: 'rank1_normal_role' }],
+    } },
+  }), /Authenticated roles differ/);
+  assert.throws(() => assertConnectedTarget(configuration, { ...runtime,
+    status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserPrivileges: privileges.map((privilege) => ({
+        ...privilege, resource: { ...privilege.resource, db: 'admin' },
+      })),
+    } },
+  }), /broad, protected-database/);
 });
 
 function reviewRows(recipeId, ratings) {
