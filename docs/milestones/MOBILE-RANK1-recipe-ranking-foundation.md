@@ -29,6 +29,16 @@ This freeze changes only this milestone document. It authorizes implementation
 within the production and test allowlists below, but no production release,
 database or index write, push, or merge.
 
+### Narrow post-freeze ordering amendment — Unicode relevance ties
+
+The relevance tie-break is amended to Recipe `_id` ascending after the
+full-precision weighted MongoDB text score descending. No lowercase-title
+computation, `titleSortKey`, additional derived field, or backfill is
+authorized. MongoDB must apply this ranking before skip and limit; application
+code must not sort results after pagination. Top Rated and Trending semantics
+are unchanged. Every existing eligibility, CAS, migration, authorization, and
+release requirement remains in force.
+
 ### First independent integration review amendment — nutrition source parity
 
 Current-main Recipe validation stores the optional nutrition source URL at
@@ -158,13 +168,11 @@ weight `10` and description weight `1`.
 The exact order is:
 
 1. full-precision text relevance score descending;
-2. internal normalized title ascending; then
-3. Recipe `_id` ascending.
+2. Recipe `_id` ascending as the deterministic tie-break.
 
-The internal normalized title is the stored, already whitespace-normalized
-title transformed to lowercase for the aggregation tie-break. The raw score
-and normalized tie-break field are implementation details: neither is accepted
-from the client nor serialized in a Recipe response.
+The raw score is an implementation detail: it is neither accepted from the
+client nor serialized in a Recipe response. Relevance needs no lowercase-title
+computation or `titleSortKey`.
 
 `sort=relevance` composes with every currently supported Recipe filter and
 with `excludeRecipeId`. All eligibility and filter stages precede scoring,
@@ -319,8 +327,8 @@ sort touched by this endpoint:
 - `prepTimeAsc`: prep time ascending, `_id` ascending;
 - `prepTimeDesc`: prep time descending, `_id` ascending;
 - `updatedDesc`: updated time descending, `_id` ascending;
-- `relevance`: relevance descending, normalized title ascending, `_id`
-  ascending; and
+- `relevance`: full-precision weighted text score descending, `_id` ascending;
+  and
 - `topRated`: raw average descending, rating count descending, `_id`
   ascending.
 
@@ -636,7 +644,10 @@ No fixture, snapshot, helper, configuration, or unrelated test path is
 implicitly allowed.
 
 Backend proof must cover strict query rejection; relevance requiring search;
-title-over-description precedence; exact relevance ties; preservation of regex
+title-over-description precedence; full-precision score descent and exact
+`_id` ascending relevance ties regardless of ASCII, accented, or non-Latin
+titles; no lowercase-title stage or `titleSortKey`; stable repeated pagination
+without duplicate or missing Recipes; preservation of regex
 search for every non-relevance sort; complete current-filter composition;
 strict exclusion; authoritative raw Review average/count aggregation; unrated
 exclusion; Review create/update/delete reflection; exact Top Rated ties;
