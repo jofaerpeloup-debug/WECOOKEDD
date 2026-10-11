@@ -653,6 +653,22 @@ async function findUsableRecipeById(id) {
   return { ...view, ingredients: view.ingredients.map(toUsageSummary) };
 }
 
+async function findConsumerVisibleShoppingSources(ids) {
+  if (!Array.isArray(ids) || ids.length > 200
+    || ids.some((id) => !/^[a-f\d]{24}$/i.test(String(id)))) {
+    throw new TypeError('Invalid Shopping source IDs.');
+  }
+  if (ids.length === 0) return new Map();
+  const recipes = await recipeRepository.findShoppingSourceCandidates(ids);
+  const visible = new Map();
+  for (const recipe of recipes) {
+    if (isUsableForNonAdmin(recipe)) {
+      visible.set(String(recipe._id), { id: String(recipe._id), title: recipe.title });
+    }
+  }
+  return visible;
+}
+
 function totalTimeExpression(bucket) {
   const normalizedPrep = { $ifNull: ['$prepTimeMinutes', 0] };
   const total = { $add: [normalizedPrep, '$cookTimeMinutes'] };
@@ -1031,6 +1047,7 @@ module.exports = {
   createDraft,
   findRecipeById,
   findUsableRecipeById,
+  findConsumerVisibleShoppingSources,
   getRecipeById,
   listRecipes,
   listSmartCollections,

@@ -14,6 +14,7 @@ const SMART_COLLECTION_CANDIDATE_FIELDS = [
   'createdAt', 'updatedAt',
 ].join(' ');
 const SMART_COLLECTION_BATCH_SIZE = 100;
+const SHOPPING_SOURCE_FIELDS = '_id title description difficulty prepTimeMinutes cookTimeMinutes servings ingredients instructions dietaryTags imageUrl imageAssetId region category nutrition nutritionProvenance publicationStatus isActive';
 
 function withIngredientSummaries(query) {
   return query.populate('ingredients.ingredientId', INGREDIENT_SUMMARY_FIELDS);
@@ -33,6 +34,10 @@ function findRawById(id) {
 
 function findByIdWithIngredients(id) {
   return withIngredientSummaries(Recipe.findById(id));
+}
+
+function findShoppingSourceCandidates(ids) {
+  return withIngredientSummaries(Recipe.find({ _id: { $in: ids } }, SHOPPING_SOURCE_FIELDS));
 }
 
 function mutationFilter(id, expectedUpdatedAt) {
@@ -156,6 +161,7 @@ module.exports = {
   createRecipe,
   findRawById,
   findByIdWithIngredients,
+  findShoppingSourceCandidates,
   updateById,
   publishById,
   archiveById,

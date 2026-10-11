@@ -56,6 +56,7 @@ test('getShoppingList lazily gets/creates exactly one list for the given user', 
 });
 
 test('addItem rejects when the ingredient does not exist', async (t) => {
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(ingredientService, 'findIngredientById', async () => null);
 
   await assert.rejects(
@@ -70,6 +71,7 @@ test('addItem rejects when the ingredient does not exist', async (t) => {
 });
 
 test('addItem rejects an inactive ingredient', async (t) => {
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(ingredientService, 'findIngredientById', async (id) => ({ _id: id, name: 'X', isActive: false }));
 
   await assert.rejects(
@@ -401,6 +403,7 @@ function usableRecipe(ingredients) {
 }
 
 test('addRecipeIngredients rejects an unusable/archived recipe', async (t) => {
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
 
   await assert.rejects(
@@ -414,6 +417,7 @@ test('addRecipeIngredients rejects an unusable/archived recipe', async (t) => {
 });
 
 test('addRecipeIngredients propagates an unexpected RecipeService/database failure as-is, never as RECIPE_NOT_FOUND', async (t) => {
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(recipeService, 'findUsableRecipeById', async () => {
     throw new Error('ECONNRESET: mongo connection lost');
   });
@@ -622,6 +626,7 @@ test('getShoppingList propagates an unexpected IngredientService/database failur
 });
 
 test('addItem propagates an unexpected IngredientService/database failure instead of INGREDIENT_NOT_FOUND', async (t) => {
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(ingredientService, 'findIngredientById', async () => {
     throw new Error('mongo timeout');
   });
@@ -881,3 +886,422 @@ test('additive operations do not retry unknown save outcomes', async (t) => {
   assert.equal(find.mock.callCount(), 1);
   assert.equal(save.mock.callCount(), 1);
 });
+test('SHOP5 v1 guard is checked before Ingredient lookup and blocks a mixed snapshot', async (t) => {
+  const list = buildList([{ type: 'custom', label: 'Milk' }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const ingredient = t.mock.method(ingredientService, 'findIngredientById', async () => activeIngredient(CHICKEN_ID));
+  await assert.rejects(() => shoppingListService.addItem(USER_ID, {
+    ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg',
+  }), { statusCode: 426, code: 'SHOPPING_LIST_UPGRADE_REQUIRED' });
+  assert.equal(ingredient.mock.callCount(), 0);
+});
+
+test('SHOP5 pre-insert v1 GET keeps its exact snapshot while the next read reaches 426', async (t) => {
+  const initial = buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]);
+  const mixed = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' },
+    { type: 'custom', label: 'Milk' },
+  ]);
+  let current = initial;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  let startLookup;
+  const lookupStarted = new Promise((resolve) => { startLookup = resolve; });
+  let finishLookup;
+  const lookupResult = new Promise((resolve) => { finishLookup = resolve; });
+  t.mock.method(ingredientService, 'findIngredientById', () => {
+    startLookup();
+    return lookupResult;
+  });
+  const early = shoppingListService.getShoppingList(USER_ID);
+  await lookupStarted;
+  current = mixed;
+  finishLookup({ _id: CHICKEN_ID, name: 'Chicken', isActive: true });
+  const { toPublicShoppingList } = require('../src/modules/shopping-lists/shopping-list.serializer');
+  const publicEarly = toPublicShoppingList(await early);
+  assert.equal(publicEarly.items.length, 1);
+  assert.deepEqual(Object.keys(publicEarly.items[0]).sort(), [
+    'category', 'id', 'ingredient', 'ingredientId', 'isAvailable', 'isChecked',
+    'quantity', 'unit',
+  ]);
+  await assert.rejects(() => shoppingListService.getShoppingList(USER_ID), {
+    statusCode: 426, code: 'SHOPPING_LIST_UPGRADE_REQUIRED',
+  });
+});
+
+test('SHOP5 legacy missing type and origin project as Ingredient with legacy source', async (t) => {
+  const list = buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map());
+  const { toPublicShoppingListV2 } = require('../src/modules/shopping-lists/shopping-list.serializer');
+  const row = toPublicShoppingListV2(await shoppingListService.getShoppingList(USER_ID, true)).items[0];
+  assert.equal(row.type, 'ingredient');
+  assert.deepEqual(row.source, { kind: 'legacy' });
+  assert.equal(row.ingredientId, CHICKEN_ID);
+});
+
+test('SHOP5 unknown persisted row type fails closed', async (t) => {
+  const list = buildList([{
+    type: 'future', ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg',
+  }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  await assert.rejects(() => shoppingListService.getShoppingList(USER_ID, true), {
+    statusCode: 500, code: 'SHOPPING_LIST_INVALID',
+  });
+});
+
+function hydratedShop5List(rows) {
+  return ShoppingList.hydrate({
+    _id: '507f1f77bcf86cd799439080', userId: USER_ID, __v: 0,
+    items: rows.map((row, index) => ({
+      _id: (index + 1000).toString(16).padStart(24, '0'), ...row,
+    })),
+  });
+}
+
+test('SHOP5 rejects malformed raw top-level items on both reads without repair', async (t) => {
+  let current;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => list);
+  const lookup = t.mock.method(ingredientService, 'findIngredientById', async () => activeIngredient(CHICKEN_ID));
+  for (const [name, raw] of [
+    ['missing', {}],
+    ['null', { items: null }],
+    ['object', { items: {} }],
+    ['string', { items: 'invalid' }],
+    ['number', { items: 7 }],
+  ]) {
+    current = ShoppingList.hydrate({
+      _id: '507f1f77bcf86cd799439080', userId: USER_ID, __v: 0, ...raw,
+    });
+    assert.equal(current.$locals.shoppingStoredItemsArray, false, name);
+    const before = JSON.stringify(current.toObject());
+    const modifiedBeforeRead = current.isModified('items');
+    for (const v2 of [false, true]) {
+      await assert.rejects(() => shoppingListService.getShoppingList(USER_ID, v2), {
+        statusCode: 500, code: 'SHOPPING_LIST_INVALID',
+      }, `${name}, v2=${v2}`);
+    }
+    assert.equal(JSON.stringify(current.toObject()), before, name);
+    assert.equal(current.isModified('items'), modifiedBeforeRead, name);
+  }
+  assert.equal(save.mock.callCount(), 0);
+  assert.equal(lookup.mock.callCount(), 0);
+});
+
+test('SHOP5 accepts persisted and newly constructed empty lists on both reads', async (t) => {
+  let current;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  for (const list of [
+    ShoppingList.hydrate({ userId: USER_ID, __v: 0, items: [] }),
+    new ShoppingList({ userId: USER_ID }),
+  ]) {
+    current = list;
+    for (const v2 of [false, true]) {
+      const result = await shoppingListService.getShoppingList(USER_ID, v2);
+      assert.equal(result.shoppingList.items.length, 0);
+    }
+  }
+});
+
+test('SHOP5 accepts 200 stored rows but rejects 201 without changing the document', async (t) => {
+  let current;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => list);
+  const rows = Array.from({ length: 200 }, (_, index) => ({
+    type: 'custom', label: `Item ${index}`, isChecked: false,
+  }));
+  current = hydratedShop5List(rows);
+  assert.equal(current.__v, 0);
+  assert.equal((await shoppingListService.getShoppingList(USER_ID, true)).shoppingList.items.length, 200);
+  current = hydratedShop5List([...rows, { type: 'custom', label: 'Last', isChecked: false }]);
+  const before = JSON.stringify(current.toObject());
+  await assert.rejects(() => shoppingListService.getShoppingList(USER_ID, true), {
+    statusCode: 500, code: 'SHOPPING_LIST_INVALID',
+  });
+  await assert.rejects(() => shoppingListService.getShoppingList(USER_ID), {
+    statusCode: 500, code: 'SHOPPING_LIST_INVALID',
+  });
+  assert.equal(JSON.stringify(current.toObject()), before);
+  assert.equal(save.mock.callCount(), 0);
+});
+
+test('SHOP5 fails closed on malformed hydrated rows before either wire format is built', async (t) => {
+  let current;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => list);
+  const lookup = t.mock.method(ingredientService, 'findIngredientById', async () => activeIngredient(CHICKEN_ID));
+  const validIngredient = { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false };
+  for (const malformed of [
+    { type: 'custom', label: 'Milk' },
+    { type: 'custom', label: 'Milk', isChecked: null },
+    { type: 'custom', label: 'Milk', isChecked: 'invalid' },
+    { type: 'custom', label: 'Milk', isChecked: 1 },
+    { _id: null, type: 'custom', label: 'Milk', isChecked: false },
+    { type: 'custom', label: 'Milk', isChecked: false, ingredientId: null },
+    { type: 'custom', label: 'Milk', isChecked: false, sourceRecipeIds: null },
+    { ingredientId: null, quantity: 1, unit: 'kg', isChecked: false },
+    { ingredientId: CHICKEN_ID, quantity: 1, isChecked: false },
+    { ingredientId: CHICKEN_ID, quantity: -1, unit: 'kg', isChecked: false },
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false,
+      originKind: 'recipe' },
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false,
+      sourceRecipeIds: [] },
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false,
+      originKind: 'recipe', sourceRecipeIds: ['not-an-id'], quantityEdited: false },
+  ]) {
+    current = hydratedShop5List([validIngredient, malformed]);
+    const before = JSON.stringify(current.toObject());
+    for (const v2 of [false, true]) {
+      await assert.rejects(() => shoppingListService.getShoppingList(USER_ID, v2), {
+        statusCode: 500, code: 'SHOPPING_LIST_INVALID',
+      });
+    }
+    assert.equal(JSON.stringify(current.toObject()), before);
+  }
+  assert.equal(lookup.mock.callCount(), 0);
+  assert.equal(save.mock.callCount(), 0);
+});
+
+test('SHOP5 accepts a hydrated legacy Ingredient and a valid sourced Recipe row', async (t) => {
+  const list = hydratedShop5List([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false },
+    { type: 'ingredient', ingredientId: GARLIC_ID, quantity: 2, unit: 'piece',
+      isChecked: true, originKind: 'recipe', sourceRecipeIds: [RECIPE_ID], quantityEdited: false },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map([
+    [RECIPE_ID, { id: RECIPE_ID, title: 'Recipe A' }],
+  ]));
+  const result = await shoppingListService.getShoppingList(USER_ID, true);
+  assert.equal((await shoppingListService.getShoppingList(USER_ID)).shoppingList.items.length, 2);
+  assert.equal(result.shoppingList.__v, 0);
+  const { toPublicShoppingListV2 } = require('../src/modules/shopping-lists/shopping-list.serializer');
+  assert.deepEqual(toPublicShoppingListV2(result).items.map((item) => item.source), [
+    { kind: 'legacy' }, { kind: 'single', title: 'Recipe A', quantityEdited: false },
+  ]);
+});
+
+test('SHOP5 v1 additive retry rechecks the winning custom row', async (t) => {
+  const old = buildList();
+  old.__v = 0;
+  const winning = buildList([{ type: 'custom', label: 'Milk' }]);
+  winning.__v = 1;
+  let reads = 0;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => ++reads === 1 ? old : winning);
+  mockAllIngredientsActive(t);
+  const save = t.mock.method(shoppingListRepository, 'save', async () => { throw versionError(old); });
+  await assert.rejects(() => shoppingListService.addItem(USER_ID, {
+    ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg',
+  }), { statusCode: 426, code: 'SHOPPING_LIST_UPGRADE_REQUIRED' });
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(winning.items.length, 1);
+  assert.equal(winning.items[0].label, 'Milk');
+});
+
+test('SHOP5 v1 Recipe import retry rechecks the winning custom row', async (t) => {
+  const old = buildList();
+  old.__v = 0;
+  const winning = buildList([{ type: 'custom', label: 'Milk' }]);
+  let reads = 0;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => ++reads === 1 ? old : winning);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
+    ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
+  }));
+  const save = t.mock.method(shoppingListRepository, 'save', async () => { throw versionError(old); });
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID), {
+    statusCode: 426, code: 'SHOPPING_LIST_UPGRADE_REQUIRED',
+  });
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(winning.items.length, 1);
+});
+
+test('SHOP5 no-op toTaste add still enters OCC and rechecks a winning custom row', async (t) => {
+  const old = ShoppingList.hydrate(buildList([
+    { ingredientId: CHICKEN_ID, unit: 'toTaste', isChecked: false },
+  ]).toObject());
+  old.__v = 0;
+  assert.equal(old.isModified('items'), false);
+  const winning = buildList([{ type: 'custom', label: 'Milk' }]);
+  let reads = 0;
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => ++reads === 1 ? old : winning);
+  mockAllIngredientsActive(t);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => {
+    assert.equal(list.isModified('items'), true);
+    throw versionError(list);
+  });
+  await assert.rejects(() => shoppingListService.addItem(USER_ID, {
+    ingredientId: CHICKEN_ID, unit: 'toTaste',
+  }), { statusCode: 426, code: 'SHOPPING_LIST_UPGRADE_REQUIRED' });
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('SHOP5 repeated checkbox value still enters versioned persistence', async (t) => {
+  const list = ShoppingList.hydrate(buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false },
+  ]).toObject());
+  list.__v = 0;
+  assert.equal(list.isModified('items'), false);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (doc) => {
+    assert.equal(doc.isModified('items'), true);
+    throw versionError(doc);
+  });
+  await assert.rejects(() => shoppingListService.patchItem(
+    USER_ID, String(list.items[0]._id), { isChecked: false }
+  ), { statusCode: 409, code: 'SHOPPING_LIST_STALE' });
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('SHOP5 empty Clear All still performs an OCC write at version zero', async (t) => {
+  const list = ShoppingList.hydrate(buildList().toObject());
+  list.__v = 0;
+  assert.equal(list.isModified('items'), false);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (doc) => {
+    assert.equal(doc.isModified('items'), true);
+    throw versionError(doc);
+  });
+  await assert.rejects(() => shoppingListService.clearItems(USER_ID), {
+    statusCode: 409, code: 'SHOPPING_LIST_STALE',
+  });
+  assert.equal(save.mock.callCount(), 1);
+});
+
+test('SHOP5 Recipe import records mixed history and projects current visible title', async (t) => {
+  const list = buildList([{ type: 'ingredient', ingredientId: CHICKEN_ID,
+    quantity: 9, unit: 'kg', originKind: 'manual' }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
+    _id: RECIPE_ID, ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
+  }));
+  const visible = t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () =>
+    new Map([[RECIPE_ID, { id: RECIPE_ID, title: 'Recipe A' }]]));
+  mockAllIngredientsActive(t);
+  mockNoSave(t);
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true);
+  const { toPublicShoppingListV2 } = require('../src/modules/shopping-lists/shopping-list.serializer');
+  const row = toPublicShoppingListV2(result).items[0];
+  assert.equal(row.quantity, 10);
+  assert.deepEqual(row.source, { kind: 'single', title: 'Recipe A', quantityEdited: true });
+  assert.equal(visible.mock.callCount(), 1);
+  assert.deepEqual(visible.mock.calls[0].arguments[0], [RECIPE_ID]);
+});
+
+test('SHOP5 two distinct Recipe imports retain multiple:false until a manual edit', async (t) => {
+  const secondId = '507f1f77bcf86cd799439098';
+  const list = buildList();
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockNoSave(t);
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
+    ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
+  }));
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map([
+    [RECIPE_ID, { id: RECIPE_ID, title: 'Recipe A' }],
+    [secondId, { id: secondId, title: 'Recipe B' }],
+  ]));
+  await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true);
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, secondId, true);
+  const { toPublicShoppingListV2 } = require('../src/modules/shopping-lists/shopping-list.serializer');
+  assert.deepEqual(toPublicShoppingListV2(result).items[0].source,
+    { kind: 'multiple', quantityEdited: false });
+  assert.equal(result.shoppingList.items[0].quantity, 2);
+  assert.deepEqual(result.shoppingList.items[0].sourceRecipeIds.map(String), [RECIPE_ID, secondId]);
+});
+
+test('SHOP5 source projection hides all titles if any historical Recipe is unavailable', async (t) => {
+  const secondId = '507f1f77bcf86cd799439098';
+  const hiddenId = '507f1f77bcf86cd799439097';
+  const anotherHiddenId = '507f1f77bcf86cd799439096';
+  const row = (ingredientId, sourceRecipeIds) => ({
+    type: 'ingredient', ingredientId, quantity: 1, unit: 'kg',
+    originKind: 'recipe', sourceRecipeIds, quantityEdited: false,
+  });
+  const list = buildList([
+    row(CHICKEN_ID, [RECIPE_ID]),
+    row(GARLIC_ID, [RECIPE_ID, secondId]),
+    row(SALT_ID, [RECIPE_ID, hiddenId]),
+    row('507f1f77bcf86cd799439014', [hiddenId, anotherHiddenId]),
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map([
+    [RECIPE_ID, { id: RECIPE_ID, title: 'Recipe A' }],
+    [secondId, { id: secondId, title: 'Recipe B' }],
+  ]));
+  const { toPublicShoppingListV2 } = require('../src/modules/shopping-lists/shopping-list.serializer');
+  const publicRows = toPublicShoppingListV2(await shoppingListService.getShoppingList(USER_ID, true)).items;
+  assert.deepEqual(publicRows.map((entry) => entry.source), [
+    { kind: 'single', title: 'Recipe A', quantityEdited: false },
+    { kind: 'multiple', quantityEdited: false },
+    { kind: 'unavailable', quantityEdited: false },
+    { kind: 'unavailable', quantityEdited: false },
+  ]);
+  assert.equal(JSON.stringify(publicRows).includes(hiddenId), false);
+  assert.equal(JSON.stringify(publicRows).includes('Recipe B'), false);
+});
+
+test('SHOP5 source bounds reject the whole Recipe import before save', async (t) => {
+  const ids = Array.from({ length: 200 }, (_, index) => index.toString(16).padStart(24, '0'));
+  const rows = Array.from({ length: 25 }, (_, index) => ({
+    type: 'ingredient', ingredientId: (1000 + index).toString(16).padStart(24, '0'),
+    quantity: 1, unit: 'kg', originKind: 'recipe',
+    sourceRecipeIds: ids.slice(index * 8, index * 8 + 8), quantityEdited: false,
+  }));
+  const list = buildList(rows);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
+    ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
+  }));
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID), {
+    statusCode: 400, code: 'SHOPPING_LIST_SOURCE_LIMIT_EXCEEDED',
+  });
+  assert.equal(save.mock.callCount(), 0);
+});
+
+test('SHOP5 per-row source bound rejects a ninth distinct Recipe before save', async (t) => {
+  const eight = Array.from({ length: 8 }, (_, index) => index.toString(16).padStart(24, '0'));
+  const list = buildList([{
+    type: 'ingredient', ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg',
+    originKind: 'recipe', sourceRecipeIds: eight, quantityEdited: false,
+  }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
+    ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
+  }));
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID), {
+    statusCode: 400, code: 'SHOPPING_LIST_SOURCE_LIMIT_EXCEEDED',
+  });
+  assert.equal(save.mock.callCount(), 0);
+});
+
+for (const [name, execute] of [
+  ['PATCH', (id) => shoppingListService.patchItem(USER_ID, id, { isChecked: true })],
+  ['single delete', (id) => shoppingListService.removeItem(USER_ID, id)],
+  ['zero-checked Clear Checked', () => shoppingListService.clearCheckedItems(USER_ID)],
+  ['Clear All', () => shoppingListService.clearItems(USER_ID)],
+]) {
+  test(`SHOP5 v1 ${name} loses a version-zero race to custom insertion without replay`, async (t) => {
+    const list = buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]);
+    list.__v = 0;
+    const winner = buildList([{ type: 'custom', label: 'Milk' }]);
+    let reads = 0;
+    t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => {
+      reads += 1;
+      return list;
+    });
+    const save = t.mock.method(shoppingListRepository, 'save', async () => {
+      throw versionError(list);
+    });
+    await assert.rejects(() => execute(String(list.items[0]._id)), {
+      statusCode: 409, code: 'SHOPPING_LIST_STALE',
+    });
+    assert.equal(reads, 1);
+    assert.equal(save.mock.callCount(), 1);
+    assert.equal(winner.items[0].label, 'Milk');
+  });
+}

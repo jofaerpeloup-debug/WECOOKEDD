@@ -1992,3 +1992,20 @@ test('duplicate analysis accepts sourced nutrition without creating persistence 
   assert.equal(result.candidates.length, 0);
   assert.match(result.resultDigest, /^[0-9a-f]{64}$/u);
 });
+test('SHOP5 source summaries use one bounded Recipe lookup and omit hidden titles', async (t) => {
+  const visibleId = '507f1f77bcf86cd799439099';
+  const hiddenId = '507f1f77bcf86cd799439098';
+  const lookup = t.mock.method(recipeRepository, 'findShoppingSourceCandidates', async () => [
+    smartRecipe(visibleId, 'Recipe A'),
+    smartRecipe(hiddenId, 'Secret', { isActive: false }),
+  ]);
+  const summaries = await recipeService.findConsumerVisibleShoppingSources([visibleId, hiddenId]);
+  assert.equal(lookup.mock.callCount(), 1);
+  assert.deepEqual(lookup.mock.calls[0].arguments[0], [visibleId, hiddenId]);
+  assert.deepEqual(summaries.get(visibleId), { id: visibleId, title: 'Recipe A' });
+  assert.equal(summaries.has(hiddenId), false);
+  await assert.rejects(() => recipeService.findConsumerVisibleShoppingSources(
+    Array.from({ length: 201 }, () => visibleId)
+  ), TypeError);
+  assert.equal(lookup.mock.callCount(), 1);
+});

@@ -170,3 +170,37 @@ test('patchItemSchema rejects client-supplied category', () => {
   });
   assert.equal(result.success, false);
 });
+
+const acceptedShop5Labels = [["\"Milk\"","Milk"],["\"\\uAE40\\uCE58\"","김치"],["\"\\u5BFF\\u53F8\"","寿司"],["\"Cafe\\u0301\"","Café"],["\"\\u0020Milk\\u00A0\"","Milk"],["\"\\u0645\\u06CC\\u200C\\u0631\\u0648\\u0645\"","می‌روم"],["\"\\uD83C\\uDF4E\"","🍎"],["\"\\uD83D\\uDC69\\u200D\\uD83C\\uDF73\"","👩‍🍳"]];
+const rejectedShop5Labels = ["\"\\u2800\"","\"\\u3164\"","\"\\uFFA0\"","\"\\u115F\"","\"\\u1160\"","\"\\u115F\\u1160\"","\"\\u2800\\u3164\\uFFA0\"","\"\\u0020\\u2800\\u00A0\"","\"Milk\\u2800\"","\"Milk\\u3164\"","\"Milk\\uFFA0\"","\"\\u200B\"","\"Milk\\u200B\"","\"\\u0301\"","\"\\u200D\"","\"A\\u200D\"","\"A\\u200D\\u200DB\"","\"\\u00ADMilk\""];
+
+test('SHOP5 literal Unicode vectors normalize and validate every label', () => {
+  assert.equal(acceptedShop5Labels.length, 8);
+  assert.equal(rejectedShop5Labels.length, 18);
+  const { normalizeCustomLabel } = require('../src/modules/shopping-lists/shopping-list.custom-label');
+  const { v2CreateItemSchema } = require('../src/modules/shopping-lists/shopping-list.validation');
+  for (const [token, expected] of acceptedShop5Labels) {
+    const value = JSON.parse(token);
+    assert.equal(normalizeCustomLabel(value), expected, token);
+    const parsed = v2CreateItemSchema.safeParse({ body: { type: 'custom', label: value }, query: {} });
+    assert.equal(parsed.success, true, token);
+    assert.equal(parsed.data.body.label, expected, token);
+  }
+  for (const token of rejectedShop5Labels) {
+    const value = JSON.parse(token);
+    assert.equal(normalizeCustomLabel(value), null, token);
+    const parsed = v2CreateItemSchema.safeParse({ body: { type: 'custom', label: value }, query: {} });
+    assert.equal(parsed.success, false, token);
+    assert.ok(parsed.error.issues.some((issue) => issue.path.includes('label')), token);
+  }
+});
+
+test('SHOP5 rejects surplus fields, edge joiners, controls, and scalar overflow', () => {
+  const { normalizeCustomLabel } = require('../src/modules/shopping-lists/shopping-list.custom-label');
+  for (const value of ['A\u200D ', 'Milk\u2060', 'Milk\uFEFF', 'Milk\u202E', 'Milk\u0001', 'A'.repeat(81), '', '\uD800']) {
+    assert.equal(normalizeCustomLabel(value), null);
+  }
+  assert.equal(normalizeCustomLabel('A'.repeat(80)), 'A'.repeat(80));
+  const { v2CreateItemSchema } = require('../src/modules/shopping-lists/shopping-list.validation');
+  assert.equal(v2CreateItemSchema.safeParse({ body: { type: 'custom', label: 'Milk', ownerId: VALID_ID }, query: {} }).success, false);
+});

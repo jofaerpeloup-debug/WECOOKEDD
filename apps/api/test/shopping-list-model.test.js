@@ -66,7 +66,86 @@ test('item ingredientId is required and references Ingredient', () => {
   const itemSchema = ShoppingList.schema.path('items').schema;
   const path = itemSchema.path('ingredientId');
   assert.equal(path.options.ref, 'Ingredient');
-  assert.equal(path.options.required, true);
+  assert.equal(path.options.required.call({ type: undefined }), true);
+  assert.equal(path.options.required.call({ type: 'custom' }), false);
+});
+
+test('SHOP5 custom rows have server IDs and no fabricated Ingredient fields', async () => {
+  const valid = baseList({ items: [{ type: 'custom', label: 'Milk' }] });
+  await assert.doesNotReject(() => valid.validate());
+  assert.ok(valid.items[0]._id);
+  assert.equal(valid.items[0].ingredientId, undefined);
+  assert.equal(valid.items[0].unit, undefined);
+  const invalid = baseList({ items: [{ type: 'custom', label: 'Milk', ingredientId: INGREDIENT_ID }] });
+  await assert.rejects(() => invalid.validate());
+});
+
+test('SHOP5 rejects every present Custom cross-type field, including null', async () => {
+  const forbidden = {
+    ingredientId: INGREDIENT_ID,
+    quantity: 1,
+    unit: 'kg',
+    originKind: 'recipe',
+    sourceRecipeIds: [INGREDIENT_ID],
+    quantityEdited: false,
+  };
+  for (const [field, value] of Object.entries(forbidden)) {
+    for (const present of [null, value]) {
+      const list = baseList({ items: [{ type: 'custom', label: 'Milk', [field]: present }] });
+      await assert.rejects(() => list.validate(), `${field}: ${String(present)}`);
+    }
+  }
+  await assert.doesNotReject(() => baseList({ items: [{ type: 'custom', label: 'Milk' }] }).validate());
+});
+
+test('SHOP5 recipe origin requires a source and valid legacy rows remain valid', async () => {
+  await assert.rejects(() => baseList({ items: [{
+    type: 'ingredient', ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg', originKind: 'recipe',
+  }] }).validate());
+  await assert.doesNotReject(() => baseList({ items: [{
+    type: 'ingredient', ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg',
+    originKind: 'recipe', sourceRecipeIds: [INGREDIENT_ID], quantityEdited: false,
+  }] }).validate());
+  await assert.doesNotReject(() => baseList({ items: [{
+    ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg',
+  }] }).validate());
+  await assert.rejects(() => baseList({ items: [{
+    ingredientId: INGREDIENT_ID, quantity: 1, unit: 'kg', sourceRecipeIds: [],
+  }] }).validate());
+});
+
+test('SHOP5 hydration records missing and uncastable stored checked values before defaults', () => {
+  const raw = (item) => ShoppingList.hydrate({
+    userId: USER_ID, __v: 0, items: [{ _id: INGREDIENT_ID, type: 'custom', label: 'Milk', ...item }],
+  }).items[0];
+  assert.equal(raw({ isChecked: false }).$locals.shoppingStoredShapeValid, true);
+  assert.equal(raw({}).isChecked, false);
+  assert.equal(raw({}).$locals.shoppingStoredShapeValid, false);
+  assert.equal(raw({ isChecked: 'invalid' }).$locals.shoppingStoredShapeValid, false);
+  assert.equal(raw({ isChecked: null }).$locals.shoppingStoredShapeValid, false);
+});
+
+test('SHOP5 parent hydration keeps raw items-array validity despite defaults and casts', () => {
+  const cases = [
+    ['missing', {}, false],
+    ['null', { items: null }, false],
+    ['object', { items: {} }, false],
+    ['string', { items: 'invalid' }, false],
+    ['number', { items: 7 }, false],
+    ['array', { items: [] }, true],
+  ];
+  for (const [name, raw, valid] of cases) {
+    const list = ShoppingList.hydrate({ userId: USER_ID, __v: 0, ...raw });
+    assert.equal(list.$locals.shoppingStoredItemsArray, valid, name);
+    assert.equal(list.isNew, false, name);
+    assert.equal(list.__v, 0, name);
+    assert.equal(Object.hasOwn(list.toObject(), 'shoppingStoredItemsArray'), false, name);
+    if (name === 'missing') assert.deepEqual(list.items.toObject(), []);
+    if (name === 'object') assert.equal(Array.isArray(list.items), true);
+  }
+  const fresh = new ShoppingList({ userId: USER_ID });
+  assert.equal(Object.hasOwn(fresh.$locals, 'shoppingStoredItemsArray'), false);
+  assert.deepEqual(fresh.items.toObject(), []);
 });
 
 test('item unit is constrained to the shared measurement-unit enum', () => {

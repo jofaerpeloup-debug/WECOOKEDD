@@ -42,6 +42,12 @@ export function getShoppingListErrorMessage(err, fallback = FALLBACK) {
   switch (err.code) {
     case 'SHOPPING_LIST_LIMIT_EXCEEDED':
       return 'Your shopping list is full (200 items). Remove some items first.';
+    case 'SHOPPING_LIST_SOURCE_LIMIT_EXCEEDED':
+      return 'This recipe would exceed the shopping list source limit.';
+    case 'SHOPPING_LIST_SERVER_UPGRADE_REQUIRED':
+      return 'Update WeCooked server to use this shopping list.';
+    case 'SHOPPING_LIST_UPGRADE_REQUIRED':
+      return 'Update WeCooked to use this shopping list.';
     case 'RECIPE_NOT_FOUND':
       return 'This recipe isn’t available anymore.';
     case 'SHOPPING_LIST_ITEM_NOT_FOUND':

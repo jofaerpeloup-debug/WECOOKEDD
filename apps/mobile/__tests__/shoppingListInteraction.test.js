@@ -41,6 +41,100 @@ jest.mock('react-native', () => {
   };
 });
 
+it('adds a custom row once from an inline draft and keeps exact server state', async () => {
+  shoppingListService.getShoppingList.mockResolvedValue(list([]));
+  const request = deferred();
+  shoppingListService.addCustomItem.mockReturnValue(request.promise);
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Custom item name')).toBeOnTheScreen());
+  fireEvent.changeText(view.getByLabelText('Custom item name'), ' Milk ');
+  fireEvent.press(view.getByLabelText('Add custom item'));
+  fireEvent.press(view.getByLabelText('Add custom item'));
+  expect(shoppingListService.addCustomItem).toHaveBeenCalledTimes(1);
+  expect(shoppingListService.addCustomItem).toHaveBeenCalledWith('Milk');
+  await settle(request, 'resolve', list([{ id: 'custom-1', type: 'custom', label: 'Milk', isChecked: false }]));
+  expect(view.getByLabelText('Custom item name').props.value).toBe('');
+  expect(view.getByLabelText('Check Milk')).toBeOnTheScreen();
+  expect(view.queryByLabelText('Edit quantity and unit for Milk')).toBeNull();
+});
+
+it('keeps the custom draft on invalid input and a failed server mutation', async () => {
+  shoppingListService.getShoppingList.mockResolvedValue(list([]));
+  shoppingListService.addCustomItem.mockRejectedValue(new Error('Shopping list changed elsewhere.'));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Custom item name')).toBeOnTheScreen());
+  fireEvent.changeText(view.getByLabelText('Custom item name'), '\u2800');
+  fireEvent.press(view.getByLabelText('Add custom item'));
+  expect(shoppingListService.addCustomItem).not.toHaveBeenCalled();
+  expect(view.getByLabelText('Custom item name').props.value).toBe('\u2800');
+  fireEvent.changeText(view.getByLabelText('Custom item name'), 'Bread');
+  fireEvent.press(view.getByLabelText('Add custom item'));
+  await waitFor(() => expect(view.getByText('Shopping list changed elsewhere.')).toBeOnTheScreen());
+  expect(view.getByLabelText('Custom item name').props.value).toBe('Bread');
+});
+
+it('shows only truthful Recipe source copy and groups custom rows last', async () => {
+  shoppingListService.getShoppingList.mockResolvedValue(list([
+    item({ source: { kind: 'single', title: 'Recipe A', quantityEdited: true } }),
+    { id: 'custom-1', type: 'custom', label: 'Bread', isChecked: false },
+  ]));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByText('Includes Recipe A')).toBeOnTheScreen());
+  expect(view.getByText('Amount manually adjusted or mixed')).toBeOnTheScreen();
+  expect(view.getByText('Custom Items')).toBeOnTheScreen();
+  expect(view.getByLabelText('Check Bread')).toBeOnTheScreen();
+  expect(view.queryByLabelText('Edit quantity and unit for Bread')).toBeNull();
+});
+
+it.each([
+  ['network', Object.assign(new Error('offline'), { kind: 'network' })],
+  ['server 5xx', Object.assign(new Error('server unavailable'), { status: 503 })],
+  ['malformed 2xx', Object.assign(new Error('malformed'), { code: 'INVALID_RESPONSE', status: 502 })],
+])('SHOP5 revokes mutation capability after a failed v2 GET: %s', async (_label, failedGet) => {
+  const first = deferred();
+  shoppingListService.getShoppingList
+    .mockReturnValueOnce(first.promise)
+    .mockRejectedValueOnce(failedGet)
+    .mockResolvedValue(list([]));
+  shoppingListService.addCustomItem.mockResolvedValue(
+    list([{ id: 'custom-1', type: 'custom', label: 'Milk', isChecked: false }])
+  );
+  render(<ShoppingListProvider><ShoppingListObserver /></ShoppingListProvider>);
+  await settle(first, 'resolve', list([]));
+  await waitFor(() => expect(observedShoppingList.isReady).toBe(true));
+  await act(async () => { await observedShoppingList.reload(); });
+  const blocked = await observedShoppingList.addCustomItem('Milk');
+  expect(blocked.ok).toBe(false);
+  expect(shoppingListService.addCustomItem).not.toHaveBeenCalled();
+  await act(async () => { await observedShoppingList.reload(); });
+  const allowed = await observedShoppingList.addCustomItem('Milk');
+  expect(allowed.ok).toBe(true);
+  expect(shoppingListService.addCustomItem).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ['same-user relogin', 'user-a'],
+  ['account switch', 'user-b'],
+])('SHOP5 clears a custom draft on %s', async (_case, nextUser) => {
+  shoppingListService.getShoppingList.mockResolvedValue(list([]));
+  const view = renderScreen();
+  await waitFor(() => expect(view.getByLabelText('Custom item name')).toBeOnTheScreen());
+  fireEvent.changeText(view.getByLabelText('Custom item name'), 'Bread');
+  mockAuth = {
+    status: 'authenticated',
+    user: { id: nextUser },
+    sessionIdentity: { ownerId: nextUser, generation: 2, localSessionRevision: 2 },
+  };
+  view.rerender(
+    <ShoppingListProvider>
+      <ShoppingListObserver />
+      <ShoppingListScreen navigation={{ goBack: jest.fn() }} />
+    </ShoppingListProvider>
+  );
+  await waitFor(() => expect(view.getByLabelText('Custom item name').props.value).toBe(''));
+  expect(shoppingListService.addCustomItem).not.toHaveBeenCalled();
+});
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
@@ -79,6 +173,7 @@ let mockAuth = {
 jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../src/api/shoppingListService', () => ({
   addItem: jest.fn(),
+  addCustomItem: jest.fn(),
   addRecipe: jest.fn(),
   clearCheckedItems: jest.fn(),
   clearItems: jest.fn(),
@@ -115,6 +210,8 @@ function deferred() {
 function item(overrides = {}) {
   return {
     id: 'item-a',
+    type: 'ingredient',
+    source: { kind: 'legacy' },
     ingredientId: 'ingredient-1',
     ingredient: { id: 'ingredient-1', name: 'Rice' },
     category: 'grain',
@@ -210,7 +307,7 @@ it('opens the exact item, prefills measurable values, and reconciles the full se
   fireEvent(view.getByLabelText('Save item changes'), 'accessibilityTap');
   fireEvent(view.getByLabelText('Save item changes'), 'accessibilityTap');
   expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1);
-  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { quantity: 2.5, unit: 'cup' });
+  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { type: 'ingredient', quantity: 2.5, unit: 'cup' });
   expect(view.getByLabelText('Save item changes').props.accessibilityState).toEqual({ disabled: true, busy: true });
   expect(view.getByText('2 kg')).toBeOnTheScreen();
 
@@ -300,7 +397,7 @@ it('keeps same-ingredient rows independent by Shopping item id', async () => {
   expect(view.getByLabelText('piece unit').props.accessibilityState.selected).toBe(true);
   fireEvent.changeText(view.getByLabelText('Quantity'), '5');
   fireEvent(view.getByLabelText('Save item changes'), 'accessibilityTap');
-  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-b', { quantity: 5, unit: 'piece' }));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-b', { type: 'ingredient', quantity: 5, unit: 'piece' }));
 });
 
 it('Cancel and Close discard drafts without mutation', () => {
@@ -389,7 +486,7 @@ it('keeps check, unavailable removal, clear-all, grouping, and focus reload beha
   expect(view.getByText('Category unavailable')).toBeOnTheScreen();
   expect(view.queryByLabelText('Edit quantity and unit for Unavailable ingredient')).toBeNull();
   fireEvent.press(view.getByLabelText('Check Rice'));
-  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { isChecked: true }));
+  await waitFor(() => expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { type: 'ingredient', isChecked: true }));
   expect(view.queryByText('Edit Shopping Item')).toBeNull();
 
   fireEvent.press(view.getByLabelText('Edit shopping list'));
@@ -543,7 +640,7 @@ it('does not let an unmounted edit response affect a remounted screen or its ope
   fireEvent.press(oldView.getByLabelText('Edit quantity and unit for Rice'));
   fireEvent.changeText(oldView.getByLabelText('Quantity'), '6');
   fireEvent(oldView.getByLabelText('Save item changes'), 'accessibilityTap');
-  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { quantity: 6, unit: 'kg' });
+  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { type: 'ingredient', quantity: 6, unit: 'kg' });
   oldView.unmount();
 
   currentServerList = list([remountedItem]);
@@ -636,7 +733,7 @@ it('keeps checkbox taps usable when a vertical gesture does not claim the row', 
   fireEvent.press(view.getByLabelText('Check Rice'));
 
   await waitFor(() => expect(shoppingListService.updateItem)
-    .toHaveBeenCalledWith('item-a', { isChecked: true }));
+    .toHaveBeenCalledWith('item-a', { type: 'ingredient', isChecked: true }));
   expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen();
 });
 
@@ -684,7 +781,7 @@ it('serializes same-frame conflicting mounted actions before React can rerender'
   });
 
   expect(shoppingListService.updateItem).toHaveBeenCalledTimes(1);
-  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { isChecked: true });
+  expect(shoppingListService.updateItem).toHaveBeenCalledWith('item-a', { type: 'ingredient', isChecked: true });
   await settle(mutation, 'resolve', list([{ ...rice, isChecked: true }]));
   expect(view.getByLabelText('Uncheck Rice')).toBeOnTheScreen();
 });
@@ -923,6 +1020,7 @@ describe('locked substitute picker', () => {
         <SwapDetailScreen navigation={{ goBack: jest.fn() }} route={route} />
       </ShoppingListProvider>
     );
+    await act(async () => { await Promise.resolve(); });
     fireEvent.press(view.getByText('Add Substitute to Shopping'));
     expect(view.getByText('Locked catalog ingredient')).toBeOnTheScreen();
     fireEvent.press(view.getByLabelText('tbsp unit'));

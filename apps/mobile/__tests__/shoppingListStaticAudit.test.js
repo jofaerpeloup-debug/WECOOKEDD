@@ -1,13 +1,38 @@
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const SRC = path.join(__dirname, '../src');
-const SHOP3_ALLOWLIST = new Set([
+const REPO = path.resolve(__dirname, '../../..');
+const SHOP4_BASELINE = '18c79c3e7630f784ed2d3bc2e919f5c1072218ad';
+const SHOP5_FREEZE = '7d66ce8a02c476266e234da84f601abaceb14a90';
+const FROZEN_CONTRACT = 'docs/milestones/MOBILE-SHOP5-custom-shopping-items-recipe-provenance.md';
+const SHOP5_ALLOWLIST = new Set([
+  'apps/api/src/modules/shopping-lists/shopping-list.model.js',
+  'apps/api/src/modules/shopping-lists/shopping-list.validation.js',
+  'apps/api/src/modules/shopping-lists/shopping-list.service.js',
+  'apps/api/src/modules/shopping-lists/shopping-list.serializer.js',
+  'apps/api/src/modules/shopping-lists/shopping-list.controller.js',
+  'apps/api/src/modules/shopping-lists/shopping-list.routes.js',
+  'apps/api/src/modules/shopping-lists/shopping-list.custom-label.js',
+  'apps/api/src/modules/recipes/recipe.service.js',
+  'apps/api/src/modules/recipes/recipe.repository.js',
+  'apps/mobile/src/api/shoppingListService.js',
+  'apps/mobile/src/api/shoppingListErrors.js',
   'apps/mobile/src/context/ShoppingListContext.js',
   'apps/mobile/src/screens/ShoppingListScreen.js',
-  'apps/mobile/src/components/ShoppingItemEditModal.js',
+  'apps/mobile/src/utils/shoppingListGrouping.js',
+  'apps/mobile/src/utils/shoppingCustomLabel.js',
   'apps/mobile/__tests__/shoppingListStaticAudit.test.js',
   'apps/mobile/__tests__/shoppingListInteraction.test.js',
+  'apps/mobile/__tests__/shoppingListService.test.js',
+  'apps/mobile/__tests__/shoppingListGrouping.test.js',
+  'apps/api/test/shopping-list-model.test.js',
+  'apps/api/test/shopping-list-validation.test.js',
+  'apps/api/test/shopping-list-service.test.js',
+  'apps/api/test/shopping-list-routes.test.js',
+  'apps/api/test/shopping-list-mongo.test.js',
+  'apps/api/test/recipe-service.test.js',
 ]);
 const read = (relativePath) => fs.readFileSync(path.join(SRC, relativePath), 'utf8');
 const stripComments = (source) => source
@@ -43,16 +68,30 @@ function region(start, end) {
   return uniqueRegion(code, start, end);
 }
 
-function assertShop3TrackedScope(paths) {
-  const outsideAllowlist = paths.filter((file) => !SHOP3_ALLOWLIST.has(file.replace(/\\/g, '/')));
+function assertShop5Scope(paths) {
+  const outsideAllowlist = paths.filter((file) => !SHOP5_ALLOWLIST.has(file.replace(/\\/g, '/')));
   if (outsideAllowlist.length > 0) {
-    throw new Error(`SHOP3 tracked scope drift: ${outsideAllowlist.join(', ')}`);
+    throw new Error(`SHOP5 scope drift: ${outsideAllowlist.join(', ')}`);
   }
 }
 
 function trackedPathsFromNameStatus(output) {
   return output.trim().split(/\r?\n/).filter(Boolean)
     .flatMap((line) => line.split('\t').slice(1));
+}
+
+function changedShop5Paths(committed, working, untracked) {
+  const frozenPaths = trackedPathsFromNameStatus(committed);
+  expect(frozenPaths.filter((file) => file === FROZEN_CONTRACT)).toHaveLength(1);
+  return [...new Set([
+    ...frozenPaths.filter((file) => file !== FROZEN_CONTRACT),
+    ...trackedPathsFromNameStatus(working),
+    ...untracked.split('\0').filter(Boolean),
+  ])];
+}
+
+function git(...args) {
+  return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' });
 }
 
 describe('Shopping List authoritative bindings', () => {
@@ -64,7 +103,7 @@ describe('Shopping List authoritative bindings', () => {
     ]) {
       expect(bindings).toMatch(new RegExp(`\\b${name}\\b`));
     }
-    expect(code).toMatch(/setChecked\(item\.id, !item\.isChecked\)/);
+    expect(code).toMatch(/setChecked\(item\.id, !item\.isChecked, item\.type\)/);
     expect(code).toMatch(/removeItem\(item\.id\)/);
   });
 
@@ -72,12 +111,14 @@ describe('Shopping List authoritative bindings', () => {
     const updateItem = uniqueRegion(contextCode, 'const updateItem = useCallback(', 'const removeItem = useCallback(');
     expect(updateItem).toMatch(/\(itemId, \{ quantity, unit \}\) =>/);
     expect(updateItem).toMatch(/runMutation\(\{ type: 'updateItem', itemId \}/);
-    expect(updateItem).toMatch(/shoppingListService\.updateItem\(itemId, \{ quantity, unit \}\)/);
+    expect(updateItem).toMatch(/shoppingListService\.updateItem\(itemId, \{ type: 'ingredient', quantity, unit \}\)/);
     expect(updateItem).not.toMatch(/setList|ingredientId|category|isChecked/);
   });
 
-  it('does not create free-text, mock, local, or duplicate list authority', () => {
-    expect(code).not.toMatch(/TextInput|addCustom|setItems|AsyncStorage|mockData|ShoppingListProvider/);
+  it('keeps custom entry on the authoritative context without local list authority', () => {
+    expect(code).toMatch(/<TextInput[\s\S]*?accessibilityLabel="Custom item name"/);
+    expect(code).toMatch(/await addCustomItem\(label\)/);
+    expect(code).not.toMatch(/setItems|AsyncStorage|mockData|ShoppingListProvider/);
     expect(code).not.toMatch(/ingredientId:\s*(name|genId)|\bgenId\(/);
     expect(groupingCode).not.toMatch(/ingredient\?*\.name|ingredientId|mockData|CAT_HINTS|\bother\b/);
   });
@@ -247,17 +288,23 @@ describe('Shopping List identity, states, and navigation', () => {
 });
 
 describe('SHOP3 bounded edit wiring and invariants', () => {
-  it('keeps the frozen SHOP3 scope predicate strict', () => {
-    // Later merged milestones legitimately changed other paths. Check the
-    // historical predicate with a bounded fixture; integration scope is
-    // verified against current main separately.
-    const changedTrackedPaths = [...SHOP3_ALLOWLIST];
-
-    expect(() => assertShop3TrackedScope(changedTrackedPaths)).not.toThrow();
-    expect(() => assertShop3TrackedScope([
-      ...changedTrackedPaths,
-      'apps/mobile/src/api/shoppingListService.js',
-    ])).toThrow('SHOP3 tracked scope drift: apps/mobile/src/api/shoppingListService.js');
+  it('keeps the frozen SHOP5 path allowlist strict', () => {
+    expect(() => git('merge-base', '--is-ancestor', SHOP4_BASELINE, 'HEAD')).not.toThrow();
+    expect(() => git('merge-base', '--is-ancestor', SHOP5_FREEZE, 'HEAD')).not.toThrow();
+    expect(git('diff', SHOP5_FREEZE, 'HEAD', '--', FROZEN_CONTRACT)).toBe('');
+    const paths = changedShop5Paths(
+      git('diff', '--name-status', '--no-renames', SHOP4_BASELINE, 'HEAD'),
+      git('diff', '--name-status', '--no-renames', 'HEAD'),
+      git('ls-files', '--others', '--exclude-standard', '-z'),
+    );
+    expect(paths).toContain('apps/api/src/modules/shopping-lists/shopping-list.custom-label.js');
+    expect(paths).toContain('apps/mobile/src/utils/shoppingCustomLabel.js');
+    expect(() => assertShop5Scope(paths)).not.toThrow();
+    expect(() => assertShop5Scope(changedShop5Paths(
+      `A\t${FROZEN_CONTRACT}\nA\tapps/mobile/src/api/client.js`, '', ''
+    ))).toThrow('SHOP5 scope drift: apps/mobile/src/api/client.js');
+    expect(() => assertShop5Scope(['apps/mobile/src/api/client.js']))
+      .toThrow('SHOP5 scope drift: apps/mobile/src/api/client.js');
   });
 
   it('rejects an out-of-allowlist tracked deletion', () => {
@@ -265,13 +312,14 @@ describe('SHOP3 bounded edit wiring and invariants', () => {
       'D\tapps/mobile/src/api/shoppingListService.js'
     );
 
-    expect(() => assertShop3TrackedScope(deletedTrackedPaths))
-      .toThrow('SHOP3 tracked scope drift: apps/mobile/src/api/shoppingListService.js');
+    expect(() => assertShop5Scope(deletedTrackedPaths)).not.toThrow();
+    expect(() => assertShop5Scope(['apps/mobile/src/components/ShoppingItemEditModal.js']))
+      .toThrow('SHOP5 scope drift: apps/mobile/src/components/ShoppingItemEditModal.js');
   });
 
   it('opens only available rows by embedded item id and keeps checkbox/remove controls separate', () => {
     const row = region('function ItemRow', 'export default function ShoppingListScreen');
-    const editControl = uniqueRegion(row, '{!editing && available ? (', ') : null}');
+    const editControl = uniqueRegion(row, "{!editing && available && item.type === 'ingredient' ? (", ') : null}');
     expect(editControl).toMatch(/onPress=\{onEdit\}/);
     expect(editControl).toMatch(/Edit quantity and unit for \$\{primary\}/);
     expect(row).toMatch(/onPress=\{editing \? onRemove : onToggle\}/);
@@ -316,7 +364,7 @@ describe('SHOP3 bounded edit wiring and invariants', () => {
 
   it('rejects out-of-scope Shopping authority and feature additions in bounded production files', () => {
     const bounded = `${code}\n${contextCode}\n${editModalCode}`;
-    expect(bounded).not.toMatch(/AsyncStorage|addCustom|CAT_HINTS|clearCompleted|drag|reorder|barcode|pricing|budget/);
+    expect(bounded).not.toMatch(/AsyncStorage|CAT_HINTS|clearCompleted|drag|reorder|barcode|pricing|budget/);
     expect(editModalCode).not.toMatch(/shoppingListService|ingredientService|setList|setItems/);
     expect(editModalCode).not.toMatch(/ingredientId\s*:|category\s*:|isChecked\s*:/);
   });
@@ -328,7 +376,7 @@ describe('SHOP4 strict authority, concurrency, and gesture boundaries', () => {
     expect(serviceCode).toMatch(/Object\.keys\(value\)\.sort\(\)\.join/);
     expect(serviceCode).toMatch(/throw invalidResponse\(\)/);
     expect(serviceCode).not.toMatch(/Array\.isArray\(r\.items\) \? r\.items : \[\]/);
-    expect(serviceCode.match(/\.then\(parseShoppingListResponse\)/g)).toHaveLength(7);
+    expect(serviceCode.match(/\.then\(parseShoppingListResponse\)/g)).toHaveLength(8);
   });
 
   it('uses exact delete idempotency and guarded stale or ambiguous reconciliation without replay', () => {

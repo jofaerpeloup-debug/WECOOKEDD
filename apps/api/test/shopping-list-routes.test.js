@@ -249,6 +249,7 @@ test('POST /api/v1/shopping-list/items merges into an existing same-ingredient+s
 
 test('POST /api/v1/shopping-list/items returns 404 INGREDIENT_NOT_FOUND for an unknown ingredient', async (t) => {
   mockAuth(t);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(ingredientRepository, 'findById', async () => null);
 
   const response = await request(app)
@@ -262,6 +263,7 @@ test('POST /api/v1/shopping-list/items returns 404 INGREDIENT_NOT_FOUND for an u
 
 test('POST /api/v1/shopping-list/items returns 400 INGREDIENT_INACTIVE for an archived ingredient', async (t) => {
   mockAuth(t);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(ingredientRepository, 'findById', async (id) => ({ _id: id, name: 'X', isActive: false }));
 
   const response = await request(app)
@@ -668,6 +670,7 @@ test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable 
 
 test('POST /api/v1/shopping-list/recipes/:recipeId returns 404 RECIPE_NOT_FOUND for an archived recipe', async (t) => {
   mockAuth(t);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
     _id: RECIPE_ID,
     title: 'Chicken Adobo',
@@ -691,6 +694,207 @@ test('POST /api/v1/shopping-list/recipes/:recipeId returns 404 RECIPE_NOT_FOUND 
 
   assert.equal(response.status, 404);
   assert.equal(response.body.error.code, 'RECIPE_NOT_FOUND');
+});
+
+test('v2 creates distinct custom rows and v1 reaches the upgrade wall', async (t) => {
+  mockAuth(t);
+  const list = buildList();
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockNoSave(t);
+  const url = '/api/v1/shopping-list';
+  const auth = { Authorization: `Bearer ${token()}` };
+  for (let i = 0; i < 2; i += 1) {
+    const added = await request(app).post(`${url}/v2/items`).set(auth)
+      .send({ type: 'custom', label: ' Milk ' });
+    assert.equal(added.status, 200);
+    assert.equal(added.body.data.shoppingListFormat, 2);
+  }
+  assert.equal(list.items.length, 2);
+  assert.notEqual(String(list.items[0]._id), String(list.items[1]._id));
+  assert.deepEqual(list.items.map((item) => item.label), ['Milk', 'Milk']);
+  const v1 = await request(app).get(url).set(auth);
+  assert.equal(v1.status, 426);
+  assert.equal(v1.body.error.code, 'SHOPPING_LIST_UPGRADE_REQUIRED');
+  const v2 = await request(app).get(`${url}/v2`).set(auth);
+  assert.equal(v2.status, 200);
+  assert.deepEqual(Object.keys(v2.body.data).sort(), ['shoppingList', 'shoppingListFormat']);
+  assert.deepEqual(Object.keys(v2.body.data.shoppingList.items[0]).sort(),
+    ['id', 'isChecked', 'label', 'type']);
+});
+
+test('SHOP5 v2 Ingredient create and tagged PATCH keep the exact source variant', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  const list = buildList();
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockNoSave(t);
+  const auth = { Authorization: `Bearer ${token()}` };
+  const created = await request(app).post('/api/v1/shopping-list/v2/items').set(auth)
+    .send({ type: 'ingredient', ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' });
+  assert.equal(created.status, 200);
+  const row = created.body.data.shoppingList.items[0];
+  assert.equal(row.type, 'ingredient');
+  assert.deepEqual(row.source, { kind: 'manual' });
+  assert.deepEqual(Object.keys(row).sort(), [
+    'category', 'id', 'ingredient', 'ingredientId', 'isAvailable', 'isChecked',
+    'quantity', 'source', 'type', 'unit',
+  ]);
+  const changed = await request(app).patch(`/api/v1/shopping-list/v2/items/${row.id}`).set(auth)
+    .send({ type: 'ingredient', isChecked: true });
+  assert.equal(changed.status, 200);
+  assert.equal(changed.body.data.shoppingList.items[0].isChecked, true);
+  const mismatch = await request(app).patch(`/api/v1/shopping-list/v2/items/${row.id}`).set(auth)
+    .send({ type: 'custom', isChecked: false });
+  assert.equal(mismatch.status, 400);
+});
+
+test('v2 custom patch is strict and clear checked preserves unchecked rows', async (t) => {
+  mockAuth(t);
+  const list = buildList([
+    { type: 'custom', label: 'Milk', isChecked: false },
+    { type: 'custom', label: 'Bread', isChecked: false },
+  ]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  mockNoSave(t);
+  const auth = { Authorization: `Bearer ${token()}` };
+  const id = String(list.items[0]._id);
+  const bad = await request(app).patch(`/api/v1/shopping-list/v2/items/${id}`).set(auth)
+    .send({ type: 'custom', isChecked: true, quantity: 1 });
+  assert.equal(bad.status, 400);
+  const selected = await request(app).get('/api/v1/shopping-list/v2?ownerId=other').set(auth);
+  assert.equal(selected.status, 400);
+  const fabricatedId = await request(app).post('/api/v1/shopping-list/v2/items').set(auth)
+    .send({ type: 'custom', label: 'Tea', _id: id });
+  assert.equal(fabricatedId.status, 400);
+  const checked = await request(app).patch(`/api/v1/shopping-list/v2/items/${id}`).set(auth)
+    .send({ type: 'custom', isChecked: true });
+  assert.equal(checked.status, 200);
+  const cleared = await request(app).delete('/api/v1/shopping-list/v2/items/checked').set(auth);
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.data.shoppingList.items.length, 1);
+  assert.equal(cleared.body.data.shoppingList.items[0].label, 'Bread');
+  const all = await request(app).delete('/api/v1/shopping-list/v2/items').set(auth);
+  assert.equal(all.status, 200);
+  assert.deepEqual(all.body.data.shoppingList.items, []);
+  const legacy = await request(app).get('/api/v1/shopping-list').set(auth);
+  assert.equal(legacy.status, 200);
+  assert.deepEqual(legacy.body.data.shoppingList.items, []);
+});
+
+test('SHOP5 valid legacy requests reach 426 on every v1 Shopping route with a custom row', async (t) => {
+  mockAuth(t);
+  const list = buildList([{ type: 'custom', label: 'Milk' }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const auth = { Authorization: `Bearer ${token()}` };
+  const root = '/api/v1/shopping-list';
+  const calls = [
+    ['get', root],
+    ['post', `${root}/items`, { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }],
+    ['patch', `${root}/items/${CHICKEN_ID}`, { isChecked: true }],
+    ['delete', `${root}/items/${CHICKEN_ID}`],
+    ['delete', `${root}/items/checked`],
+    ['delete', `${root}/items`],
+    ['post', `${root}/recipes/${RECIPE_ID}`],
+  ];
+  for (const [method, url, body] of calls) {
+    let call = request(app)[method](url).set(auth);
+    if (body) call = call.send(body);
+    const response = await call;
+    assert.equal(response.status, 426, `${method} ${url}`);
+    assert.equal(response.body.error.code, 'SHOPPING_LIST_UPGRADE_REQUIRED');
+  }
+  assert.equal(list.items.length, 1);
+});
+
+test('SHOP5 v1 add reports 426 after a proven version-zero race with Custom insertion', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  const original = buildList();
+  original.__v = 0;
+  const winner = buildList([{ type: 'custom', label: 'Milk', isChecked: false }]);
+  let current = original;
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => {
+    current = winner;
+    throw new ShoppingList.base.Error.VersionError(list, 0, ['items']);
+  });
+  const response = await request(app).post('/api/v1/shopping-list/items')
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' });
+  assert.equal(response.status, 426);
+  assert.equal(response.body.error.code, 'SHOPPING_LIST_UPGRADE_REQUIRED');
+  assert.equal(find.mock.callCount(), 2);
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(winner.items.length, 1);
+  assert.equal(winner.items[0].type, 'custom');
+});
+
+test('SHOP5 v1 destructive write reports 409 without replay after Custom insertion', async (t) => {
+  mockAuth(t);
+  const original = buildList([{
+    ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false,
+  }]);
+  original.__v = 0;
+  const itemId = String(original.items[0]._id);
+  const winner = buildList([
+    { ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg', isChecked: false },
+    { type: 'custom', label: 'Milk', isChecked: false },
+  ]);
+  let current = original;
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => current);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => {
+    current = winner;
+    throw new ShoppingList.base.Error.VersionError(list, 0, ['items']);
+  });
+  const response = await request(app).patch(`/api/v1/shopping-list/items/${itemId}`)
+    .set('Authorization', `Bearer ${token()}`).send({ isChecked: true });
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, 'SHOPPING_LIST_STALE');
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(winner.items[1].type, 'custom');
+});
+
+test('SHOP5 v1 malformed operands stay 400 before the mixed-list upgrade guard', async (t) => {
+  mockAuth(t);
+  const mixed = buildList([{ type: 'custom', label: 'Milk' }]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => mixed);
+  const auth = { Authorization: `Bearer ${token()}` };
+  const root = '/api/v1/shopping-list';
+  for (const [method, url, body] of [
+    ['post', `${root}/items`, { ingredientId: 'bad', quantity: 1, unit: 'kg' }],
+    ['patch', `${root}/items/bad`, { isChecked: true }],
+    ['delete', `${root}/items/bad`],
+    ['post', `${root}/recipes/bad`],
+  ]) {
+    let call = request(app)[method](url).set(auth);
+    if (body) call = call.send(body);
+    const response = await call;
+    assert.equal(response.status, 400, `${method} ${url}`);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
+});
+
+test('SHOP5 v2 owner scope keeps foreign custom IDs opaque and rejects client owner selection', async (t) => {
+  mockAuth(t);
+  const ownerList = buildList([{ type: 'custom', label: 'Milk' }]);
+  const otherList = buildList([], OTHER_USER_ID);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (id) =>
+    id === OTHER_USER_ID ? otherList : ownerList);
+  const foreignId = String(ownerList.items[0]._id);
+  const root = '/api/v1/shopping-list/v2';
+  const unauthorized = await request(app).get(root);
+  assert.equal(unauthorized.status, 401);
+  const denied = await request(app).delete(`${root}/items/${foreignId}`)
+    .set('Authorization', `Bearer ${otherUserToken()}`);
+  assert.equal(denied.status, 404);
+  assert.equal(denied.body.error.code, 'SHOPPING_LIST_ITEM_NOT_FOUND');
+  const malformed = await request(app).post(`${root}/items`)
+    .set('Authorization', `Bearer ${otherUserToken()}`)
+    .send({ type: 'custom', label: 'Bread', ownerId: USER_ID });
+  assert.equal(malformed.status, 400);
+  assert.equal(ownerList.items.length, 1);
+  assert.equal(otherList.items.length, 0);
 });
 
 test('POST /api/v1/shopping-list/recipes/:recipeId rejects an invalid ObjectId param', async (t) => {
