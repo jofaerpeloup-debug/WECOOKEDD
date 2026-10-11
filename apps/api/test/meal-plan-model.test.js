@@ -5,12 +5,13 @@ const MealPlanEntry = require('../src/modules/meal-plan/meal-plan.model');
 const USER_ID = '507f1f77bcf86cd799439001';
 const RECIPE_ID = '507f1f77bcf86cd799439099';
 
-test('meal plan model contains only ownership, calendar date, recipe, and timestamps', () => {
+test('meal plan model includes a strict one-off reminder and monotonic revision', () => {
   const paths = Object.keys(MealPlanEntry.schema.paths).filter((path) => path !== '_id' && path !== '__v');
-  assert.deepEqual(paths.sort(), ['createdAt', 'dateKey', 'recipeId', 'updatedAt', 'userId'].sort());
+  assert.deepEqual(paths.sort(), ['createdAt', 'dateKey', 'recipeId', 'reminder', 'reminderRevision', 'updatedAt', 'userId'].sort());
   assert.equal(MealPlanEntry.schema.path('userId').options.ref, 'User');
   assert.equal(MealPlanEntry.schema.path('recipeId').options.ref, 'Recipe');
   assert.equal(MealPlanEntry.schema.options.timestamps, true);
+  assert.equal(MealPlanEntry.schema.path('reminderRevision').options.default, 0);
 });
 
 test('model requires every domain field and validates real date keys', async () => {

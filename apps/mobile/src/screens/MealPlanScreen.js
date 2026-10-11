@@ -10,7 +10,9 @@ import { typography, spacing, radius } from '../theme/theme';
 import RecipeImage from '../components/RecipeImage';
 import MealPlanSheet from '../components/MealPlanSheet';
 import MealPlanMoveSheet from '../components/MealPlanMoveSheet';
-import { clearMealPlanRange, getMealPlan, moveMealPlanEntry, removeMealPlanEntry } from '../api/mealPlanService';
+import MealPlanReminderSheet from '../components/MealPlanReminderSheet';
+import { useMealReminders } from '../context/MealReminderContext';
+import { clearMealPlanRange, deleteMealPlanReminder, getMealPlan, moveMealPlanEntry, putMealPlanReminder, removeMealPlanEntry } from '../api/mealPlanService';
 import { getMealPlanErrorMessage, getMealPlanErrorState } from '../api/mealPlanErrors';
 import { difficultyLabel } from '../api/recipeOptions';
 import { formatMinutes } from '../utils/recipe';
@@ -102,11 +104,12 @@ function MealPlanDragHandle({
   );
 }
 
-export default function MealPlanScreen({ navigation }) {
+export default function MealPlanScreen({ navigation, route }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
   const { user } = useAuth();
+  const reminders = useMealReminders();
   const { addRecipe, isMutating: shoppingMutating } = useShoppingList();
   const ownerId = user?.id || null;
   const [weekAnchor, setWeekAnchor] = useState(() => startOfLocalWeek(new Date()));
@@ -117,6 +120,9 @@ export default function MealPlanScreen({ navigation }) {
   const [data, setData] = useState({ ownerId: null, range: null, entries: [], status: 'loading', error: null });
   const [pickDay, setPickDay] = useState(null);
   const [moveEntry, setMoveEntry] = useState(null);
+  const [reminderEntry, setReminderEntry] = useState(null);
+  const [reminderPending, setReminderPending] = useState(false);
+  const [reminderError, setReminderError] = useState(null);
   const [moveError, setMoveError] = useState(null);
   const [pendingEntryId, setPendingEntryId] = useState(null);
   const [clearing, setClearing] = useState(false);
@@ -149,6 +155,7 @@ export default function MealPlanScreen({ navigation }) {
     setData({ ownerId, range: null, entries: [], status: ownerId ? 'loading' : 'idle', error: null });
     setPickDay(null);
     setMoveEntry(null);
+    setReminderEntry(null);
     setMoveError(null);
     setPendingEntryId(null);
     setClearing(false);
@@ -159,6 +166,14 @@ export default function MealPlanScreen({ navigation }) {
     operationRef.current = null;
     mutationRef.current = null;
   }, [ownerId]);
+
+  useEffect(() => {
+    const dateKey = route?.params?.dateKey;
+    if (typeof dateKey !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const target = new Date(year, month - 1, day);
+    if (target.getFullYear() === year && target.getMonth() === month - 1 && target.getDate() === day) setWeekAnchor(startOfLocalWeek(target));
+  }, [route?.params?.dateKey, route?.params?.entryId]);
 
   useEffect(() => {
     if (rangeRef.current !== range) {
@@ -228,7 +243,7 @@ export default function MealPlanScreen({ navigation }) {
   // recovery through the current render's account/range-aware loader.
   loadRef.current = load;
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => { load(); void reminders.reconcile(); }, [load, reminders.reconcile]));
 
   const trusted = data.ownerId === ownerId && data.range === range;
   const entries = trusted ? data.entries : [];
@@ -354,6 +369,7 @@ export default function MealPlanScreen({ navigation }) {
       } else {
         setDragError(null);
       }
+      void reminders.reconcile();
     } catch (err) {
       if (!operationStillOwned(operation) || !currentEntryMatches(submittedEntry)) return;
       const failure = getMealPlanErrorState(err);
@@ -526,11 +542,15 @@ export default function MealPlanScreen({ navigation }) {
     const requestRange = range;
     setPendingEntryId(entryId);
     try {
-      await removeMealPlanEntry(entryId);
+      const observed = entriesRef.current.find((entry) => entry.id === entryId);
+      if (!observed?.updatedAt) throw new Error('Meal plan entry is unavailable.');
+      await removeMealPlanEntry(entryId, observed.updatedAt);
       if (ownerRef.current !== requestOwner || rangeRef.current !== requestRange) return;
-      setData((old) => ({ ...old, entries: old.entries.filter((entry) => entry.id !== entryId) }));
+      await load();
+      void reminders.reconcile();
     } catch (err) {
       if (ownerRef.current === requestOwner) notify('Couldn’t remove meal', getMealPlanErrorMessage(err));
+      if (ownerRef.current === requestOwner) await load();
     } finally {
       if (ownerRef.current === requestOwner && mutationRef.current === claim) {
         mutationRef.current = null;
@@ -547,15 +567,53 @@ export default function MealPlanScreen({ navigation }) {
     const requestRange = range;
     setClearing(true);
     try {
-      await clearMealPlanRange(startDate, endDate);
+      const expectedEntries = [...entriesRef.current].map((entry) => ({ id: entry.id, expectedUpdatedAt: entry.updatedAt }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+      await clearMealPlanRange(startDate, endDate, expectedEntries);
       if (ownerRef.current !== requestOwner || rangeRef.current !== requestRange) return;
-      setData((old) => ({ ...old, entries: [] }));
+      await load();
+      void reminders.reconcile();
     } catch (err) {
-      if (ownerRef.current === requestOwner) notify('Couldn’t clear meal plan', getMealPlanErrorMessage(err));
+      if (ownerRef.current === requestOwner && rangeRef.current === requestRange) {
+        notify('Couldn’t clear meal plan', getMealPlanErrorMessage(err));
+        await load();
+      }
     } finally {
       if (ownerRef.current === requestOwner && mutationRef.current === claim) {
         mutationRef.current = null;
         setClearing(false);
+      }
+    }
+  };
+
+  const saveReminder = async (localTime, timeZone, turnOff = false) => {
+    if (!reminderEntry || reminderPending || mutationRef.current) return;
+    const submitted = entriesRef.current.find((entry) => entry.id === reminderEntry.id);
+    if (!submitted) return;
+    const claim = { id: ++mutationSequenceRef.current, kind: 'reminder' };
+    mutationRef.current = claim;
+    const requestOwner = ownerId;
+    const requestRange = range;
+    setReminderPending(true);
+    setReminderError(null);
+    try {
+      const version = { expectedUpdatedAt: submitted.updatedAt, expectedReminderRevision: submitted.reminderRevision };
+      const updated = turnOff
+        ? await deleteMealPlanReminder(submitted.id, version)
+        : await putMealPlanReminder(submitted.id, { ...version, localTime, timeZone });
+      if (ownerRef.current !== requestOwner || rangeRef.current !== requestRange) return;
+      setReminderEntry(updated);
+      await load();
+      void reminders.reconcile();
+    } catch (error) {
+      if (ownerRef.current === requestOwner) {
+        setReminderError(getMealPlanErrorMessage(error));
+        await load();
+      }
+    } finally {
+      if (ownerRef.current === requestOwner && mutationRef.current === claim) {
+        mutationRef.current = null;
+        setReminderPending(false);
       }
     }
   };
@@ -638,7 +696,7 @@ export default function MealPlanScreen({ navigation }) {
             {grouped[day.dateKey].length === 0 ? (
               <Pressable style={styles.emptyDay} onPress={() => setPickDay(day)} disabled={status !== 'ready' || mealPlanControlsDisabled}><Text style={styles.emptyText}>Tap + to plan a meal</Text></Pressable>
             ) : grouped[day.dateKey].map((entry) => (
-              <View key={entry.id} style={[styles.mealRow, dragState?.entry.id === entry.id ? styles.dragSource : null]}>
+              <View key={entry.id} style={[styles.mealRow, dragState?.entry.id === entry.id ? styles.dragSource : null, route?.params?.entryId === entry.id ? styles.highlight : null]}>
                 <View style={styles.mealTop}>
                   {entry.isAvailable ? (
                     <Pressable style={styles.mealMain} onPress={() => navigation.navigate('RecipeDetail', { recipeSource: 'api', recipeId: entry.recipeId, initialRecipe: entry.recipe })} accessibilityRole="button" accessibilityLabel={`Open ${entry.recipe.title}`}>
@@ -659,6 +717,11 @@ export default function MealPlanScreen({ navigation }) {
                     onDragTerminate={cancelDrag}
                     styles={styles}
                   />
+                  <Pressable hitSlop={8} onPress={() => { setReminderError(null); setReminderEntry(entry); }}
+                    disabled={mealPlanControlsDisabled} accessibilityRole="button" accessibilityLabel={`Reminder for ${entry.isAvailable ? entry.recipe.title : 'unavailable recipe'}`}>
+                    <Ionicons name={entry.reminder ? 'notifications' : 'notifications-outline'} size={18} color={colors.sageDeep} />
+                    <Text style={styles.moveText}>{entry.reminder ? 'Reminder' : 'Remind'}</Text>
+                  </Pressable>
                   <Pressable
                     hitSlop={8}
                     onPress={() => openMove(entry)}
@@ -713,7 +776,13 @@ export default function MealPlanScreen({ navigation }) {
           </Pressable>
         </View>
       ) : null}
-      <MealPlanSheet visible={!!pickDay} day={pickDay} onClose={() => setPickDay(null)} onAdded={load} />
+      <MealPlanSheet visible={!!pickDay} day={pickDay} onClose={() => setPickDay(null)} onAdded={() => { void load(); void reminders.reconcile(); }} />
+      <MealPlanReminderSheet visible={!!reminderEntry} entry={reminderEntry} pending={reminderPending}
+        error={reminderError} status={reminders.state} onClose={() => { if (!reminderPending) setReminderEntry(null); }}
+        onSave={(localTime, timeZone) => saveReminder(localTime, timeZone)}
+        onCancelReminder={() => saveReminder(null, null, true)} onRetry={() => reminders.reconcile()}
+        onManualRetry={reminders.manualRetry} onRequestPermission={reminders.requestPermission}
+        onOpenSettings={reminders.openSettings} />
       <MealPlanMoveSheet
         visible={!!moveEntry}
         entry={moveEntry}
@@ -751,6 +820,7 @@ function makeStyles(colors) {
     emptyDay: { borderWidth: 1, borderColor: colors.hairline, borderStyle: 'dashed', borderRadius: radius.md, paddingVertical: 14, alignItems: 'center' },
     emptyText: { fontFamily: typography.body.fontFamily, fontSize: 12.5, color: colors.inkFaint },
     mealRow: { backgroundColor: colors.creamDeep, borderRadius: 12, padding: 8, marginBottom: 8 },
+    highlight: { borderWidth: 2, borderColor: colors.sageDeep },
     dragSource: { opacity: 0.45 },
     mealTop: { flexDirection: 'row', alignItems: 'center' },
     mealMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },

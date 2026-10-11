@@ -10,10 +10,29 @@ jest.mock('../src/api/client', () => {
 });
 
 const { ApiError, api } = require('../src/api/client');
-const { getMealPlan, createMealPlanEntry, moveMealPlanEntry, removeMealPlanEntry, clearMealPlanRange } = require('../src/api/mealPlanService');
+const { getMealPlan, createMealPlanEntry, moveMealPlanEntry, removeMealPlanEntry, clearMealPlanRange,
+  getMealPlanHorizon, getMealPlanEntry } = require('../src/api/mealPlanService');
 const { getMealPlanErrorState } = require('../src/api/mealPlanErrors');
 
 beforeEach(() => jest.clearAllMocks());
+
+const completeEntry = (overrides = {}) => ({ id: '507f1f77bcf86cd799439077',
+  ownerId: '507f1f77bcf86cd799439001', recipeId: '507f1f77bcf86cd799439033',
+  dateKey: '2027-09-14', isAvailable: false, recipe: null,
+  createdAt: '2027-09-01T00:00:00.123Z', updatedAt: '2027-09-02T00:00:00.456Z',
+  reminderRevision: 2, reminder: { localTime: '17:00', timeZone: 'UTC',
+    fireAt: '2027-09-14T09:00:00.000Z' }, ...overrides });
+
+it.each(['2027-09-14T09:00:00.001Z', 'bad-time'])('rejects a malformed fireAt in the whole horizon response: %s', async (fireAt) => {
+  api.get.mockResolvedValue({ mealPlan: [completeEntry(), completeEntry({ id: '507f1f77bcf86cd799439078',
+    reminder: { localTime: '17:00', timeZone: 'UTC', fireAt } })] });
+  await expect(getMealPlanHorizon('2027-09-14', '2027-09-14')).rejects.toThrow('malformed');
+});
+
+it('rejects a single-entry response with a different ID before navigation can use it', async () => {
+  api.get.mockResolvedValue({ mealPlanEntry: completeEntry() });
+  await expect(getMealPlanEntry('507f1f77bcf86cd799439078')).rejects.toThrow('incomplete');
+});
 
 it('fetches only the explicit bounded date range and preserves unavailable entries', async () => {
   api.get.mockResolvedValue({ mealPlan: [{ id: 'e1', dateKey: '2026-09-14', recipeId: 'r1', isAvailable: false, recipe: null }] });
@@ -30,10 +49,12 @@ it('creates with only dateKey and recipeId', async () => {
 
 it('removes one encoded entry id and clears only an explicit range', async () => {
   api.del.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({ deletedCount: 4 });
-  await expect(removeMealPlanEntry('entry/id')).resolves.toBe(true);
-  await expect(clearMealPlanRange('2026-09-14', '2026-09-20')).resolves.toEqual({ deletedCount: 4 });
-  expect(api.del).toHaveBeenNthCalledWith(1, '/meal-plan/entry%2Fid');
-  expect(api.del).toHaveBeenNthCalledWith(2, '/meal-plan', { query: { startDate: '2026-09-14', endDate: '2026-09-20' } });
+  const expectedUpdatedAt = '2026-09-14T08:30:00.000Z';
+  const expectedEntries = [{ id: 'entry/id', expectedUpdatedAt }];
+  await expect(removeMealPlanEntry('entry/id', expectedUpdatedAt)).resolves.toBe(true);
+  await expect(clearMealPlanRange('2026-09-14', '2026-09-20', expectedEntries)).resolves.toEqual({ deletedCount: 4 });
+  expect(api.del).toHaveBeenNthCalledWith(1, '/meal-plan/entry%2Fid', { body: { expectedUpdatedAt } });
+  expect(api.del).toHaveBeenNthCalledWith(2, '/meal-plan', { query: { startDate: '2026-09-14', endDate: '2026-09-20' }, body: { expectedEntries } });
 });
 
 it('moves one encoded entry with the exact conditional PATCH body and normalizes success', async () => {
@@ -55,12 +76,15 @@ it('moves one encoded entry with the exact conditional PATCH body and normalizes
     recipeId: 'must-not-send',
   })).resolves.toEqual({
     id: 'entry/id',
+    ownerId: null,
     dateKey: '2026-09-16',
     recipeId: 'r1',
     isAvailable: false,
     recipe: null,
     createdAt: '2026-09-01T00:00:00.000Z',
     updatedAt: '2026-09-14T09:00:00.000Z',
+    reminder: null,
+    reminderRevision: 0,
   });
   expect(api.patch).toHaveBeenCalledWith('/meal-plan/entry%2Fid', {
     body: { dateKey: '2026-09-16', expectedUpdatedAt: '2026-09-14T08:30:00.000Z' },

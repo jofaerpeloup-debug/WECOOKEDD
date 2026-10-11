@@ -4,14 +4,16 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { useAuth } from './AuthContext';
 import { useNotifications } from './NotificationsContext';
+import { useMealReminders } from './MealReminderContext';
 import { markNotificationRead } from '../api/notificationService';
 import { registerPushInstallation, unregisterPushInstallation } from '../api/pushInstallationService';
 import {
   createInstallationRecord, incrementAndPersist, loadInstallationRecord, saveInstallationRecord,
 } from '../notifications/pushInstallationStore';
 import { permissionState, responseKey, setBeforePushLogout } from '../notifications/nativePushLifecycle';
-import { actionDestination, validNativeNotificationData } from '../navigation/notificationAction';
+import { actionDestination, isLocalReminderDiscriminator, validNativeNotificationData } from '../navigation/notificationAction';
 import { navigationRef } from '../navigation/navigationRef';
+import { PREFIX as MEAL4_PREFIX } from '../notifications/mealReminderSessionStore';
 
 const NativePushContext = createContext(null);
 const IS_NATIVE = Platform.OS === 'ios' || Platform.OS === 'android';
@@ -60,6 +62,7 @@ async function waitForNavigation(stillCurrent) {
 export function NativePushProvider({ children }) {
   const { user, isReady, isLoggedIn, sessionIdentity } = useAuth();
   const { reload } = useNotifications();
+  const { handleLocalTap, mayShowLocal } = useMealReminders();
   const ownerId = isLoggedIn ? user?.id || null : null;
   const pushEnabled = isLoggedIn && user?.preferences?.notifications?.push === true;
   const [status, setStatus] = useState(IS_NATIVE ? 'checking' : 'unsupported');
@@ -203,7 +206,13 @@ export function NativePushProvider({ children }) {
       && stateRef.current.sessionIdentity?.generation === captured.generation
       && stateRef.current.sessionIdentity?.localSessionRevision === captured.localSessionRevision;
     try {
-      if (!captured.ownerId || !validNativeNotificationData(data)) return;
+      if (!captured.ownerId) return;
+      if (response?.notification?.request?.identifier?.startsWith(MEAL4_PREFIX)) {
+        if (!isLocalReminderDiscriminator(data)) return;
+        if (await waitForNavigation(sameOwner)) await handleLocalTap(response, sameOwner);
+        return;
+      }
+      if (!validNativeNotificationData(data)) return;
       if (!(await waitForNavigation(sameOwner))) return;
       const result = await markNotificationRead(data.notificationId);
       if (!sameOwner()) return;
@@ -219,7 +228,7 @@ export function NativePushProvider({ children }) {
         // Best effort only; never clear without proving the exact response is still current.
       }
     }
-  }, []);
+  }, [handleLocalTap]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -269,9 +278,11 @@ export function NativePushProvider({ children }) {
       if (next === 'active') void reconcile();
     });
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: !!stateRef.current.ownerId && stateRef.current.pushEnabled,
-        shouldShowList: !!stateRef.current.ownerId && stateRef.current.pushEnabled,
+      handleNotification: async (notification) => ({
+        shouldShowBanner: notification?.request?.identifier?.startsWith(MEAL4_PREFIX)
+          ? await mayShowLocal(notification.request.content.data) : !!stateRef.current.ownerId && stateRef.current.pushEnabled,
+        shouldShowList: notification?.request?.identifier?.startsWith(MEAL4_PREFIX)
+          ? await mayShowLocal(notification.request.content.data) : !!stateRef.current.ownerId && stateRef.current.pushEnabled,
         shouldPlaySound: false,
         shouldSetBadge: false,
       }),
@@ -288,7 +299,7 @@ export function NativePushProvider({ children }) {
         handleNotification: async () => ({ shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false }),
       });
     };
-  }, [captureLifecycle, consumeResponse, owned, reconcile, registerCurrentToken, reload]);
+  }, [captureLifecycle, consumeResponse, owned, reconcile, registerCurrentToken, reload, mayShowLocal]);
 
   const openSettings = useCallback(() => Linking.openSettings(), []);
   return (
