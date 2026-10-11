@@ -255,6 +255,21 @@ test('imageUrl is optional and may be absent', async () => {
   await assert.doesNotReject(() => recipe.validate());
 });
 
+test('imageUrlIsPublicHttps is internal, has no unsafe default, and is excluded by default', () => {
+  const path = Recipe.schema.path('imageUrlIsPublicHttps');
+  assert.ok(path);
+  assert.equal(path.options.type, Boolean);
+  assert.equal(path.options.select, false);
+  assert.equal(path.options.default, undefined);
+  assert.equal(baseRecipe().imageUrlIsPublicHttps, undefined);
+  const nutritionPath = Recipe.schema.path('nutritionSourceUrlIsPublicHttps');
+  assert.ok(nutritionPath);
+  assert.equal(nutritionPath.options.type, Boolean);
+  assert.equal(nutritionPath.options.select, false);
+  assert.equal(nutritionPath.options.default, undefined);
+  assert.equal(baseRecipe().nutritionSourceUrlIsPublicHttps, undefined);
+});
+
 test('isActive defaults to true', () => {
   const recipe = baseRecipe();
   assert.equal(recipe.isActive, true);
@@ -279,6 +294,22 @@ test('there is an index on ingredients.ingredientId for "recipes using this ingr
 test('there is a title index backing titleAsc/titleDesc sort and search', () => {
   const indexes = Recipe.schema.indexes();
   assert.ok(indexes.some(([spec]) => spec.title === 1 && Object.keys(spec).length === 1));
+});
+
+test('Recipe declares the exact frozen weighted title/description text index', () => {
+  assert.equal(Recipe.schema.options.autoIndex, false, 'API startup must not create migration-owned indexes');
+  const index = Recipe.schema.indexes().find(([, options]) => (
+    options.name === 'recipe_title_description_text_v1'
+  ));
+  assert.deepEqual(index, [
+    { title: 'text', description: 'text' },
+    {
+      name: 'recipe_title_description_text_v1',
+      weights: { title: 10, description: 1 },
+      default_language: 'english',
+      language_override: 'language',
+    },
+  ]);
 });
 
 test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and hides __v', () => {
@@ -309,6 +340,8 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
     instructions: ['Combine chicken, soy sauce, garlic, and bay leaves.', 'Simmer until done.'],
     dietaryTags: [],
     imageUrl: null,
+    imageUrlIsPublicHttps: true,
+    nutritionSourceUrlIsPublicHttps: true,
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -331,6 +364,8 @@ test('toPublicRecipe exposes id (not _id), populated ingredient summaries, and h
   assert.deepEqual(Object.keys(publicRecipe.ingredients[0].ingredient).sort(), ['id', 'name']);
   assert.equal('_id' in publicRecipe, false);
   assert.equal('__v' in publicRecipe, false);
+  assert.equal('imageUrlIsPublicHttps' in publicRecipe, false);
+  assert.equal('nutritionSourceUrlIsPublicHttps' in publicRecipe, false);
 });
 
 const validNutrition = () => ({

@@ -194,7 +194,12 @@ test('remove clears imageUrl/imageAssetId, then deletes the old managed asset', 
   });
   t.mock.method(imageProvider, 'deleteByAssetId', async (assetId) => events.push(['delete', assetId]));
   await recipeService.updateRecipe(RECIPE_ID, { imageUrl: null, imageAssetId: null });
-  assert.deepEqual(events[0], ['update', { imageUrl: null, imageAssetId: null }]);
+  assert.deepEqual(events[0], ['update', {
+    imageUrl: null,
+    imageAssetId: null,
+    imageUrlIsPublicHttps: false,
+    nutritionSourceUrlIsPublicHttps: false,
+  }]);
   assert.deepEqual(events[1], ['delete', 'old-asset-id']);
 });
 
@@ -210,6 +215,7 @@ test('old managed-asset deletion failure does not roll back successful update', 
 
 test('archive retains image metadata and performs no provider deletion', async (t) => {
   const archived = existing({ isActive: false });
+  t.mock.method(recipeRepository, 'findRawById', async () => existing());
   t.mock.method(recipeRepository, 'archiveById', async () => archived);
   let deleted = false;
   t.mock.method(imageProvider, 'deleteByAssetId', async () => { deleted = true; });

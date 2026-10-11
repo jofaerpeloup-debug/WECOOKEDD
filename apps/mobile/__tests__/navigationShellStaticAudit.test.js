@@ -136,6 +136,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(stack).toEqual([
       'MainTabs',
       'Discover',
+      'Trending',
       'Saved',
       'CollectionDetail',
       'Assistant',
@@ -169,7 +170,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     ]);
   });
 
-  it.each(['MainTabs', 'Discover', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'RecipeReviews', 'CookingHistory', 'CookMode', 'AccountDetails', 'Settings'])(
+  it.each(['MainTabs', 'Discover', 'Trending', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'RecipeReviews', 'CookingHistory', 'CookMode', 'AccountDetails', 'Settings'])(
     'registers the "%s" stack route',
     (name) => {
       expect(stack).toContain(name);
@@ -178,6 +179,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
 
   it('maps the moved-off-tab routes to their real screens', () => {
     expect(rootNav).toMatch(/name="Discover"\s+component=\{DiscoverScreen\}/);
+    expect(rootNav).toMatch(/name="Trending"\s+component=\{TrendingScreen\}/);
     expect(rootNav).toMatch(/name="Saved"\s+component=\{SavedScreen\}/);
     expect(rootNav).toMatch(/name="Assistant"\s+component=\{AssistantScreen\}/);
     expect(rootNav).toMatch(/name="MealPlan"\s+component=\{MealPlanScreen\}/);
@@ -264,7 +266,7 @@ describe('no nested duplicate route names (React Navigation same-name warning)',
     }
   });
 
-  it('Community is reached solely via the tab bar — no in-app screen navigates to it', () => {
+  it('Community is reached through the tab bar, including the existing notification deep action', () => {
     // Profile Settings final port (feat/frontend-migration-profile-settings)
     // dropped ProfileScreen's old flat "Community" menu row: the teammate
     // final Profile has no such row, and Community is already a sibling
@@ -274,7 +276,13 @@ describe('no nested duplicate route names (React Navigation same-name warning)',
     const tabBar = read('components/TabBar.js');
     expect(tabBar).toMatch(/name:\s*'Community'/);
     expect(tabScreenNames(mainTabs)).toContain('Community');
+    const notifications = read('components/NotificationsDropdown.js');
+    expect(notifications).toMatch(/import \{ actionDestination \} from '\.\.\/navigation\/notificationAction'/);
+    expect(notifications).toMatch(/const destination = actionDestination\(notification\.action\)/);
+    expect(notifications).toMatch(/navigation\.navigate\(\.\.\.destination\)/);
 
+    // No screen introduces another direct Community route. The established
+    // notification action above targets the registered tab through MainTabs.
     const files = ['screens', 'components', 'navigation'].flatMap((d) =>
       fs.readdirSync(path.join(SRC, d))
         .filter((f) => f.endsWith('.js') && f !== 'NotificationsDropdown.js')

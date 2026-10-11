@@ -78,6 +78,7 @@ const fs = require('fs');
 const path = require('path');
 const { act, fireEvent, render, waitFor, within } = require('@testing-library/react-native');
 const { listRecipes } = require('../src/api/recipeService');
+const { getRecipeErrorMessage } = require('../src/api/recipeErrors');
 const { loadJSON, removeItem, saveJSON } = require('../src/utils/storage');
 const {
   normalizeSearchHistory,
@@ -178,22 +179,72 @@ it('hydrates sanitized data and synchronizes Dashboard and Search immediately', 
 });
 
 it('synchronizes the mounted real Dashboard and Search consumers through one provider', async () => {
-  const dashboardRecipes = deferred();
+  const latestRecipes = deferred();
+  const trendingRecipes = deferred();
   const searchRecipes = deferred();
-  listRecipes
-    .mockReturnValueOnce(dashboardRecipes.promise)
-    .mockReturnValueOnce(searchRecipes.promise);
+  const unexpectedQueries = [];
+  listRecipes.mockImplementation((query) => {
+    if (query.sort === 'newest') return latestRecipes.promise;
+    if (query.sort === 'topRated') return trendingRecipes.promise;
+    if (query.sort === 'titleAsc') return searchRecipes.promise;
+    unexpectedQueries.push(query);
+    return Promise.reject(new Error(`Unexpected Recipe request: ${JSON.stringify(query)}`));
+  });
   const view = render(<RealConsumerHarness />);
   await waitFor(() => expect(loadJSON).toHaveBeenCalledWith(searchHistoryKey('user-a'), []));
-  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+  await waitFor(() => {
+    const queries = listRecipes.mock.calls.map(([query]) => query);
+    expect(queries).toHaveLength(3);
+    expect(queries).toEqual(expect.arrayContaining([
+      { sort: 'newest', limit: 8 },
+      { sort: 'topRated', page: 1, limit: 6 },
+      { sort: 'titleAsc', page: 1, limit: 20 },
+    ]));
+    expect(queries.filter(({ sort }) => sort === 'topRated')).toEqual([
+      { sort: 'topRated', page: 1, limit: 6 },
+    ]);
+  });
   await act(async () => {
-    const emptyPage = { recipes: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } };
-    dashboardRecipes.resolve(emptyPage);
-    searchRecipes.resolve(emptyPage);
-    await Promise.all([dashboardRecipes.promise, searchRecipes.promise]);
+    latestRecipes.resolve({
+      recipes: [{ id: '507f1f77bcf86cd799439021', title: 'Dashboard Pick' }],
+      pagination: { page: 1, limit: 8, total: 1, totalPages: 1 },
+    });
+    trendingRecipes.resolve({
+      recipes: [
+        {
+          id: '507f1f77bcf86cd799439022', title: 'Trending Zeta',
+          ratingSummary: { averageRating: 4.8, ratingCount: 6 },
+        },
+        {
+          id: '507f1f77bcf86cd799439024', title: 'Trending Alpha',
+          ratingSummary: { averageRating: 4.7, ratingCount: 9 },
+        },
+      ],
+      pagination: { page: 1, limit: 6, total: 2, totalPages: 1 },
+    });
+    searchRecipes.resolve({
+      recipes: [
+        { id: '507f1f77bcf86cd799439023', title: 'Search Zeta' },
+        { id: '507f1f77bcf86cd799439025', title: 'Search Alpha' },
+      ],
+      pagination: { page: 1, limit: 20, total: 2, totalPages: 1 },
+    });
+    await Promise.all([latestRecipes.promise, trendingRecipes.promise, searchRecipes.promise]);
   });
   const dashboard = within(view.getByTestId('real-dashboard'));
   const search = within(view.getByTestId('real-search'));
+  expect(dashboard.getByText('Dashboard Pick')).toBeOnTheScreen();
+  const trendingOrder = dashboard.getAllByText(/^Trending (Zeta|Alpha)$/).map((row) => row.props.children);
+  const searchOrder = search.getAllByText(/^Search (Zeta|Alpha)$/).map((row) => row.props.children);
+  const assertTrendingOrder = (order) => expect(order).toEqual(['Trending Zeta', 'Trending Alpha']);
+  const assertSearchOrder = (order) => expect(order).toEqual(['Search Zeta', 'Search Alpha']);
+  assertTrendingOrder(trendingOrder);
+  assertSearchOrder(searchOrder);
+  expect(() => assertTrendingOrder([...trendingOrder].reverse())).toThrow();
+  expect(() => assertSearchOrder([...searchOrder].reverse())).toThrow();
+  expect(unexpectedQueries).toEqual([]);
+  expect(listRecipes).toHaveBeenCalledTimes(3);
+  expect(getRecipeErrorMessage).not.toHaveBeenCalled();
 
   fireEvent.changeText(search.getByLabelText('Search recipes'), '  Adobo  ');
   fireEvent(search.getByLabelText('Search recipes'), 'submitEditing');
@@ -211,6 +262,8 @@ it('synchronizes the mounted real Dashboard and Search consumers through one pro
   expect(search.queryByText('Rice')).toBeNull();
   expect(search.queryByText('Adobo')).toBeNull();
   expect(removeItem).toHaveBeenLastCalledWith(searchHistoryKey('user-a'));
+  expect(unexpectedQueries).toEqual([]);
+  expect(getRecipeErrorMessage).not.toHaveBeenCalled();
 });
 
 it('keeps both real consumers free of a screen-local history owner', () => {

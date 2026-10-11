@@ -358,7 +358,10 @@ function refineImageConsistency(body, ctx, { update = false } = {}) {
 
 const statusSchema = z.enum(['active', 'inactive', 'all'], 'Invalid status.').default('active');
 const sortSchema = z
-  .enum(['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc', 'updatedDesc'], 'Invalid sort value.')
+  .enum([
+    'titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc',
+    'prepTimeDesc', 'updatedDesc', 'relevance', 'topRated',
+  ], 'Invalid sort value.')
   .default('titleAsc');
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(20);
@@ -403,6 +406,7 @@ const listRecipesSchema = z.object({
       ingredientId: objectIdSchema.optional(),
       maxPrepTimeMinutes: z.coerce.number().int().min(0).max(MAX_PREP_TIME_MINUTES).optional(),
       totalTimeBucket: totalTimeBucketSchema.optional(),
+      excludeRecipeId: objectIdSchema.optional(),
       status: statusSchema,
       page: pageSchema,
       limit: limitSchema,
@@ -415,6 +419,13 @@ const listRecipesSchema = z.object({
           code: 'custom',
           path: ['dietaryTags'],
           message: 'dietaryTag and dietaryTags cannot be supplied together.',
+        });
+      }
+      if (query.sort === 'relevance' && !query.search) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['search'],
+          message: 'search is required when sort is relevance.',
         });
       }
     }),

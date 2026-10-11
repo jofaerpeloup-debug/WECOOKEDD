@@ -31,6 +31,7 @@ const LIST_PARAM_KEYS = [
   'ingredientId',
   'maxPrepTimeMinutes',
   'totalTimeBucket',
+  'excludeRecipeId',
   'page',
   'limit',
   'sort',
@@ -199,20 +200,64 @@ function buildQuery(params) {
  *   search?: string, region?: string, category?: string, difficulty?: string,
  *   dietaryTag?: string, dietaryTags?: string[]|string, ingredientId?: string,
  *   maxPrepTimeMinutes?: number, totalTimeBucket?: 'under-15'|'15-to-30'|'31-to-60'|'over-60',
+ *   excludeRecipeId?: string,
  *   page?: number, limit?: number,
- *   sort?: 'titleAsc'|'titleDesc'|'newest'|'oldest'|'prepTimeAsc'|'prepTimeDesc',
+ *   sort?: 'titleAsc'|'titleDesc'|'newest'|'oldest'|'prepTimeAsc'|'prepTimeDesc'|'relevance'|'topRated',
  * }} [params]
  * @returns {Promise<{ recipes: object[], pagination: { page, limit, total, totalPages } | null }>}
  *   `recipes` are public PublicRecipe objects (id, never _id). The backend
- *   already applies its non-admin "usable" filter to each page.
+ *   already applies its non-admin "usable" filter before total and paging.
  */
+function isPagination(value) {
+  return !!value
+    && Number.isInteger(value.page)
+    && value.page >= 1
+    && Number.isInteger(value.limit)
+    && value.limit >= 1
+    && Number.isInteger(value.total)
+    && value.total >= 0
+    && Number.isInteger(value.totalPages)
+    && value.totalPages === Math.ceil(value.total / value.limit);
+}
+
+function isRatingSummary(value) {
+  return !!value
+    && typeof value.averageRating === 'number'
+    && Number.isFinite(value.averageRating)
+    && value.averageRating >= 1
+    && value.averageRating <= 5
+    && Number.isInteger(value.ratingCount)
+    && value.ratingCount > 0;
+}
+
+function isRankedRecipe(value) {
+  return !!value && typeof value.id === 'string' && /^[a-f\d]{24}$/i.test(value.id);
+}
+
+function rankedResponseError() {
+  const error = new Error('The ranked recipe response was unavailable.');
+  error.code = 'INVALID_RANKED_RECIPE_RESPONSE';
+  return error;
+}
+
 export function listRecipes(params = {}) {
-  return api.get('/recipes', { query: buildQuery(params) }).then((data) => ({
-    // Array.map is deliberate: one malformed present nutrition member rejects
-    // the whole response, so callers can never render a valid-looking subset.
-    recipes: Array.isArray(data && data.recipes) ? data.recipes.map(parseRecipe) : [],
-    pagination: (data && data.pagination) || null,
-  }));
+  return api.get('/recipes', { query: buildQuery(params) }).then((data) => {
+    const ranked = params.sort === 'relevance' || params.sort === 'topRated';
+    if (ranked && (!Array.isArray(data?.recipes) || !isPagination(data?.pagination))) {
+      throw rankedResponseError();
+    }
+    if (ranked && data.recipes.some((recipe) => !isRankedRecipe(recipe))) {
+      throw rankedResponseError();
+    }
+    if (params.sort === 'topRated' && data.recipes.some((recipe) => !isRatingSummary(recipe.ratingSummary))) {
+      throw rankedResponseError();
+    }
+    return {
+      // Every present nutrition value must validate before a list can render.
+      recipes: Array.isArray(data && data.recipes) ? data.recipes.map(parseRecipe) : [],
+      pagination: (data && data.pagination) || null,
+    };
+  });
 }
 
 /**

@@ -41,7 +41,7 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 //     Discover jump goes through `openDiscover(key)` which ALWAYS passes an
 //     explicit `initialFilter` ('all' for the filter button / "See all"), so
 //     the Discover screen never keeps a stale shortcut. No
-//     MainTabs replace/reset, no RootNavigator change.
+//     MainTabs replace/reset; RANK1 adds only the dedicated Trending stack route.
 //   - the header stays our shared `<TopBar mode="brand">` (wordmark + Saved +
 //     bell), with the teammate Dashboard's `bookmark-outline` affordance wired
 //     through TopBar's opt-in `onSavedPress` prop —
@@ -69,6 +69,7 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 const SEARCH_DEBOUNCE_MS = 300;
 const LATEST_LIMIT = 8;
 const SEARCH_LIMIT = 20;
+const TRENDING_LIMIT = 6;
 
 // Each shortcut maps to an EXACT backend-supported Discover filter key
 // (see api/recipeOptions.js DISCOVER_FILTERS). No cuisine entry — `cuisine`
@@ -131,6 +132,9 @@ export default function DashboardScreen({ navigation }) {
   const [latest, setLatest] = useState([]);
   const [latestLoading, setLatestLoading] = useState(true);
   const [latestError, setLatestError] = useState(null);
+  const [trending, setTrending] = useState([]);
+  const [trendingLoading, setTrendingLoading] = useState(true);
+  const [trendingError, setTrendingError] = useState(null);
 
   const [results, setResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -141,12 +145,19 @@ export default function DashboardScreen({ navigation }) {
   // a newer request (query change / retry / unmount) supersedes it.
   const mountedRef = useRef(true);
   const latestGenRef = useRef(0);
+  const trendingGenRef = useRef(0);
   const searchGenRef = useRef(0);
+  const ownerKey = String(user?.id || '');
+  const ownerRef = useRef(ownerKey);
+  ownerRef.current = ownerKey;
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      latestGenRef.current += 1;
+      trendingGenRef.current += 1;
+      searchGenRef.current += 1;
     };
   }, []);
 
@@ -170,8 +181,37 @@ export default function DashboardScreen({ navigation }) {
     loadLatest();
   }, [loadLatest]);
 
+  const loadTrending = useCallback(async () => {
+    const owner = ownerKey;
+    const gen = ++trendingGenRef.current;
+    setTrendingLoading(true);
+    try {
+      const { recipes } = await listRecipes({
+        sort: 'topRated', page: 1, limit: TRENDING_LIMIT,
+      });
+      if (!mountedRef.current || owner !== ownerRef.current || gen !== trendingGenRef.current) return;
+      setTrending(recipes);
+      setTrendingError(null);
+    } catch (err) {
+      if (!mountedRef.current || owner !== ownerRef.current || gen !== trendingGenRef.current) return;
+      setTrendingError(getRecipeErrorMessage(err));
+    } finally {
+      if (mountedRef.current && owner === ownerRef.current && gen === trendingGenRef.current) {
+        setTrendingLoading(false);
+      }
+    }
+  }, [ownerKey]);
+
+  useEffect(() => {
+    trendingGenRef.current += 1;
+    setTrending([]);
+    setTrendingError(null);
+    loadTrending();
+  }, [loadTrending]);
+
   useRecipeScreenRefresh(() => {
     loadLatest();
+    loadTrending();
     if (searching) {
       // Invalidate immediately, before the debounced replacement request starts,
       // so an older search response cannot win during the debounce window.
@@ -284,6 +324,24 @@ export default function DashboardScreen({ navigation }) {
         </Text>
         <Text style={styles.railMeta} numberOfLines={1}>
           {metaLine(recipe)}
+        </Text>
+      </Pressable>
+      <FavoriteHeart recipe={recipe} size={15} variant="overlay" style={styles.railHeart} />
+    </View>
+  );
+
+  const renderTrendingCard = (recipe) => (
+    <View key={recipe.id} style={styles.railCard}>
+      <Pressable
+        style={styles.railMain}
+        onPress={() => openRecipe(recipe)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${recipe.title}`}
+      >
+        <RecipeImage source={recipe.imageUrl} style={styles.railImage} />
+        <Text style={styles.railTitle} numberOfLines={1}>{recipe.title}</Text>
+        <Text style={styles.railMeta} numberOfLines={1}>
+          {`★ ${recipe.ratingSummary.averageRating.toFixed(1)} · ${recipe.ratingSummary.ratingCount}`}
         </Text>
       </Pressable>
       <FavoriteHeart recipe={recipe} size={15} variant="overlay" style={styles.railHeart} />
@@ -420,6 +478,33 @@ export default function DashboardScreen({ navigation }) {
           </View>
         ) : (
           <>
+            <View style={styles.eyebrowRow}>
+              <Text style={styles.eyebrow}>Trending Meals</Text>
+              <Pressable
+                hitSlop={8}
+                onPress={() => navigation.navigate('Trending')}
+                accessibilityRole="button"
+                accessibilityLabel="Open Trending Meals"
+              >
+                <Text style={styles.linkText}>See all</Text>
+              </Pressable>
+            </View>
+            {trendingLoading && trending.length === 0 ? (
+              renderLoadingBlock('Loading Trending Meals…')
+            ) : shouldBlockRecipeFailure(trendingError, trending, { background: true }) ? (
+              renderErrorBlock(trendingError, loadTrending)
+            ) : trending.length === 0 ? (
+              renderEmptyBlock('No rated recipes yet.')
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.railRow}
+              >
+                {trending.map(renderTrendingCard)}
+              </ScrollView>
+            )}
+
             {/* Today's Pick — a daily rotation from the real latest recipes. */}
             {latestLoading && latest.length === 0 ? (
               renderLoadingBlock()

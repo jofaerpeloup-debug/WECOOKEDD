@@ -18,7 +18,8 @@
     "migrate:notifications-v1": "node scripts/migrate-notifications-v1.js",
     "migrate:recipe-nutrition-v1": "node scripts/migrate-recipe-nutrition-v1.js",
     "migrate:shopping-list-versions": "node scripts/migrate-shopping-list-versions.js",
-    "migrate:notifications-v2": "node scripts/migrate-notifications-v2.js"
+    "migrate:notifications-v2": "node scripts/migrate-notifications-v2.js",
+    "migrate:recipe-ranking-index": "node scripts/migrate-recipe-ranking-index.js"
   },
   "dependencies": {
     "@wecooked/contracts": "0.0.0",

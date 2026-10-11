@@ -16,6 +16,9 @@ const {
 } = require('../src/modules/recipes/recipe.validation');
 const { toPublicRecipe, toStaffRecipe } = require('../src/modules/recipes/recipe.serializer');
 const Recipe = require('../src/modules/recipes/recipe.model');
+const Ingredient = require('../src/modules/ingredients/ingredient.model');
+const mongoose = require('mongoose');
+const { assertCommandTarget } = require('../scripts/migrate-recipe-ranking-index');
 
 const RECIPE_ID = '507f1f77bcf86cd799439099';
 const MODERATOR_ID = '507f1f77bcf86cd799439001';
@@ -291,12 +294,10 @@ test('service normalization enforces new title and instruction rules even withou
   assert.equal(update.$set.description, 'Legacy recipe repair.');
 });
 
-test('consumer list/detail/usability fail closed for incomplete legacy and explicit Published records', async (t) => {
+test('consumer detail/usability fail closed for incomplete legacy and explicit Published records', async (t) => {
   let current = populated(fullRecipe());
   delete current.publicationStatus;
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => current);
-  t.mock.method(recipeRepository, 'findMany', async () => [current]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
 
   async function assertConsumerVisibility(visible) {
     const usable = await recipeService.findUsableRecipeById(RECIPE_ID);
@@ -310,10 +311,6 @@ test('consumer list/detail/usability fail closed for incomplete legacy and expli
         { code: 'RECIPE_NOT_FOUND' }
       );
     }
-    const listed = await recipeService.listRecipes({
-      status: 'active', page: 1, limit: 20, sort: 'newest', isAdmin: false,
-    });
-    assert.equal(listed.items.length, visible ? 1 : 0);
   }
 
   await assertConsumerVisibility(true);
@@ -333,11 +330,167 @@ test('consumer list/detail/usability fail closed for incomplete legacy and expli
   }
 });
 
+test('consumer list emits exact eligibility before the shared count/page facet', async (t) => {
+  let pipeline;
+  t.mock.method(Recipe, 'aggregate', async (emitted) => {
+    pipeline = emitted;
+    return [{ items: [], total: [] }];
+  });
+  t.mock.method(Recipe, 'populate', async (rows) => rows);
+  const result = await recipeService.listRecipes({
+    status: 'active', page: 2, limit: 2, sort: 'newest', isAdmin: false,
+  });
+  assert.deepEqual(result.items, []);
+  assert.equal(result.total, 0);
+
+  function assertEligibility(stages) {
+    const facetIndex = stages.findIndex((stage) => stage.$facet);
+    const completenessIndex = stages.findIndex((stage) => stage.$match?.$expr?.$and);
+    const requiredIndex = stages.findIndex((stage) => stage.$set?._requiredIngredientIds);
+    const lookupIndex = stages.findIndex((stage) => stage.$lookup?.as === '_activeRequiredIngredients');
+    const activeMatchIndex = stages.findIndex((stage, index) =>
+      index > lookupIndex && stage.$match?.$expr?.$eq
+    );
+    assert.equal(facetIndex, stages.length - 1);
+    assert.deepEqual(stages[0].$match.$and[0].$or, [
+      { publicationStatus: 'published' },
+      { publicationStatus: { $exists: false } },
+    ]);
+    assert.equal(stages[0].$match.isActive, true);
+    for (const index of [completenessIndex, requiredIndex, lookupIndex, activeMatchIndex]) {
+      assert.ok(index > 0 && index < facetIndex, 'eligibility must precede both facet branches');
+    }
+    assert.ok(completenessIndex < requiredIndex && requiredIndex < lookupIndex && lookupIndex < activeMatchIndex);
+    // Completeness must remain in the database before the shared count/page facet.
+    const terms = stages[completenessIndex].$match.$expr.$and;
+    const termFor = (path) => terms.find((term) => JSON.stringify(term).includes(JSON.stringify(path)));
+    for (const path of [
+      '$title', '$description', '$difficulty', '$prepTimeMinutes', '$cookTimeMinutes',
+      '$servings', '$ingredients', '$instructions', '$dietaryTags', '$imageUrl',
+      '$imageAssetId', '$nutrition', '$nutritionProvenance',
+    ]) {
+      assert.ok(termFor(path), `missing completeness predicate for ${path}`);
+    }
+    assert.match(JSON.stringify(termFor('$imageUrlIsPublicHttps')), /imageUrlIsPublicHttps/);
+    assert.match(JSON.stringify(termFor('$nutritionSourceUrlIsPublicHttps')), /nutritionSourceUrlIsPublicHttps/);
+    assert.match(JSON.stringify(termFor('$nutritionProvenance.acceptedBy')), /acceptedBy/);
+    assert.match(JSON.stringify(termFor('$nutritionProvenance.acceptedAt')), /acceptedAt/);
+    assert.deepEqual(stages[lookupIndex].$lookup.pipeline[0].$match.$expr, {
+      $and: [
+        { $in: ['$_id', '$$requiredIds'] },
+        { $eq: ['$isActive', true] },
+      ],
+    });
+    assert.deepEqual(stages[activeMatchIndex].$match.$expr, {
+      $eq: [
+        { $size: '$_activeRequiredIngredients' },
+        { $size: '$_requiredIngredientIds' },
+      ],
+    });
+    assert.deepEqual(stages[facetIndex].$facet.total, [{ $count: 'value' }]);
+    assert.deepEqual(stages[facetIndex].$facet.items.slice(0, 3), [
+      { $sort: { createdAt: -1, _id: 1 } }, { $skip: 2 }, { $limit: 2 },
+    ]);
+  }
+
+  assertEligibility(pipeline);
+  const withoutCompleteness = structuredClone(pipeline);
+  withoutCompleteness.splice(withoutCompleteness.findIndex((stage) => stage.$match?.$expr?.$and), 1);
+  assert.throws(() => assertEligibility(withoutCompleteness));
+  const afterPaging = structuredClone(pipeline);
+  afterPaging.push(afterPaging.splice(afterPaging.findIndex((stage) => stage.$match?.$expr?.$and), 1)[0]);
+  assert.throws(() => assertEligibility(afterPaging));
+  const weakened = structuredClone(pipeline);
+  const lookup = weakened.find((stage) => stage.$lookup?.as === '_activeRequiredIngredients');
+  lookup.$lookup.pipeline[0].$match.$expr.$and[1].$eq[1] = false;
+  assert.throws(() => assertEligibility(weakened));
+});
+
+test('isolated Mongo evaluates mixed consumer eligibility before every page and total', {
+  skip: !process.env.RECIPE_RANKING_MONGO_URI,
+  timeout: 60000,
+}, async () => {
+  const uri = process.env.RECIPE_RANKING_MONGO_URI;
+  assertCommandTarget(uri, { apply: true });
+  await mongoose.connect(uri, { autoIndex: false, autoCreate: false });
+  const activeIngredientId = new mongoose.Types.ObjectId();
+  const inactiveIngredientId = new mongoose.Types.ObjectId();
+  const ids = Array.from({ length: 14 }, () => new mongoose.Types.ObjectId());
+  const base = {
+    title: 'Eligible recipe',
+    description: 'A complete recipe.',
+    difficulty: 'easy',
+    cookTimeMinutes: 30,
+    servings: 4,
+    ingredients: [{ ingredientId: activeIngredientId, quantity: 1, unit: 'kg', optional: false }],
+    instructions: ['Cook until ready.'],
+    dietaryTags: [],
+    imageUrl: null,
+    isActive: true,
+    publicationStatus: 'published',
+  };
+  const row = (index, changes = {}) => ({
+    ...base, _id: ids[index], createdAt: new Date(Date.UTC(2026, 8, 30 - index)),
+    updatedAt: new Date(Date.UTC(2026, 8, 30 - index)), ...changes,
+  });
+  const legacy = row(3);
+  delete legacy.publicationStatus;
+  const noDescription = row(9);
+  delete noDescription.description;
+  const noInstructions = row(10);
+  delete noInstructions.instructions;
+  const rows = [
+    row(0, { publicationStatus: 'draft' }),
+    row(1, { description: '   ' }),
+    row(2, { ingredients: [{ ingredientId: inactiveIngredientId, quantity: 1, unit: 'kg' }] }),
+    legacy,
+    row(4, { isActive: false }),
+    row(5),
+    row(6, { difficulty: undefined }),
+    row(7),
+    row(8, { instructions: [] }),
+    noDescription,
+    noInstructions,
+    row(11, { imageUrl: 'https://example.com/picture.jpg', imageUrlIsPublicHttps: false }),
+    row(12, { imageUrl: 'https://example.com/picture.jpg' }),
+    row(13, { imageUrl: 'https://example.com/picture.jpg', imageUrlIsPublicHttps: true }),
+  ];
+  try {
+    await Ingredient.collection.insertMany([
+      { _id: activeIngredientId, name: 'Rank1 active fixture', isActive: true },
+      { _id: inactiveIngredientId, name: 'Rank1 inactive fixture', isActive: false },
+    ]);
+    await Recipe.collection.insertMany(rows);
+    const readPage = (page) => recipeService.listRecipes({
+      status: 'active', page, limit: 2, sort: 'newest', isAdmin: false,
+    });
+    const pages = await Promise.all([readPage(1), readPage(2), readPage(3), readPage(4)]);
+    assert.deepEqual(pages.map(({ items }) => items.map(({ _id }) => String(_id))), [
+      [String(ids[3]), String(ids[5])],
+      [String(ids[7]), String(ids[13])],
+      [], [],
+    ]);
+    assert.deepEqual(pages.map(({ total }) => total), [4, 4, 4, 4]);
+    assert.deepEqual(pages.map(({ page, limit }) => [page, limit]), [
+      [1, 2], [2, 2], [3, 2], [4, 2],
+    ]);
+  } finally {
+    await Recipe.collection.deleteMany({ _id: { $in: ids } });
+    await Ingredient.collection.deleteMany({ _id: { $in: [activeIngredientId, inactiveIngredientId] } });
+    await mongoose.disconnect();
+  }
+});
+
 test('consumer list query requests Published-or-legacy records while staff can inspect Drafts', async (t) => {
   const draft = populated(fullRecipe());
-  const seen = [];
+  let consumerQuery;
+  const staffQueries = [];
+  t.mock.method(recipeRepository, 'findConsumerPage', async (query) => {
+    consumerQuery = query;
+    return { items: [], total: 0 };
+  });
   t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
-    seen.push(filter);
+    staffQueries.push(filter);
     return [draft];
   });
   t.mock.method(recipeRepository, 'countByFilter', async () => 1);
@@ -346,27 +499,28 @@ test('consumer list query requests Published-or-legacy records while staff can i
   const staff = await recipeService.listRecipes({ status: 'active', page: 1, limit: 20, sort: 'newest', isAdmin: true });
 
   assert.deepEqual(consumer.items, []);
+  assert.equal(consumer.total, 0);
   assert.equal(staff.items.length, 1);
-  assert.deepEqual(seen[0].$and[0].$or, [
+  assert.deepEqual(consumerQuery.filter.$and[0].$or, [
     { publicationStatus: 'published' },
     { publicationStatus: { $exists: false } },
   ]);
-  assert.equal(seen[1].$and, undefined);
+  assert.deepEqual(consumerQuery.sort, { createdAt: -1, _id: 1 });
+  assert.equal(staffQueries[0].$and, undefined);
 });
 
 test('newest/oldest retain pre-M20 createdAt ordering while consumer publication filtering remains active', async (t) => {
   const seen = [];
-  t.mock.method(recipeRepository, 'findMany', async ({ filter, sort }) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter, sort }) => {
     seen.push({ filter, sort });
-    return [];
+    return { items: [], total: 0 };
   });
-  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
 
   await recipeService.listRecipes({ status: 'active', page: 1, limit: 20, sort: 'newest', isAdmin: false });
   await recipeService.listRecipes({ status: 'active', page: 1, limit: 20, sort: 'oldest', isAdmin: false });
 
-  assert.deepEqual(seen[0].sort, { createdAt: -1 });
-  assert.deepEqual(seen[1].sort, { createdAt: 1 });
+  assert.deepEqual(seen[0].sort, { createdAt: -1, _id: 1 });
+  assert.deepEqual(seen[1].sort, { createdAt: 1, _id: 1 });
   assert.ok(seen.every(({ filter }) => filter.$and[0].$or.some((term) => term.publicationStatus === 'published')));
 });
 
@@ -480,11 +634,12 @@ test('Published recipes allow optional prep clears but reject required scalar cl
 });
 
 test('archive preserves publication state and Draft restore does not require publish completeness', async (t) => {
+  t.mock.method(recipeRepository, 'findRawById', async () => fullRecipe({ isActive: true }));
   t.mock.method(recipeRepository, 'archiveById', async () => populated(fullRecipe({ isActive: false })));
   const archived = await recipeService.archiveRecipe(RECIPE_ID, {}, { actorId: MODERATOR_ID });
   assert.equal(archived.publicationStatus, 'draft');
 
-  t.mock.method(recipeRepository, 'findRawById', async () => fullRecipe({ isActive: false, ingredients: [], instructions: [] }));
+  recipeRepository.findRawById.mock.mockImplementation(async () => fullRecipe({ isActive: false, ingredients: [], instructions: [] }));
   let restoreArgs;
   t.mock.method(recipeRepository, 'restoreById', async (id, args) => {
     restoreArgs = args;

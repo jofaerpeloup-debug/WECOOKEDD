@@ -190,7 +190,11 @@ it('continues representing retained ready data during a background-refresh error
 it('tracks provider replacements without a Dashboard Shopping request or recipe refetch', async () => {
   mockShopping = { status: 'ready', error: null, items: [item('a')] };
   const view = render(<DashboardScreen navigation={mockNativeNavigation} />);
-  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  const initialQueries = [
+    { sort: 'newest', limit: 8 },
+    { sort: 'topRated', page: 1, limit: 6 },
+  ];
+  await waitFor(() => expect(listRecipes.mock.calls.map(([query]) => query)).toEqual(initialQueries));
   expect(getShoppingBadge(view)).toHaveTextContent('1');
 
   mockShopping = { status: 'ready', error: null, items: [item('a', true), item('b'), item('c')] };
@@ -200,7 +204,7 @@ it('tracks provider replacements without a Dashboard Shopping request or recipe 
   mockShopping = { status: 'ready', error: null, items: [] };
   view.rerender(<DashboardScreen navigation={mockNativeNavigation} />);
   expect(queryShoppingBadge(view)).toBeNull();
-  expect(listRecipes).toHaveBeenCalledTimes(1);
+  expect(listRecipes.mock.calls.map(([query]) => query)).toEqual(initialQueries);
 });
 
 it('drops the previous account count during the provider ownership transition', () => {

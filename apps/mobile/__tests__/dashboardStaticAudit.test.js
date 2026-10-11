@@ -68,4 +68,14 @@ describe('Dashboard production authority and shared recent searches', () => {
     expect(combined).not.toMatch(/shoppingListService|AsyncStorage|SecureStore/);
     expect(combined).not.toMatch(/shoppingGen|shoppingLoading|shoppingError|setShopping/);
   });
+
+  it('adds only the server-authoritative six-item Top Rated Trending prefix', () => {
+    expect(source).toMatch(/listRecipes\(\{\s*sort: 'topRated', page: 1, limit: TRENDING_LIMIT/);
+    expect(source).toMatch(/const TRENDING_LIMIT = 6/);
+    expect(source).toMatch(/trending\.map\(renderTrendingCard\)/);
+    expect(source).toMatch(/recipe\.ratingSummary\.averageRating/);
+    expect(source).toMatch(/recipe\.ratingSummary\.ratingCount/);
+    expect(source).toMatch(/navigation\.navigate\('Trending'\)/);
+    expect(source).not.toMatch(/trending\.sort\(|mockTrending|trendingScore|popularity|AsyncStorage/);
+  });
 });

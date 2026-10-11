@@ -232,6 +232,19 @@ const recipeSchema = new mongoose.Schema(
         message: 'imageUrl must be a public HTTPS URL without credentials.',
       },
     },
+    // Internal database-query fact derived only by the server from imageUrl
+    // via isPublicHttpsUrl. It is deliberately not defaulted: legacy rows must
+    // fail closed until the explicit RANK1 backfill has classified them.
+    imageUrlIsPublicHttps: {
+      type: Boolean,
+      select: false,
+    },
+    // Kept separate from image eligibility; absent optional source URLs do not
+    // require a true value, while present URLs must be classified by the server.
+    nutritionSourceUrlIsPublicHttps: {
+      type: Boolean,
+      select: false,
+    },
     // Internal Cloudinary management metadata. It is intentionally absent
     // from recipe.serializer.js and requires no migration for legacy records.
     imageAssetId: {
@@ -271,7 +284,13 @@ const recipeSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Recipe indexes are release-managed. In particular, the weighted text
+    // index must pass the RANK1 catalogue preflight and may be created only by
+    // the explicit migration command, never as a side effect of API startup.
+    autoIndex: false,
+  }
 );
 
 recipeSchema.pre('validate', function validateManagedImageConsistency() {
@@ -299,6 +318,15 @@ recipeSchema.index({ isActive: 1, publicationStatus: 1, createdAt: -1 });
 recipeSchema.index({ publicationStatus: 1, isActive: 1, updatedAt: -1 });
 recipeSchema.index({ 'ingredients.ingredientId': 1 });
 recipeSchema.index({ title: 1 });
+recipeSchema.index(
+  { title: 'text', description: 'text' },
+  {
+    name: 'recipe_title_description_text_v1',
+    weights: { title: 10, description: 1 },
+    default_language: 'english',
+    language_override: 'language',
+  }
+);
 
 const Recipe = mongoose.model('Recipe', recipeSchema);
 

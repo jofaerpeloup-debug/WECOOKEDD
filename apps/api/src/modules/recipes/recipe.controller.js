@@ -19,6 +19,7 @@ const listRecipes = asyncHandler(async (req, res) => {
     dietaryTag,
     dietaryTags,
     ingredientId,
+    excludeRecipeId,
     maxPrepTimeMinutes,
     totalTimeBucket,
     status,
@@ -37,6 +38,7 @@ const listRecipes = asyncHandler(async (req, res) => {
     dietaryTag,
     dietaryTags,
     ingredientId,
+    excludeRecipeId,
     maxPrepTimeMinutes,
     totalTimeBucket,
     status,
@@ -47,7 +49,11 @@ const listRecipes = asyncHandler(async (req, res) => {
   });
 
   sendSuccess(res, {
-    recipes: items.map(canReadAll ? toStaffRecipe : toPublicRecipe),
+    recipes: items.map((recipe) => (
+      canReadAll
+        ? toStaffRecipe(recipe, { includeRatingSummary: sort === 'topRated' })
+        : toPublicRecipe(recipe, { includeRatingSummary: sort === 'topRated' })
+    )),
     pagination: toPagination({ page, limit, total }),
   });
 });

@@ -344,8 +344,7 @@ test('GET /api/v1/recipes without a token is rejected', async () => {
 
 test('GET /api/v1/recipes is readable by an authenticated normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
-  t.mock.method(recipeRepository, 'findMany', async () => [fakeRecipeDoc()]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({ items: [fakeRecipeDoc()], total: 1 }));
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app).get('/api/v1/recipes').set('Authorization', `Bearer ${token}`);
@@ -358,8 +357,7 @@ test('GET /api/v1/recipes is readable by an authenticated normal user', async (t
 
 test('GET /api/v1/recipes never leaks internal ingredient fields in the populated summary', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
-  t.mock.method(recipeRepository, 'findMany', async () => [fakeRecipeDoc()]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({ items: [fakeRecipeDoc()], total: 1 }));
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app).get('/api/v1/recipes').set('Authorization', `Bearer ${token}`);
@@ -368,16 +366,37 @@ test('GET /api/v1/recipes never leaks internal ingredient fields in the populate
   assert.deepEqual(Object.keys(ingredientSummary).sort(), ['id', 'name']);
 });
 
+test('GET /api/v1/recipes serializes authoritative ratingSummary only for topRated', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const ranked = fakeRecipeDoc({ _ratingSummary: { averageRating: 4.7, ratingCount: 3 } });
+  t.mock.method(recipeRepository, 'findRanked', async () => ({ items: [ranked], total: 1 }));
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+
+  const response = await request(app)
+    .get('/api/v1/recipes?sort=topRated')
+    .set('Authorization', `Bearer ${token}`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data.recipes[0].ratingSummary, { averageRating: 4.7, ratingCount: 3 });
+  assert.equal('_ratingSummary' in response.body.data.recipes[0], false);
+});
+
+test('GET /api/v1/recipes requires search for relevance and rejects malformed exclusion', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  for (const query of ['sort=relevance', 'sort=relevance&search=%20%20', 'excludeRecipeId=bad']) {
+    const response = await request(app).get(`/api/v1/recipes?${query}`).set('Authorization', `Bearer ${token}`);
+    assert.equal(response.status, 400, query);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR', query);
+  }
+});
+
 test('GET /api/v1/recipes filters out a recipe with an archived required ingredient for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
-  t.mock.method(recipeRepository, 'findMany', async () => [
-    fakeRecipeDoc({ _id: 'r1' }),
-    fakeRecipeDoc({
-      _id: 'r2',
-      ingredients: [{ ingredientId: inactiveIngredient(CHICKEN_ID), quantity: 1, unit: 'kg', optional: false }],
-    }),
-  ]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 2);
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({
+    items: [fakeRecipeDoc({ _id: 'r1' })],
+    total: 1,
+  }));
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app).get('/api/v1/recipes').set('Authorization', `Bearer ${token}`);
@@ -389,15 +408,15 @@ test('GET /api/v1/recipes filters out a recipe with an archived required ingredi
 
 test('GET /api/v1/recipes keeps a recipe visible but omits an archived optional ingredient usage for a normal user', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
-  t.mock.method(recipeRepository, 'findMany', async () => [
-    fakeRecipeDoc({
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({
+    items: [fakeRecipeDoc({
       ingredients: [
         { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), quantity: 1, unit: 'kg', optional: false },
         { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), quantity: 1, unit: 'clove', optional: true },
       ],
-    }),
-  ]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+    })],
+    total: 1,
+  }));
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app).get('/api/v1/recipes').set('Authorization', `Bearer ${token}`);
@@ -449,7 +468,7 @@ test('GET /api/v1/recipes Draft review filter is Moderator-only and preserves th
   assert.equal(response.body.data.recipes[0].publicationStatus, 'draft');
   assert.deepEqual(response.body.data.pagination, { page: 1, limit: 20, total: 1, totalPages: 1 });
   assert.deepEqual(findArgs.filter, { publicationStatus: 'draft', isActive: true });
-  assert.deepEqual(findArgs.sort, { updatedAt: -1 });
+  assert.deepEqual(findArgs.sort, { updatedAt: -1, _id: 1 });
 });
 
 for (const actor of [
@@ -506,11 +525,10 @@ test('GET /api/v1/recipes rejects invalid query params', async (t) => {
 test('GET /api/v1/recipes?region=&category=&maxPrepTimeMinutes=20 is applied as filters', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   let capturedFilter;
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
     capturedFilter = filter;
-    return [];
+    return { items: [], total: 0 };
   });
-  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app)
@@ -526,9 +544,10 @@ test('GET /api/v1/recipes?region=&category=&maxPrepTimeMinutes=20 is applied as 
 test('GET /api/v1/recipes composes canonical dietaryTags and totalTimeBucket through controller and service', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   let findFilter;
-  let countFilter;
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { findFilter = filter; return []; });
-  t.mock.method(recipeRepository, 'countByFilter', async (filter) => { countFilter = filter; return 0; });
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
+    findFilter = filter;
+    return { items: [], total: 0 };
+  });
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app)
@@ -536,7 +555,6 @@ test('GET /api/v1/recipes composes canonical dietaryTags and totalTimeBucket thr
     .set('Authorization', `Bearer ${token}`);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(findFilter, countFilter);
   assert.deepEqual(findFilter.dietaryTags, { $all: ['vegetarian', 'vegan'] });
   assert.ok(findFilter.$expr);
   assert.equal(findFilter.$or[0].title.source, 'adobo');
@@ -545,8 +563,10 @@ test('GET /api/v1/recipes composes canonical dietaryTags and totalTimeBucket thr
 test('GET /api/v1/recipes preserves dietaryTag alias and rejects dual/repeated/empty DISC6 parameters', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const captured = [];
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { captured.push(filter); return []; });
-  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
+    captured.push(filter);
+    return { items: [], total: 0 };
+  });
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
 
   const alias = await request(app)
@@ -584,8 +604,7 @@ test('GET /api/v1/recipes?cuisine=filipino is rejected (retired query param)', a
 
 test('GET /api/v1/recipes response carries region/category/steps and no cuisine', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
-  t.mock.method(recipeRepository, 'findMany', async () => [fakeRecipeDoc()]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({ items: [fakeRecipeDoc()], total: 1 }));
 
   const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   const response = await request(app).get('/api/v1/recipes').set('Authorization', `Bearer ${token}`);
@@ -753,10 +772,12 @@ test('POST /api/v1/recipes creates a recipe for a moderator when every ingredien
   assert.equal(response.body.data.recipe.title, 'Chicken Adobo');
   assert.equal(response.body.data.recipe.ingredients[0].ingredient.name, 'Chicken');
   assert.equal(capturedData.publicationStatus, 'published');
+  assert.equal(capturedData.imageUrlIsPublicHttps, false);
   assert.equal(capturedData.publishedBy, MODERATOR_ID);
   assert.ok(capturedData.publishedAt instanceof Date);
   assert.equal('confirmFilipinoCuisine' in capturedData, false);
   assert.equal('confirmFilipinoCuisine' in response.body.data.recipe, false);
+  assert.equal('imageUrlIsPublicHttps' in response.body.data.recipe, false);
 });
 
 test('legacy POST /api/v1/recipes returns pre-mutation duplicate evidence and succeeds only on explicit current retry', async (t) => {
@@ -961,14 +982,14 @@ test('POST /api/v1/recipes preserves canonical lb/oz values through serializatio
   ]);
 });
 
-test('POST /api/v1/recipes rejects unknown top-level fields', async (t) => {
+test('POST /api/v1/recipes rejects the server-owned image eligibility field', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
 
   const response = await request(app)
     .post('/api/v1/recipes')
     .set('Authorization', `Bearer ${token}`)
-    .send(validCreatePayload({ notAField: true }));
+    .send(validCreatePayload({ imageUrlIsPublicHttps: true }));
 
   assert.equal(response.status, 400);
   assert.equal(response.body.error.code, 'VALIDATION_ERROR');
@@ -1050,7 +1071,11 @@ test('PATCH /api/v1/recipes/:id clears category with an explicit null and the se
 
   assert.equal(response.status, 200);
   assert.deepEqual(capturedOps.$unset, { category: '' });
-  assert.deepEqual(capturedOps.$set, { updatedBy: MODERATOR_ID });
+  assert.deepEqual(capturedOps.$set, {
+    updatedBy: MODERATOR_ID,
+    imageUrlIsPublicHttps: false,
+    nutritionSourceUrlIsPublicHttps: false,
+  });
   assert.equal(response.body.data.recipe.category, null);
   // The untouched region is unaffected.
   assert.equal(response.body.data.recipe.region, 'central-luzon');
@@ -1325,6 +1350,7 @@ test('DELETE /api/v1/recipes/:id is forbidden for a normal user', async (t) => {
 
 test('DELETE /api/v1/recipes/:id archives (soft-deletes) for a moderator', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  t.mock.method(recipeRepository, 'findRawById', async () => fakeRecipeDoc());
   let archivedId;
   t.mock.method(recipeRepository, 'archiveById', async (id) => {
     archivedId = id;
@@ -1343,7 +1369,7 @@ test('DELETE /api/v1/recipes/:id archives (soft-deletes) for a moderator', async
 
 test('DELETE /api/v1/recipes/:id returns 404 for an unknown id', async (t) => {
   mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
-  t.mock.method(recipeRepository, 'archiveById', async () => null);
+  t.mock.method(recipeRepository, 'findRawById', async () => null);
 
   const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
   const response = await request(app)
@@ -1370,9 +1396,24 @@ test('POST /api/v1/recipes/drafts creates a title-only Draft with server-owned a
 
   assert.equal(response.status, 201);
   assert.equal(captured.publicationStatus, 'draft');
+  assert.equal(captured.imageUrlIsPublicHttps, false);
   assert.equal(captured.createdBy, MODERATOR_ID);
   assert.equal(captured.updatedBy, MODERATOR_ID);
   assert.equal(response.body.data.recipe.publicationStatus, 'draft');
+  assert.equal('imageUrlIsPublicHttps' in response.body.data.recipe, false);
+});
+
+test('POST /api/v1/recipes/drafts rejects client-owned image eligibility state', async (t) => {
+  mockAuth(t, { id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+  const token = tokenFor({ id: MODERATOR_ID, role: 'moderator', sessionId: MODERATOR_SESSION_ID });
+
+  const response = await request(app)
+    .post('/api/v1/recipes/drafts')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ title: 'Draft Adobo', imageUrlIsPublicHttps: true });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
 });
 
 test('normal User cannot read a Draft by id while staff can inspect it', async (t) => {
@@ -1440,6 +1481,7 @@ test('publish requires Filipino confirmation and a Moderator can publish a compl
   assert.equal(published.body.data.recipe.publicationStatus, 'published');
   assert.equal(transition.actorId, MODERATOR_ID);
   assert.ok(transition.publishedAt instanceof Date);
+  assert.equal(transition.imageUrlIsPublicHttps, false);
 });
 
 test('PATCH rejects state/actor mass assignment and returns 409 for a stale precondition', async (t) => {
@@ -1452,6 +1494,7 @@ test('PATCH rejects state/actor mass assignment and returns 409 for a stale prec
     { updatedBy: MODERATOR_ID },
     { publishedBy: MODERATOR_ID },
     { publishedAt: new Date().toISOString() },
+    { imageUrlIsPublicHttps: true },
   ]) {
     const rejected = await request(app)
       .patch(`/api/v1/recipes/${RECIPE_ID}`)
@@ -1535,6 +1578,7 @@ test('restore returns controlled 409 when the validated snapshot changes before 
   assert.equal(response.status, 409);
   assert.equal(response.body.error.code, 'RECIPE_EDIT_CONFLICT');
   assert.equal(mutationArgs.expectedUpdatedAt, updatedAt.toISOString());
+  assert.equal(mutationArgs.imageUrlIsPublicHttps, false);
 });
 
 test('normal User is denied publish, archive, and restore commands', async (t) => {

@@ -19,17 +19,18 @@ const {
   nutritionSourceSchema,
 } = require('./recipe.validation');
 const { consumerPublicationFilter } = require('./recipe.visibility');
+const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
 
 const SORT_MAP = {
-  titleAsc: { title: 1 },
-  titleDesc: { title: -1 },
+  titleAsc: { title: 1, _id: 1 },
+  titleDesc: { title: -1, _id: 1 },
   // Transitional M20B ordering remains creation-based until the publication
   // state/time backfill has been executed and verified in deployment.
-  newest: { createdAt: -1 },
-  oldest: { createdAt: 1 },
-  prepTimeAsc: { prepTimeMinutes: 1 },
-  prepTimeDesc: { prepTimeMinutes: -1 },
-  updatedDesc: { updatedAt: -1 },
+  newest: { createdAt: -1, _id: 1 },
+  oldest: { createdAt: 1, _id: 1 },
+  prepTimeAsc: { prepTimeMinutes: 1, _id: 1 },
+  prepTimeDesc: { prepTimeMinutes: -1, _id: 1 },
+  updatedDesc: { updatedAt: -1, _id: 1 },
 };
 
 const SMART_COLLECTIONS = Object.freeze([
@@ -181,6 +182,23 @@ function applyNutritionToDocument(doc, nutrition, nutritionSource, context) {
   }
   doc.nutrition = parseAuthoringValue(nutritionSchema, nutrition, 'nutrition');
   doc.nutritionProvenance = buildNutritionProvenance(nutritionSource, context);
+}
+
+function deriveImageUrlIsPublicHttps(imageUrl) {
+  return typeof imageUrl === 'string' && isPublicHttpsUrl(imageUrl.trim());
+}
+
+function deriveNutritionSourceUrlIsPublicHttps(provenance) {
+  const sourceUrl = provenance?.sourceUrl;
+  return typeof sourceUrl === 'string' && isPublicHttpsUrl(sourceUrl.trim());
+}
+
+function snapshotRevision(recipe) {
+  const revision = recipe.__v;
+  if (revision !== undefined && (
+    !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER
+  )) throw conflictError();
+  return revision;
 }
 
 // Reduces validated step input to the persisted `instructions: string[]`
@@ -376,6 +394,7 @@ function buildPublishedRecipeDocument({
     instructions: toInstructionsList({ instructions, steps }),
     dietaryTags: normalizeDietaryTags(dietaryTags),
     imageUrl: imageUrl ?? null,
+    imageUrlIsPublicHttps: deriveImageUrlIsPublicHttps(imageUrl),
     imageAssetId: imageAssetId ?? null,
     publicationStatus: 'published',
     createdBy: actorId ?? null,
@@ -388,6 +407,7 @@ function buildPublishedRecipeDocument({
   if (region !== undefined) doc.region = region;
   if (category !== undefined) doc.category = category;
   applyNutritionToDocument(doc, nutrition, nutritionSource, { actorId, now });
+  doc.nutritionSourceUrlIsPublicHttps = deriveNutritionSourceUrlIsPublicHttps(doc.nutritionProvenance);
 
   return doc;
 }
@@ -589,7 +609,9 @@ async function createDraft(input, { actorId, now = new Date() } = {}) {
   if (input.dietaryTags !== undefined) doc.dietaryTags = normalizeDietaryTags(input.dietaryTags);
   if (input.imageUrl !== undefined) doc.imageUrl = input.imageUrl;
   if (input.imageAssetId !== undefined) doc.imageAssetId = input.imageAssetId;
+  doc.imageUrlIsPublicHttps = deriveImageUrlIsPublicHttps(doc.imageUrl);
   applyNutritionToDocument(doc, input.nutrition, input.nutritionSource, { actorId, now });
+  doc.nutritionSourceUrlIsPublicHttps = deriveNutritionSourceUrlIsPublicHttps(doc.nutritionProvenance);
   return recipeRepository.createRecipe(doc);
 }
 
@@ -749,6 +771,7 @@ async function listRecipes({
   dietaryTag,
   dietaryTags,
   ingredientId,
+  excludeRecipeId,
   maxPrepTimeMinutes,
   totalTimeBucket,
   status,
@@ -792,7 +815,12 @@ async function listRecipes({
   if (totalTimeBucket) {
     filter.$expr = totalTimeExpression(totalTimeBucket);
   }
-  if (search) {
+  if (excludeRecipeId) {
+    filter._id = { $ne: excludeRecipeId };
+  }
+  if (search && sort === 'relevance') {
+    filter.$text = { $search: search };
+  } else if (search) {
     const pattern = new RegExp(escapeRegex(search), 'i');
     filter.$or = [{ title: pattern }, { description: pattern }];
   }
@@ -801,31 +829,40 @@ async function listRecipes({
     filter.$and = [...(filter.$and || []), consumerPublicationFilter()];
   }
 
+  const ranked = sort === 'relevance' || sort === 'topRated';
   const skip = (page - 1) * limit;
-  const [rawItems, total] = await Promise.all([
-    recipeRepository.findMany({ filter, sort: SORT_MAP[sort], skip, limit }),
-    recipeRepository.countByFilter(filter),
-  ]);
+  let rawItems;
+  let total;
 
-  // Authoritative nutrition is not ordinary publication incompleteness. A
-  // malformed present value must reject the whole consumer response before
-  // the legacy usability filter can turn it into a valid-looking omission.
+  if (ranked) {
+    ({ items: rawItems, total } = await recipeRepository.findRanked({
+      filter,
+      sort,
+      skip,
+      limit,
+      consumerOnly: !isAdmin,
+    }));
+  } else if (isAdmin) {
+    [rawItems, total] = await Promise.all([
+      recipeRepository.findMany({ filter, sort: SORT_MAP[sort], skip, limit }),
+      recipeRepository.countByFilter(filter),
+    ]);
+  } else {
+    ({ items: rawItems, total } = await recipeRepository.findConsumerPage({
+      filter,
+      sort: SORT_MAP[sort],
+      skip,
+      limit,
+    }));
+  }
+
+  // Every consumer path returns an already eligible, counted, and paged
+  // database result. Application memory holds at most the validated page.
+  // Staff retain their existing raw catalogue visibility.
   if (!isAdmin) {
     rawItems.forEach((recipe) => toPublicNutrition(recipe.nutrition));
   }
-
-  // Known V1 simplification, same trade-off as substitutions (see
-  // docs/architecture/recipes.md): the "usable" filter runs in application
-  // code after the database page is fetched, so pagination.total/
-  // totalPages reflect the pre-filter Recipe count and can overstate how
-  // many usable recipes actually exist. The returned `data` array itself is
-  // always safe — no unusable recipe is ever included.
-  const usableItems = isAdmin
-    ? rawItems
-    : status === 'active'
-      ? rawItems.filter(isUsableForNonAdmin)
-      : rawItems;
-  const items = isAdmin ? usableItems : usableItems.map(toNonAdminView);
+  const items = isAdmin ? rawItems : rawItems.map(toNonAdminView);
 
   return { items, total, page, limit };
 }
@@ -839,6 +876,7 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
   const { expectedUpdatedAt, ...contentPatch } = patch;
   patch = contentPatch;
   assertCurrentPrecondition(existing, expectedUpdatedAt);
+  const expectedRevision = snapshotRevision(existing);
 
   const update = {};
   // Fields removed from the document rather than set — an explicit `null` for
@@ -916,6 +954,10 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
     ...update,
   };
   for (const field of Object.keys(unset)) delete merged[field];
+  update.imageUrlIsPublicHttps = deriveImageUrlIsPublicHttps(merged.imageUrl);
+  merged.imageUrlIsPublicHttps = update.imageUrlIsPublicHttps;
+  update.nutritionSourceUrlIsPublicHttps = deriveNutritionSourceUrlIsPublicHttps(merged.nutritionProvenance);
+  merged.nutritionSourceUrlIsPublicHttps = update.nutritionSourceUrlIsPublicHttps;
   // Published records retain the pre-M25B completeness check after every
   // edit so unrelated repairs do not strand an older title/instruction. Any
   // newly supplied title or instruction has already passed the new-write
@@ -951,10 +993,9 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
   if (Object.keys(update).length > 0) ops.$set = update;
   if (Object.keys(unset).length > 0) ops.$unset = unset;
 
-  const updated = await recipeRepository.updateById(id, ops, { expectedUpdatedAt });
+  const updated = await recipeRepository.updateById(id, ops, { expectedUpdatedAt, expectedRevision });
   if (!updated) {
-    if (expectedUpdatedAt) throw conflictError();
-    throw notFoundError();
+    throw conflictError();
   }
 
   // Database state changes first. Cleanup is best-effort and can never roll
@@ -981,6 +1022,7 @@ async function publishRecipe(id, { expectedUpdatedAt, duplicateReview } = {}, { 
   const existing = await recipeRepository.findRawById(id);
   if (!existing) throw notFoundError();
   assertCurrentPrecondition(existing, expectedUpdatedAt);
+  const expectedRevision = snapshotRevision(existing);
   const evaluation = await evaluatePublishReadiness(existing, {
     duplicateReview,
     collectAllIssues: false,
@@ -992,16 +1034,22 @@ async function publishRecipe(id, { expectedUpdatedAt, duplicateReview } = {}, { 
     actorId,
     publishedAt: existing.publishedAt || now,
     expectedUpdatedAt: atomicUpdatedAt,
+    expectedRevision,
+    imageUrlIsPublicHttps: deriveImageUrlIsPublicHttps(existing.imageUrl),
+    nutritionSourceUrlIsPublicHttps: deriveNutritionSourceUrlIsPublicHttps(existing.nutritionProvenance),
   });
   if (!published) throw conflictError();
   return published;
 }
 
 async function archiveRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
-  const archived = await recipeRepository.archiveById(id, { actorId, expectedUpdatedAt });
+  const existing = await recipeRepository.findRawById(id);
+  if (!existing) throw notFoundError();
+  assertCurrentPrecondition(existing, expectedUpdatedAt);
+  const expectedRevision = snapshotRevision(existing);
+  const archived = await recipeRepository.archiveById(id, { actorId, expectedUpdatedAt, expectedRevision });
   if (!archived) {
-    if (expectedUpdatedAt) throw conflictError();
-    throw notFoundError();
+    throw conflictError();
   }
   return archived;
 }
@@ -1010,6 +1058,7 @@ async function restoreRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
   const existing = await recipeRepository.findRawById(id);
   if (!existing) throw notFoundError();
   assertCurrentPrecondition(existing, expectedUpdatedAt);
+  const expectedRevision = snapshotRevision(existing);
   if (effectivePublicationStatus(existing) === 'published') {
     assertLegacyPublishedComplete(existing);
     await assertIngredientsActive(existing.ingredients || []);
@@ -1018,6 +1067,9 @@ async function restoreRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
   const restored = await recipeRepository.restoreById(id, {
     actorId,
     expectedUpdatedAt: atomicUpdatedAt,
+    expectedRevision,
+    imageUrlIsPublicHttps: deriveImageUrlIsPublicHttps(existing.imageUrl),
+    nutritionSourceUrlIsPublicHttps: deriveNutritionSourceUrlIsPublicHttps(existing.nutritionProvenance),
   });
   if (!restored) {
     throw conflictError();

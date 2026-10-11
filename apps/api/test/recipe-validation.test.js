@@ -598,6 +598,14 @@ test('listRecipesSchema rejects an invalid sort value (no raw Mongo sort syntax)
   assert.equal(listRecipesSchema.safeParse({ query: { sort: '{ title: 1 }' } }).success, false);
 });
 
+test('listRecipesSchema accepts frozen ranking sorts and strict exclusion', () => {
+  assert.equal(listRecipesSchema.safeParse({ query: { sort: 'topRated', excludeRecipeId: RECIPE_ID } }).success, true);
+  assert.equal(listRecipesSchema.safeParse({ query: { sort: 'relevance', search: 'adobo' } }).success, true);
+  assert.equal(listRecipesSchema.safeParse({ query: { sort: 'relevance' } }).success, false);
+  assert.equal(listRecipesSchema.safeParse({ query: { sort: 'relevance', search: '   ' } }).success, false);
+  assert.equal(listRecipesSchema.safeParse({ query: { excludeRecipeId: 'bad' } }).success, false);
+});
+
 test('listRecipesSchema caps limit at 100', () => {
   const result = listRecipesSchema.safeParse({ query: { limit: '500' } });
   assert.equal(result.success, false);

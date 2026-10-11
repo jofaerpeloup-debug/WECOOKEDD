@@ -95,8 +95,8 @@ function toStaffNutritionSource(provenance) {
 // property, and any other internal field is never leaked. `cuisine` is
 // retired from the target contract (M3) — old documents may still carry it
 // in Mongo but it is never read here.
-function toPublicRecipe(recipe) {
-  return {
+function toPublicRecipe(recipe, { includeRatingSummary = false } = {}) {
+  const serialized = {
     id: String(recipe._id),
     title: recipe.title,
     description: recipe.description,
@@ -116,6 +116,13 @@ function toPublicRecipe(recipe) {
     createdAt: recipe.createdAt,
     updatedAt: recipe.updatedAt,
   };
+  if (includeRatingSummary) {
+    serialized.ratingSummary = {
+      averageRating: recipe._ratingSummary.averageRating,
+      ratingCount: recipe._ratingSummary.ratingCount,
+    };
+  }
+  return serialized;
 }
 
 function actorId(value) {
@@ -125,9 +132,9 @@ function actorId(value) {
 
 // Staff-only representation. Normal consumer responses continue to use
 // toPublicRecipe and therefore never expose actor attribution.
-function toStaffRecipe(recipe) {
+function toStaffRecipe(recipe, options) {
   return {
-    ...toPublicRecipe(recipe),
+    ...toPublicRecipe(recipe, options),
     publicationStatus: recipe.publicationStatus === undefined ? 'published' : recipe.publicationStatus,
     createdBy: actorId(recipe.createdBy),
     updatedBy: actorId(recipe.updatedBy),
