@@ -31,6 +31,8 @@ const UPDATED_AT = new Date('2026-09-15T10:00:00.000Z');
 const atlasExecFile = promisify(execFile);
 const QA_PROJECT_ID = '6acb1e1905708eb667a03f01';
 const QA_CLUSTER_NAME = 'wecooked-rank1-qa';
+const AUTHORING_APPROVAL_REFERENCE = 'RANK1-QA-AUTHORING-001';
+let approvedAuthoringLiveRun = null;
 const ACTIONS = Object.freeze({
   recipes: ['find', 'insert', 'update', 'remove', 'createIndex', 'listIndexes'],
   reviews: ['find', 'insert', 'update', 'remove'],
@@ -158,7 +160,7 @@ function requireAuthoringTargetConfiguration({
     && configuration.authenticatedUser.db,
   'Expected authenticated user is required');
   assert.ok(JSON.stringify(configuration.effectiveGrants)
-    === JSON.stringify([{ database: selectedDatabase, role: 'rank1_normal_role' }]),
+    === JSON.stringify([{ database: 'admin', role: 'rank1_normal_role' }]),
   'Expected grants must contain only the normal RANK1 custom role');
   return configuration;
 }
@@ -180,6 +182,8 @@ async function requireAuthoringExternalApproval(configuration,
     const record = (await question('External human approval record reference: ')).trim();
     const project = (await question('Approved isolated Atlas QA project ID: ')).trim();
     assert.ok(record && project, 'External approval reference and QA project declaration are required');
+    assert.equal(record, AUTHORING_APPROVAL_REFERENCE,
+      'Authoring approval reference differs from the separate external record');
     assert.equal(project, configuration.atlasProjectId,
       'Declared QA project differs from the intended Atlas project');
     const operations = Object.entries(ACTIONS)
@@ -248,17 +252,28 @@ async function connectForAuthoringPhysicalProof({
   connect = (...args) => mongoose.connect(...args),
   connection = mongoose.connection, disconnect = () => mongoose.disconnect(),
   collections = { recipes: Recipe.collection, ingredients: Ingredient.collection },
-  approvalOptions, fetchAtlasEvidence = getFreshAtlasEvidence,
+  approvalOptions, fetchAtlasEvidence = getFreshAtlasEvidence, onStage = () => {},
 } = {}) {
   const configuration = requireAuthoringTargetConfiguration({ uri, path,
     configuration: suppliedConfiguration, mode });
-  await requireAuthoringExternalApproval(configuration, approvalOptions);
+  if (approvalOptions) {
+    await requireAuthoringExternalApproval(configuration, approvalOptions);
+  } else {
+    assert.ok(approvedAuthoringLiveRun
+      && approvedAuthoringLiveRun.uri === uri
+      && approvedAuthoringLiveRun.path === path
+      && approvedAuthoringLiveRun.configuration === JSON.stringify(configuration),
+    'Interactive operator approval for this exact RANK1 authoring target is required before Mongo connection');
+  }
+  onStage('approval bound');
   const atlasHosts = assertAtlasEvidence(configuration, uri, await fetchAtlasEvidence());
+  onStage('fresh Atlas identity verified');
   try {
     await connect(uri, { autoIndex: false, autoCreate: false });
   } catch {
     throw new Error('Isolated Mongo connection failed.');
   }
+  onStage('Mongo connected');
   try {
     const admin = connection.db.admin();
     const [hello, build, status] = await Promise.all([
@@ -273,11 +288,22 @@ async function connectForAuthoringPhysicalProof({
       'Physical proof requires an empty disposable Recipe collection');
     assert.equal(await collections.ingredients.countDocuments({}), 0,
       'Physical proof requires an empty disposable Ingredient collection');
+    onStage('connected grants and empty fixtures verified');
   } catch (error) {
     await disconnect();
     throw error;
   }
 }
+
+test.before(async () => {
+  if (process.env.RECIPE_RANKING_MONGO_RUN !== 'authoring') return;
+  // Human input is outside the physical test's 60-second database-operation budget.
+  const uri = process.env.RECIPE_RANKING_MONGO_URI;
+  const path = process.env.RECIPE_RANKING_MONGO_PREFLIGHT_FILE;
+  const configuration = requireAuthoringTargetConfiguration({ uri, path, mode: 'authoring' });
+  await requireAuthoringExternalApproval(configuration);
+  approvedAuthoringLiveRun = { uri, path, configuration: JSON.stringify(configuration) };
+});
 
 function fullRecipe(overrides = {}) {
   return {
@@ -672,7 +698,7 @@ test('authoring Mongo selector and target configuration fail closed', async () =
     serverVersion: '8.0.0',
     requiredFcv: '8.0',
     authenticatedUser: { user: 'rank1-qa', db: 'admin' },
-    effectiveGrants: [{ database: 'wecooked-rank1-isolated', role: 'rank1_normal_role' }],
+    effectiveGrants: [{ database: 'admin', role: 'rank1_normal_role' }],
   };
   assert.throws(() => assertAuthoringLiveMode({ mode: '', uri }), /RECIPE_RANKING_MONGO_RUN/);
   assert.throws(() => assertAuthoringLiveMode({ mode: 'authorng', uri }), /RECIPE_RANKING_MONGO_RUN/);
@@ -694,18 +720,47 @@ test('authoring Mongo selector and target configuration fail closed', async () =
     configuration, mode: 'authorng', connect: () => { connections += 1; },
   }), /RECIPE_RANKING_MONGO_RUN/);
   assert.equal(connections, 0, 'No approval or invalid mode must prevent connection');
+  const previousApproval = approvedAuthoringLiveRun;
+  try {
+    approvedAuthoringLiveRun = null;
+    await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+      configuration, mode: 'authoring', connect: () => { connections += 1; },
+    }), /Interactive operator approval for this exact RANK1 authoring target/);
+    approvedAuthoringLiveRun = { uri, path: 'synthetic',
+      configuration: JSON.stringify(configuration) };
+    let atlasReads = 0;
+    await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+      configuration, mode: 'authoring',
+      fetchAtlasEvidence: async () => { atlasReads += 1; throw new Error('synthetic Atlas stop'); },
+      connect: () => { connections += 1; },
+    }), /synthetic Atlas stop/);
+    assert.equal(atlasReads, 1, 'Bound approval permits a fresh Atlas check');
+    await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'changed-path',
+      configuration, mode: 'authoring', connect: () => { connections += 1; },
+    }), /Interactive operator approval for this exact RANK1 authoring target/);
+    assert.equal(connections, 0, 'Unapproved targets must never connect');
+  } finally {
+    approvedAuthoringLiveRun = previousApproval;
+  }
   await assert.rejects(() => requireAuthoringExternalApproval(configuration,
     { input: { isTTY: false }, output: { isTTY: false } }),
   { code: 'RANK1_EXTERNAL_APPROVAL_REQUIRED' });
   const declared = await requireAuthoringExternalApproval(configuration, {
     input: { isTTY: true }, output: { isTTY: true },
     ask: async (prompt) => {
-      if (prompt.startsWith('External')) return 'QA-approval-123';
+      if (prompt.startsWith('External')) return AUTHORING_APPROVAL_REFERENCE;
       if (prompt.startsWith('Approved')) return configuration.atlasProjectId;
       return prompt.match(/Type exactly "([^"]+)"/)[1];
     },
   });
-  assert.deepEqual(declared, { record: 'QA-approval-123', project: configuration.atlasProjectId });
+  assert.deepEqual(declared, { record: AUTHORING_APPROVAL_REFERENCE,
+    project: configuration.atlasProjectId });
+  await assert.rejects(() => requireAuthoringExternalApproval(configuration, {
+    input: { isTTY: true }, output: { isTTY: true },
+    ask: async (prompt) => prompt.startsWith('External') ? 'TAP version 13'
+      : prompt.startsWith('Approved') ? configuration.atlasProjectId
+        : prompt.match(/Type exactly "([^"]+)"/)[1],
+  }), /Authoring approval reference differs/);
   await assert.rejects(() => requireAuthoringExternalApproval(configuration, {
     input: { isTTY: true }, output: { isTTY: true }, ask: async () => '',
   }), /External approval reference/);
@@ -739,6 +794,10 @@ test('authoring Mongo selector and target configuration fail closed', async () =
     path: 'synthetic', configuration: { ...configuration,
       effectiveGrants: [{ database: configuration.connectedDatabase, role: 'readWrite' }] } }),
   /normal RANK1 custom role/);
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
+    path: 'synthetic', configuration: { ...configuration,
+      effectiveGrants: [{ database: configuration.connectedDatabase, role: 'rank1_normal_role' }] } }),
+  /normal RANK1 custom role/);
   assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring',
     uri: 'mongodb://127.0.0.1/wecooked-rank1-failure-test', path: 'synthetic', configuration }),
   /cannot use the failure-injection database/);
@@ -748,7 +807,7 @@ test('authoring Mongo selector and target configuration fail closed', async () =
     build: { version: '8.0.0' },
     status: { authInfo: {
       authenticatedUsers: [{ user: 'rank1-qa', db: 'admin' }],
-      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'rank1_normal_role' }],
+      authenticatedUserRoles: [{ db: 'admin', role: 'rank1_normal_role' }],
       authenticatedUserPrivileges: Object.entries(ACTIONS).map(([collection, actions]) => ({
         resource: { db: configuration.connectedDatabase, collection }, actions,
       })),
@@ -756,6 +815,11 @@ test('authoring Mongo selector and target configuration fail closed', async () =
     atlasHosts: ['qa.example.test:27017'],
   };
   assert.doesNotThrow(() => assertAuthoringConnectedTarget(configuration, runtime));
+  assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
+    status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'rank1_normal_role' }],
+    } },
+  }), /Authenticated roles differ/);
   assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
     databaseName: 'wecooked-production',
   }), /Connected database differs/);
@@ -781,8 +845,15 @@ test('authoring Mongo selector and target configuration fail closed', async () =
         collection: '' }, actions: ['find'] }],
     } },
   }), /broad, protected-database/);
+  assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
+    status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserPrivileges: runtime.status.authInfo.authenticatedUserPrivileges.map(
+        (privilege) => privilege.resource.collection === 'reviews'
+          ? { ...privilege, actions: [...privilege.actions, 'createIndex'] } : privilege),
+    } },
+  }), /unapproved collection action/);
   const approvalOptions = { input: { isTTY: true }, output: { isTTY: true },
-    ask: async (prompt) => prompt.startsWith('External') ? 'QA-approval-123'
+    ask: async (prompt) => prompt.startsWith('External') ? AUTHORING_APPROVAL_REFERENCE
       : prompt.startsWith('Approved') ? configuration.atlasProjectId
         : prompt.match(/Type exactly "([^"]+)"/)[1] };
   const atlas = { groupId: QA_PROJECT_ID, name: QA_CLUSTER_NAME,
@@ -863,8 +934,8 @@ test('authoring Mongo selector and target configuration fail closed', async () =
 test('isolated Mongo evaluates mixed consumer eligibility before every page and total', {
   skip: process.env.RECIPE_RANKING_MONGO_RUN !== 'authoring',
   timeout: 60000,
-}, async () => {
-  await connectForAuthoringPhysicalProof();
+}, async (t) => {
+  await connectForAuthoringPhysicalProof({ onStage: stage => t.diagnostic(stage) });
   const activeIngredientId = new mongoose.Types.ObjectId();
   const inactiveIngredientId = new mongoose.Types.ObjectId();
   const ids = Array.from({ length: 14 }, () => new mongoose.Types.ObjectId());
@@ -912,10 +983,16 @@ test('isolated Mongo evaluates mixed consumer eligibility before every page and 
       { _id: activeIngredientId, name: 'Rank1 active fixture', isActive: true },
       { _id: inactiveIngredientId, name: 'Rank1 inactive fixture', isActive: false },
     ]);
+    t.diagnostic('Ingredient fixtures inserted');
     await Recipe.collection.insertMany(rows);
-    const readPage = (page) => recipeService.listRecipes({
-      status: 'active', page, limit: 2, sort: 'newest', isAdmin: false,
-    });
+    t.diagnostic('Recipe fixtures inserted');
+    const readPage = async (page) => {
+      const result = await recipeService.listRecipes({
+        status: 'active', page, limit: 2, sort: 'newest', isAdmin: false,
+      });
+      t.diagnostic(`page ${page} resolved`);
+      return result;
+    };
     const pages = await Promise.all([readPage(1), readPage(2), readPage(3), readPage(4)]);
     assert.deepEqual(pages.map(({ items }) => items.map(({ _id }) => String(_id))), [
       [String(ids[3]), String(ids[5])],
@@ -927,9 +1004,13 @@ test('isolated Mongo evaluates mixed consumer eligibility before every page and 
       [1, 2], [2, 2], [3, 2], [4, 2],
     ]);
   } finally {
+    t.diagnostic('fixture cleanup started');
     await Recipe.collection.deleteMany({ _id: { $in: ids } });
+    t.diagnostic('Recipe fixtures removed');
     await Ingredient.collection.deleteMany({ _id: { $in: [activeIngredientId, inactiveIngredientId] } });
+    t.diagnostic('Ingredient fixtures removed');
     await mongoose.disconnect();
+    t.diagnostic('Mongo disconnected');
   }
 });
 

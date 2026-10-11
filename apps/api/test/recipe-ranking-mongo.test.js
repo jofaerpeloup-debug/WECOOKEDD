@@ -3,8 +3,9 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const readline = require('node:readline/promises');
+const readline = require('node:readline');
 const { execFile } = require('node:child_process');
+const { PassThrough } = require('node:stream');
 const { promisify } = require('node:util');
 const mongoose = require('mongoose');
 
@@ -31,6 +32,7 @@ const QA_PROJECT_ID = '6acb1e1905708eb667a03f01';
 const QA_CLUSTER_NAME = 'wecooked-rank1-qa';
 const QA_ROLE_DATABASE = 'admin';
 let physicalBackfillPassed = false;
+let approvedLiveRun = null;
 const ACTIONS = Object.freeze({
   recipes: ['find', 'insert', 'update', 'remove', 'createIndex', 'listIndexes'],
   reviews: ['find', 'insert', 'update', 'remove'],
@@ -172,11 +174,44 @@ function requireTargetConfiguration({ selectedUri = uri,
     && configuration.authenticatedUser.db,
   'Expected authenticated user is required');
   // A role's defining database is distinct from the database in its privilege resources.
-  const roleDatabase = mode === 'ranking' ? QA_ROLE_DATABASE : selectedDatabase;
   assert.ok(JSON.stringify(configuration.effectiveGrants)
-    === JSON.stringify([{ database: roleDatabase, role: expectedRole(mode) }]),
+    === JSON.stringify([{ database: QA_ROLE_DATABASE, role: expectedRole(mode) }]),
   'Expected grants must contain only the mode-specific RANK1 custom role');
   return configuration;
+}
+
+function createQueuedQuestions(input, output) {
+  const terminal = readline.createInterface({ input, output });
+  const lines = [];
+  let pending = null;
+  let closed = false;
+  terminal.on('line', (line) => {
+    if (pending) {
+      const { resolve } = pending;
+      pending = null;
+      resolve(line);
+    } else {
+      lines.push(line);
+    }
+  });
+  terminal.on('close', () => {
+    closed = true;
+    if (pending) {
+      const { reject } = pending;
+      pending = null;
+      reject(new Error('Operator input closed before approval was complete.'));
+    }
+  });
+  return {
+    question(prompt) {
+      assert.equal(pending, null, 'Concurrent operator questions are not allowed');
+      output.write(prompt);
+      if (lines.length) return Promise.resolve(lines.shift());
+      if (closed) return Promise.reject(new Error('Operator input closed before approval was complete.'));
+      return new Promise((resolve, reject) => { pending = { resolve, reject }; });
+    },
+    close() { terminal.close(); },
+  };
 }
 
 async function requireExternalOperatorApproval(configuration, mode = liveMode,
@@ -191,11 +226,19 @@ async function requireExternalOperatorApproval(configuration, mode = liveMode,
     throw Object.assign(new Error('Interactive operator approval is required before Mongo connection.'),
       { code: 'RANK1_EXTERNAL_APPROVAL_REQUIRED' });
   }
-  const terminal = ask ? null : readline.createInterface({ input, output });
+  const terminal = ask ? null : createQueuedQuestions(input, output);
   const question = ask || ((prompt) => terminal.question(prompt));
+  const requiredAnswer = async (prompt) => {
+    let answer = (await question(prompt)).trim();
+    while (!ask && !answer) {
+      output.write('Input was empty; enter a value.\n');
+      answer = (await question(prompt)).trim();
+    }
+    return answer;
+  };
   try {
-    const record = (await question('External human approval record reference: ')).trim();
-    const project = (await question('Approved isolated Atlas QA project ID: ')).trim();
+    const record = await requiredAnswer('External human approval record reference: ');
+    const project = await requiredAnswer('Approved isolated Atlas QA project ID: ');
     assert.ok(record && project, 'External approval reference and QA project declaration are required');
     assert.equal(project, configuration.atlasProjectId,
       'Declared QA project differs from the intended Atlas project');
@@ -203,8 +246,8 @@ async function requireExternalOperatorApproval(configuration, mode = liveMode,
       .map(([collection, actions]) => `${collection}:${actions.join(',')}`).join(';');
     const declaration = `${project} ${configuration.connectedDatabase} ${mode} `
       + `${expectedRole(mode)} ${operations}`;
-    assert.equal((await question(`Type exactly "${declaration}" to confirm project, database, `
-      + 'mode and permitted operations: ')).trim(), declaration,
+    assert.equal(await requiredAnswer(`Type exactly "${declaration}" to confirm project, database, `
+      + 'mode and permitted operations: '), declaration,
     'Operator declaration does not match the intended QA target and operations');
     return { record, project };
   } finally {
@@ -270,7 +313,14 @@ async function connectForPhysicalProof({ selectedUri = uri,
   fetchAtlasEvidence = getFreshAtlasEvidence } = {}) {
   const configuration = requireTargetConfiguration({ selectedUri, path,
     configuration: suppliedConfiguration, mode });
-  await requireExternalOperatorApproval(configuration, mode, approvalOptions);
+  if (approvalOptions) {
+    await requireExternalOperatorApproval(configuration, mode, approvalOptions);
+  } else {
+    assert.ok(approvedLiveRun && approvedLiveRun.selectedUri === selectedUri
+      && approvedLiveRun.path === path && approvedLiveRun.mode === mode
+      && approvedLiveRun.configuration === JSON.stringify(configuration),
+    'Interactive operator approval for this exact RANK1 target is required before Mongo connection');
+  }
   const atlasHosts = assertAtlasEvidence(configuration, selectedUri, await fetchAtlasEvidence());
   try {
     await connect(selectedUri, { autoIndex: false, autoCreate: false });
@@ -298,6 +348,19 @@ async function connectForPhysicalProof({ selectedUri = uri,
     throw error;
   }
 }
+
+test.before(async () => {
+  if (!liveRequested && !failureRequested) return;
+  // Collect one human declaration before timed physical tests; recheck the target on every connection.
+  const configuration = requireTargetConfiguration();
+  await requireExternalOperatorApproval(configuration, liveMode);
+  approvedLiveRun = {
+    selectedUri: uri,
+    path: process.env.RECIPE_RANKING_MONGO_PREFLIGHT_FILE,
+    mode: liveMode,
+    configuration: JSON.stringify(configuration),
+  };
+});
 
 test('live Mongo selector is explicit and valid for this file', () => {
   assertLiveMode();
@@ -374,13 +437,19 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
   const failureDatabase = 'wecooked-rank1-failure-test';
   const failureUri = `mongodb://qa.example.test:27017/${failureDatabase}`;
   const failureConfiguration = { ...configuration, connectedDatabase: failureDatabase,
-    effectiveGrants: [{ database: failureDatabase, role: 'rank1_failure_role' }] };
+    authenticatedUser: { user: 'rank1_failure_runner', db: 'admin' },
+    effectiveGrants: [{ database: QA_ROLE_DATABASE, role: 'rank1_failure_role' }] };
   assert.doesNotThrow(() => requireTargetConfiguration({ selectedUri: failureUri,
     path: 'synthetic', configuration: failureConfiguration, mode: 'ranking-failure' }));
   assert.throws(() => requireTargetConfiguration({ selectedUri: failureUri,
     path: 'synthetic', configuration: { ...failureConfiguration,
-      effectiveGrants: configuration.effectiveGrants.map((grant) => ({ ...grant,
-        database: failureDatabase })) }, mode: 'ranking-failure' }),
+      effectiveGrants: [{ database: failureDatabase, role: 'rank1_failure_role' }] },
+    mode: 'ranking-failure' }),
+  /mode-specific RANK1 custom role/);
+  assert.throws(() => requireTargetConfiguration({ selectedUri: failureUri,
+    path: 'synthetic', configuration: { ...failureConfiguration,
+      effectiveGrants: [...failureConfiguration.effectiveGrants,
+        { database: 'wecooked-dev', role: 'readWrite' }] }, mode: 'ranking-failure' }),
   /mode-specific RANK1 custom role/);
   assert.throws(() => requireTargetConfiguration({ selectedUri: failureUri,
     path: 'synthetic', configuration: failureConfiguration, mode: 'ranking' }),
@@ -463,7 +532,8 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
   }), /unapproved collection action/);
   const failureRuntime = { ...runtime, databaseName: failureDatabase,
     status: { authInfo: { ...runtime.status.authInfo,
-      authenticatedUserRoles: [{ db: failureDatabase, role: 'rank1_failure_role' }],
+      authenticatedUsers: [failureConfiguration.authenticatedUser],
+      authenticatedUserRoles: [{ db: QA_ROLE_DATABASE, role: 'rank1_failure_role' }],
       authenticatedUserPrivileges: Object.entries(FAILURE_ACTIONS)
         .map(([collection, actions]) => ({ resource: { db: failureDatabase, collection },
           actions })),
@@ -472,7 +542,39 @@ test('physical runner rejects self-approval, malformed targets, and mismatched m
     'ranking-failure'));
   assert.throws(() => assertConnectedTarget(failureConfiguration, { ...failureRuntime,
     status: { authInfo: { ...failureRuntime.status.authInfo,
+      authenticatedUserRoles: [{ db: failureDatabase, role: 'rank1_failure_role' }],
+    } },
+  }, 'ranking-failure'), /Authenticated roles differ/);
+  assert.throws(() => assertConnectedTarget(failureConfiguration, { ...failureRuntime,
+    status: { authInfo: { ...failureRuntime.status.authInfo,
+      authenticatedUserRoles: [
+        { db: QA_ROLE_DATABASE, role: 'rank1_failure_role' },
+        { db: QA_ROLE_DATABASE, role: 'readWrite' },
+      ],
+    } },
+  }, 'ranking-failure'), /Authenticated roles differ/);
+  assert.throws(() => assertConnectedTarget(failureConfiguration, { ...failureRuntime,
+    status: { authInfo: { ...failureRuntime.status.authInfo,
+      authenticatedUserPrivileges: failureRuntime.status.authInfo.authenticatedUserPrivileges
+        .map((privilege) => privilege.resource.collection === 'reviews'
+          ? { ...privilege, actions: ['find', 'insert'] } : privilege),
+    } },
+  }, 'ranking-failure'), /unapproved collection action/);
+  assert.throws(() => assertConnectedTarget(failureConfiguration, { ...failureRuntime,
+    status: { authInfo: { ...failureRuntime.status.authInfo,
       authenticatedUserPrivileges: runtime.status.authInfo.authenticatedUserPrivileges,
+    } },
+  }, 'ranking-failure'), /broad, protected-database/);
+  assert.throws(() => assertConnectedTarget(failureConfiguration, { ...failureRuntime,
+    status: { authInfo: { ...failureRuntime.status.authInfo,
+      authenticatedUserPrivileges: [{ resource: { db: failureDatabase, collection: '' },
+        actions: ['find'] }],
+    } },
+  }, 'ranking-failure'), /broad, protected-database/);
+  assert.throws(() => assertConnectedTarget(failureConfiguration, { ...failureRuntime,
+    status: { authInfo: { ...failureRuntime.status.authInfo,
+      authenticatedUserPrivileges: [{ resource: { db: 'wecooked-production',
+        collection: 'recipes' }, actions: ['find'] }],
     } },
   }, 'ranking-failure'), /broad, protected-database/);
   const approvalOptions = { input: { isTTY: true }, output: { isTTY: true },
@@ -612,6 +714,85 @@ test('Atlas admin custom role has only isolated RANK1 collection privileges', ()
       })),
     } },
   }), /broad, protected-database/);
+});
+
+test('interactive approval buffers terminal lines and rejects missing approval', async () => {
+  const configuration = {
+    atlasProjectId: QA_PROJECT_ID,
+    connectedDatabase: 'rank1-isolated-test',
+  };
+  const input = new PassThrough();
+  const output = new PassThrough();
+  input.isTTY = true;
+  output.isTTY = true;
+  const chunks = [];
+  output.on('data', (chunk) => chunks.push(chunk.toString()));
+  const operations = Object.entries(ACTIONS)
+    .map(([collection, actions]) => `${collection}:${actions.join(',')}`).join(';');
+  const declaration = `${QA_PROJECT_ID} rank1-isolated-test ranking rank1_normal_role ${operations}`;
+  const approval = requireExternalOperatorApproval(configuration, 'ranking', { input, output });
+  input.write(`\nQA-approval-123\n${QA_PROJECT_ID}\n${declaration}\n`);
+  assert.deepEqual(await approval, { record: 'QA-approval-123', project: QA_PROJECT_ID });
+  assert.equal(chunks.join('').match(/External human approval record reference:/g)?.length, 2);
+  input.end();
+
+  const target = 'mongodb://qa.example.test:27017/rank1-isolated-test';
+  const completeConfiguration = {
+    ...configuration,
+    normalDatabase: configuration.connectedDatabase,
+    failureDatabase: 'rank1-failure-isolated-test',
+    deploymentIdentity: { setName: 'qa-replica', hosts: ['qa.example.test:27017'], me: null },
+    serverVersion: '8.0.34', requiredFcv: '8.0',
+    authenticatedUser: { user: 'rank1_normal_runner', db: 'admin' },
+    effectiveGrants: [{ database: QA_ROLE_DATABASE, role: 'rank1_normal_role' }],
+  };
+  const previousApproval = approvedLiveRun;
+  approvedLiveRun = null;
+  let connections = 0;
+  try {
+    await assert.rejects(() => connectForPhysicalProof({ selectedUri: target,
+      path: 'synthetic', configuration: completeConfiguration, mode: 'ranking',
+      connect: async () => { connections += 1; },
+    }), /Interactive operator approval for this exact RANK1 target/);
+    assert.equal(connections, 0);
+    approvedLiveRun = { selectedUri: target, path: 'synthetic', mode: 'ranking',
+      configuration: JSON.stringify(completeConfiguration) };
+    const atlas = { groupId: QA_PROJECT_ID, name: QA_CLUSTER_NAME,
+      mongoDBVersion: '8.0.34', featureCompatibilityVersion: '8.0',
+      connectionStrings: { standard: 'mongodb://qa.example.test:27017/',
+        standardSrv: 'mongodb+srv://qa.example.test/' } };
+    const runtime = { databaseName: completeConfiguration.connectedDatabase,
+      admin: () => ({ command: async (command) => command.hello
+        ? { setName: 'qa-replica', hosts: ['qa.example.test:27017'] }
+        : command.buildInfo ? { version: '8.0.34' }
+          : { authInfo: {
+            authenticatedUsers: [completeConfiguration.authenticatedUser],
+            authenticatedUserRoles: [{ db: QA_ROLE_DATABASE, role: 'rank1_normal_role' }],
+            authenticatedUserPrivileges: Object.entries(ACTIONS).map(([collection, actions]) => ({
+              resource: { db: completeConfiguration.connectedDatabase, collection }, actions,
+            })),
+          } } }),
+    };
+    let fixtureReads = 0;
+    const collection = { countDocuments: async () => { fixtureReads += 1; return 0; } };
+    for (let index = 0; index < 2; index += 1) {
+      await connectForPhysicalProof({ selectedUri: target, path: 'synthetic',
+        configuration: completeConfiguration, mode: 'ranking',
+        connect: async () => { connections += 1; }, connection: { db: runtime },
+        collections: { recipes: collection, reviews: collection, ingredients: collection },
+        fetchAtlasEvidence: async () => ({ cluster: atlas, retrievedAt: Date.now() }),
+      });
+    }
+    assert.equal(connections, 2, 'One operator declaration covers the bound physical run');
+    assert.equal(fixtureReads, 6);
+    await assert.rejects(() => connectForPhysicalProof({ selectedUri: target,
+      path: 'synthetic', configuration: { ...completeConfiguration, serverVersion: '8.0.35' },
+      mode: 'ranking', connect: async () => { connections += 1; },
+    }), /Interactive operator approval for this exact RANK1 target/);
+    assert.equal(connections, 2, 'A changed target must be rejected before connection');
+  } finally {
+    approvedLiveRun = previousApproval;
+  }
 });
 
 function reviewRows(recipeId, ratings) {
