@@ -3,6 +3,9 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const readline = require('node:readline/promises');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const ingredientService = require('../src/modules/ingredients/ingredient.service');
@@ -25,6 +28,65 @@ const RECIPE_ID = '507f1f77bcf86cd799439099';
 const MODERATOR_ID = '507f1f77bcf86cd799439001';
 const INGREDIENT_ID = '507f1f77bcf86cd799439011';
 const UPDATED_AT = new Date('2026-09-15T10:00:00.000Z');
+const atlasExecFile = promisify(execFile);
+const QA_PROJECT_ID = '6acb1e1905708eb667a03f01';
+const QA_CLUSTER_NAME = 'wecooked-rank1-qa';
+const ACTIONS = Object.freeze({
+  recipes: ['find', 'insert', 'update', 'remove', 'createIndex', 'listIndexes'],
+  reviews: ['find', 'insert', 'update', 'remove'],
+  ingredients: ['find', 'insert', 'remove'],
+});
+
+function mongoHosts(value, protocol, allowCredentials = false) {
+  assert.ok(typeof value === 'string' && value.startsWith(`${protocol}://`),
+    'Atlas connection string is missing or malformed');
+  const authority = value.slice(protocol.length + 3).split(/[/?#]/, 1)[0];
+  assert.ok(authority && (allowCredentials || !authority.includes('@')),
+    'Atlas connection string must contain host names without credentials');
+  const hosts = (allowCredentials ? authority.slice(authority.lastIndexOf('@') + 1) : authority)
+    .toLowerCase().split(',');
+  assert.ok(hosts.every((host) => /^[a-z0-9.-]+(?::\d+)?$/.test(host)),
+    'Atlas connection string has malformed host names');
+  return hosts.sort();
+}
+
+function assertAtlasEvidence(configuration, uri, evidence) {
+  assert.ok(Number.isFinite(evidence?.retrievedAt)
+    && evidence.retrievedAt <= Date.now()
+    && Date.now() - evidence.retrievedAt <= 30000,
+  'Fresh Atlas API evidence is required');
+  const atlas = evidence.cluster;
+  assert.equal(configuration.atlasProjectId, QA_PROJECT_ID,
+    'Configured Atlas project differs from the approved QA project');
+  assert.equal(atlas?.groupId, QA_PROJECT_ID, 'Atlas API project differs from the approved QA project');
+  assert.equal(atlas.name, QA_CLUSTER_NAME, 'Atlas API cluster differs from the approved QA cluster');
+  assert.equal(atlas.mongoDBVersion, configuration.serverVersion,
+    'Atlas API server version differs from the reviewed target');
+  assert.equal(atlas.featureCompatibilityVersion, configuration.requiredFcv,
+    'Atlas API FCV is missing or differs from required FCV');
+  const atlasHosts = mongoHosts(atlas.connectionStrings?.standard, 'mongodb');
+  const selectedProtocol = uri.startsWith('mongodb+srv://') ? 'mongodb+srv' : 'mongodb';
+  const selectedHosts = mongoHosts(uri, selectedProtocol, true);
+  const expectedHosts = selectedProtocol === 'mongodb+srv'
+    ? mongoHosts(atlas.connectionStrings?.standardSrv, 'mongodb+srv') : atlasHosts;
+  assert.deepEqual(selectedHosts, expectedHosts,
+    'Selected Mongo URI hosts differ from the authenticated Atlas cluster');
+  return atlasHosts;
+}
+
+async function getFreshAtlasEvidence() {
+  let stdout;
+  try {
+    ({ stdout } = await atlasExecFile('atlas', ['api', 'clusters', 'getCluster',
+      '--version', '2024-08-05', '--groupId', QA_PROJECT_ID,
+      '--clusterName', QA_CLUSTER_NAME, '--output', 'json'],
+    { timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true }));
+    return { cluster: JSON.parse(stdout), retrievedAt: Date.now() };
+  } catch {
+    throw Object.assign(new Error('Fresh authenticated Atlas API evidence is unavailable.'),
+      { code: 'RANK1_ATLAS_EVIDENCE_UNAVAILABLE' });
+  }
+}
 
 function assertAuthoringLiveMode({ mode = process.env.RECIPE_RANKING_MONGO_RUN,
   uri = process.env.RECIPE_RANKING_MONGO_URI,
@@ -32,7 +94,6 @@ function assertAuthoringLiveMode({ mode = process.env.RECIPE_RANKING_MONGO_RUN,
   if (!mode && !uri && !path) return;
   assert.ok(['ranking', 'ranking-failure', 'authoring'].includes(mode),
     'RECIPE_RANKING_MONGO_RUN must select ranking, ranking-failure, or authoring');
-  assert.equal(mode, 'authoring', 'This file runs only authoring physical proof');
 }
 
 function requireAuthoringTargetConfiguration({
@@ -42,6 +103,7 @@ function requireAuthoringTargetConfiguration({
   mode = process.env.RECIPE_RANKING_MONGO_RUN,
 } = {}) {
   assertAuthoringLiveMode({ mode, uri, path });
+  assert.equal(mode, 'authoring', 'This file runs only authoring physical proof');
   assert.ok(uri, 'RECIPE_RANKING_MONGO_URI is required for requested physical proof');
   const selectedDatabase = assertCommandTarget(uri, { apply: true });
   assert.ok(!/failure/i.test(selectedDatabase),
@@ -55,12 +117,29 @@ function requireAuthoringTargetConfiguration({
   }
   assert.ok(configuration && typeof configuration === 'object' && !Array.isArray(configuration),
     'RANK1 target configuration must be an object');
-  const allowedFields = ['connectedDatabase', 'deploymentIdentity', 'serverVersion',
-    'authenticatedUser', 'effectiveGrants'];
+  const allowedFields = ['atlasProjectId', 'connectedDatabase', 'normalDatabase', 'failureDatabase',
+    'deploymentIdentity', 'serverVersion',
+    'requiredFcv', 'authenticatedUser', 'effectiveGrants'];
   assert.ok(Object.keys(configuration).every((field) => allowedFields.includes(field)),
     'Target configuration cannot contain local approval or unverified evidence metadata');
+  assert.ok(/^[a-f\d]{24}$/i.test(configuration.atlasProjectId || ''),
+    'Expected Atlas QA project ID is required');
+  assert.equal(configuration.atlasProjectId, QA_PROJECT_ID,
+    'Configured Atlas project differs from the approved QA project');
   assert.equal(configuration.connectedDatabase, selectedDatabase,
     'Configured database differs from the selected database');
+  assert.ok(typeof configuration.normalDatabase === 'string'
+    && /rank1/i.test(configuration.normalDatabase)
+    && /(test|isolated)/i.test(configuration.normalDatabase)
+    && !/failure/i.test(configuration.normalDatabase)
+    && typeof configuration.failureDatabase === 'string'
+    && /rank1/i.test(configuration.failureDatabase)
+    && /(test|isolated)/i.test(configuration.failureDatabase)
+    && /failure/i.test(configuration.failureDatabase)
+    && configuration.normalDatabase !== configuration.failureDatabase,
+  'Distinct normal and failure RANK1 test databases are required');
+  assert.equal(selectedDatabase, configuration.normalDatabase,
+    'Selected database does not match the configured normal database');
   const identity = configuration.deploymentIdentity;
   assert.ok(identity && typeof identity === 'object' && !Array.isArray(identity),
     'Expected deployment identity is required');
@@ -72,27 +151,52 @@ function requireAuthoringTargetConfiguration({
   'Expected deployment identity must identify a connected host or replica set');
   assert.ok(/^\d+\.\d+\.\d+/.test(configuration.serverVersion || ''),
     'Expected server version is required');
+  assert.ok(/^\d+\.\d+$/.test(configuration.requiredFcv || ''),
+    'Required FCV must be specified as major.minor');
   assert.ok(configuration.authenticatedUser && typeof configuration.authenticatedUser.user === 'string'
     && configuration.authenticatedUser.user && typeof configuration.authenticatedUser.db === 'string'
     && configuration.authenticatedUser.db,
   'Expected authenticated user is required');
   assert.ok(JSON.stringify(configuration.effectiveGrants)
-    === JSON.stringify([{ database: selectedDatabase, role: 'readWrite' }]),
-  'Expected grants must contain only isolated-database readWrite');
+    === JSON.stringify([{ database: selectedDatabase, role: 'rank1_normal_role' }]),
+  'Expected grants must contain only the normal RANK1 custom role');
   return configuration;
 }
 
-function requireAuthoringExternalApproval() {
-  // No trusted verifier is installed. An external gate must independently approve the isolated
-  // deployment, disposable database, restricted credentials, FCV, nutrition prerequisite,
-  // writer freeze, and the separately resettable failure target before this hold can change.
-  const error = new Error('Independent operator approval is required before Mongo connection; '
-    + 'local target configuration and approval claims cannot authorize physical proof.');
-  error.code = 'RANK1_EXTERNAL_APPROVAL_REQUIRED';
-  throw error;
+async function requireAuthoringExternalApproval(configuration,
+  { input = process.stdin, output = process.stdout, ask } = {}) {
+  // Manual checkpoint: obtain human approval in an external change record. Independently inspect
+  // the Atlas QA project/deployment, both isolated databases, custom user/role, empty fixtures,
+  // nutrition prerequisite and writer freeze before an interactive TTY run. Keep approval outside
+  // local JSON/ENV. Answers are operator declarations, not cryptographic authorization; connected
+  // identity, privileges and server FCV still gate fixture writes.
+  if (!input.isTTY || !output.isTTY) {
+    throw Object.assign(new Error('Interactive operator approval is required before Mongo connection.'),
+      { code: 'RANK1_EXTERNAL_APPROVAL_REQUIRED' });
+  }
+  const terminal = ask ? null : readline.createInterface({ input, output });
+  const question = ask || ((prompt) => terminal.question(prompt));
+  try {
+    const record = (await question('External human approval record reference: ')).trim();
+    const project = (await question('Approved isolated Atlas QA project ID: ')).trim();
+    assert.ok(record && project, 'External approval reference and QA project declaration are required');
+    assert.equal(project, configuration.atlasProjectId,
+      'Declared QA project differs from the intended Atlas project');
+    const operations = Object.entries(ACTIONS)
+      .map(([collection, actions]) => `${collection}:${actions.join(',')}`).join(';');
+    const declaration = `${project} ${configuration.connectedDatabase} authoring `
+      + `rank1_normal_role ${operations}`;
+    assert.equal((await question(`Type exactly "${declaration}" to confirm project, database, `
+      + 'mode and permitted operations: ')).trim(), declaration,
+    'Operator declaration does not match the intended QA target and operations');
+    return { record, project };
+  } finally {
+    terminal?.close();
+  }
 }
 
-function assertAuthoringConnectedTarget(configuration, { databaseName, hello, build, status }) {
+function assertAuthoringConnectedTarget(configuration,
+  { databaseName, hello, build, status, atlasHosts }) {
   assert.equal(databaseName, configuration.connectedDatabase,
     'Connected database differs from target configuration');
   const connectedIdentity = {
@@ -106,6 +210,8 @@ function assertAuthoringConnectedTarget(configuration, { databaseName, hello, bu
   };
   assert.ok(JSON.stringify(connectedIdentity) === JSON.stringify(expectedIdentity),
     'Connected deployment identity differs from target configuration');
+  assert.deepEqual(connectedIdentity.hosts, atlasHosts,
+    'Connected replica hosts differ from the authenticated Atlas cluster');
   assert.equal(build.version, configuration.serverVersion,
     'Runtime server version differs from target configuration');
   assert.ok(JSON.stringify(status.authInfo?.authenticatedUsers)
@@ -119,8 +225,58 @@ function assertAuthoringConnectedTarget(configuration, { databaseName, hello, bu
   assert.ok(Array.isArray(privileges) && privileges.length > 0,
     'Effective credential privileges must be inspectable');
   assert.ok(privileges.every(({ resource }) => resource?.db === configuration.connectedDatabase
-    && resource?.anyResource !== true && resource?.cluster !== true),
-  'Credential has grants outside the isolated database');
+    && resource?.anyResource !== true && resource?.cluster !== true
+    && Object.hasOwn(ACTIONS, resource?.collection)),
+  'Credential has broad, protected-database or unapproved-collection privileges');
+  const granted = Object.fromEntries(Object.keys(ACTIONS).map((collection) => [collection, new Set()]));
+  for (const { resource, actions } of privileges) {
+    assert.ok(Array.isArray(actions) && actions.length > 0
+      && actions.every((action) => ACTIONS[resource.collection].includes(action)),
+    'Credential has an unapproved collection action');
+    for (const action of actions) granted[resource.collection].add(action);
+  }
+  for (const [collection, actions] of Object.entries(ACTIONS)) {
+    assert.ok(actions.every((action) => granted[collection].has(action)),
+      `Credential lacks required ${collection} actions`);
+  }
+}
+
+async function connectForAuthoringPhysicalProof({
+  uri = process.env.RECIPE_RANKING_MONGO_URI,
+  path = process.env.RECIPE_RANKING_MONGO_PREFLIGHT_FILE,
+  configuration: suppliedConfiguration, mode = process.env.RECIPE_RANKING_MONGO_RUN,
+  connect = (...args) => mongoose.connect(...args),
+  connection = mongoose.connection, disconnect = () => mongoose.disconnect(),
+  collections = { recipes: Recipe.collection, ingredients: Ingredient.collection },
+  approvalOptions, fetchAtlasEvidence = getFreshAtlasEvidence,
+} = {}) {
+  const configuration = requireAuthoringTargetConfiguration({ uri, path,
+    configuration: suppliedConfiguration, mode });
+  await requireAuthoringExternalApproval(configuration, approvalOptions);
+  const atlasHosts = assertAtlasEvidence(configuration, uri, await fetchAtlasEvidence());
+  try {
+    await connect(uri, { autoIndex: false, autoCreate: false });
+  } catch {
+    throw new Error('Isolated Mongo connection failed.');
+  }
+  try {
+    const admin = connection.db.admin();
+    const [hello, build, status] = await Promise.all([
+      admin.command({ hello: 1 }),
+      admin.command({ buildInfo: 1 }),
+      admin.command({ connectionStatus: 1, showPrivileges: true }),
+    ]);
+    assertAuthoringConnectedTarget(configuration, {
+      databaseName: connection.db.databaseName, hello, build, status, atlasHosts,
+    });
+    assert.equal(await collections.recipes.countDocuments({}), 0,
+      'Physical proof requires an empty disposable Recipe collection');
+    assert.equal(await collections.ingredients.countDocuments({}), 0,
+      'Physical proof requires an empty disposable Ingredient collection');
+  } catch (error) {
+    await disconnect();
+    throw error;
+  }
 }
 
 function fullRecipe(overrides = {}) {
@@ -504,19 +660,23 @@ test('consumer list emits exact eligibility before the shared count/page facet',
   assert.throws(() => assertEligibility(weakened));
 });
 
-test('authoring Mongo selector and target configuration fail closed', () => {
+test('authoring Mongo selector and target configuration fail closed', async () => {
   assertAuthoringLiveMode();
-  const uri = 'mongodb://127.0.0.1/wecooked-rank1-isolated';
+  const uri = 'mongodb://qa.example.test:27017/wecooked-rank1-isolated';
   const configuration = {
+    atlasProjectId: QA_PROJECT_ID,
     connectedDatabase: 'wecooked-rank1-isolated',
+    normalDatabase: 'wecooked-rank1-isolated',
+    failureDatabase: 'wecooked-rank1-failure-test',
     deploymentIdentity: { setName: 'qa-replica', hosts: ['qa.example.test:27017'], me: null },
     serverVersion: '8.0.0',
+    requiredFcv: '8.0',
     authenticatedUser: { user: 'rank1-qa', db: 'admin' },
-    effectiveGrants: [{ database: 'wecooked-rank1-isolated', role: 'readWrite' }],
+    effectiveGrants: [{ database: 'wecooked-rank1-isolated', role: 'rank1_normal_role' }],
   };
   assert.throws(() => assertAuthoringLiveMode({ mode: '', uri }), /RECIPE_RANKING_MONGO_RUN/);
   assert.throws(() => assertAuthoringLiveMode({ mode: 'authorng', uri }), /RECIPE_RANKING_MONGO_RUN/);
-  assert.throws(() => assertAuthoringLiveMode({ mode: 'ranking', uri }),
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'ranking', uri }),
     /only authoring physical proof/);
   assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri: '', path: '' }),
     /RECIPE_RANKING_MONGO_URI/);
@@ -525,7 +685,30 @@ test('authoring Mongo selector and target configuration fail closed', () => {
   assert.doesNotThrow(() => requireAuthoringTargetConfiguration({
     mode: 'authoring', uri, path: 'synthetic', configuration,
   }));
-  assert.throws(requireAuthoringExternalApproval, { code: 'RANK1_EXTERNAL_APPROVAL_REQUIRED' });
+  let connections = 0;
+  await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+    configuration, mode: 'authoring', connect: () => { connections += 1; },
+    approvalOptions: { input: { isTTY: false }, output: { isTTY: false } },
+  }), { code: 'RANK1_EXTERNAL_APPROVAL_REQUIRED' });
+  await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+    configuration, mode: 'authorng', connect: () => { connections += 1; },
+  }), /RECIPE_RANKING_MONGO_RUN/);
+  assert.equal(connections, 0, 'No approval or invalid mode must prevent connection');
+  await assert.rejects(() => requireAuthoringExternalApproval(configuration,
+    { input: { isTTY: false }, output: { isTTY: false } }),
+  { code: 'RANK1_EXTERNAL_APPROVAL_REQUIRED' });
+  const declared = await requireAuthoringExternalApproval(configuration, {
+    input: { isTTY: true }, output: { isTTY: true },
+    ask: async (prompt) => {
+      if (prompt.startsWith('External')) return 'QA-approval-123';
+      if (prompt.startsWith('Approved')) return configuration.atlasProjectId;
+      return prompt.match(/Type exactly "([^"]+)"/)[1];
+    },
+  });
+  assert.deepEqual(declared, { record: 'QA-approval-123', project: configuration.atlasProjectId });
+  await assert.rejects(() => requireAuthoringExternalApproval(configuration, {
+    input: { isTTY: true }, output: { isTTY: true }, ask: async () => '',
+  }), /External approval reference/);
   assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
     path: 'synthetic', configuration: { ...configuration, reviewedBy: 'self',
       evidence: { deployment: 'external' } } }), /cannot contain local approval/);
@@ -536,8 +719,26 @@ test('authoring Mongo selector and target configuration fail closed', () => {
     path: 'synthetic', configuration: { ...configuration, connectedDatabase: 'rank1-other-test' } }),
   /Configured database differs/);
   assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
+    path: 'synthetic', configuration: { ...configuration,
+      normalDatabase: 'wecooked-rank1-other-test' } }),
+  /configured normal database/);
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
+    path: 'synthetic', configuration: { ...configuration,
+      failureDatabase: configuration.normalDatabase } }),
+  /Distinct normal and failure/);
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
     path: 'synthetic', configuration: { ...configuration, deploymentIdentity: 'dedicated-qa' } }),
   /Expected deployment identity/);
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
+    path: 'synthetic', configuration: { ...configuration, requiredFcv: undefined } }),
+  /Required FCV/);
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
+    path: 'synthetic', configuration: { ...configuration,
+      atlasProjectId: '0123456789abcdef01234567' } }), /approved QA project/);
+  assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring', uri,
+    path: 'synthetic', configuration: { ...configuration,
+      effectiveGrants: [{ database: configuration.connectedDatabase, role: 'readWrite' }] } }),
+  /normal RANK1 custom role/);
   assert.throws(() => requireAuthoringTargetConfiguration({ mode: 'authoring',
     uri: 'mongodb://127.0.0.1/wecooked-rank1-failure-test', path: 'synthetic', configuration }),
   /cannot use the failure-injection database/);
@@ -547,10 +748,12 @@ test('authoring Mongo selector and target configuration fail closed', () => {
     build: { version: '8.0.0' },
     status: { authInfo: {
       authenticatedUsers: [{ user: 'rank1-qa', db: 'admin' }],
-      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'readWrite' }],
-      authenticatedUserPrivileges: [{ resource: { db: configuration.connectedDatabase,
-        collection: '' }, actions: ['find'] }],
+      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'rank1_normal_role' }],
+      authenticatedUserPrivileges: Object.entries(ACTIONS).map(([collection, actions]) => ({
+        resource: { db: configuration.connectedDatabase, collection }, actions,
+      })),
     } },
+    atlasHosts: ['qa.example.test:27017'],
   };
   assert.doesNotThrow(() => assertAuthoringConnectedTarget(configuration, runtime));
   assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
@@ -561,45 +764,107 @@ test('authoring Mongo selector and target configuration fail closed', () => {
   }), /Connected deployment identity differs/);
   assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
     status: { authInfo: { ...runtime.status.authInfo,
-      authenticatedUserRoles: [{ db: 'wecooked-production', role: 'readWrite' }],
+      authenticatedUserRoles: [{ db: 'wecooked-production', role: 'rank1_normal_role' }],
     } },
   }), /Authenticated roles differ/);
   assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
     status: { authInfo: { ...runtime.status.authInfo,
-      authenticatedUserPrivileges: [{ resource: { db: 'wecooked-production', collection: '' },
+      authenticatedUserPrivileges: [{ resource: { db: 'wecooked-production', collection: 'recipes' },
         actions: ['insert'] }],
     } },
-  }), /grants outside the isolated database/);
+  }), /broad, protected-database/);
+  assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
+    atlasHosts: ['other.example.test:27017'] }), /Connected replica hosts differ/);
+  assert.throws(() => assertAuthoringConnectedTarget(configuration, { ...runtime,
+    status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserPrivileges: [{ resource: { db: configuration.connectedDatabase,
+        collection: '' }, actions: ['find'] }],
+    } },
+  }), /broad, protected-database/);
+  const approvalOptions = { input: { isTTY: true }, output: { isTTY: true },
+    ask: async (prompt) => prompt.startsWith('External') ? 'QA-approval-123'
+      : prompt.startsWith('Approved') ? configuration.atlasProjectId
+        : prompt.match(/Type exactly "([^"]+)"/)[1] };
+  const atlas = { groupId: QA_PROJECT_ID, name: QA_CLUSTER_NAME,
+    mongoDBVersion: '8.0.0', featureCompatibilityVersion: '8.0',
+    connectionStrings: { standard: 'mongodb://qa.example.test:27017/',
+      standardSrv: 'mongodb+srv://qa.example.test/' } };
+  const evidence = { cluster: atlas, retrievedAt: Date.now() };
+  assert.deepEqual(assertAtlasEvidence(configuration, uri, evidence), runtime.atlasHosts);
+  assert.deepEqual(assertAtlasEvidence(configuration,
+    'mongodb+srv://user:encoded%40password@qa.example.test/wecooked-rank1-isolated', evidence),
+  runtime.atlasHosts);
+  const wrongHostRuntime = { ...runtime,
+    hello: { ...runtime.hello, hosts: ['other.example.test:27017'] } };
+  assert.throws(() => assertAuthoringConnectedTarget({ ...configuration,
+    deploymentIdentity: { ...configuration.deploymentIdentity,
+      hosts: ['other.example.test:27017'] } }, wrongHostRuntime),
+  /Connected replica hosts differ/);
+  for (const [badEvidence, message] of [
+    [{ ...evidence, retrievedAt: Date.now() - 31000 }, /Fresh Atlas API evidence/],
+    [{ ...evidence, cluster: { ...atlas, groupId: '0123456789abcdef01234567' } },
+      /Atlas API project differs/],
+    [{ ...evidence, cluster: { ...atlas, name: 'other-cluster' } },
+      /Atlas API cluster differs/],
+    [{ ...evidence, cluster: { ...atlas, mongoDBVersion: '8.0.1' } },
+      /Atlas API server version differs/],
+    [{ ...evidence, cluster: { ...atlas, featureCompatibilityVersion: undefined } },
+      /Atlas API FCV is missing/],
+    [{ ...evidence, cluster: { ...atlas, connectionStrings: {
+      ...atlas.connectionStrings, standard: 'mongodb://other.example.test:27017/',
+    } } }, /Selected Mongo URI hosts differ/],
+  ]) {
+    let connected = 0;
+    await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+      configuration, mode: 'authoring', approvalOptions,
+      fetchAtlasEvidence: async () => badEvidence,
+      connect: async () => { connected += 1; },
+    }), message);
+    assert.equal(connected, 0, 'Bad Atlas evidence must prevent Mongo connection');
+  }
+  let unavailableConnections = 0;
+  await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+    configuration, mode: 'authoring', approvalOptions,
+    fetchAtlasEvidence: async () => { throw Object.assign(new Error('API unavailable'),
+      { code: 'RANK1_ATLAS_EVIDENCE_UNAVAILABLE' }); },
+    connect: async () => { unavailableConnections += 1; },
+  }), { code: 'RANK1_ATLAS_EVIDENCE_UNAVAILABLE' });
+  assert.equal(unavailableConnections, 0);
+  for (const [badRuntime, message] of [
+    [{ ...runtime, databaseName: 'wecooked-production' }, /Connected database differs/],
+    [{ ...runtime, status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserRoles: [{ db: configuration.connectedDatabase, role: 'readWrite' }],
+    } } }, /Authenticated roles differ/],
+    [{ ...runtime, status: { authInfo: { ...runtime.status.authInfo,
+      authenticatedUserPrivileges: [{ resource: { db: configuration.connectedDatabase,
+        collection: '' }, actions: ['find'] }],
+    } } }, /broad, protected-database/],
+    [{ ...runtime, build: { version: '8.0.1' } }, /Runtime server version differs/],
+  ]) {
+    let fixtureReads = 0;
+    const fakeCollection = { countDocuments: () => { fixtureReads += 1; return 0; } };
+    const fakeConnection = { db: { databaseName: badRuntime.databaseName,
+      admin: () => ({ command: async (command) => {
+        assert.ok(!command.getParameter, 'M0 preflight must not require getParameter');
+        return command.hello ? badRuntime.hello : command.buildInfo ? badRuntime.build
+          : badRuntime.status;
+      } }) } };
+    await assert.rejects(() => connectForAuthoringPhysicalProof({ uri, path: 'synthetic',
+      configuration, mode: 'authoring', approvalOptions,
+      fetchAtlasEvidence: async () => evidence,
+      connect: async () => { connections += 1; }, connection: fakeConnection,
+      disconnect: async () => {}, collections: { recipes: fakeCollection,
+        ingredients: fakeCollection },
+    }), message);
+    assert.equal(fixtureReads, 0, 'Connected checks precede fixture access and writes');
+  }
 });
 
 test('isolated Mongo evaluates mixed consumer eligibility before every page and total', {
   skip: process.env.RECIPE_RANKING_MONGO_RUN !== 'authoring',
   timeout: 60000,
 }, async () => {
-  const configuration = requireAuthoringTargetConfiguration();
-  requireAuthoringExternalApproval();
-  const uri = process.env.RECIPE_RANKING_MONGO_URI;
-  try {
-    await mongoose.connect(uri, { autoIndex: false, autoCreate: false });
-  } catch {
-    throw new Error('Isolated Mongo connection failed.');
-  }
-  try {
-    const admin = mongoose.connection.db.admin();
-    const [hello, build, status] = await Promise.all([
-      admin.command({ hello: 1 }),
-      admin.command({ buildInfo: 1 }),
-      admin.command({ connectionStatus: 1, showPrivileges: true }),
-    ]);
-    assertAuthoringConnectedTarget(configuration, {
-      databaseName: mongoose.connection.db.databaseName, hello, build, status,
-    });
-    assert.equal(await Recipe.collection.countDocuments({}), 0);
-    assert.equal(await Ingredient.collection.countDocuments({}), 0);
-  } catch (error) {
-    await mongoose.disconnect();
-    throw error;
-  }
+  await connectForAuthoringPhysicalProof();
   const activeIngredientId = new mongoose.Types.ObjectId();
   const inactiveIngredientId = new mongoose.Types.ObjectId();
   const ids = Array.from({ length: 14 }, () => new mongoose.Types.ObjectId());
