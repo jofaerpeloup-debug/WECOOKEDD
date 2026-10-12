@@ -22,13 +22,11 @@ let ModeratorWorkspace;
 let OverviewTab;
 let RecipeAuthoringSteps;
 let loadRecipeDashboardData;
-let loadUserDashboardData;
 try {
   ({
     ModeratorWorkspace,
     OverviewTab,
     loadRecipeDashboardData,
-    loadUserDashboardData,
   } = await server.ssrLoadModule('/src/App.jsx'));
   ({ default: RecipeAuthoringSteps } = await server.ssrLoadModule('/src/recipeAuthoring/RecipeAuthoringSteps.jsx'));
 } catch (error) {
@@ -40,19 +38,34 @@ test.after(async () => {
   await server.close();
 });
 
-const metrics = {
-  totalRecipes: 42,
-  totalUsers: 117,
-  activeUsers: 104,
-  suspendedUsers: 13,
+const analyticsState = {
+  status: 'ready',
+  data: {
+    periodEndUtc: '2026-10-12T04:00:00.000Z',
+    generatedAtUtc: '2026-10-12T04:00:01.000Z',
+    timeZone: 'Asia/Manila',
+    accounts: {
+      total: 117,
+      byRole: { user: 110, moderator: 5, admin: 2 },
+      byStatus: { active: 104, suspended: 13 },
+      eligibleActive: 100,
+    },
+    communityPosts: { retainedTotal: 39 },
+    periods: Object.fromEntries([7, 30, 90].map((days) => [`days${days}`, {
+      fromUtc: '2026-10-01T16:00:00.000Z',
+      toUtc: '2026-10-12T04:00:00.000Z',
+      accountsRegistered: 0,
+      postsCreated: 0,
+    }])),
+  },
 };
 
 function renderOverview(overrides = {}) {
   return renderToStaticMarkup(React.createElement(OverviewTab, {
-    metrics,
+    totalRecipes: 42,
     latestRecipes: [{ id: 'recipe-1', title: 'Real API Recipe', category: 'dinner' }],
     recipeStatus: 'ready',
-    userStatus: 'ready',
+    analyticsState,
     onNavigate: () => {},
     ...overrides,
   }));
@@ -76,7 +89,7 @@ test('recipe dashboard loader uses the authoritative total and preserves newest 
   assert.deepEqual(state, { status: 'ready', total: 41, latest: recipes.slice(0, 4) });
 
   const markup = renderOverview({
-    metrics: { ...metrics, totalRecipes: state.total },
+    totalRecipes: state.total,
     latestRecipes: state.latest,
     recipeStatus: state.status,
   });
@@ -90,15 +103,9 @@ test('dashboard loaders accept authoritative zero totals', async () => {
     recipes: [],
     pagination: { total: 0 },
   }));
-  const userState = await loadUserDashboardData(async () => ({
-    users: [],
-    pagination: { total: 0 },
-  }));
-
   assert.deepEqual(recipeState, { status: 'ready', total: 0, latest: [] });
-  assert.deepEqual(userState, { status: 'ready', total: 0, active: 0, suspended: 0 });
   assert.match(renderOverview({
-    metrics: { totalRecipes: 0, totalUsers: 0, activeUsers: 0, suspendedUsers: 0 },
+    totalRecipes: 0,
     latestRecipes: [],
   }), />0</);
 });
@@ -115,51 +122,12 @@ test('recipe dashboard loader never substitutes page length for an invalid total
   }
 });
 
-test('user dashboard loader uses each server-filtered authoritative total', async () => {
-  const calls = [];
-  const totals = { all: 50, active: 43, suspended: 7 };
-  const state = await loadUserDashboardData(async (params) => {
-    calls.push(params);
-    return { users: [], pagination: { total: totals[params.status || 'all'] } };
-  });
-
-  assert.deepEqual(calls, [
-    { limit: 1 },
-    { limit: 1, status: 'active' },
-    { limit: 1, status: 'suspended' },
-  ]);
-  assert.deepEqual(state, { status: 'ready', total: 50, active: 43, suspended: 7 });
-});
-
-test('missing or malformed user totals make the whole user summary unavailable', async () => {
-  const invalidTotals = [undefined, null, '0', NaN, Infinity, -1, 0.5, Number.MAX_SAFE_INTEGER + 1];
-
-  for (const total of invalidTotals) {
-    for (const invalidStatus of ['all', 'active', 'suspended']) {
-      const state = await loadUserDashboardData(async (params) => {
-        const status = params.status || 'all';
-        return {
-          users: [],
-          pagination: status === invalidStatus
-            ? (total === undefined ? {} : { total })
-            : { total: 2 },
-        };
-      });
-      assert.deepEqual(state, { status: 'error', total: 0, active: 0, suspended: 0 });
-    }
-  }
-});
-
 test('rejected dashboard requests produce unavailable states without error details', async () => {
   const rejected = async () => { throw new Error('sensitive upstream detail'); };
 
   assert.deepEqual(
     await loadRecipeDashboardData(rejected),
     { status: 'error', total: 0, latest: [] },
-  );
-  assert.deepEqual(
-    await loadUserDashboardData(rejected),
-    { status: 'error', total: 0, active: 0, suspended: 0 },
   );
 });
 
@@ -171,7 +139,8 @@ test('Admin Overview presents only supported REST-backed totals and latest recip
   }
   assert.match(markup, /Admin Overview/);
   assert.match(markup, /Latest recipes/);
-  assert.equal((markup.match(/wc-dashboard-stat-icon/g) || []).length, 4);
+  assert.equal((markup.match(/wc-dashboard-stat-icon/g) || []).length, 1);
+  assert.match(markup, /Active-status accounts/);
 });
 
 test('Admin metadata controls render the exact ordered Region/category labels and unset choices', () => {
@@ -182,7 +151,7 @@ test('Admin metadata controls render the exact ordered Region/category labels an
         fieldErrors: {},
         form: {
           difficulty: '', prepTimeMinutes: '', cookTimeHours: '', cookTimeMinutePart: '',
-          servings: '', region: '', category: '', dietaryTags: [],
+          servings: '', region: '', category: '', dietaryTags: [], nutrition: null,
         },
       },
       change: () => {},
@@ -258,7 +227,7 @@ test('Admin Overview distinguishes loading, empty, and error recipe states', () 
   assert.match(renderOverview({ recipeStatus: 'loading' }), /Loading recipe data/);
   assert.match(renderOverview({ latestRecipes: [] }), /No recipes are currently in the catalog/);
 
-  const errorMarkup = renderOverview({ recipeStatus: 'error', userStatus: 'error' });
+  const errorMarkup = renderOverview({ recipeStatus: 'error', analyticsState: { status: 'error', data: null } });
   assert.match(errorMarkup, /Some overview data could not be loaded/);
   assert.match(errorMarkup, /Recipe data is unavailable/);
   assert.doesNotMatch(errorMarkup, />0</);
