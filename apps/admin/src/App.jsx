@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import {
   LayoutDashboard, ChefHat, Users, X,
   Leaf, Check, CheckCircle2, LogOut, Mail, Lock, Eye, EyeOff,
@@ -12,7 +12,7 @@ import {
 } from './auth.js';
 import { useBackendAuth } from './backendAuth.js';
 import { listRecipes } from './recipeApi.js';
-import { listUsers } from './userApi.js';
+import AnalyticsOverview, { loadAnalyticsOverview } from './AnalyticsOverview.jsx';
 import { categoryLabel, regionLabel } from './recipeOptions.js';
 import IngredientsTab from './IngredientsTab.jsx';
 import SubstitutionsTab from './SubstitutionsTab.jsx';
@@ -141,24 +141,6 @@ export async function loadRecipeDashboardData(request = listRecipes) {
   }
 }
 
-export async function loadUserDashboardData(request = listUsers) {
-  try {
-    const [all, active, suspended] = await Promise.all([
-      request({ limit: 1 }),
-      request({ limit: 1, status: 'active' }),
-      request({ limit: 1, status: 'suspended' }),
-    ]);
-    return {
-      status: 'ready',
-      total: authoritativePaginationTotal(all.pagination),
-      active: authoritativePaginationTotal(active.pagination),
-      suspended: authoritativePaginationTotal(suspended.pagination),
-    };
-  } catch {
-    return { status: 'error', total: 0, active: 0, suspended: 0 };
-  }
-}
-
 // Thin wrappers around window.storage that NEVER throw synchronously and never
 // reject -- window.storage itself may be missing in some rendering contexts,
 // and a raw `window.storage.set(...)` call would throw before `.catch()` can
@@ -203,16 +185,15 @@ function WeCookedAdminApp() {
   const [staffState, setStaffState] = useState({ status: 'idle', data: null, error: '' });
   const [applicationNotice, setApplicationNotice] = useState('');
   const staffRequestRef = useRef(0);
-  // Recipes and users are fully REST-backed now (zero Firestore). The Overview
-  // tab shows a few summary widgets, so it pulls lightweight, best-effort
-  // counts from the same REST APIs the Recipes / Users tabs use.
+  // Recipe inventory remains on the catalog API. Fixed account and post
+  // aggregates come from one server-authoritative analytics response.
   //
   // The "Cuisines" breakdown widget was removed in M3 when `cuisine` left the
   // Recipe domain. A replacement region/category visualization waits on a
   // content-classification milestone — showing one now would be misleading
   // (no existing recipe is classified yet).
   const [recipeStats, setRecipeStats] = useState({ status: 'idle', total: 0, latest: [] });
-  const [userCounts, setUserCounts] = useState({ status: 'idle', total: 0, active: 0, suspended: 0 });
+  const [analyticsState, setAnalyticsState] = useState({ status: 'idle', data: null });
 
   const [firebaseAccountEmail, setFirebaseAccountEmail] = useState('');
   const [authNotice, setAuthNotice] = useState('');
@@ -305,21 +286,18 @@ function WeCookedAdminApp() {
   }, [backend.status, backend.user?.role]);
 
   useEffect(() => {
-    // User counts for the Overview tab, straight from the REST API — no
-    // Firestore. Refetched whenever the admin lands on Overview so a suspend /
-    // reactivate done on the Users tab is reflected. Only pagination.total is
-    // read (limit: 1 keeps the payload tiny). Best-effort: a failure just
-    // leaves the current totals in an explicit unavailable state.
-    if (tab !== 'overview') return undefined;
-    if (backend.status !== 'authenticated' || backend.user?.role !== 'admin') return undefined;
+    if (tab !== 'overview' || backend.status !== 'authenticated' || backend.user?.role !== 'admin') {
+      setAnalyticsState({ status: 'idle', data: null });
+      return undefined;
+    }
     let cancelled = false;
-    setUserCounts((current) => ({ ...current, status: 'loading' }));
+    setAnalyticsState({ status: 'loading', data: null });
     (async () => {
-      const nextState = await loadUserDashboardData();
-      if (!cancelled) setUserCounts(nextState);
+      const nextState = await loadAnalyticsOverview();
+      if (!cancelled) setAnalyticsState(nextState);
     })();
     return () => { cancelled = true; };
-  }, [tab, backend.status, backend.user?.role]);
+  }, [tab, backend.status, backend.user?.role, backend.user?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -340,13 +318,6 @@ function WeCookedAdminApp() {
     if (!prefsLoaded) return;
     safeSet(DISPLAY_PREFS_KEY, JSON.stringify(displayPrefs), false);
   }, [displayPrefs, prefsLoaded]);
-
-  const metrics = useMemo(() => ({
-    totalRecipes: recipeStats.total,
-    totalUsers: userCounts.total,
-    activeUsers: userCounts.active,
-    suspendedUsers: userCounts.suspended,
-  }), [recipeStats.total, userCounts]);
 
   async function registerAndApply({ name, email, password }) {
     setApplicationNotice('');
@@ -1195,10 +1166,10 @@ function WeCookedAdminApp() {
           <main className="wc-main wc-staff-main">
             {tab === 'overview' && (
               <OverviewTab
-                metrics={metrics}
+                totalRecipes={recipeStats.total}
                 latestRecipes={recipeStats.latest}
                 recipeStatus={recipeStats.status}
-                userStatus={userCounts.status}
+                analyticsState={analyticsState}
                 onNavigate={setTab}
               />
             )}
@@ -1811,10 +1782,9 @@ function LogoutConfirmModal({ onCancel, onConfirm }) {
   );
 }
 
-export function OverviewTab({ metrics, latestRecipes, recipeStatus, userStatus, onNavigate }) {
-  const recipeValue = recipeStatus === 'ready' ? metrics.totalRecipes : '—';
-  const userValue = (value) => (userStatus === 'ready' ? value : '—');
-  const hasLoadError = recipeStatus === 'error' || userStatus === 'error';
+export function OverviewTab({ totalRecipes, latestRecipes, recipeStatus, analyticsState, onNavigate }) {
+  const recipeValue = recipeStatus === 'ready' ? totalRecipes : '—';
+  const hasLoadError = recipeStatus === 'error';
 
   return (
     <div className="wc-dashboard wc-admin-dashboard">
@@ -1835,28 +1805,18 @@ export function OverviewTab({ metrics, latestRecipes, recipeStatus, userStatus, 
       <section
         className="wc-dashboard-summary"
         aria-label="Current totals"
-        aria-busy={recipeStatus === 'loading' || userStatus === 'loading'}
+        aria-busy={recipeStatus === 'loading'}
       >
-        {(recipeStatus === 'loading' || userStatus === 'loading') && (
+        {recipeStatus === 'loading' && (
           <span className="wc-dashboard-sr-only" role="status">Loading current totals…</span>
         )}
         <div className="wc-dashboard-stat">
           <span className="wc-dashboard-stat-icon" aria-hidden="true"><ChefHat size={17} /></span>
           <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Recipes</span><strong>{recipeValue}</strong><span className="wc-dashboard-stat-detail">Current catalog total</span></span>
         </div>
-        <div className="wc-dashboard-stat">
-          <span className="wc-dashboard-stat-icon" aria-hidden="true"><Users size={17} /></span>
-          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Users</span><strong>{userValue(metrics.totalUsers)}</strong><span className="wc-dashboard-stat-detail">All user accounts</span></span>
-        </div>
-        <div className="wc-dashboard-stat">
-          <span className="wc-dashboard-stat-icon" aria-hidden="true"><CheckCircle2 size={17} /></span>
-          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Active users</span><strong>{userValue(metrics.activeUsers)}</strong><span className="wc-dashboard-stat-detail">Accounts with active status</span></span>
-        </div>
-        <div className="wc-dashboard-stat">
-          <span className="wc-dashboard-stat-icon" aria-hidden="true"><ShieldAlert size={17} /></span>
-          <span className="wc-dashboard-stat-copy"><span className="wc-dashboard-stat-label">Suspended users</span><strong>{userValue(metrics.suspendedUsers)}</strong><span className="wc-dashboard-stat-detail">Accounts with suspended status</span></span>
-        </div>
       </section>
+
+      <AnalyticsOverview state={analyticsState} />
 
       <div className="wc-dashboard-columns">
         <section className="wc-dashboard-section wc-dashboard-recipes" aria-labelledby="latest-recipes-heading">

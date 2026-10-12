@@ -15,6 +15,7 @@ const communityRoutes = require('../modules/community/community.routes');
 const uploadRoutes = require('../modules/uploads/upload.routes');
 const staffRoutes = require('../modules/moderator-applications/moderator-application.routes');
 const auditRoutes = require('../modules/audit/audit.routes');
+const analyticsRoutes = require('../modules/analytics/analytics.routes');
 const assistantRoutes = require('../modules/assistant/assistant.routes');
 const notificationRoutes = require('../modules/notifications/notification.routes');
 
@@ -38,6 +39,7 @@ router.use('/community', communityRoutes);
 router.use('/admin/uploads', uploadRoutes);
 router.use('/staff', staffRoutes);
 router.use('/admin/audit-logs', auditRoutes);
+router.use('/admin/analytics', analyticsRoutes);
 router.use('/assistant', assistantRoutes);
 router.use('/notifications', notificationRoutes);
 
