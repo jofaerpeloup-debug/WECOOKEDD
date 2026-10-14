@@ -9,7 +9,7 @@ import {
   RECIPE_CATEGORIES, RECIPE_DIETARY_TAGS, RECIPE_DIFFICULTIES, RECIPE_REGIONS,
   RECIPE_UNITS, TO_TASTE_UNIT,
 } from '../recipeOptions.js';
-import { blankIngredient, blankNutrition, NUTRIENT_FIELDS } from './recipeAuthoringModel.js';
+import { blankIngredient, blankNutrition, blankSpiceAlternative, blankStepTimer, cookingForMode, cookingMode, NUTRIENT_FIELDS, SPICE_LEVELS } from './recipeAuthoringModel.js';
 import { ingredientCreationPrefill, prepareIngredientResolutionRequest } from './recipeIngredientResolution.js';
 import { createRecipeIntakeHandlers, metadataSuggestionState } from './recipeIntake.js';
 import { createRecipeUrlImportHandlers, RecipeUrlImportControls } from './recipeUrlImport.js';
@@ -17,6 +17,69 @@ import RecipeReview from './RecipeReview.jsx';
 
 function FieldError({ message }) { return message ? <div className="wc-author-field-error" role="alert">{message}</div> : null; }
 function err(errors, prefix) { return errors[prefix] || Object.entries(errors).find(([key]) => key.startsWith(`${prefix}.`))?.[1]; }
+
+function CookingSpiceEditor({ form, change, busy, errors }) {
+  const cooking = form.cooking;
+  const mode = cookingMode(cooking);
+  const setCooking = (patch) => change('cooking', { ...cooking, ...patch });
+  return <fieldset className="wc-cooking-editor"><legend>Authored cooking options</legend>
+    <label>Cooking profile<select value={mode} disabled={busy} onChange={(event) => change('cooking', cookingForMode(cooking, event.target.value))}>
+      <option value="none">No spice levels or timers</option><option value="timers">Step timers only</option><option value="spice">Authored spice levels and optional timers</option>
+    </select></label>
+    {mode === 'spice' && <>
+      <label>Default spice level<select value={cooking.defaultSpiceLevel} disabled={busy} aria-invalid={Boolean(errors['cooking.defaultSpiceLevel'])} onChange={(event) => setCooking({ defaultSpiceLevel: event.target.value })}>
+        {SPICE_LEVELS.map((level) => <option key={level} value={level}>{level.replace('_', ' ')}</option>)}
+      </select></label><FieldError message={errors['cooking.defaultSpiceLevel']} />
+      <p className="wc-author-hint">The Ingredients above are the complete default list. Each alternative below is a complete replacement list.</p>
+      {(cooking.spiceAlternatives || []).map((alternative, altIndex) => {
+        const prefix = `cooking.spiceAlternatives.${altIndex}`;
+        const updateAlternative = (patch) => setCooking({ spiceAlternatives: cooking.spiceAlternatives.map((value, index) => index === altIndex ? { ...value, ...patch } : value) });
+        const updateRow = (rowIndex, patch) => updateAlternative({ ingredients: alternative.ingredients.map((row, index) => index === rowIndex ? { ...row, ...patch } : row) });
+        return <section className="wc-cooking-alternative" key={altIndex} aria-label={`Alternative spice level ${altIndex + 1}`}>
+          <div className="wc-author-section-intro"><label>Alternative level<select value={alternative.spiceLevel} disabled={busy} aria-invalid={Boolean(errors[`${prefix}.spiceLevel`])} onChange={(event) => updateAlternative({ spiceLevel: event.target.value })}>
+            <option value="">Choose level</option>{SPICE_LEVELS.map((level) => <option key={level} value={level}>{level.replace('_', ' ')}</option>)}
+          </select></label><button type="button" className="wc-btn-secondary" disabled={busy} onClick={() => setCooking({ spiceAlternatives: cooking.spiceAlternatives.filter((_, index) => index !== altIndex) })}>Remove level</button></div>
+          <FieldError message={errors[`${prefix}.spiceLevel`] || errors[`${prefix}.ingredients`]} />
+          {alternative.ingredients.map((row, rowIndex) => <div className="wc-author-ingredient" key={row.key || rowIndex}>
+            <span className="wc-author-row-number">{rowIndex + 1}</span><IngredientPicker value={row.ingredient} disabled={busy} ariaLabel={`${alternative.spiceLevel || 'Alternative'} ingredient ${rowIndex + 1}`} onChange={(ingredient) => updateRow(rowIndex, { ingredient })} />
+            <label>Quantity<input type="text" inputMode="decimal" value={row.quantity} disabled={busy || row.unit === TO_TASTE_UNIT} aria-invalid={Boolean(errors[`${prefix}.ingredients.${rowIndex}.quantity`])} onChange={(event) => updateRow(rowIndex, { quantity: event.target.value })} /></label>
+            <label>Unit<select value={row.unit} disabled={busy} onChange={(event) => updateRow(rowIndex, { unit: event.target.value, quantity: event.target.value === TO_TASTE_UNIT ? '' : row.quantity })}>{RECIPE_UNITS.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></label>
+            <label className="wc-author-check"><input type="checkbox" checked={row.optional} disabled={busy} onChange={(event) => updateRow(rowIndex, { optional: event.target.checked })} /> Optional</label>
+            <label className="wc-author-note">Note<input value={row.note} disabled={busy} maxLength={200} onChange={(event) => updateRow(rowIndex, { note: event.target.value })} /></label>
+            <button type="button" className="wc-icon-btn danger" aria-label={`Remove ${alternative.spiceLevel || 'alternative'} ingredient ${rowIndex + 1}`} disabled={busy} onClick={() => updateAlternative({ ingredients: alternative.ingredients.length === 1 ? [blankIngredient()] : alternative.ingredients.filter((_, index) => index !== rowIndex) })}><Trash2 size={15} /></button>
+          </div>)}
+          <FieldError message={err(errors, `${prefix}.ingredients`)} />
+          <button type="button" className="wc-btn-secondary" disabled={busy || alternative.ingredients.length >= MAX_INGREDIENTS} onClick={() => updateAlternative({ ingredients: [...alternative.ingredients, blankIngredient()] })}>Add alternative ingredient</button>
+        </section>;
+      })}
+      <FieldError message={errors['cooking.spiceAlternatives']} />
+      <button type="button" className="wc-btn-secondary" disabled={busy || cooking.spiceAlternatives.length >= 4} onClick={() => setCooking({ spiceAlternatives: [...cooking.spiceAlternatives, blankSpiceAlternative()] })}>Add complete spice alternative</button>
+    </>}
+  </fieldset>;
+}
+
+function CookingTimerEditor({ form, change, busy, errors }) {
+  const cooking = form.cooking;
+  const instructions = (form.instructions || []).map((text) => text.trim()).filter(Boolean);
+  if (!cooking) return <section className="wc-cooking-editor"><h3>Cook Mode step timers</h3><p className="wc-author-hint">Timers are optional and use exact authored durations.</p><button type="button" className="wc-btn-secondary" disabled={busy} onClick={() => change('cooking', cookingForMode(null, 'timers'))}>Enable step timers</button></section>;
+  const levels = cooking.defaultSpiceLevel === null ? [null] : [cooking.defaultSpiceLevel, ...cooking.spiceAlternatives.map((alternative) => alternative.spiceLevel)];
+  const setTimers = (stepTimers) => change('cooking', { ...cooking, stepTimers });
+  return <fieldset className="wc-cooking-editor"><legend>Cook Mode step timers</legend><p className="wc-author-hint">Select a current instruction, exact servings, authored level, and duration in seconds. Missing presets stay manual in Cook Mode.</p>
+    {cooking.stepTimers.map((timer, index) => {
+      const prefix = `cooking.stepTimers.${index}`;
+      const update = (patch) => setTimers(cooking.stepTimers.map((entry, entryIndex) => entryIndex === index ? { ...entry, ...patch } : entry));
+      return <div className="wc-cooking-timer" key={index}>
+        <label>Instruction<select value={timer.stepOrder} disabled={busy} aria-invalid={Boolean(errors[`${prefix}.stepOrder`])} onChange={(event) => update({ stepOrder: event.target.value })}><option value="">Choose step</option>{instructions.map((text, stepIndex) => <option key={stepIndex} value={stepIndex + 1}>{stepIndex + 1}. {text.slice(0, 60)}</option>)}</select></label>
+        <label>Servings<input type="number" min="1" max="100" step="1" value={timer.servings} disabled={busy} aria-invalid={Boolean(errors[`${prefix}.servings`])} onChange={(event) => update({ servings: event.target.value })} /></label>
+        <label>Spice level<select value={timer.spiceLevel ?? ''} disabled={busy} aria-invalid={Boolean(errors[`${prefix}.spiceLevel`])} onChange={(event) => update({ spiceLevel: cooking.defaultSpiceLevel === null ? null : event.target.value })}>{cooking.defaultSpiceLevel === null ? <option value="">No spice selection</option> : <><option value="">Choose level</option>{levels.map((level) => <option key={level} value={level}>{level.replace('_', ' ')}</option>)}</>}</select></label>
+        <label>Duration (seconds)<input type="number" min="1" max="10800" step="1" value={timer.durationSeconds} disabled={busy} aria-invalid={Boolean(errors[`${prefix}.durationSeconds`])} onChange={(event) => update({ durationSeconds: event.target.value })} /></label>
+        <button type="button" className="wc-btn-secondary" disabled={busy} onClick={() => setTimers(cooking.stepTimers.filter((_, entryIndex) => entryIndex !== index))}>Remove timer</button>
+        <FieldError message={err(errors, prefix)} />
+      </div>;
+    })}
+    <button type="button" className="wc-btn-secondary" disabled={busy} onClick={() => setTimers([...cooking.stepTimers, blankStepTimer(cooking.defaultSpiceLevel)])}>Add timer preset</button>
+  </fieldset>;
+}
 
 function metadataSuggestionKey(item) {
   return `${item.source}:${item.field}:${item.value}`;
@@ -272,6 +335,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage, 
         <label className="wc-author-note">Note<input value={row.note} maxLength={200} disabled={busy} onChange={(e) => updateRow(index, { note: e.target.value })} /></label>
         <button type="button" className="wc-icon-btn danger" aria-label={`Remove ingredient ${index + 1}`} disabled={busy} onClick={() => change('ingredients', form.ingredients.length === 1 ? [blankIngredient()] : form.ingredients.filter((_, i) => i !== index))}><Trash2 size={15} /></button>
       </div>)}
+      <CookingSpiceEditor form={form} change={change} busy={busy} errors={fieldErrors} />
     </div>;
   }
 
@@ -280,6 +344,7 @@ export default function RecipeAuthoringSteps({ authoring, canUploadRecipeImage, 
     return <div><div className="wc-author-section-intro"><p>Blank instructions are ignored and saved steps are renumbered automatically.</p><button type="button" className="wc-btn-secondary" disabled={form.instructions.length >= MAX_INSTRUCTIONS || busy} onClick={() => change('instructions', [...form.instructions, ''])}><Plus size={15} /> Add instruction</button></div><FieldError message={err(fieldErrors, 'instructions')} />
       {form.instructions.map((text, index) => <div className="wc-author-instruction" key={index}><span>{index + 1}</span><textarea rows="3" value={text} maxLength={MAX_INSTRUCTION_LENGTH} disabled={busy} aria-label={`Instruction ${index + 1}`} aria-invalid={Boolean(fieldErrors[`instructions.${index}`])} onChange={(e) => change('instructions', form.instructions.map((value, i) => i === index ? e.target.value : value))} />
         <div><button type="button" aria-label="Move up" disabled={index === 0 || busy} onClick={() => move(index, index - 1)}><ArrowUp size={14} /></button><button type="button" aria-label="Move down" disabled={index === form.instructions.length - 1 || busy} onClick={() => move(index, index + 1)}><ArrowDown size={14} /></button><button type="button" aria-label="Remove instruction" disabled={busy} onClick={() => change('instructions', form.instructions.length === 1 ? [''] : form.instructions.filter((_, i) => i !== index))}><Trash2 size={14} /></button></div></div>)}
+      <CookingTimerEditor form={form} change={change} busy={busy} errors={fieldErrors} />
     </div>;
   }
 

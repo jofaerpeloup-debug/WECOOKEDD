@@ -146,6 +146,18 @@ export default function RecipeReview({
         <section><h3>Ingredients</h3>{ingredients.length ? <ul>{ingredients.map((row, index) => <li key={row.key || index}><strong>{row.ingredient.name}</strong> — {row.unit === 'toTaste' ? 'to taste' : `${row.quantity} ${UNIT_LABELS[row.unit] || row.unit}`}{row.optional ? ' (optional)' : ''}{row.note ? `, ${row.note}` : ''}</li>)}</ul> : <p className="wc-author-muted">None yet.</p>}</section>
       </div>
       <section><h3>Instructions</h3>{instructions.length ? <ol>{instructions.map((text, index) => <li key={`${index}-${text}`}>{text}</li>)}</ol> : <p className="wc-author-muted">None yet.</p>}</section>
+      <section className="wc-cooking-review"><h3>Authored cooking</h3>
+        {form.cooking == null ? <p className="wc-author-muted">No spice levels or step timers.</p> : <>
+          <p><strong>Default spice level:</strong> {form.cooking.defaultSpiceLevel?.replace('_', ' ') || 'None (timers only)'}</p>
+          {form.cooking.spiceAlternatives.map((alternative, index) => <div key={`${alternative.spiceLevel}-${index}`}>
+            <h4>{alternative.spiceLevel?.replace('_', ' ') || 'Unselected level'} — complete ingredient list</h4>
+            <ul>{alternative.ingredients.filter((row) => row.ingredient?.id).map((row, rowIndex) => <li key={row.key || rowIndex}>{row.ingredient.name} — {row.unit === 'toTaste' ? 'to taste' : `${row.quantity} ${UNIT_LABELS[row.unit] || row.unit}`}{row.optional ? ' (optional)' : ''}{row.note ? `, ${row.note}` : ''}</li>)}</ul>
+          </div>)}
+          {form.cooking.spiceAlternatives.length > 0 && <p className="wc-author-hint">Nutrition above applies only to the default ingredient list.</p>}
+          <h4>Cook Mode step timers</h4>
+          {form.cooking.stepTimers.length ? <ul>{form.cooking.stepTimers.map((timer, index) => <li key={index}>Step {timer.stepOrder} · {timer.servings} servings · {timer.spiceLevel?.replace('_', ' ') || 'no spice selection'} · {timer.durationSeconds} seconds</li>)}</ul> : <p className="wc-author-muted">No authored timer presets. Cooking steps remain manual.</p>}
+        </>}
+      </section>
       <section className="wc-author-nutrition-review"><h3>Nutrition</h3>
         {form.nutrition == null
           ? <p className="wc-author-muted">Authoritative nutrition is unavailable.</p>

@@ -4,7 +4,7 @@ import {
   buildStepPatch, createDraftBody, emptyRecipeForm, firstIncompleteStep, formFromRecipe,
   combineDuration, formatDuration, mutationBody, normalizeIngredients, normalizeInstructions,
   parseIngredientQuantity, publicationReadiness, publishBody, splitDuration, statusLabel,
-  stepForField, validateStep,
+  stepForField, validateStep, normalizeCooking, cookingForMode, cookingSaveDisposition,
 } from '../src/recipeAuthoring/recipeAuthoringModel.js';
 import { RECIPE_UNITS, UNIT_LABELS } from '../src/recipeOptions.js';
 
@@ -225,5 +225,127 @@ test('Details diff emits exact numeric v1 nutrition and source, never blank-to-z
   assert.deepEqual(buildStepPatch(hydrated, { ...hydrated, nutrition: null }, 'details'), { nutrition: null });
   assert.equal(stepForField('nutrition.fiberGrams'), 'details');
   assert.equal(stepForField('nutritionSource.label'), 'details');
+});
+
+test('staff cooking reload keeps every authored level, canonical usage, and exact timer tuple', () => {
+  const id = '507f1f77bcf86cd799439011';
+  const recipe = {
+    title: 'Adobo', servings: 4,
+    ingredients: [{ ingredient: { id, name: 'Chicken' }, quantity: 1, unit: 'kg' }],
+    instructions: ['Simmer.'],
+    cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [
+      { spiceLevel: 'none', ingredients: [{ ingredientId: id, ingredient: { id, name: 'Chicken' }, quantity: 2, unit: 'kg', note: 'trimmed', optional: false }] },
+      { spiceLevel: 'medium', ingredients: [{ ingredientId: id, ingredient: { id, name: 'Chicken' }, quantity: null, unit: 'toTaste', optional: true }] },
+      { spiceLevel: 'hot', ingredients: [{ ingredientId: id, ingredient: { id, name: 'Chicken' }, quantity: 3, unit: 'kg' }] },
+      { spiceLevel: 'extra_hot', ingredients: [{ ingredientId: id, ingredient: { id, name: 'Chicken' }, quantity: 4, unit: 'kg' }] },
+    ], stepTimers: [{ stepOrder: 1, servings: 4, spiceLevel: 'hot', durationSeconds: 90 }] },
+  };
+  const form = formFromRecipe(recipe);
+  assert.equal(form.cooking.spiceAlternatives[0].ingredients[0].ingredient.id, id);
+  assert.deepEqual(validateStep(form, 'ingredients'), {});
+  assert.deepEqual(validateStep(form, 'instructions'), {});
+  const payload = normalizeCooking(form.cooking);
+  assert.deepEqual(payload.spiceAlternatives.map((entry) => entry.spiceLevel), ['none', 'medium', 'hot', 'extra_hot']);
+  assert.deepEqual(payload.stepTimers, recipe.cooking.stepTimers);
+  assert.equal(Object.hasOwn(payload.spiceAlternatives[1].ingredients[0], 'quantity'), false);
+  assert.deepEqual(buildStepPatch(form, form, 'ingredients'), {});
+  assert.deepEqual(buildStepPatch(form, form, 'instructions'), {});
+  assert.equal(stepForField('cooking.spiceAlternatives.1.ingredients.0.quantity'), 'ingredients');
+  assert.equal(stepForField('cooking.stepTimers.0.stepOrder'), 'instructions');
+});
+
+test('spice alternatives must be complete and unique, while timer tuples must match current steps and levels', () => {
+  const form = emptyRecipeForm();
+  form.servings = '4';
+  form.ingredients = [{ ingredient: { id: '507f1f77bcf86cd799439011', name: 'Chicken' }, quantity: '1', unit: 'kg', optional: false, note: '' }];
+  form.instructions = ['Simmer.'];
+  form.cooking = cookingForMode(null, 'spice');
+  form.cooking.spiceAlternatives = [
+    { spiceLevel: 'hot', ingredients: [{ ingredient: { id: '507f1f77bcf86cd799439012', name: 'Garlic' }, quantity: '2', unit: 'clove', optional: false, note: '' }] },
+    { spiceLevel: 'hot', ingredients: [{ ingredient: null, quantity: '', unit: 'g', optional: false, note: '' }] },
+  ];
+  assert.match(validateStep(form, 'ingredients')['cooking.spiceAlternatives.1.spiceLevel'], /distinct/);
+  assert.match(validateStep(form, 'ingredients')['cooking.spiceAlternatives.1.ingredients'], /complete ingredients/);
+  form.cooking.spiceAlternatives.pop();
+  form.cooking.stepTimers = [
+    { stepOrder: '1', servings: '4', spiceLevel: 'hot', durationSeconds: '90' },
+    { stepOrder: '1', servings: '4', spiceLevel: 'hot', durationSeconds: '100' },
+  ];
+  assert.match(validateStep(form, 'instructions')['cooking.stepTimers.1'], /unique/);
+  form.cooking.stepTimers[1].stepOrder = '2';
+  assert.match(validateStep(form, 'instructions')['cooking.stepTimers.1.stepOrder'], /whole number/);
+  form.cooking.stepTimers[1].stepOrder = '1'; form.cooking.stepTimers[1].spiceLevel = 'none';
+  assert.match(validateStep(form, 'instructions')['cooking.stepTimers.1.spiceLevel'], /authored/);
+  form.servings = '';
+  assert.deepEqual(validateStep(form, 'ingredients'), {});
+  assert.match(validateStep(form, 'details').servings, /required/);
+});
+
+test('alternative authoring advances through Ingredients and Instructions, then requires servings before Review and save', () => {
+  const saved = formFromRecipe({ title: 'Adobo', description: 'Chicken simmered in vinegar.',
+    publicationStatus: 'draft', ingredients: [], instructions: [], cooking: null });
+  const form = { ...saved, ingredients: [{ ingredient: { id: '507f1f77bcf86cd799439011', name: 'Chicken' },
+    quantity: '1', unit: 'kg', optional: false, note: '' }], instructions: ['Simmer chicken.'],
+    cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [{ spiceLevel: 'hot',
+      ingredients: [{ ingredient: { id: '507f1f77bcf86cd799439012', name: 'Chili' },
+        quantity: '2', unit: 'g', optional: false, note: '' }] }], stepTimers: [] } };
+  const incomplete = { ...form, cooking: { ...form.cooking, spiceAlternatives: [{ spiceLevel: 'hot',
+    ingredients: [{ ...form.cooking.spiceAlternatives[0].ingredients[0], ingredient: null }] }] } };
+  assert.match(validateStep(incomplete, 'ingredients')['cooking.spiceAlternatives.0.ingredients.0.ingredientId'], /canonical/);
+  assert.deepEqual(validateStep(form, 'ingredients'), {});
+  assert.deepEqual(validateStep(form, 'instructions'), {});
+  assert.equal(cookingSaveDisposition(form, buildStepPatch(saved, form, 'ingredients'), { step: 'ingredients', advance: true }), 'defer');
+  assert.equal(cookingSaveDisposition(form, buildStepPatch(saved, form, 'ingredients'), { step: 'ingredients' }), 'needsServings');
+  assert.equal(cookingSaveDisposition(form, buildStepPatch(saved, form, 'instructions'), { step: 'instructions', advance: true }), 'defer');
+  assert.equal(cookingSaveDisposition(form, buildStepPatch(saved, form, 'details'), { step: 'details', advance: true }), 'needsServings');
+  assert.match(validateStep(form, 'details').servings, /required/);
+  assert.equal(publicationReadiness(form).complete, false);
+  form.servings = '4'; form.difficulty = 'easy'; form.cookTimeMinutePart = '20';
+  assert.deepEqual(validateStep(form, 'details'), {});
+  assert.equal(publicationReadiness(form).complete, true);
+  const patch = buildStepPatch(saved, form, 'details');
+  assert.equal(cookingSaveDisposition(form, patch, { step: 'details', advance: true }), 'save');
+  assert.deepEqual(patch.ingredients, [{ ingredientId: '507f1f77bcf86cd799439011', quantity: 1, unit: 'kg', optional: false }]);
+  assert.deepEqual(patch.cooking.spiceAlternatives[0].ingredients,
+    [{ ingredientId: '507f1f77bcf86cd799439012', quantity: 2, unit: 'g', optional: false }]);
+  assert.equal(patch.servings, 4);
+  assert.equal(mutationBody(patch, '2026-10-14T00:00:00.000Z').expectedUpdatedAt, '2026-10-14T00:00:00.000Z');
+});
+
+test('timer-only authoring uses null spice and requires exact 1 to 10800 second presets', () => {
+  const form = emptyRecipeForm();
+  form.instructions = ['Simmer.'];
+  form.cooking = cookingForMode(null, 'timers');
+  form.cooking.stepTimers = [{ stepOrder: '1', servings: '100', spiceLevel: null, durationSeconds: '10800' }];
+  assert.deepEqual(validateStep(form, 'instructions'), {});
+  assert.deepEqual(normalizeCooking(form.cooking).stepTimers, [{ stepOrder: 1, servings: 100, spiceLevel: null, durationSeconds: 10800 }]);
+  form.cooking.stepTimers[0].durationSeconds = '10801';
+  assert.match(validateStep(form, 'instructions')['cooking.stepTimers.0.durationSeconds'], /10800/);
+  form.cooking.stepTimers[0].durationSeconds = '60';
+  form.cooking.stepTimers[0].spiceLevel = 'hot';
+  assert.match(validateStep(form, 'instructions')['cooking.stepTimers.0.spiceLevel'], /authored/);
+});
+
+test('profiled dependent PATCHes reaffirm full cooking and preserve expectedUpdatedAt', () => {
+  const id = '507f1f77bcf86cd799439011';
+  const recipe = { title: 'Adobo', servings: 4, ingredients: [{ ingredient: { id, name: 'Chicken' }, quantity: 1, unit: 'kg' }],
+    instructions: ['Simmer.'], cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [], stepTimers: [] } };
+  const saved = formFromRecipe(recipe);
+  const ingredients = { ...saved, ingredients: [{ ...saved.ingredients[0], quantity: '2' }] };
+  assert.deepEqual(buildStepPatch(saved, ingredients, 'ingredients'), { ingredients: [{ ingredientId: id, quantity: 2, unit: 'kg', optional: false }], cooking: recipe.cooking });
+  const instructions = { ...saved, instructions: ['Boil.'] };
+  assert.deepEqual(buildStepPatch(saved, instructions, 'instructions'), { instructions: ['Boil.'], cooking: recipe.cooking });
+  const details = { ...saved, servings: '6' };
+  assert.deepEqual(buildStepPatch(saved, details, 'details'), { servings: 6, cooking: recipe.cooking });
+  const clear = { ...saved, cooking: null };
+  assert.deepEqual(buildStepPatch(saved, clear, 'ingredients'), { cooking: null });
+  assert.deepEqual(mutationBody(buildStepPatch(saved, details, 'details'), 'revision'), { servings: 6, cooking: recipe.cooking, expectedUpdatedAt: 'revision' });
+  const combined = { ...saved, servings: '6', instructions: ['Boil.'], cooking: {
+    ...saved.cooking, stepTimers: [{ stepOrder: '1', servings: '6', spiceLevel: 'mild', durationSeconds: '60' }],
+  } };
+  assert.deepEqual(buildStepPatch(saved, combined, 'ingredients'), {
+    cooking: { ...recipe.cooking, stepTimers: [{ stepOrder: 1, servings: 6, spiceLevel: 'mild', durationSeconds: 60 }] },
+    instructions: ['Boil.'], servings: 6,
+  });
 });
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ApiError } from '../apiClient.js';
+import { getIngredient } from '../ingredientApi.js';
 import * as recipeApi from '../recipeApi.js';
 import {
   createDraft, getRecipe, publishRecipe, updateRecipe, uploadRecipeImage,
@@ -8,11 +9,11 @@ import {
   createDraftAndRefresh, publishRecipeAndRefresh, updateRecipeAndRefresh,
 } from '../recipeCatalogMutations.js';
 import {
-  AUTHORING_STEPS, buildStepPatch, createDraftBody, dirtySteps, formFromRecipe, mutationBody,
+  AUTHORING_STEPS, buildStepPatch, cookingSaveDisposition, createDraftBody, dirtySteps, formFromRecipe, mutationBody,
   publicationReadiness, publishBody, stepForField, validateStep,
 } from './recipeAuthoringModel.js';
 import {
-  duplicateReviewGate, hasUnsavedChanges, initialAuthoringState, isMutationBusy, publishAcknowledgementGate,
+  duplicateReviewGate, hasUnsavedChanges, ingredientErrorFields, initialAuthoringState, isMutationBusy, publishAcknowledgementGate,
   recipeAuthoringReducer, resolveBasicsImageUpload,
 } from './recipeAuthoringState.js';
 
@@ -35,11 +36,44 @@ function noPatchNotice(state) {
   return state.publicationStatus === 'published' ? 'All changes are saved.' : 'Draft is saved.';
 }
 
+async function withCookingIngredientNames(recipe, known = new Map()) {
+  const alternatives = recipe?.cooking?.spiceAlternatives;
+  if (!alternatives?.length) return recipe;
+  const ids = [...new Set(alternatives.flatMap((alternative) => alternative.ingredients.map((entry) => entry.ingredientId).filter(Boolean)))];
+  // Staff Recipe detail uses input-compatible IDs. The Ingredient API supplies
+  // names for display while the Recipe's IDs remain the save authority.
+  for (let index = 0; index < ids.length; index += 8) {
+    await Promise.all(ids.slice(index, index + 8).map(async (id) => {
+      if (known.has(id)) return;
+      try {
+        const ingredient = await getIngredient(id);
+        known.set(id, { id, name: ingredient.name, unavailable: ingredient.isActive === false });
+      } catch {
+        known.set(id, { id, name: `Ingredient ${id} (name unavailable)` });
+      }
+    }));
+  }
+  return { ...recipe, cooking: { ...recipe.cooking, spiceAlternatives: alternatives.map((alternative) => ({
+    ...alternative, ingredients: alternative.ingredients.map((entry) => ({
+      ...entry, ingredient: entry.ingredientId ? known.get(entry.ingredientId) : null,
+    })),
+  })) } };
+}
+
+function rememberCookingNames(form, known) {
+  for (const alternative of form.cooking?.spiceAlternatives || []) {
+    for (const row of alternative.ingredients || []) {
+      if (row.ingredient?.id && row.ingredient?.name && !row.ingredient.unavailable) known.set(row.ingredient.id, row.ingredient);
+    }
+  }
+}
+
 export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, onPublished, onAuthorityLost }) {
   const [state, dispatch] = useReducer(recipeAuthoringReducer, { recipe, readOnly }, initialAuthoringState);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const flightRef = useRef(false);
+  const cookingNamesRef = useRef(new Map());
   useEffect(() => {
     if (!selectedFile) { setPreviewUrl(''); return undefined; }
     const url = URL.createObjectURL(selectedFile); setPreviewUrl(url);
@@ -50,7 +84,8 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
     if (!recipe?.id && !state.recipeId) return null;
     dispatch({ type: 'LOAD_START' });
     try {
-      const latest = await getRecipe(state.recipeId || recipe.id);
+      cookingNamesRef.current.clear();
+      const latest = await withCookingIngredientNames(await getRecipe(state.recipeId || recipe.id), cookingNamesRef.current);
       dispatch({ type: 'LOAD_SUCCESS', recipe: latest, keepStep });
       setSelectedFile(null);
       return latest;
@@ -69,9 +104,21 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
   const handleFailure = useCallback((error) => {
     if (error instanceof ApiError && error.isForbidden) onAuthorityLost?.();
     if (error?.code === 'RECIPE_EDIT_CONFLICT') { dispatch({ type: 'CONFLICT' }); return; }
+    if (error?.code === 'RECIPE_COOKING_REVIEW_REQUIRED') {
+      dispatch({ type: 'SET_STEP', step: 'ingredients' });
+      dispatch({ type: 'SET_ERRORS', fieldErrors: { 'cooking.spiceAlternatives': 'Review and save the complete cooking profile with this change.' }, message: errorMessage(error) });
+      return;
+    }
+    if (error?.code === 'RECIPE_INGREDIENT_NOT_FOUND' || error?.code === 'RECIPE_INGREDIENT_INACTIVE') {
+      dispatch({ type: 'SET_STEP', step: 'ingredients' });
+      dispatch({ type: 'SET_ERRORS', fieldErrors: ingredientErrorFields(error, state.form), message: errorMessage(error) });
+      return;
+    }
     const fieldErrors = errorsFromApi(error);
+    const firstField = Object.keys(fieldErrors)[0];
+    if (firstField) dispatch({ type: 'SET_STEP', step: stepForField(firstField) });
     dispatch({ type: 'SAVE_FAILURE', fieldErrors, message: errorMessage(error) });
-  }, [onAuthorityLost]);
+  }, [onAuthorityLost, state.form]);
 
   const saveCurrent = useCallback(async ({ advance = false } = {}) => {
     if (flightRef.current || readOnly || state.conflict || state.status === 'uncertain') return false;
@@ -79,6 +126,37 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
     if (!step) { dispatch({ type: 'SAVE_SUCCESS', preserveWorking: true, notice: noPatchNotice(state) }); return true; }
     const fieldErrors = validateStep(state.form, step, { published: state.publicationStatus === 'published' });
     if (Object.keys(fieldErrors).length) { dispatch({ type: 'SET_ERRORS', fieldErrors }); return false; }
+    const cookingPatch = buildStepPatch(state.saved, state.form, step);
+    const cookingDisposition = cookingSaveDisposition(state.form, cookingPatch, { step, advance });
+    if (cookingDisposition === 'defer') {
+      // Keep the complete local profile until Details can send it with base servings.
+      setStep(AUTHORING_STEPS[AUTHORING_STEPS.indexOf(step) + 1]);
+      return true;
+    }
+    if (cookingDisposition === 'needsServings') {
+      dispatch({ type: 'SET_ERRORS',
+        fieldErrors: step === 'ingredients' ? { 'cooking.spiceAlternatives': 'Set base servings in Details before saving cooking.' } : {},
+        message: 'Set base servings in Details before saving cooking.' });
+      return false;
+    }
+    if (Object.hasOwn(cookingPatch, 'cooking')) {
+      for (const section of ['ingredients', 'instructions']) {
+        const errors = validateStep(state.form, section, { published: state.publicationStatus === 'published' });
+        if (Object.keys(errors).length) {
+          dispatch({ type: 'SET_STEP', step: section });
+          dispatch({ type: 'SET_ERRORS', fieldErrors: errors, message: 'Complete the highlighted cooking section before saving.' });
+          return false;
+        }
+      }
+      if (Object.hasOwn(cookingPatch, 'servings')) {
+        const servingsError = validateStep(state.form, 'details', { published: state.publicationStatus === 'published' }).servings;
+        if (servingsError) {
+          dispatch({ type: 'SET_STEP', step: 'details' });
+          dispatch({ type: 'SET_ERRORS', fieldErrors: { servings: servingsError } });
+          return false;
+        }
+      }
+    }
     flightRef.current = true;
     dispatch({ type: 'MUTATION_START', status: selectedFile || state.retainedUpload ? 'uploading' : 'saving' });
     let draftCreated = false;
@@ -111,7 +189,9 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
         patch = { ...patch, imageUrl: uploaded.url, imageAssetId: uploaded.assetId };
       }
       if (Object.keys(patch).length) {
+        rememberCookingNames(state.form, cookingNamesRef.current);
         latest = await updateRecipeAndRefresh(recipeId, mutationBody(patch, token), onSaved, updateRecipe);
+        latest = await withCookingIngredientNames(latest, cookingNamesRef.current);
       }
       else if (!latest) {
         dispatch({ type: 'SAVE_SUCCESS', preserveWorking: true, notice: noPatchNotice(state) });
@@ -119,7 +199,7 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
         return true;
       }
 
-      dispatch({ type: 'SAVE_SUCCESS', recipe: latest, step, preserveWorking: true, clearUpload: Boolean(uploaded), notice: state.publicationStatus === 'published' ? 'Changes saved and visible to users.' : 'Draft saved.' });
+      dispatch({ type: 'SAVE_SUCCESS', recipe: latest, step, cookingSaved: Object.hasOwn(patch, 'cooking'), savedFields: Object.keys(patch), preserveWorking: true, clearUpload: Boolean(uploaded), notice: state.publicationStatus === 'published' ? 'Changes saved and visible to users.' : 'Draft saved.' });
       if (uploaded) setSelectedFile(null);
       if (advance) setStep(AUTHORING_STEPS[AUTHORING_STEPS.indexOf(step) + 1]);
       return true;
@@ -194,7 +274,7 @@ export default function useRecipeAuthoring({ recipe, readOnly = false, onSaved, 
       else if (error?.code === 'RECIPE_ARCHIVED') dispatch({ type: 'SAVE_FAILURE', message: 'Restore this archived Draft before publishing.' });
       else if (error?.code === 'RECIPE_INGREDIENT_NOT_FOUND' || error?.code === 'RECIPE_INGREDIENT_INACTIVE') {
         dispatch({ type: 'SET_STEP', step: 'ingredients' });
-        dispatch({ type: 'SET_ERRORS', fieldErrors: { ingredients: errorMessage(error) }, message: 'Review the recipe ingredients before publishing.' });
+        dispatch({ type: 'SET_ERRORS', fieldErrors: ingredientErrorFields(error, state.form), message: 'Review the recipe ingredients before publishing.' });
       }
       else if (error?.code === 'RECIPE_INCOMPLETE' || error?.code === 'VALIDATION_ERROR') {
         const mapped = errorsFromApi(error); const first = Object.keys(mapped)[0]; const step = stepForField(first);

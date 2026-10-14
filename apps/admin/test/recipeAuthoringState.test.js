@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  hasUnsavedChanges, initialAuthoringState, recipeAuthoringReducer, resolveBasicsImageUpload,
+  hasUnsavedChanges, ingredientErrorFields, initialAuthoringState, recipeAuthoringReducer, resolveBasicsImageUpload,
 } from '../src/recipeAuthoring/recipeAuthoringState.js';
-import { publicationReadiness } from '../src/recipeAuthoring/recipeAuthoringModel.js';
+import { buildStepPatch, cookingSaveDisposition, publicationReadiness } from '../src/recipeAuthoring/recipeAuthoringModel.js';
 import { ingredientCreationPrefill } from '../src/recipeAuthoring/recipeIngredientResolution.js';
 
 test('reducer tracks dirty state, save token replacement, conflict, and close confirmation', () => {
@@ -26,6 +26,117 @@ test('step changes reset acknowledgement and content changes on Review invalidat
   assert.equal(state.publishAcknowledged, false);
   state = recipeAuthoringReducer({ ...state, publishAcknowledged: true }, { type: 'SET_STEP', step: 'details' });
   assert.equal(state.publishAcknowledged, false);
+});
+
+test('cooking edits remain dirty until an authoritative save or reload and retain conflict protection', () => {
+  const recipe = { id: 'r1', title: 'Adobo', publicationStatus: 'draft', isActive: true, updatedAt: 'revision-1',
+    cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [], stepTimers: [] } };
+  let state = initialAuthoringState({ recipe });
+  state = recipeAuthoringReducer(state, { type: 'CHANGE', field: 'cooking', value: {
+    ...state.form.cooking, defaultSpiceLevel: 'hot',
+  } });
+  assert.equal(hasUnsavedChanges(state), true);
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', recipe: {
+    ...recipe, updatedAt: 'revision-2', cooking: { ...recipe.cooking, defaultSpiceLevel: 'hot' },
+  }, step: 'ingredients', cookingSaved: true, preserveWorking: true });
+  assert.equal(state.form.cooking.defaultSpiceLevel, 'hot');
+  assert.equal(state.saved.cooking.defaultSpiceLevel, 'hot');
+  assert.equal(state.updatedAt, 'revision-2');
+  assert.equal(hasUnsavedChanges(state), false);
+  state = recipeAuthoringReducer(state, { type: 'CHANGE', field: 'cooking', value: null });
+  assert.equal(hasUnsavedChanges(state), true);
+  state = recipeAuthoringReducer(state, { type: 'CONFLICT' });
+  assert.equal(state.conflict, true);
+  state = recipeAuthoringReducer(state, { type: 'LOAD_SUCCESS', recipe: { ...recipe, updatedAt: 'revision-3' }, keepStep: true });
+  assert.equal(state.conflict, false);
+  assert.equal(state.form.cooking.defaultSpiceLevel, 'mild');
+  assert.equal(hasUnsavedChanges(state), false);
+});
+
+test('one atomic cooking PATCH adopts server values for dependent base fields', () => {
+  const recipe = { id: 'r1', title: 'Adobo', publicationStatus: 'draft', isActive: true, updatedAt: 'one',
+    servings: 4, instructions: ['Simmer.'], cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [], stepTimers: [] } };
+  let state = initialAuthoringState({ recipe });
+  state = { ...state, form: { ...state.form, servings: '6', instructions: ['Boil.'], cooking: {
+    ...state.form.cooking, stepTimers: [{ stepOrder: '1', servings: '6', spiceLevel: 'mild', durationSeconds: '90' }],
+  } } };
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', recipe: {
+    ...recipe, updatedAt: 'two', servings: 6, instructions: ['Boil.'], cooking: {
+      ...recipe.cooking, stepTimers: [{ stepOrder: 1, servings: 6, spiceLevel: 'mild', durationSeconds: 90 }],
+    },
+  }, step: 'ingredients', cookingSaved: true, savedFields: ['cooking', 'instructions', 'servings'], preserveWorking: true });
+  assert.equal(state.form.servings, '6');
+  assert.deepEqual(state.form.instructions, ['Boil.']);
+  assert.equal(state.form.cooking.stepTimers[0].durationSeconds, '90');
+  assert.equal(hasUnsavedChanges(state), false);
+});
+
+test('ingredient API rejection stays visible for unprofiled defaults and ambiguous alternative failures', () => {
+  const error = { code: 'RECIPE_INGREDIENT_INACTIVE', message: 'One or more referenced ingredients are not active.', details: [] };
+  let state = initialAuthoringState({ recipe: { id: '507f1f77bcf86cd799439010', title: 'Adobo',
+    publicationStatus: 'draft', isActive: true, updatedAt: '2026-10-14T00:00:00.000Z' } });
+  assert.deepEqual(ingredientErrorFields(error, state.form), { ingredients: error.message });
+  state = recipeAuthoringReducer(state, { type: 'SET_STEP', step: 'ingredients' });
+  state = recipeAuthoringReducer(state, { type: 'SET_ERRORS', fieldErrors: ingredientErrorFields(error, state.form), message: error.message });
+  assert.equal(state.currentStep, 'ingredients');
+  assert.equal(state.fieldErrors.ingredients, error.message);
+  state = recipeAuthoringReducer(state, { type: 'CHANGE', field: 'ingredients', value: [{
+    ingredient: { id: '507f1f77bcf86cd799439011', name: 'Chicken' }, quantity: '1', unit: 'kg', optional: false, note: '',
+  }] });
+  assert.equal(state.fieldErrors.ingredients, undefined);
+
+  const withAlternative = { ...state.form, cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild',
+    spiceAlternatives: [{ spiceLevel: 'hot', ingredients: [] }], stepTimers: [] } };
+  assert.deepEqual(ingredientErrorFields(error, withAlternative), { ingredients: error.message });
+  const detailed = { ...error, details: [{ field: 'cooking.spiceAlternatives.0.ingredients.0.ingredientId', message: 'Choose an active Ingredient.' }] };
+  assert.deepEqual(ingredientErrorFields(detailed, withAlternative), {
+    'cooking.spiceAlternatives.0.ingredients.0.ingredientId': 'Choose an active Ingredient.',
+  });
+  state = recipeAuthoringReducer({ ...state, form: withAlternative }, { type: 'SET_ERRORS',
+    fieldErrors: ingredientErrorFields(detailed, withAlternative), message: detailed.message });
+  state = recipeAuthoringReducer(state, { type: 'CHANGE', field: 'cooking', value: {
+    ...withAlternative.cooking, spiceAlternatives: [{ spiceLevel: 'hot', ingredients: [{
+      ingredient: { id: '507f1f77bcf86cd799439012', name: 'Chili' }, quantity: '2', unit: 'g', optional: false, note: '',
+    }] }],
+  } });
+  assert.equal(Object.keys(state.fieldErrors).some((field) => field.startsWith('cooking.')), false);
+});
+
+test('wizard keeps an unsaved alternative through Details, then saves and reloads the complete profile', () => {
+  const recipe = { id: '507f1f77bcf86cd799439010', title: 'Adobo', description: 'Chicken simmered in vinegar.',
+    publicationStatus: 'draft', isActive: true, updatedAt: '2026-10-14T00:00:00.000Z', difficulty: 'easy', cookTimeMinutes: 20,
+    ingredients: [{ ingredient: { id: '507f1f77bcf86cd799439011', name: 'Chicken' }, quantity: 1, unit: 'kg', optional: false }],
+    instructions: ['Simmer chicken.'], cooking: null };
+  let state = initialAuthoringState({ recipe });
+  state = recipeAuthoringReducer(state, { type: 'SET_STEP', step: 'ingredients' });
+  state = recipeAuthoringReducer(state, { type: 'CHANGE', field: 'cooking', value: {
+    schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [{ spiceLevel: 'hot', ingredients: [{
+      ingredient: { id: '507f1f77bcf86cd799439012', name: 'Chili' }, quantity: '2', unit: 'g', optional: false, note: '',
+    }] }], stepTimers: [] } });
+  assert.equal(cookingSaveDisposition(state.form, buildStepPatch(state.saved, state.form, 'ingredients'),
+    { step: 'ingredients', advance: true }), 'defer');
+  state = recipeAuthoringReducer(state, { type: 'SET_STEP', step: 'instructions' });
+  assert.equal(cookingSaveDisposition(state.form, buildStepPatch(state.saved, state.form, 'instructions'),
+    { step: 'instructions', advance: true }), 'defer');
+  state = recipeAuthoringReducer(state, { type: 'SET_STEP', step: 'details' });
+  assert.equal(publicationReadiness(state.form).complete, false);
+  assert.equal(cookingSaveDisposition(state.form, buildStepPatch(state.saved, state.form, 'details'),
+    { step: 'details', advance: true }), 'needsServings');
+  state = recipeAuthoringReducer(state, { type: 'CHANGE', field: 'servings', value: '4' });
+  const patch = buildStepPatch(state.saved, state.form, 'details');
+  assert.equal(cookingSaveDisposition(state.form, patch, { step: 'details', advance: true }), 'save');
+  assert.equal(publicationReadiness(state.form).complete, true);
+  assert.equal(patch.cooking.spiceAlternatives[0].ingredients[0].ingredientId, '507f1f77bcf86cd799439012');
+  const savedRecipe = { ...recipe, updatedAt: '2026-10-14T00:00:00.001Z', servings: patch.servings,
+    cooking: patch.cooking };
+  state = recipeAuthoringReducer(state, { type: 'SAVE_SUCCESS', recipe: savedRecipe,
+    step: 'details', cookingSaved: true, savedFields: Object.keys(patch), preserveWorking: true });
+  state = recipeAuthoringReducer(state, { type: 'SET_STEP', step: 'review' });
+  assert.equal(state.currentStep, 'review');
+  assert.equal(hasUnsavedChanges(state), false);
+  state = recipeAuthoringReducer(state, { type: 'LOAD_SUCCESS', recipe: savedRecipe, keepStep: true });
+  assert.equal(state.form.cooking.spiceAlternatives[0].ingredients[0].ingredient.id, '507f1f77bcf86cd799439012');
+  assert.equal(state.updatedAt, '2026-10-14T00:00:00.001Z');
 });
 
 test('nutrition participates in saved-versus-working Details state and server refresh replacement', () => {

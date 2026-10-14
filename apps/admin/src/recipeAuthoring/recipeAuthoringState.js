@@ -6,6 +6,20 @@ import {
 export const PUBLISH_ACKNOWLEDGEMENT_ERROR = 'Confirm that this recipe belongs to Filipino cuisine before publishing.';
 export const DUPLICATE_REVIEW_REQUIRED_ERROR = 'Check for duplicates and variants before publishing.';
 
+export function ingredientErrorFields(error, form) {
+  const fields = {};
+  for (const detail of Array.isArray(error?.details) ? error.details : []) {
+    const field = String(detail?.field || '');
+    const defaultIngredient = field === 'ingredients' || /^ingredients\.\d+\.(?:ingredient|ingredientId)$/.test(field);
+    const alternativeIngredient = form?.cooking?.defaultSpiceLevel != null
+      && /^cooking\.spiceAlternatives\.\d+\.ingredients(?:\.\d+\.(?:ingredient|ingredientId))?$/.test(field);
+    if (defaultIngredient || alternativeIngredient) fields[field] = detail.message || error.message;
+  }
+  // Current Recipe API eligibility errors carry no field details. Keep their
+  // repair message visible without guessing which authored list failed.
+  return Object.keys(fields).length ? fields : { ingredients: error?.message || 'Review the recipe ingredients.' };
+}
+
 function emptyDuplicateReview() {
   return {
     duplicateReviewStatus: 'idle', duplicateReview: null, duplicateReviewError: '',
@@ -57,10 +71,12 @@ export function recipeAuthoringReducer(state, action) {
     case 'CHANGE': {
       const form = { ...state.form, [action.field]: action.value };
       const clearedField = /^cookTime(?:Hours|MinutePart)$/.test(action.field) ? 'cookTimeMinutes' : action.field;
-      const next = { ...state, form, notice: '', fieldErrors: { ...state.fieldErrors, [clearedField]: undefined },
+      const fieldErrors = { ...state.fieldErrors, [clearedField]: undefined };
+      if (action.field === 'cooking') Object.keys(fieldErrors).filter((key) => key.startsWith('cooking.')).forEach((key) => { delete fieldErrors[key]; });
+      const next = { ...state, form, notice: '', fieldErrors,
         publishAcknowledged: state.currentStep === 'review' ? false : state.publishAcknowledged,
         publishAcknowledgementError: state.currentStep === 'review' ? '' : state.publishAcknowledgementError };
-      return ['title', 'ingredients', 'instructions'].includes(action.field) ? invalidateDuplicateReview(next) : next;
+      return ['title', 'ingredients', 'instructions', 'cooking'].includes(action.field) ? invalidateDuplicateReview(next) : next;
     }
     case 'SET_UNRESOLVED_INGREDIENTS': {
       const generation = state.ingredientResolutionGeneration + 1;
@@ -121,7 +137,7 @@ export function recipeAuthoringReducer(state, action) {
     case 'SAVE_SUCCESS': {
       const serverForm = action.recipe ? formFromRecipe(action.recipe) : state.saved;
       const form = action.preserveWorking ? { ...state.form } : serverForm;
-      if (action.preserveWorking && action.step) copySection(form, serverForm, action.step);
+      if (action.preserveWorking && action.step) copySection(form, serverForm, action.step, action.cookingSaved, action.savedFields);
       const next = { ...state, recipeId: action.recipe?.id || state.recipeId, publicationStatus: action.recipe?.publicationStatus || state.publicationStatus,
         isActive: action.recipe?.isActive ?? state.isActive, saved: serverForm, form, updatedAt: action.recipe?.updatedAt || state.updatedAt,
         status: 'idle', notice: action.notice || 'Saved.', fieldErrors: {}, formError: '', retainedUpload: action.clearUpload ? null : state.retainedUpload };
@@ -167,12 +183,16 @@ export function recipeAuthoringReducer(state, action) {
   }
 }
 
-function copySection(target, source, step) {
+function copySection(target, source, step, cookingSaved = false, savedFields = []) {
   const fields = {
     basics: ['title', 'description', 'imageUrl'], ingredients: ['ingredients'], instructions: ['instructions'],
     details: ['difficulty', 'prepTimeMinutes', 'cookTimeHours', 'cookTimeMinutePart', 'servings', 'region', 'category', 'dietaryTags', 'nutrition', 'nutritionSource'],
   }[step] || [];
   fields.forEach((field) => { target[field] = source[field]; });
+  if (cookingSaved) target.cooking = source.cooking;
+  for (const field of ['ingredients', 'instructions', 'servings']) {
+    if (savedFields.includes(field)) target[field] = source[field];
+  }
 }
 
 export function hasUnsavedChanges(state) {

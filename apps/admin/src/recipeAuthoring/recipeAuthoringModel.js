@@ -26,6 +26,8 @@ const DIETARY_TAGS = new Set(RECIPE_DIETARY_TAGS.map(({ value }) => value));
 const REGIONS = new Set(RECIPE_REGIONS.map(({ value }) => value));
 const CATEGORIES = new Set(RECIPE_CATEGORIES.map(({ value }) => value));
 const UNITS = new Set(RECIPE_UNITS.map(({ value }) => value));
+export const SPICE_LEVELS = Object.freeze(['none', 'mild', 'medium', 'hot', 'extra_hot']);
+const SPICES = new Set(SPICE_LEVELS);
 const scalarDetails = ['difficulty', 'prepTimeMinutes', 'cookTimeMinutes', 'servings'];
 export const NUTRIENT_FIELDS = Object.freeze([
   ['caloriesKcal', 'Calories', 'kcal'],
@@ -49,13 +51,65 @@ export function blankIngredient() {
   return { key: `ingredient-${Date.now()}-${Math.random()}`, ingredient: null, quantity: '', unit: 'g', optional: false, note: '' };
 }
 
+export function blankSpiceAlternative(spiceLevel = '') {
+  return { spiceLevel, ingredients: [blankIngredient()] };
+}
+
+export function blankStepTimer(spiceLevel = null) {
+  return { stepOrder: '', servings: '', spiceLevel, durationSeconds: '' };
+}
+
+export function cookingMode(cooking) {
+  return cooking == null ? 'none' : cooking.defaultSpiceLevel == null ? 'timers' : 'spice';
+}
+
+export function cookingForMode(cooking, mode) {
+  if (mode === 'none') return null;
+  if (mode === 'timers') return {
+    schemaVersion: 1, defaultSpiceLevel: null, spiceAlternatives: [],
+    stepTimers: cookingMode(cooking) === 'timers' ? cooking.stepTimers : [],
+  };
+  if (mode === 'spice') return {
+    schemaVersion: 1,
+    defaultSpiceLevel: cookingMode(cooking) === 'spice' ? cooking.defaultSpiceLevel : 'mild',
+    spiceAlternatives: cookingMode(cooking) === 'spice' ? cooking.spiceAlternatives : [],
+    stepTimers: cookingMode(cooking) === 'spice' ? cooking.stepTimers : [],
+  };
+  return cooking;
+}
+
+function ingredientRowsFromRecipe(entries = []) {
+  return entries.length ? entries.map((entry, index) => ({
+    key: `ingredient-${index}-${entry.ingredientId || entry.ingredient?.id || 'missing'}`,
+    ingredient: entry.ingredientId
+      ? { id: entry.ingredientId, name: entry.ingredient?.name || `Ingredient ${entry.ingredientId}`, unavailable: entry.ingredient?.unavailable === true }
+      : entry.ingredient ? { ...entry.ingredient } : { id: null, name: 'Unavailable', unavailable: true },
+    quantity: entry.quantity == null ? '' : String(entry.quantity), unit: entry.unit || 'g',
+    optional: Boolean(entry.optional), note: entry.note ?? '',
+  })) : [blankIngredient()];
+}
+
+function cookingFromRecipe(cooking) {
+  if (cooking == null) return null;
+  return {
+    schemaVersion: 1, defaultSpiceLevel: cooking.defaultSpiceLevel ?? null,
+    spiceAlternatives: (cooking.spiceAlternatives || []).map((entry) => ({
+      spiceLevel: entry.spiceLevel, ingredients: ingredientRowsFromRecipe(entry.ingredients),
+    })),
+    stepTimers: (cooking.stepTimers || []).map((timer) => ({
+      stepOrder: valueOrBlank(timer.stepOrder), servings: valueOrBlank(timer.servings),
+      spiceLevel: timer.spiceLevel ?? null, durationSeconds: valueOrBlank(timer.durationSeconds),
+    })),
+  };
+}
+
 export function emptyRecipeForm() {
   return {
     title: '', description: '', imageUrl: null,
     ingredients: [blankIngredient()], instructions: [''],
     difficulty: '', prepTimeMinutes: '', cookTimeHours: '', cookTimeMinutePart: '', servings: '',
     region: '', category: '', dietaryTags: [],
-    nutrition: null, nutritionSource: blankNutritionSource(),
+    nutrition: null, nutritionSource: blankNutritionSource(), cooking: null,
   };
 }
 
@@ -64,12 +118,7 @@ export function formFromRecipe(recipe) {
   const cookTime = splitDuration(recipe.cookTimeMinutes);
   return {
     title: recipe.title ?? '', description: recipe.description ?? '', imageUrl: recipe.imageUrl ?? null,
-    ingredients: recipe.ingredients?.length ? recipe.ingredients.map((entry, index) => ({
-      key: `ingredient-${index}-${entry.ingredient?.id || 'missing'}`,
-      ingredient: entry.ingredient ? { ...entry.ingredient } : { id: null, name: 'Unavailable', unavailable: true },
-      quantity: entry.quantity == null ? '' : String(entry.quantity), unit: entry.unit || 'g',
-      optional: Boolean(entry.optional), note: entry.note ?? '',
-    })) : [blankIngredient()],
+    ingredients: ingredientRowsFromRecipe(recipe.ingredients),
     instructions: recipe.instructions?.length ? [...recipe.instructions] : [''],
     difficulty: recipe.difficulty ?? '', prepTimeMinutes: valueOrBlank(recipe.prepTimeMinutes),
     cookTimeHours: cookTime.hours, cookTimeMinutePart: cookTime.minutes, servings: valueOrBlank(recipe.servings),
@@ -80,6 +129,7 @@ export function formFromRecipe(recipe) {
       label: recipe.nutritionSource.label ?? '',
       url: recipe.nutritionSource.url ?? '',
     } : blankNutritionSource(),
+    cooking: cookingFromRecipe(recipe.cooking),
   };
 }
 
@@ -160,6 +210,30 @@ export function normalizeInstructions(rows = []) {
   return rows.map((row) => String(row ?? '').trim()).filter(Boolean);
 }
 
+export function normalizeCooking(cooking) {
+  if (cooking == null) return null;
+  return {
+    schemaVersion: 1, defaultSpiceLevel: cooking.defaultSpiceLevel,
+    spiceAlternatives: (cooking.spiceAlternatives || []).map((entry) => ({
+      spiceLevel: entry.spiceLevel, ingredients: normalizeIngredients(entry.ingredients),
+    })),
+    stepTimers: (cooking.stepTimers || []).map((timer) => ({
+      stepOrder: Number(timer.stepOrder), servings: Number(timer.servings),
+      spiceLevel: timer.spiceLevel, durationSeconds: Number(timer.durationSeconds),
+    })),
+  };
+}
+
+function normalizedSpice(cooking) {
+  if (cooking == null) return null;
+  const normalized = normalizeCooking(cooking);
+  return { defaultSpiceLevel: normalized.defaultSpiceLevel, spiceAlternatives: normalized.spiceAlternatives };
+}
+
+function normalizedTimers(cooking) {
+  return cooking == null ? null : normalizeCooking(cooking).stepTimers;
+}
+
 function normalizeNutrition(nutrition) {
   if (nutrition == null) return null;
   return {
@@ -184,8 +258,8 @@ function normalizeNutritionSource(source) {
 
 export function normalizeSection(form, step) {
   if (step === 'basics') return { title: collapsed(form.title), description: String(form.description ?? '').trim(), imageUrl: form.imageUrl ?? null };
-  if (step === 'ingredients') return { ingredients: normalizeIngredients(form.ingredients) };
-  if (step === 'instructions') return { instructions: normalizeInstructions(form.instructions) };
+  if (step === 'ingredients') return { ingredients: normalizeIngredients(form.ingredients), cookingSpice: normalizedSpice(form.cooking) };
+  if (step === 'instructions') return { instructions: normalizeInstructions(form.instructions), cookingTimers: normalizedTimers(form.cooking) };
   if (step === 'details') return {
     difficulty: form.difficulty || '',
     prepTimeMinutes: form.prepTimeMinutes === '' ? '' : Number(form.prepTimeMinutes),
@@ -259,6 +333,28 @@ export function validateStep(form, step, { published = false } = {}) {
       if (row.unit !== TO_TASTE_UNIT && parseIngredientQuantity(row.quantity) == null) error(errors, `ingredients.${index}.quantity`, 'Enter a positive number, fraction, or mixed fraction.');
       if (String(row.note ?? '').trim().length > MAX_INGREDIENT_NOTE_LENGTH) error(errors, `ingredients.${index}.note`, `Note must be ${MAX_INGREDIENT_NOTE_LENGTH} characters or fewer.`);
     });
+    const cooking = form.cooking;
+    if (cooking) {
+      if (cooking.defaultSpiceLevel !== null && !SPICES.has(cooking.defaultSpiceLevel)) error(errors, 'cooking.defaultSpiceLevel', 'Choose an authored default spice level.');
+      if (cooking.defaultSpiceLevel === null && cooking.spiceAlternatives.length) error(errors, 'cooking.defaultSpiceLevel', 'Spice alternatives require a default level.');
+      const offered = new Set([cooking.defaultSpiceLevel]);
+      if (cooking.spiceAlternatives.length > SPICE_LEVELS.length - 1) error(errors, 'cooking.spiceAlternatives', 'A maximum of four alternative levels is allowed.');
+      cooking.spiceAlternatives.forEach((alternative, altIndex) => {
+        const prefix = `cooking.spiceAlternatives.${altIndex}`;
+        if (!SPICES.has(alternative.spiceLevel) || offered.has(alternative.spiceLevel)) error(errors, `${prefix}.spiceLevel`, 'Choose a distinct authored spice level.');
+        offered.add(alternative.spiceLevel);
+        const rows = alternative.ingredients || [];
+        const active = rows.map((row, index) => ({ row, index })).filter(({ row }) => !isBlankIngredient(row));
+        if (!active.length || active.length > MAX_INGREDIENTS) error(errors, `${prefix}.ingredients`, `Each alternative needs 1 to ${MAX_INGREDIENTS} complete ingredients.`);
+        active.forEach(({ row, index }) => {
+          if (!row.ingredient?.id || row.ingredient.unavailable) error(errors, `${prefix}.ingredients.${index}.ingredientId`, 'Choose an active canonical ingredient.');
+          if (!UNITS.has(row.unit)) error(errors, `${prefix}.ingredients.${index}.unit`, 'Choose a valid unit.');
+          if (row.unit !== TO_TASTE_UNIT && parseIngredientQuantity(row.quantity) == null) error(errors, `${prefix}.ingredients.${index}.quantity`, 'Enter a positive finite quantity.');
+          if (String(row.note ?? '').trim().length > MAX_INGREDIENT_NOTE_LENGTH) error(errors, `${prefix}.ingredients.${index}.note`, 'Ingredient note is too long.');
+        });
+      });
+      if (cooking.spiceAlternatives.length && !persisted.length) error(errors, 'cooking.spiceAlternatives', 'Alternatives require a nonempty default ingredient list.');
+    }
   }
   if (step === 'instructions') {
     const instructions = (form.instructions || [])
@@ -271,6 +367,21 @@ export function validateStep(form, step, { published = false } = {}) {
       else if (text.length > MAX_INSTRUCTION_LENGTH) error(errors, `instructions.${index}`, `Instruction must be ${MAX_INSTRUCTION_LENGTH} characters or fewer.`);
       else if (!/\p{L}/u.test(text)) error(errors, `instructions.${index}`, 'Instruction must contain text.');
     });
+    const cooking = form.cooking;
+    if (cooking) {
+      const offered = new Set([cooking.defaultSpiceLevel, ...cooking.spiceAlternatives.map((entry) => entry.spiceLevel)]);
+      const tuples = new Set();
+      cooking.stepTimers.forEach((timer, index) => {
+        const prefix = `cooking.stepTimers.${index}`;
+        validateInteger(errors, `${prefix}.stepOrder`, timer.stepOrder, 1, instructions.length, 'Timer step', true);
+        validateInteger(errors, `${prefix}.servings`, timer.servings, 1, MAX_SERVINGS, 'Timer servings', true);
+        validateInteger(errors, `${prefix}.durationSeconds`, timer.durationSeconds, 1, 10800, 'Timer duration', true);
+        if (!offered.has(timer.spiceLevel)) error(errors, `${prefix}.spiceLevel`, 'Choose an authored spice level.');
+        const tuple = `${timer.stepOrder}:${timer.servings}:${timer.spiceLevel}`;
+        if (tuples.has(tuple)) error(errors, prefix, 'Each step, serving, and spice combination must be unique.');
+        tuples.add(tuple);
+      });
+    }
   }
   if (step === 'details') {
     if (form.difficulty && !DIFFICULTIES.has(form.difficulty)) error(errors, 'difficulty', 'Choose a valid difficulty.');
@@ -283,7 +394,7 @@ export function validateStep(form, step, { published = false } = {}) {
     } else if (cookTime == null || cookTime < 3 || cookTime > MAX_COOK_TIME_MINUTES) {
       error(errors, 'cookTimeMinutes', `Cooking time must use whole hours and 0–59 minutes, totaling 3 to ${MAX_COOK_TIME_MINUTES} minutes.`);
     }
-    validateInteger(errors, 'servings', form.servings, 1, MAX_SERVINGS, 'Servings', published);
+    validateInteger(errors, 'servings', form.servings, 1, MAX_SERVINGS, 'Servings', published || Boolean(form.cooking?.spiceAlternatives?.length));
     if (form.region && !REGIONS.has(form.region)) error(errors, 'region', 'Choose a supported region.');
     if (form.category && !CATEGORIES.has(form.category)) error(errors, 'category', 'Choose a supported category.');
     if ((form.dietaryTags || []).some((tag) => !DIETARY_TAGS.has(tag))) error(errors, 'dietaryTags', 'Choose only supported dietary tags.');
@@ -308,8 +419,8 @@ export function firstIncompleteStep(form) {
 
 export function stepForField(field = '') {
   if (/^(title|description|image)/.test(field)) return 'basics';
-  if (/^ingredients/.test(field)) return 'ingredients';
-  if (/^(instructions|steps)/.test(field)) return 'instructions';
+  if (/^(ingredients|cooking\.(defaultSpiceLevel|spiceAlternatives))/.test(field)) return 'ingredients';
+  if (/^(instructions|steps|cooking\.stepTimers)/.test(field)) return 'instructions';
   if (/^(difficulty|prepTimeMinutes|cookTimeMinutes|servings|region|category|dietaryTags|nutrition)/.test(field)) return 'details';
   return 'review';
 }
@@ -323,6 +434,7 @@ export function buildStepPatch(savedForm, workingForm, step) {
   const after = normalizeSection(workingForm, step);
   const patch = {};
   for (const [field, value] of Object.entries(after)) {
+    if (field === 'cookingSpice' || field === 'cookingTimers') continue;
     if (step === 'details' && (field === 'nutrition' || field === 'nutritionSource')) continue;
     if (comparable(value) === comparable(before[field])) continue;
     if (step === 'basics' && field === 'description' && value === '') patch[field] = null;
@@ -336,7 +448,30 @@ export function buildStepPatch(savedForm, workingForm, step) {
     patch.nutrition = after.nutrition;
     if (after.nutrition !== null) patch.nutritionSource = after.nutritionSource;
   }
+  const cookingChanged = JSON.stringify(normalizeCooking(savedForm.cooking)) !== JSON.stringify(normalizeCooking(workingForm.cooking));
+  const dependentChanged = ['ingredients', 'instructions', 'servings'].some((field) => Object.hasOwn(patch, field));
+  if (cookingChanged || (dependentChanged && savedForm.cooking != null)) {
+    patch.cooking = normalizeCooking(workingForm.cooking);
+    // A profile and the base fields it references must describe one snapshot.
+    // Include locally changed dependent fields in the same PATCH even when the
+    // Moderator reaches Save from a different wizard section.
+    for (const field of ['ingredients', 'instructions', 'servings']) {
+      if (Object.hasOwn(patch, field)) continue;
+      const section = field === 'servings' ? 'details' : field;
+      const beforeField = normalizeSection(savedForm, section)[field];
+      const afterField = normalizeSection(workingForm, section)[field];
+      if (comparable(beforeField) !== comparable(afterField)) patch[field] = field === 'servings' && afterField === '' ? null : afterField;
+    }
+  }
   return patch;
+}
+
+export function cookingSaveDisposition(form, patch, { step, advance = false } = {}) {
+  const needsServings = Object.hasOwn(patch, 'cooking')
+    && Boolean(form.cooking?.spiceAlternatives?.length)
+    && Boolean(validateStep(form, 'details').servings);
+  if (!needsServings) return 'save';
+  return advance && step !== 'details' ? 'defer' : 'needsServings';
 }
 
 export function createDraftBody(form) { return { title: collapsed(form.title) }; }
