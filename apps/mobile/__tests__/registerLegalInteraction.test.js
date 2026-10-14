@@ -62,6 +62,8 @@ jest.mock('../src/context/AuthContext', () => ({
 const { act, cleanup, fireEvent, render } = require('@testing-library/react-native');
 const RegisterScreen = require('../src/screens/RegisterScreen').default;
 const { AccessibilityInfo, Platform } = require('react-native');
+const { ApiError } = require('../src/api/client');
+const { NEW_PASSWORD_ERROR_MESSAGES, validateNewPassword } = require('@wecooked/contracts');
 
 beforeEach(() => {
   Platform.OS = 'android';
@@ -105,6 +107,88 @@ it('requires acknowledgement before password signUp and sends the unchanged payl
   fireEvent.press(view.UNSAFE_getByType('Button'));
   expect(mockSignUp).toHaveBeenCalledTimes(1);
   expect(view.getByText('Acknowledge the Terms & Conditions and Privacy Policy to create an account.')).toBeOnTheScreen();
+});
+
+it('keeps the checkbox and each legal link in separate 48px targets', () => {
+  const view = render(<RegisterScreen navigation={{ navigate: jest.fn(), setOptions: jest.fn() }} />);
+  const checkbox = view.getByLabelText('I acknowledge the Terms & Conditions and Privacy Policy');
+  expect(checkbox.props.style).toEqual(expect.objectContaining({ width: 48, height: 48 }));
+  expect(checkbox.props.accessibilityState.checked).toBe(false);
+  for (const label of ['Terms & Conditions', 'Privacy Policy']) {
+    const link = view.getByLabelText(label);
+    expect(link.props.style.minHeight).toBe(48);
+    expect(link.props.accessibilityRole).toBe('link');
+  }
+});
+
+it('blocks too-long and unsupported passwords with plain-language errors', () => {
+  const view = render(<RegisterScreen navigation={{ navigate: jest.fn(), setOptions: jest.fn() }} />);
+  fillValidForm(view);
+  fireEvent.press(view.getByLabelText('I acknowledge the Terms & Conditions and Privacy Policy'));
+  const passwordInput = () => view.UNSAFE_getAllByType('Input').find((item) => item.props.label === 'Password');
+
+  fireEvent.changeText(passwordInput(), `A${'a'.repeat(70)}1!`);
+  fireEvent.press(view.UNSAFE_getByType('Button'));
+  expect(passwordInput().props.error).toBe('Password is too long. Please shorten it.');
+  expect(mockSignUp).not.toHaveBeenCalled();
+
+  fireEvent.changeText(passwordInput(), 'Generated1!^');
+  fireEvent.press(view.UNSAFE_getByType('Button'));
+  expect(passwordInput().props.error).toBe(
+    "Some characters aren't supported. Please choose different characters."
+  );
+  expect(mockSignUp).not.toHaveBeenCalled();
+});
+
+it('shows friendly symbol guidance on local submit while retaining shared validation', () => {
+  const view = render(<RegisterScreen navigation={{ navigate: jest.fn(), setOptions: jest.fn() }} />);
+  fillValidForm(view);
+  fireEvent.press(view.getByLabelText('I acknowledge the Terms & Conditions and Privacy Policy'));
+  const passwordInput = () => view.UNSAFE_getAllByType('Input').find((item) => item.props.label === 'Password');
+  fireEvent.changeText(passwordInput(), 'Generated1');
+  fireEvent.press(view.UNSAFE_getByType('Button'));
+
+  expect(validateNewPassword('Generated1')).toContain(NEW_PASSWORD_ERROR_MESSAGES.SPECIAL);
+  expect(passwordInput().props.error).toBe('Add at least one supported symbol to your password.');
+  expect(passwordInput().props.error).not.toContain('! @ #');
+  expect(mockSignUp).not.toHaveBeenCalled();
+});
+
+it('translates exact API password rules while preserving unrelated API field errors', async () => {
+  mockSignUp.mockRejectedValue(new ApiError('Request validation failed.', {
+    code: 'VALIDATION_ERROR', status: 400,
+    details: [
+      { field: 'password', message: NEW_PASSWORD_ERROR_MESSAGES.SPECIAL },
+      { field: 'password', message: 'Another password issue from the API.' },
+      { field: 'email', message: 'Email needs attention.' },
+    ],
+  }));
+  const view = render(<RegisterScreen navigation={{ navigate: jest.fn(), setOptions: jest.fn() }} />);
+  fillValidForm(view);
+  fireEvent.press(view.getByLabelText('I acknowledge the Terms & Conditions and Privacy Policy'));
+  await act(async () => { fireEvent.press(view.UNSAFE_getByType('Button')); });
+
+  const inputs = view.UNSAFE_getAllByType('Input');
+  expect(inputs.find((item) => item.props.label === 'Password').props.error).toBe(
+    'Add at least one supported symbol to your password. Another password issue from the API.'
+  );
+  expect(inputs.find((item) => item.props.label === 'Email').props.error).toBe('Email needs attention.');
+  expect(mockSignUp).toHaveBeenCalledWith({
+    name: 'Ada Cook', email: 'ada@example.com', password: 'Generated1!',
+  });
+});
+
+it('translates a known password rule in the validation fallback only', async () => {
+  mockSignUp.mockRejectedValueOnce(new ApiError('Request validation failed.', {
+    code: 'VALIDATION_ERROR', status: 400,
+    details: [{ message: NEW_PASSWORD_ERROR_MESSAGES.SPECIAL }],
+  }));
+  const view = render(<RegisterScreen navigation={{ navigate: jest.fn(), setOptions: jest.fn() }} />);
+  fillValidForm(view);
+  fireEvent.press(view.getByLabelText('I acknowledge the Terms & Conditions and Privacy Policy'));
+  await act(async () => { fireEvent.press(view.UNSAFE_getByType('Button')); });
+  expect(view.getByText('Add at least one supported symbol to your password.')).toBeOnTheScreen();
+  expect(view.queryByText(NEW_PASSWORD_ERROR_MESSAGES.SPECIAL)).toBeNull();
 });
 
 it('announces an unchecked submit once on iOS and never from rerenders or valid submit', async () => {

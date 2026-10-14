@@ -369,6 +369,8 @@ describe('MOBILE-M27 Register auth visual consistency', () => {
     expect(code.Register).toMatch(/accessibilityState=\{\{ checked: legalAcknowledged, disabled: busy \}\}/);
     expect(code.Register).toMatch(/\{ name: trimmedName, email: trimmedEmail, password \}/);
     expect(code.Register).not.toMatch(/await signUp\(\{[^}]*legalAcknowledged/);
+    expect(code.Register).toMatch(/legalCheckboxTarget:\s*\{\s*width:\s*48,\s*height:\s*48/);
+    expect(code.Register).toMatch(/legalLinkTarget:\s*\{\s*minHeight:\s*48/);
   });
 
   it('has two separate accessible legal links on the guest stack', () => {

@@ -15,6 +15,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { BowlMark, GoogleGlyph } from '../theme/brandKit';
+import {
+  NEW_PASSWORD_ERROR_MESSAGES,
+  PASSWORD_MIN_CHARS,
+  validateNewPassword,
+} from '@wecooked/contracts';
+import { ApiError } from '../api/client';
 import Input, { PasswordRequirements } from '../components/Input';
 import Button from '../components/Button';
 import useGoogleSignIn from '../hooks/useGoogleSignIn';
@@ -23,8 +29,58 @@ import {
   getAuthErrorMessage,
   getAuthFieldErrors,
   getEmailValidationError,
-  getNewPasswordValidationError,
 } from '../api/errorMessages';
+
+const REGISTRATION_PASSWORD_TOO_LONG = 'Password is too long. Please shorten it.';
+const REGISTRATION_UNSUPPORTED_CHARACTERS =
+  "Some characters aren't supported. Please choose different characters.";
+const REGISTRATION_PASSWORD_MESSAGES = new Map([
+  [NEW_PASSWORD_ERROR_MESSAGES.MIN_CHARS, `Use ${PASSWORD_MIN_CHARS}+ characters in your password.`],
+  [NEW_PASSWORD_ERROR_MESSAGES.UPPERCASE, 'Add an uppercase letter to your password.'],
+  [NEW_PASSWORD_ERROR_MESSAGES.LOWERCASE, 'Add a lowercase letter to your password.'],
+  [NEW_PASSWORD_ERROR_MESSAGES.DIGIT, 'Add a number to your password.'],
+  [NEW_PASSWORD_ERROR_MESSAGES.SPECIAL, 'Add at least one supported symbol to your password.'],
+  [NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED, REGISTRATION_UNSUPPORTED_CHARACTERS],
+  [NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES, REGISTRATION_PASSWORD_TOO_LONG],
+]);
+
+function registrationPasswordMessage(message) {
+  return REGISTRATION_PASSWORD_MESSAGES.get(message) || message;
+}
+
+function registrationPasswordError(value) {
+  const errors = validateNewPassword(value);
+  const firstError = errors.includes(NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES)
+    ? NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES
+    : errors.includes(NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED)
+      ? NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED
+      : errors[0];
+  return firstError ? registrationPasswordMessage(firstError) : null;
+}
+
+function registrationApiFieldErrors(err) {
+  const fieldErrors = getAuthFieldErrors(err, ['name', 'email', 'password']);
+  if (!(err instanceof ApiError) || err.code !== 'VALIDATION_ERROR' || !fieldErrors.password) {
+    return fieldErrors;
+  }
+  const passwordMessages = err.details
+    .filter((detail) =>
+      typeof detail?.field === 'string' &&
+      detail.field.split('.').pop() === 'password' &&
+      typeof detail.message === 'string' && detail.message
+    )
+    .map((detail) => registrationPasswordMessage(detail.message));
+  if (passwordMessages.length) fieldErrors.password = passwordMessages.join(' ');
+  return fieldErrors;
+}
+
+function registrationFallbackError(err) {
+  const message = getAuthErrorMessage(err);
+  if (!(err instanceof ApiError) || err.code !== 'VALIDATION_ERROR') return message;
+  const field = err.details?.[0]?.field;
+  if (typeof field === 'string' && field.split('.').pop() !== 'password') return message;
+  return registrationPasswordMessage(message);
+}
 
 export function getRegistrationPasswordAutofillProps(platform) {
   // On iOS, cancelling a generated Strong Password can visually clear the
@@ -43,7 +99,7 @@ export function prepareRegistrationSubmission({ name, email, password }) {
   const fieldErrors = {
     name: trimmedName ? null : 'Name is required.',
     email: getEmailValidationError(email),
-    password: getNewPasswordValidationError(password),
+    password: registrationPasswordError(password),
   };
 
   return {
@@ -140,9 +196,9 @@ export default function RegisterScreen({ navigation }) {
       // the new account in; RootNavigator then swaps to the authed stack.
       await signUp(submission.payload);
     } catch (err) {
-      const apiFieldErrors = getAuthFieldErrors(err, ['name', 'email', 'password']);
+      const apiFieldErrors = registrationApiFieldErrors(err);
       setFieldErrors(apiFieldErrors);
-      if (Object.keys(apiFieldErrors).length === 0) setError(getAuthErrorMessage(err));
+      if (Object.keys(apiFieldErrors).length === 0) setError(registrationFallbackError(err));
     } finally {
       inFlightRef.current = false;
       setActiveAction(null);
@@ -246,43 +302,45 @@ export default function RegisterScreen({ navigation }) {
           <PasswordRequirements value={password} />
 
           <View style={styles.legalSection}>
-            <Pressable
-              onPress={toggleLegalAcknowledgement}
-              disabled={busy}
-              style={styles.legalCheckboxRow}
-              accessibilityRole="checkbox"
-              accessibilityLabel="I acknowledge the Terms & Conditions and Privacy Policy"
-              accessibilityState={{ checked: legalAcknowledged, disabled: busy }}
-              accessibilityHint={legalError || undefined}
-            >
-              <View style={[styles.legalCheckbox, legalAcknowledged && styles.legalCheckboxChecked]}>
-                {legalAcknowledged && <Text style={styles.legalCheckmark}>✓</Text>}
+            <View style={styles.legalConsentRow}>
+              <Pressable
+                onPress={toggleLegalAcknowledgement}
+                disabled={busy}
+                style={styles.legalCheckboxTarget}
+                accessibilityRole="checkbox"
+                accessibilityLabel="I acknowledge the Terms & Conditions and Privacy Policy"
+                accessibilityState={{ checked: legalAcknowledged, disabled: busy }}
+                accessibilityHint={legalError || undefined}
+              >
+                <View style={[styles.legalCheckbox, legalAcknowledged && styles.legalCheckboxChecked]}>
+                  {legalAcknowledged && <Text style={styles.legalCheckmark}>✓</Text>}
+                </View>
+              </Pressable>
+              <View style={styles.legalCopy}>
+                <Text style={styles.legalAcknowledgement}>I agree to the</Text>
+                <View style={styles.legalLinks}>
+                  <Pressable
+                    onPress={() => openLegal('Terms')}
+                    disabled={busy}
+                    style={styles.legalLinkTarget}
+                    accessibilityRole="link"
+                    accessibilityLabel="Terms & Conditions"
+                    accessibilityState={{ disabled: busy }}
+                  >
+                    <Text style={styles.legalLink}>Terms & Conditions</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => openLegal('Privacy')}
+                    disabled={busy}
+                    style={styles.legalLinkTarget}
+                    accessibilityRole="link"
+                    accessibilityLabel="Privacy Policy"
+                    accessibilityState={{ disabled: busy }}
+                  >
+                    <Text style={styles.legalLink}>Privacy Policy</Text>
+                  </Pressable>
+                </View>
               </View>
-              <Text style={styles.legalAcknowledgement}>
-                I acknowledge the Terms & Conditions and Privacy Policy.
-              </Text>
-            </Pressable>
-            <View style={styles.legalLinks}>
-              <Pressable
-                onPress={() => openLegal('Terms')}
-                disabled={busy}
-                style={styles.legalLinkTarget}
-                accessibilityRole="link"
-                accessibilityLabel="Terms & Conditions"
-                accessibilityState={{ disabled: busy }}
-              >
-                <Text style={styles.legalLink}>Terms & Conditions</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => openLegal('Privacy')}
-                disabled={busy}
-                style={styles.legalLinkTarget}
-                accessibilityRole="link"
-                accessibilityLabel="Privacy Policy"
-                accessibilityState={{ disabled: busy }}
-              >
-                <Text style={styles.legalLink}>Privacy Policy</Text>
-              </Pressable>
             </View>
             {legalError && (
               <Text style={styles.legalError} accessibilityLiveRegion="polite">
@@ -402,13 +460,13 @@ function makeStyles(colors, isDark) {
     statusError: { color: colors.error },
     statusMuted: { color: colors.inkFaint },
 
-    legalSection: { marginTop: spacing.lg },
-    legalCheckboxRow: {
-      minHeight: 48,
+    legalSection: { marginTop: spacing.sm },
+    legalConsentRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: spacing.md,
+      gap: spacing.xs,
     },
+    legalCheckboxTarget: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
     legalCheckbox: {
       width: 24,
       height: 24,
@@ -421,12 +479,12 @@ function makeStyles(colors, isDark) {
     legalCheckboxChecked: { backgroundColor: colors.sageDeep },
     legalCheckmark: { color: colors.onAccent, fontFamily: typography.body.bold, fontSize: 16 },
     legalAcknowledgement: {
-      flex: 1,
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.base,
       color: colors.ink,
     },
-    legalLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+    legalCopy: { flex: 1 },
+    legalLinks: { flexDirection: 'row', flexWrap: 'wrap', columnGap: spacing.md },
     legalLinkTarget: { minHeight: 48, justifyContent: 'center' },
     legalLink: {
       fontFamily: typography.body.semibold,

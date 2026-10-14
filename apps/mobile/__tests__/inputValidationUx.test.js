@@ -284,15 +284,14 @@ describe('registration password checklist transitions', () => {
   it('keeps an empty password incomplete', () => {
     const labels = requirementLabels('');
     expect(labels).toEqual(expect.arrayContaining([
-      'Not met: At least 8 characters',
-      'Not met: One uppercase letter',
-      'Not met: One lowercase letter',
+      'Not met: 8+ characters',
+      'Not met: Upper & lowercase',
       'Not met: One number',
-      'Not met: One of ! @ # $ % & * ? _ - .',
+      'Not met: One symbol',
     ]));
     expect(
       elementsOfType(PasswordRequirements({ value: '' }), 'Text')
-        .some((element) => element.props.children === 'Meets password requirements')
+        .some((element) => element.props.children === 'Password meets all requirements')
     ).toBe(false);
   });
 
@@ -303,8 +302,29 @@ describe('registration password checklist transitions', () => {
 
   it('updates immediately when a valid value becomes invalid', () => {
     expect(requirementLabels(validPassword).every((label) => label.startsWith('Met:'))).toBe(true);
-    expect(requirementLabels('Generated1').find((label) => label.includes('One of')))
-      .toBe('Not met: One of ! @ # $ % & * ? _ - .');
+    expect(requirementLabels('Generated1').find((label) => label.includes('One symbol')))
+      .toBe('Not met: One symbol');
+    expect(requirementLabels('GENERATED1!')).toContain('Not met: Upper & lowercase');
+    expect(requirementLabels('generated1!')).toContain('Not met: Upper & lowercase');
+  });
+
+  it('shows no false success for unsupported or overlong values', () => {
+    for (const [value, message] of [
+      ['Generated1!^', "Some characters aren't supported. Please choose different characters."],
+      [`A${'a'.repeat(70)}1!`, 'Password is too long. Please shorten it.'],
+    ]) {
+      const texts = elementsOfType(PasswordRequirements({ value }), 'Text');
+      expect(texts.some((element) => element.props.children === message)).toBe(true);
+      expect(texts.some((element) => element.props.children === 'Password meets all requirements')).toBe(false);
+    }
+  });
+
+  it('keeps technical limits and symbol examples out of visible guidance', () => {
+    const texts = elementsOfType(PasswordRequirements({ value: '' }), 'Text');
+    const visible = texts.map((element) => String(element.props.children)).join(' ');
+    expect(visible).not.toMatch(/UTF-8|bytes|! @ #|One of/);
+    expect(visible).toContain('8+ characters');
+    expect(visible).toContain('Upper & lowercase');
   });
 });
 
@@ -358,8 +378,8 @@ describe('shared Input and auth-screen UX invariants', () => {
 
   it('renders the live shared-contract checklist with deterministic wording', () => {
     expect(input).toMatch(/validateNewPassword\(value\)/);
-    expect(input).toMatch(/Password requirements/);
-    expect(input).toMatch(/Meets password requirements/);
+    expect(input).toMatch(/Your password needs/);
+    expect(input).toMatch(/Password meets all requirements/);
     expect(input).not.toMatch(/Strong password|Weak|Fair/);
   });
 

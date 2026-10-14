@@ -488,4 +488,23 @@ This owner-reported Jest result does not establish CI, native QA, deployment saf
 
 The owner approved consolidating the existing UI-FINAL1 implementation onto `887784a72a9966f841ae239cc985933a5597fef7` in a new isolated worktree while preserving the source UI worktree. The pre-edit, exact-path integration freeze is [`UI-FINAL1-consolidated-integration.md`](UI-FINAL1-consolidated-integration.md). Its 74 source paths and named test amendment govern this consolidation on `feat/mobile-ui-final1-consolidated-2026-10-14`; earlier slice-specific edit lists above remain the historical boundaries for work done in the source UI worktree. This integration does not authorize the deferred four-card imagery, Register feedback redesign, or backend-dependent cooking features.
 
-This consolidated worktree is the active location for remaining UI-FINAL1 development after its integration test and source-review gate. The source UI worktree remains preserved. The integrated branch is uncommitted and has not been pushed, merged, migrated or deployed.
+This consolidated worktree is the active location for remaining UI-FINAL1 development after its integration test and source-review gate. The source UI worktree remains preserved. The reviewed consolidation was locally committed as `ddf66970a6b46966b3e90750ca3ae97499f2b90f`; no push, merge, migration or deployment is claimed.
+
+## Registration UX follow-on slice — 2026-10-14 (Asia/Singapore)
+
+**Frozen before registration code edits.** Baseline: reviewed, committed consolidation `ddf66970a6b46966b3e90750ca3ae97499f2b90f`, clean at the start of this slice. The completed Registration UX audit was delivered in chat. Its six exact edit paths are:
+
+1. `apps/mobile/src/screens/RegisterScreen.js`
+2. `apps/mobile/src/components/Input.js`
+3. `apps/mobile/__tests__/registerLegalInteraction.test.js`
+4. `apps/mobile/__tests__/inputValidationUx.test.js`
+5. `apps/mobile/__tests__/authScreensStaticAudit.test.js`
+6. `docs/milestones/UI-FINAL1-mobile-ui-adoption.md`
+
+The three test paths above use the existing `__tests__` directory identified in this contract's prior planning list; `apps/mobile/tests` does not exist in this worktree. No other production, test, package, backend or configuration path is authorized for editing.
+
+**Behavior:** Give registration a compact live checklist labelled “8+ characters”, “Upper & lowercase”, “One number” and “One symbol”. Keep the shared `validateNewPassword` rules authoritative, including supported characters and length. Never show symbol examples, byte terminology, strength scores or a success state for a password the validator rejects. A too-long password must say “Password is too long. Please shorten it.” Keep the consent section compact, with a small visible checkbox inside a 48px touch target and separate 48px Terms and Privacy link targets. Preserve unchecked default, required acknowledgement, accessible inline errors, current legal navigation, the exact `{ name, email, password }` payload, and the existing Google/authentication flow. Client acknowledgement does not establish backend consent enforcement.
+
+**Verification boundary:** The owner will run focused Jest locally. Source, rendered-state and static checks by the builder do not establish native/device, live API, backend consent or deployment readiness.
+
+**Focused review finding fix:** An independent source review blocked the first registration implementation because submitting a password without a symbol exposed the shared validator's raw symbol list. Register now translates only exact known password-rule messages at local submit, password-specific API field details, and the existing validation-error fallback. The underlying `validateNewPassword` decisions and unknown or unrelated API messages remain unchanged. Rendered tests cover these paths; the owner will rerun the focused suites and request findings-only re-review.

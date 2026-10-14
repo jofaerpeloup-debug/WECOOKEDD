@@ -3,7 +3,6 @@ import { View, Text, TextInput, StyleSheet, Pressable, Platform } from 'react-na
 import { Ionicons } from '@expo/vector-icons';
 import {
   NEW_PASSWORD_ERROR_MESSAGES,
-  PASSWORD_ALLOWED_SPECIAL_CHARS,
   PASSWORD_MIN_CHARS,
   validateNewPassword,
 } from '@wecooked/contracts';
@@ -138,15 +137,13 @@ export function getInputAccessibilityProps({
 }
 
 const PASSWORD_REQUIREMENTS = [
-  [NEW_PASSWORD_ERROR_MESSAGES.MIN_CHARS, `At least ${PASSWORD_MIN_CHARS} characters`],
-  [NEW_PASSWORD_ERROR_MESSAGES.UPPERCASE, 'One uppercase letter'],
-  [NEW_PASSWORD_ERROR_MESSAGES.LOWERCASE, 'One lowercase letter'],
-  [NEW_PASSWORD_ERROR_MESSAGES.DIGIT, 'One number'],
+  [[NEW_PASSWORD_ERROR_MESSAGES.MIN_CHARS], `${PASSWORD_MIN_CHARS}+ characters`],
   [
-    NEW_PASSWORD_ERROR_MESSAGES.SPECIAL,
-    `One of ${PASSWORD_ALLOWED_SPECIAL_CHARS.split('').join(' ')}`,
+    [NEW_PASSWORD_ERROR_MESSAGES.UPPERCASE, NEW_PASSWORD_ERROR_MESSAGES.LOWERCASE],
+    'Upper & lowercase',
   ],
-  [NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED, 'No unsupported characters'],
+  [[NEW_PASSWORD_ERROR_MESSAGES.DIGIT], 'One number'],
+  [[NEW_PASSWORD_ERROR_MESSAGES.SPECIAL], 'One symbol'],
 ];
 
 export function PasswordRequirements({ value }) {
@@ -157,22 +154,33 @@ export function PasswordRequirements({ value }) {
 
   return (
     <View style={styles.requirements} accessibilityLiveRegion="polite">
-      <Text style={styles.requirementsTitle}>Password requirements</Text>
-      {PASSWORD_REQUIREMENTS.map(([message, label]) => {
-        const met = !errors.has(message);
-        return (
-          <Text
-            key={message}
-            style={[styles.requirement, met && styles.requirementMet]}
-            accessibilityLabel={`${met ? 'Met' : 'Not met'}: ${label}`}
-          >
-            {met ? '✓' : '○'} {label}
-          </Text>
-        );
-      })}
+      <Text style={styles.requirementsTitle}>Your password needs</Text>
+      <View style={styles.requirementsGrid}>
+        {PASSWORD_REQUIREMENTS.map(([messages, label]) => {
+          const met = messages.every((message) => !errors.has(message));
+          return (
+            <Text
+              key={label}
+              style={[styles.requirement, met && styles.requirementMet]}
+              accessibilityLabel={`${met ? 'Met' : 'Not met'}: ${label}`}
+            >
+              {met ? '✓' : '○'} {label}
+            </Text>
+          );
+        })}
+      </View>
+      {errors.has(NEW_PASSWORD_ERROR_MESSAGES.MAX_BYTES) ? (
+        <Text style={styles.requirementError} accessibilityLiveRegion="polite">
+          Password is too long. Please shorten it.
+        </Text>
+      ) : errors.has(NEW_PASSWORD_ERROR_MESSAGES.UNSUPPORTED) ? (
+        <Text style={styles.requirementError} accessibilityLiveRegion="polite">
+          Some characters aren't supported. Please choose different characters.
+        </Text>
+      ) : null}
       {meetsRequirements ? (
         <Text style={[styles.requirementStatus, styles.requirementMet]}>
-          Meets password requirements
+          Password meets all requirements
         </Text>
       ) : null}
     </View>
@@ -228,20 +236,29 @@ function makeStyles(colors) {
       marginTop: spacing.xs,
     },
     errorText: { color: colors.error },
-    requirements: { marginTop: -spacing.sm, marginBottom: spacing.lg },
+    requirements: { marginTop: -spacing.sm, marginBottom: spacing.md },
     requirementsTitle: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
       color: colors.inkSoft,
-      marginBottom: spacing.xs,
+      marginBottom: spacing.sm,
     },
+    requirementsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: spacing.xs },
     requirement: {
       fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
-      lineHeight: 17,
+      fontSize: typography.sizes.sm,
+      color: colors.inkSoft,
+      lineHeight: 19,
+      width: '48%',
     },
     requirementMet: { color: colors.success },
+    requirementError: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      lineHeight: 18,
+      color: colors.error,
+      marginTop: spacing.sm,
+    },
     requirementStatus: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.xs,
