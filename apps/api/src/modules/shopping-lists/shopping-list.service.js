@@ -65,7 +65,8 @@ async function saveOrThrowStale(list) {
   }
 }
 
-async function saveAdditiveWithOneRetry(userId, list, applyPayload, v2 = false) {
+async function saveAdditiveWithOneRetry(userId, list, applyPayload, v2 = false,
+  readLatest = shoppingListRepository.findOrCreateByUserId) {
   try {
     list.markModified('items');
     await shoppingListRepository.save(list);
@@ -74,7 +75,8 @@ async function saveAdditiveWithOneRetry(userId, list, applyPayload, v2 = false) 
     if (!isVersionError(err)) throw err;
   }
 
-  const latest = await shoppingListRepository.findOrCreateByUserId(userId);
+  const latest = await readLatest(userId);
+  if (!latest) throw staleError();
   assertListIntegrity(latest);
   if (!v2) assertV1Compatible(latest);
   applyPayload(latest);
@@ -108,6 +110,31 @@ function findItemIndex(items, ingredientId, unit) {
     && String(item.ingredientId) === String(ingredientId) && item.unit === unit);
 }
 
+function checkedMergedQuantity(existingQuantity, quantity, unit) {
+  if (!isValidQuantityForUnit(quantity, unit)) {
+    throw invalidQuantityError('Shopping list quantity must be a finite number greater than zero, or omitted for toTaste.');
+  }
+  if (unit === 'toTaste') return undefined;
+  const merged = (existingQuantity ?? 0) + quantity;
+  if (!isPositiveFiniteNumber(merged)) {
+    throw invalidQuantityError('Merged shopping list quantity must be a finite number greater than zero.');
+  }
+  return merged;
+}
+
+// Validate the whole Recipe payload before changing any row. Re-run this on
+// the fresh SHOP5 snapshot too, since a winning write can change the sum.
+function assertMergeQuantities(items, usages) {
+  const prospective = new Map();
+  for (const { ingredientId, quantity, unit } of usages) {
+    const key = `${String(ingredientId)}\0${unit}`;
+    const index = findItemIndex(items, ingredientId, unit);
+    const existingQuantity = prospective.has(key)
+      ? prospective.get(key) : index === -1 ? undefined : items[index].quantity;
+    prospective.set(key, checkedMergedQuantity(existingQuantity, quantity, unit));
+  }
+}
+
 // Adds one ingredient usage into `items` (a live Mongoose DocumentArray),
 // merging into an existing same-ingredient+same-unit entry — summing
 // quantity and resetting isChecked to false, since merging in more of an
@@ -118,9 +145,11 @@ function findItemIndex(items, ingredientId, unit) {
 // persisting afterward.
 function mergeItemInto(items, { ingredientId, quantity, unit, recipeId }) {
   const index = findItemIndex(items, ingredientId, unit);
+  const mergedQuantity = checkedMergedQuantity(index === -1 ? undefined : items[index].quantity,
+    quantity, unit);
   if (index === -1) {
     items.push({ type: 'ingredient', ingredientId,
-      quantity: unit === 'toTaste' ? undefined : quantity, unit, isChecked: false,
+      quantity: mergedQuantity, unit, isChecked: false,
       originKind: recipeId ? 'recipe' : 'manual',
       ...(recipeId ? { sourceRecipeIds: [recipeId], quantityEdited: false } : {}),
     });
@@ -137,7 +166,7 @@ function mergeItemInto(items, { ingredientId, quantity, unit, recipeId }) {
     existing.quantityEdited = true;
   }
   if (unit !== 'toTaste') {
-    existing.quantity = (existing.quantity ?? 0) + quantity;
+    existing.quantity = mergedQuantity;
   }
   existing.isChecked = false;
 }
@@ -371,16 +400,28 @@ async function clearItems(userId, v2 = false) {
 // RecipeService already omits from its own non-admin view never reappears
 // here. Applies every usage to the single ShoppingList document and saves
 // it once — no transaction needed since it's one document.
-async function addRecipeIngredients(userId, recipeId, v2 = false) {
-  const list = await shoppingListRepository.findOrCreateByUserId(userId);
-  assertListIntegrity(list);
-  if (!v2) assertV1Compatible(list);
-  const recipe = await recipeService.findUsableRecipeById(recipeId);
-  if (!recipe) {
-    throw recipeNotFoundError();
+async function addRecipeIngredients(userId, recipeId, v2 = false, selection) {
+  // Old clients must still see the SHOP5 upgrade wall before Recipe lookup.
+  // This read cannot create a list, even when the Recipe is unusable.
+  const v1List = v2 ? null : await shoppingListRepository.findByUserId(userId);
+  if (v1List) {
+    assertListIntegrity(v1List);
+    assertV1Compatible(v1List);
   }
+  const hasSelection = v2 && selection && Object.keys(selection).length > 0;
+  const recipe = hasSelection
+    ? await recipeService.resolveShoppingRecipeSelection(recipeId, selection)
+    : await recipeService.findUsableRecipeById(recipeId);
+  if (!recipe) throw recipeNotFoundError();
+  const usages = recipe.ingredients.map((usage) => ({
+    ingredientId: usage.ingredient.id, quantity: usage.quantity, unit: usage.unit,
+  }));
 
+  // Reject invalid authored quantities (including duplicate usages) before
+  // even reading the owner's list, and never upsert on an invalid merge.
+  assertMergeQuantities([], usages);
   const applyPayload = (target) => {
+    assertMergeQuantities(target.items, usages);
     for (const usage of recipe.ingredients) {
       mergeItemInto(target.items, {
         ingredientId: usage.ingredient.id,
@@ -392,9 +433,28 @@ async function addRecipeIngredients(userId, recipeId, v2 = false) {
     assertWithinLimit(target.items);
     assertProvenanceBounds(target.items);
   };
+
+  const existing = v2 ? await shoppingListRepository.findByUserId(userId) : v1List;
+  if (existing) {
+    assertListIntegrity(existing);
+    if (!v2) assertV1Compatible(existing);
+  }
+  // A disposable copy also checks row and provenance limits without changing
+  // an existing document or creating an empty first-time list on rejection.
+  const prospective = existing
+    ? ShoppingList.hydrate(existing.toObject({ depopulate: true }))
+    : new ShoppingList({ userId, items: [] });
+  applyPayload(prospective);
+
+  // Retain the singleton atomic upsert and Mongoose __v write. Recheck the
+  // upsert result: another writer can change the list after the read above.
+  const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
   applyPayload(list);
 
-  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload, v2);
+  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload, v2,
+    shoppingListRepository.findByUserId);
   return toResult(saved, v2);
 }
 

@@ -67,7 +67,7 @@ const clearItemsV2 = asyncHandler(async (req, res) => {
   sendV2(res, await shoppingListService.clearItems(req.auth.userId, true));
 });
 const addRecipeIngredientsV2 = asyncHandler(async (req, res) => {
-  sendV2(res, await shoppingListService.addRecipeIngredients(req.auth.userId, req.params.recipeId, true));
+  sendV2(res, await shoppingListService.addRecipeIngredients(req.auth.userId, req.params.recipeId, true, req.body));
 });
 
 module.exports = {

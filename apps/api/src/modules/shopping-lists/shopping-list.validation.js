@@ -66,7 +66,16 @@ const noSelectors = { query: z.object({}).strict() };
 const noBody = { body: z.union([z.undefined(), z.object({}).strict()]), ...noSelectors };
 const v2GetSchema = z.object(noBody);
 const v2ItemParamsSchema = z.object({ ...noBody, params: z.object({ itemId: objectIdSchema }).strict() });
-const v2RecipeParamsSchema = z.object({ ...noBody, params: z.object({ recipeId: objectIdSchema }).strict() });
+const selectedRecipeImportBody = z.object({
+  servings: z.number().int().min(1).max(100),
+  expectedRecipeUpdatedAt: z.string().datetime({ offset: true }),
+  spiceLevel: z.enum(['none', 'mild', 'medium', 'hot', 'extra_hot']).optional(),
+}).strict();
+const v2RecipeParamsSchema = z.object({
+  params: z.object({ recipeId: objectIdSchema }).strict(),
+  body: z.union([z.undefined(), z.object({}).strict(), selectedRecipeImportBody]),
+  ...noSelectors,
+});
 const customLabelSchema = z.string().refine((value) => normalizeCustomLabel(value) !== null, {
   message: 'Invalid custom item label.',
 }).transform(normalizeCustomLabel);

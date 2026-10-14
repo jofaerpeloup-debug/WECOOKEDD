@@ -6,6 +6,7 @@ const {
   recipeParamsSchema,
   createItemSchema,
   patchItemSchema,
+  v2RecipeParamsSchema,
 } = require('../src/modules/shopping-lists/shopping-list.validation');
 
 const VALID_ID = '507f1f77bcf86cd799439011';
@@ -18,6 +19,35 @@ test('itemParamsSchema accepts a valid ObjectId and rejects an invalid one', () 
 test('recipeParamsSchema accepts a valid ObjectId and rejects an invalid one', () => {
   assert.equal(recipeParamsSchema.safeParse({ params: { recipeId: VALID_ID } }).success, true);
   assert.equal(recipeParamsSchema.safeParse({ params: { recipeId: 'not-an-id' } }).success, false);
+});
+
+test('v2 Recipe import accepts empty legacy and strict selected-serving bodies', () => {
+  const envelope = (body) => ({ params: { recipeId: VALID_ID }, query: {}, body });
+  assert.equal(v2RecipeParamsSchema.safeParse(envelope(undefined)).success, true);
+  assert.equal(v2RecipeParamsSchema.safeParse(envelope({})).success, true);
+  for (const servings of [1, 100]) {
+    for (const spiceLevel of ['none', 'mild', 'medium', 'hot', 'extra_hot']) {
+      assert.equal(v2RecipeParamsSchema.safeParse(envelope({
+        servings, spiceLevel, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+      })).success, true);
+    }
+  }
+  assert.equal(v2RecipeParamsSchema.safeParse(envelope({
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  })).success, true, 'an unprofiled or timer-only Recipe omits spiceLevel');
+  for (const body of [
+    { servings: 4 }, { expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' },
+    { servings: 0, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' },
+    { servings: 101, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' },
+    { servings: 1.5, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' },
+    { servings: '4', expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' },
+    { servings: 4, expectedRecipeUpdatedAt: 'yesterday' },
+    { servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z', spiceLevel: 'very_hot' },
+    { servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z', ingredientId: VALID_ID },
+    { userId: VALID_ID },
+  ]) {
+    assert.equal(v2RecipeParamsSchema.safeParse(envelope(body)).success, false, JSON.stringify(body));
+  }
 });
 
 test('createItemSchema accepts a valid measurable-unit item', () => {

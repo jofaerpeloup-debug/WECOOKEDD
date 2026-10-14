@@ -6,6 +6,19 @@ const shoppingListRepository = require('../src/modules/shopping-lists/shopping-l
 
 const USER_ID = '507f1f77bcf86cd799439001';
 
+test('findByUserId only reads the owner list and never upserts', async (t) => {
+  const read = t.mock.method(ShoppingList, 'findOne', async (filter) => {
+    assert.deepEqual(filter, { userId: USER_ID });
+    return null;
+  });
+  const upsert = t.mock.method(ShoppingList, 'findOneAndUpdate', async () =>
+    assert.fail('noncreating read must not upsert'));
+
+  assert.equal(await shoppingListRepository.findByUserId(USER_ID), null);
+  assert.equal(read.mock.callCount(), 1);
+  assert.equal(upsert.mock.callCount(), 0);
+});
+
 test('findOrCreateByUserId issues an atomic upsert keyed on userId with an empty-items default', async (t) => {
   let capturedFilter;
   let capturedUpdate;

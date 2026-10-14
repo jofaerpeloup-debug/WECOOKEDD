@@ -105,6 +105,23 @@ function cookingProfile(overrides = {}) {
   };
 }
 
+function shoppingProfiledRecipe(overrides = {}) {
+  return completeStoredRecipe({
+    publicationStatus: 'published', updatedAt: new Date('2026-10-14T00:00:00.000Z'),
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), quantity: 1, unit: 'kg' }],
+    cooking: {
+      schemaVersion: 1, defaultSpiceLevel: 'none',
+      spiceAlternatives: ['mild', 'medium', 'hot', 'extra_hot'].map((spiceLevel, index) => ({
+        spiceLevel,
+        ingredients: [{ ingredientId: activeIngredient(GARLIC_ID),
+          quantity: index + 2, unit: 'clove', note: 'authored', optional: false }],
+      })),
+      stepTimers: [],
+    },
+    ...overrides,
+  });
+}
+
 function smartRecipe(id, title, overrides = {}) {
   const recipe = completeStoredRecipe({
     _id: id,
@@ -1656,6 +1673,91 @@ test('consumer detail offers only usable authored alternatives and their exact t
   assert.deepEqual(view.cooking.stepTimers.map((entry) => entry.spiceLevel), ['none', 'mild']);
   const staff = await recipeService.getRecipeById('recipe1', { isAdmin: true });
   assert.equal(staff.cooking.spiceAlternatives.length, 2);
+});
+
+test('selected Shopping import resolves each authored complete list and scales without rounding', async (t) => {
+  const recipe = shoppingProfiledRecipe();
+  recipe.cooking.spiceAlternatives[2].ingredients.push({
+    ingredientId: activeIngredient(OTHER_ID), unit: 'toTaste', optional: true,
+  });
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  const expectedRecipeUpdatedAt = recipe.updatedAt.toISOString();
+  for (const [spiceLevel, amount, id] of [
+    ['none', 1.5, CHICKEN_ID], ['mild', 3, GARLIC_ID],
+    ['medium', 4.5, GARLIC_ID], ['hot', 6, GARLIC_ID],
+    ['extra_hot', 7.5, GARLIC_ID],
+  ]) {
+    const resolved = await recipeService.resolveShoppingRecipeSelection('recipe1', {
+      servings: 6, spiceLevel, expectedRecipeUpdatedAt,
+    });
+    assert.equal(resolved.ingredients[0].ingredient.id, id);
+    assert.equal(resolved.ingredients[0].quantity, amount);
+    assert.equal(resolved.ingredients[0].unit, spiceLevel === 'none' ? 'kg' : 'clove');
+    if (spiceLevel === 'hot') {
+      assert.equal(resolved.ingredients[1].unit, 'toTaste');
+      assert.equal(resolved.ingredients[1].quantity, undefined);
+    }
+  }
+  const boundary = await recipeService.resolveShoppingRecipeSelection('recipe1', {
+    servings: 1, spiceLevel: 'mild', expectedRecipeUpdatedAt,
+  });
+  assert.equal(boundary.ingredients[0].quantity, 0.5);
+  assert.equal(boundary.ingredients[0].note, 'authored');
+  assert.equal(boundary.ingredients[0].optional, false);
+  assert.equal(Object.isFrozen(boundary.ingredients), true);
+});
+
+test('selected Shopping import distinguishes hidden, stale, unauthored, and unavailable spice levels', async (t) => {
+  let recipe = shoppingProfiledRecipe();
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  const selected = { servings: 4, spiceLevel: 'hot',
+    expectedRecipeUpdatedAt: recipe.updatedAt.toISOString() };
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', {
+    ...selected, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.001Z',
+  }), { code: 'RECIPE_STALE', statusCode: 409 });
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', {
+    ...selected, spiceLevel: undefined,
+  }), { code: 'VALIDATION_ERROR', statusCode: 400 });
+  recipe.cooking.spiceAlternatives = recipe.cooking.spiceAlternatives.filter((alt) => alt.spiceLevel !== 'hot');
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', selected), {
+    code: 'RECIPE_SPICE_LEVEL_NOT_OFFERED', statusCode: 400,
+  });
+  recipe = shoppingProfiledRecipe();
+  recipe.cooking.spiceAlternatives[2].ingredients[0].ingredientId = inactiveIngredient(GARLIC_ID);
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', selected), {
+    code: 'RECIPE_SPICE_LEVEL_UNAVAILABLE', statusCode: 409,
+  });
+  recipe.cooking.spiceAlternatives[2].ingredients[0].optional = true;
+  const optional = await recipeService.resolveShoppingRecipeSelection('recipe1', selected);
+  assert.deepEqual(optional.ingredients, []);
+  recipe = shoppingProfiledRecipe({ isActive: false });
+  assert.equal(await recipeService.resolveShoppingRecipeSelection('recipe1', selected), null);
+});
+
+test('selected Shopping import handles unprofiled and timer-only Recipes and scaling errors', async (t) => {
+  let recipe = shoppingProfiledRecipe({ cooking: undefined });
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  const selected = { servings: 100, expectedRecipeUpdatedAt: recipe.updatedAt.toISOString() };
+  const plain = await recipeService.resolveShoppingRecipeSelection('recipe1', selected);
+  assert.equal(plain.ingredients[0].quantity, 25);
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', {
+    ...selected, spiceLevel: 'none',
+  }), { code: 'RECIPE_SPICE_LEVEL_NOT_OFFERED', statusCode: 400 });
+  recipe = shoppingProfiledRecipe({ cooking: {
+    schemaVersion: 1, defaultSpiceLevel: null, spiceAlternatives: [], stepTimers: [],
+  } });
+  assert.equal((await recipeService.resolveShoppingRecipeSelection('recipe1', selected))
+    .ingredients[0].quantity, 25);
+  recipe = shoppingProfiledRecipe({ cooking: undefined, servings: null });
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', selected), {
+    code: 'RECIPE_SERVINGS_UNAVAILABLE', statusCode: 422,
+  });
+  recipe = shoppingProfiledRecipe({ cooking: undefined, servings: 1,
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), quantity: Number.MAX_VALUE, unit: 'kg' }],
+  });
+  await assert.rejects(() => recipeService.resolveShoppingRecipeSelection('recipe1', selected), {
+    code: 'RECIPE_QUANTITY_UNSCALABLE', statusCode: 422,
+  });
 });
 
 test('stale title edit cannot erase a newer nutrition source or derived eligibility fact', async (t) => {

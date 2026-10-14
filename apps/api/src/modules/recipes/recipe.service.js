@@ -783,6 +783,80 @@ async function findUsableRecipeById(id) {
   return { ...view, ingredients: view.ingredients.map(toUsageSummary) };
 }
 
+// Selected Shopping List imports resolve one populated Recipe snapshot here,
+// preserving the Recipe module's visibility and authored-spice authority.
+// The resulting plain payload is reused unchanged if SHOP5 retries its own
+// additive list write; a retry must never fetch a newer Recipe revision.
+async function resolveShoppingRecipeSelection(id, { servings, spiceLevel, expectedRecipeUpdatedAt }) {
+  const recipe = await recipeRepository.findByIdWithIngredients(id);
+  if (!recipe) return null;
+
+  const baseServingsAvailable = Number.isInteger(recipe.servings)
+    && recipe.servings >= 1 && recipe.servings <= 100;
+  const visibilityRecipe = baseServingsAvailable ? recipe : {
+    ...(typeof recipe.toObject === 'function' ? recipe.toObject() : recipe),
+    servings: 1,
+  };
+  if (!isUsableForNonAdmin(visibilityRecipe)) return null;
+
+  const storedTime = recipe.updatedAt == null ? NaN : new Date(recipe.updatedAt).getTime();
+  if (!Number.isFinite(storedTime) || storedTime !== new Date(expectedRecipeUpdatedAt).getTime()) {
+    throw new AppError('Recipe changed. Refresh and try again.', {
+      statusCode: 409, code: 'RECIPE_STALE',
+    });
+  }
+  if (!baseServingsAvailable) {
+    throw new AppError('Recipe base servings are unavailable.', {
+      statusCode: 422, code: 'RECIPE_SERVINGS_UNAVAILABLE',
+    });
+  }
+
+  const cooking = recipe.cooking;
+  const hasSpiceProfile = cooking?.defaultSpiceLevel != null;
+  let usages = recipe.ingredients;
+  if (hasSpiceProfile && spiceLevel === undefined) {
+    throw new AppError('Select an authored spice level.', {
+      statusCode: 400, code: 'VALIDATION_ERROR',
+      details: [{ field: 'spiceLevel', message: 'Required for this Recipe.' }],
+    });
+  }
+  if (!hasSpiceProfile && spiceLevel !== undefined) {
+    throw new AppError('Spice level is not offered for this Recipe.', {
+      statusCode: 400, code: 'RECIPE_SPICE_LEVEL_NOT_OFFERED',
+    });
+  }
+  if (hasSpiceProfile && spiceLevel !== cooking.defaultSpiceLevel) {
+    const alternative = cooking.spiceAlternatives.find((entry) => entry.spiceLevel === spiceLevel);
+    if (!alternative) {
+      throw new AppError('Spice level is not offered for this Recipe.', {
+        statusCode: 400, code: 'RECIPE_SPICE_LEVEL_NOT_OFFERED',
+      });
+    }
+    if (alternative.ingredients.some((entry) =>
+      !entry.optional && (!entry.ingredientId || !entry.ingredientId.isActive))) {
+      throw new AppError('Spice level is currently unavailable.', {
+        statusCode: 409, code: 'RECIPE_SPICE_LEVEL_UNAVAILABLE',
+      });
+    }
+    usages = alternative.ingredients;
+  }
+
+  const ingredients = usages.filter(isIngredientEntryVisibleToNonAdmin).map((entry) => {
+    const quantity = entry.unit === 'toTaste'
+      ? undefined : (entry.quantity * servings) / recipe.servings;
+    if (entry.unit !== 'toTaste' && (!Number.isFinite(quantity) || quantity <= 0)) {
+      throw new AppError('Recipe quantity cannot be scaled.', {
+        statusCode: 422, code: 'RECIPE_QUANTITY_UNSCALABLE',
+      });
+    }
+    return Object.freeze({
+      ingredient: Object.freeze({ id: String(entry.ingredientId._id), name: entry.ingredientId.name }),
+      quantity, unit: entry.unit, note: entry.note ?? null, optional: entry.optional ?? false,
+    });
+  });
+  return Object.freeze({ ingredients: Object.freeze(ingredients) });
+}
+
 async function findConsumerVisibleShoppingSources(ids) {
   if (!Array.isArray(ids) || ids.length > 200
     || ids.some((id) => !/^[a-f\d]{24}$/i.test(String(id)))) {
@@ -1235,6 +1309,7 @@ module.exports = {
   createDraft,
   findRecipeById,
   findUsableRecipeById,
+  resolveShoppingRecipeSelection,
   findConsumerVisibleShoppingSources,
   getRecipeById,
   listRecipes,

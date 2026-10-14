@@ -14,6 +14,7 @@ const userRepository = require('../src/modules/users/user.repository');
 const sessionRepository = require('../src/modules/sessions/session.repository');
 const ingredientRepository = require('../src/modules/ingredients/ingredient.repository');
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
+const recipeService = require('../src/modules/recipes/recipe.service');
 const shoppingListRepository = require('../src/modules/shopping-lists/shopping-list.repository');
 const ShoppingList = require('../src/modules/shopping-lists/shopping-list.model');
 const { signAccessToken } = require('../src/shared/security/access-token');
@@ -35,6 +36,25 @@ function buildList(items = [], userId = USER_ID) {
 
 function activeIngredientDoc(id, name = 'Ingredient', category = 'meat') {
   return { _id: id, name, category, isActive: true };
+}
+
+function profiledRecipeDoc(overrides = {}) {
+  return {
+    _id: RECIPE_ID, title: 'Chicken Adobo',
+    description: 'A complete Filipino braised chicken recipe.',
+    difficulty: 'easy', prepTimeMinutes: 15, cookTimeMinutes: 40,
+    servings: 4, isActive: true, publicationStatus: 'published',
+    updatedAt: new Date('2026-10-14T00:00:00.000Z'),
+    ingredients: [{ ingredientId: activeIngredientDoc(CHICKEN_ID, 'Chicken'),
+      quantity: 1, unit: 'kg', optional: false }],
+    instructions: ['Combine and simmer.'], dietaryTags: [], imageUrl: null,
+    cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild',
+      spiceAlternatives: [{ spiceLevel: 'hot', ingredients: [{
+        ingredientId: activeIngredientDoc(GARLIC_ID, 'Garlic'),
+        quantity: 2, unit: 'clove', optional: false,
+      }] }], stepTimers: [] },
+    ...overrides,
+  };
 }
 
 function mockAuth(t) {
@@ -638,6 +658,7 @@ test('Mongoose VersionError is returned as 409 SHOPPING_LIST_STALE without __v l
 test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable ingredients', async (t) => {
   mockAuth(t);
   mockIngredientActive(t, 'Chicken');
+  t.mock.method(shoppingListRepository, 'findByUserId', async () => null);
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
     _id: RECIPE_ID,
     title: 'Chicken Adobo',
@@ -670,6 +691,7 @@ test('POST /api/v1/shopping-list/recipes/:recipeId imports the recipe\'s usable 
 
 test('POST /api/v1/shopping-list/recipes/:recipeId returns 404 RECIPE_NOT_FOUND for an archived recipe', async (t) => {
   mockAuth(t);
+  t.mock.method(shoppingListRepository, 'findByUserId', async () => null);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => ({
     _id: RECIPE_ID,
@@ -694,6 +716,121 @@ test('POST /api/v1/shopping-list/recipes/:recipeId returns 404 RECIPE_NOT_FOUND 
 
   assert.equal(response.status, 404);
   assert.equal(response.body.error.code, 'RECIPE_NOT_FOUND');
+});
+
+test('v2 selected Recipe import uses authored spice quantities while empty body keeps the default', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  t.mock.method(shoppingListRepository, 'findByUserId', async () => null);
+  const recipe = profiledRecipeDoc();
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  t.mock.method(recipeRepository, 'findShoppingSourceCandidates', async () => [recipe]);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (id) => buildList([], id));
+  mockNoSave(t);
+  const url = `/api/v1/shopping-list/v2/recipes/${RECIPE_ID}`;
+  const auth = { Authorization: `Bearer ${token()}` };
+  const selected = await request(app).post(url).set(auth).send({
+    servings: 6, spiceLevel: 'hot', expectedRecipeUpdatedAt: recipe.updatedAt.toISOString(),
+  });
+  assert.equal(selected.status, 200);
+  assert.equal(selected.body.data.shoppingListFormat, 2);
+  assert.equal(selected.body.data.shoppingList.items[0].ingredient.id, GARLIC_ID);
+  assert.equal(selected.body.data.shoppingList.items[0].quantity, 3);
+  assert.deepEqual(selected.body.data.shoppingList.items[0].source,
+    { kind: 'single', title: 'Chicken Adobo', quantityEdited: false });
+  const legacy = await request(app).post(url).set(auth).send({});
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.data.shoppingList.items[0].ingredient.id, CHICKEN_ID);
+  assert.equal(legacy.body.data.shoppingList.items[0].quantity, 1);
+});
+
+test('v2 selected import authenticates before lookup and rejects malformed or stale selections', async (t) => {
+  mockAuth(t);
+  t.mock.method(shoppingListRepository, 'findByUserId', async () =>
+    assert.fail('invalid or stale selection must not read Shopping List'));
+  const recipe = profiledRecipeDoc();
+  const findRecipe = t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    assert.fail('invalid or stale selection must not touch Shopping List'));
+  const url = `/api/v1/shopping-list/v2/recipes/${RECIPE_ID}`;
+  const body = { servings: 6, spiceLevel: 'hot',
+    expectedRecipeUpdatedAt: recipe.updatedAt.toISOString() };
+  const unauthenticated = await request(app).post(url).send(body);
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(findRecipe.mock.callCount(), 0);
+  for (const malformed of [
+    { ...body, servings: 0 }, { ...body, ingredientId: CHICKEN_ID },
+    { spiceLevel: 'hot', expectedRecipeUpdatedAt: body.expectedRecipeUpdatedAt },
+  ]) {
+    const response = await request(app).post(url)
+      .set('Authorization', `Bearer ${token()}`).send(malformed);
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  }
+  assert.equal(findRecipe.mock.callCount(), 0);
+  const stale = await request(app).post(url).set('Authorization', `Bearer ${token()}`)
+    .send({ ...body, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.001Z' });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error.code, 'RECIPE_STALE');
+});
+
+test('v2 selected import keeps hidden Recipes opaque and uses the authenticated list owner', async (t) => {
+  mockAuth(t);
+  mockIngredientActive(t);
+  const read = t.mock.method(shoppingListRepository, 'findByUserId', async (id) => {
+    assert.equal(id, OTHER_USER_ID);
+    return null;
+  });
+  let recipe = profiledRecipeDoc({ isActive: false });
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  t.mock.method(recipeRepository, 'findShoppingSourceCandidates', async () => [recipe]);
+  const owners = [];
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (id) => {
+    owners.push(id);
+    return buildList([], id);
+  });
+  mockNoSave(t);
+  const url = `/api/v1/shopping-list/v2/recipes/${RECIPE_ID}`;
+  const body = { servings: 6, spiceLevel: 'hot',
+    expectedRecipeUpdatedAt: '2026-10-14T00:00:00.001Z' };
+  const hidden = await request(app).post(url)
+    .set('Authorization', `Bearer ${otherUserToken()}`).send(body);
+  assert.equal(hidden.status, 404);
+  assert.equal(hidden.body.error.code, 'RECIPE_NOT_FOUND');
+  assert.deepEqual(owners, []);
+  assert.equal(read.mock.callCount(), 0);
+
+  recipe = profiledRecipeDoc();
+  const allowed = await request(app).post(url)
+    .set('Authorization', `Bearer ${otherUserToken()}`)
+    .send({ ...body, expectedRecipeUpdatedAt: recipe.updatedAt.toISOString() });
+  assert.equal(allowed.status, 200);
+  assert.deepEqual(owners, [OTHER_USER_ID]);
+  assert.equal(read.mock.callCount(), 1);
+});
+
+test('v2 selected import returns 400 for merged overflow without reaching list upsert', async (t) => {
+  mockAuth(t);
+  const list = buildList([{ ingredientId: CHICKEN_ID, quantity: 1e308,
+    unit: 'kg', isChecked: true, originKind: 'manual' }]);
+  const before = JSON.stringify(list.toObject());
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1e308, unit: 'kg' }],
+  }));
+  t.mock.method(shoppingListRepository, 'findByUserId', async (id) => {
+    assert.equal(id, USER_ID);
+    return list;
+  });
+  const upsert = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    assert.fail('merged overflow must not reach list upsert'));
+
+  const response = await request(app).post(`/api/v1/shopping-list/v2/recipes/${RECIPE_ID}`)
+    .set('Authorization', `Bearer ${token()}`)
+    .send({ servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(upsert.mock.callCount(), 0);
+  assert.equal(JSON.stringify(list.toObject()), before);
 });
 
 test('v2 creates distinct custom rows and v1 reaches the upgrade wall', async (t) => {
@@ -784,6 +921,7 @@ test('v2 custom patch is strict and clear checked preserves unchecked rows', asy
 test('SHOP5 valid legacy requests reach 426 on every v1 Shopping route with a custom row', async (t) => {
   mockAuth(t);
   const list = buildList([{ type: 'custom', label: 'Milk' }]);
+  t.mock.method(shoppingListRepository, 'findByUserId', async () => list);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
   const auth = { Authorization: `Bearer ${token()}` };
   const root = '/api/v1/shopping-list';

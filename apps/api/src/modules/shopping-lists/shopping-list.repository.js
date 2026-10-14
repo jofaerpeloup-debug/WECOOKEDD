@@ -2,6 +2,10 @@ const ShoppingList = require('./shopping-list.model');
 
 const DUPLICATE_KEY_ERROR_CODE = 11000;
 
+function findByUserId(userId) {
+  return ShoppingList.findOne({ userId });
+}
+
 // Deliberately never populates items.ingredientId. Populating would
 // silently replace a dangling ref with null and lose the raw historical id
 // the safe response shape needs to report for a stale/archived Ingredient
@@ -42,6 +46,7 @@ function save(shoppingList) {
 }
 
 module.exports = {
+  findByUserId,
   findOrCreateByUserId,
   save,
 };

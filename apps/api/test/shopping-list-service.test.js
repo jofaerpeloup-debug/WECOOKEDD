@@ -41,6 +41,13 @@ function mockNoSave(t) {
   t.mock.method(shoppingListRepository, 'save', async (list) => list);
 }
 
+function mockImportRead(t, list = null) {
+  return t.mock.method(shoppingListRepository, 'findByUserId', async (userId) => {
+    assert.equal(userId, USER_ID);
+    return list;
+  });
+}
+
 test('getShoppingList lazily gets/creates exactly one list for the given user', async (t) => {
   let capturedUserId;
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (userId) => {
@@ -403,6 +410,7 @@ function usableRecipe(ingredients) {
 }
 
 test('addRecipeIngredients rejects an unusable/archived recipe', async (t) => {
+  mockImportRead(t);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(recipeService, 'findUsableRecipeById', async () => null);
 
@@ -417,6 +425,7 @@ test('addRecipeIngredients rejects an unusable/archived recipe', async (t) => {
 });
 
 test('addRecipeIngredients propagates an unexpected RecipeService/database failure as-is, never as RECIPE_NOT_FOUND', async (t) => {
+  mockImportRead(t);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => buildList());
   t.mock.method(recipeService, 'findUsableRecipeById', async () => {
     throw new Error('ECONNRESET: mongo connection lost');
@@ -433,6 +442,7 @@ test('addRecipeIngredients propagates an unexpected RecipeService/database failu
 });
 
 test('addRecipeIngredients adds the recipe\'s usable ingredient usages to an empty list', async (t) => {
+  mockImportRead(t);
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () =>
     usableRecipe([
@@ -449,6 +459,7 @@ test('addRecipeIngredients adds the recipe\'s usable ingredient usages to an emp
 });
 
 test('addRecipeIngredients preserves canonical lb/oz values without conversion', async (t) => {
+  mockImportRead(t);
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => usableRecipe([
     usage(CHICKEN_ID, 'Chicken', { quantity: 0.75, unit: 'lb', optional: false }),
@@ -464,6 +475,7 @@ test('addRecipeIngredients preserves canonical lb/oz values without conversion',
 });
 
 test('addRecipeIngredients merges a same-ingredient+same-unit recipe usage into an existing list item', async (t) => {
+  mockImportRead(t, buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]));
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () =>
     usableRecipe([usage(CHICKEN_ID, 'Chicken', { quantity: 2, unit: 'kg', optional: false })])
@@ -480,6 +492,7 @@ test('addRecipeIngredients merges a same-ingredient+same-unit recipe usage into 
 });
 
 test('addRecipeIngredients keeps a different-unit usage of the same ingredient as a separate item', async (t) => {
+  mockImportRead(t, buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]));
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () =>
     usableRecipe([usage(CHICKEN_ID, 'Chicken', { quantity: 200, unit: 'g', optional: false })])
@@ -495,6 +508,7 @@ test('addRecipeIngredients keeps a different-unit usage of the same ingredient a
 });
 
 test('addRecipeIngredients handles a toTaste recipe usage by keeping a single item', async (t) => {
+  mockImportRead(t, buildList([{ ingredientId: SALT_ID, unit: 'toTaste' }]));
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () =>
     usableRecipe([usage(SALT_ID, 'Salt', { unit: 'toTaste', optional: false })])
@@ -510,6 +524,7 @@ test('addRecipeIngredients handles a toTaste recipe usage by keeping a single it
 });
 
 test('addRecipeIngredients includes an active optional ingredient usage exactly like a required one', async (t) => {
+  mockImportRead(t);
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () =>
     usableRecipe([usage(GARLIC_ID, 'Garlic', { quantity: 1, unit: 'clove', optional: true })])
@@ -524,6 +539,7 @@ test('addRecipeIngredients includes an active optional ingredient usage exactly 
 });
 
 test('addRecipeIngredients enforces the 200-item maximum on the merged result', async (t) => {
+  mockImportRead(t);
   mockAllIngredientsActive(t);
   const existingItems = Array.from({ length: ShoppingList.MAX_ITEMS }, (_, i) => ({
     ingredientId: `507f1f77bcf86cd7994${String(50000 + i).padStart(5, '0')}`,
@@ -551,6 +567,7 @@ test('addRecipeIngredients enforces the 200-item maximum on the merged result', 
 });
 
 test('addRecipeIngredients succeeds at exactly the 200-item boundary when merges keep the final count from exceeding it', async (t) => {
+  mockImportRead(t);
   // 199 existing items. The recipe contributes 6 usages: 5 merge into
   // existing entries (no net growth) and 1 is genuinely new — so the final
   // merged count is exactly 200, not 199 + 6 = 205. The limit must be
@@ -586,6 +603,7 @@ test('addRecipeIngredients succeeds at exactly the 200-item boundary when merges
 });
 
 test('addRecipeIngredients saves the ShoppingList document exactly once for a multi-ingredient import', async (t) => {
+  mockImportRead(t);
   mockAllIngredientsActive(t);
   t.mock.method(recipeService, 'findUsableRecipeById', async () =>
     usableRecipe([
@@ -847,6 +865,8 @@ test('addRecipeIngredients retries exactly once after VersionError and applies e
   const latest = buildList([
     { ingredientId: GARLIC_ID, quantity: 1, unit: 'clove', isChecked: false },
   ]);
+  const read = t.mock.method(shoppingListRepository, 'findByUserId', async () =>
+    read.mock.callCount() === 0 ? stale : latest);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
     ingredients: [
       { ingredient: { id: GARLIC_ID }, quantity: 2, unit: 'clove' },
@@ -854,9 +874,7 @@ test('addRecipeIngredients retries exactly once after VersionError and applies e
     ],
   }));
   mockAllIngredientsActive(t);
-  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
-    find.mock.callCount() === 0 ? stale : latest
-  );
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => stale);
   const save = t.mock.method(shoppingListRepository, 'save', async (value) => {
     if (save.mock.callCount() === 0) throw versionError(value);
     return value;
@@ -864,10 +882,282 @@ test('addRecipeIngredients retries exactly once after VersionError and applies e
 
   const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID);
 
-  assert.equal(find.mock.callCount(), 2);
+  assert.equal(read.mock.callCount(), 2);
+  assert.equal(find.mock.callCount(), 1);
   assert.equal(save.mock.callCount(), 2);
   assert.equal(result.shoppingList.items[0].quantity, 3);
   assert.equal(result.shoppingList.items.filter((row) => String(row.ingredientId) === SALT_ID).length, 1);
+});
+
+test('selected v2 import merges server-resolved usages under SHOP5 owner and provenance rules', async (t) => {
+  mockImportRead(t, buildList([{ type: 'ingredient', ingredientId: CHICKEN_ID,
+    quantity: 1, unit: 'kg', originKind: 'manual' }]));
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map());
+  const selection = { servings: 6, spiceLevel: 'hot',
+    expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' };
+  const resolver = t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async (id, actual) => {
+    assert.equal(id, RECIPE_ID);
+    assert.deepEqual(actual, selection);
+    return { ingredients: [
+      usage(CHICKEN_ID, 'Chicken', { quantity: 2, unit: 'kg', note: 'authored', optional: false }),
+      usage(SALT_ID, 'Salt', { unit: 'toTaste', optional: true }),
+    ] };
+  });
+  t.mock.method(recipeService, 'findUsableRecipeById', async () => assert.fail('selected import must use the selected resolver'));
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async (id) => {
+    assert.equal(id, USER_ID);
+    return buildList([{ type: 'ingredient', ingredientId: CHICKEN_ID,
+      quantity: 1, unit: 'kg', originKind: 'manual' }]);
+  });
+  mockNoSave(t);
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, selection);
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(resolver.mock.callCount(), 1);
+  assert.equal(result.shoppingList.items[0].quantity, 3);
+  assert.equal(result.shoppingList.items[0].quantityEdited, true);
+  assert.deepEqual(result.shoppingList.items[0].sourceRecipeIds.map(String), [RECIPE_ID]);
+  assert.equal(result.shoppingList.items[1].unit, 'toTaste');
+  assert.equal(result.shoppingList.items[1].quantity, undefined);
+});
+
+test('selected v2 import rejects stale Recipe before touching the Shopping List', async (t) => {
+  t.mock.method(shoppingListRepository, 'findByUserId', async () =>
+    assert.fail('a stale Recipe must not read a Shopping List'));
+  const error = new AppError('Recipe changed.', { statusCode: 409, code: 'RECIPE_STALE' });
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => { throw error; });
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    assert.fail('a stale Recipe must not create or read a Shopping List'));
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, spiceLevel: 'hot', expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), (actual) => actual === error);
+});
+
+test('selected v2 import retry reapplies one immutable Recipe snapshot', async (t) => {
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map());
+  const stale = buildList();
+  const latest = buildList([{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg' }]);
+  const read = t.mock.method(shoppingListRepository, 'findByUserId', async () =>
+    read.mock.callCount() === 0 ? stale : latest);
+  const resolver = t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [usage(CHICKEN_ID, 'Chicken', { quantity: 2, unit: 'kg' })],
+  }));
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => stale);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => {
+    if (save.mock.callCount() === 0) throw versionError(list);
+    return list;
+  });
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 6, spiceLevel: 'hot', expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  });
+  assert.equal(resolver.mock.callCount(), 1);
+  assert.equal(read.mock.callCount(), 2);
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 2);
+  assert.equal(result.shoppingList.items[0].quantity, 3);
+  assert.deepEqual(result.shoppingList.items[0].sourceRecipeIds.map(String), [RECIPE_ID]);
+});
+
+test('selected v2 import rejects an overflowing existing row without changing any row', async (t) => {
+  const list = buildList([{ ingredientId: CHICKEN_ID, quantity: 1e308, unit: 'kg',
+    isChecked: true, originKind: 'manual' }]);
+  const before = JSON.stringify(list.toObject());
+  mockImportRead(t, list);
+  const create = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    assert.fail('overflow must not reach the upsert'));
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [
+      usage(GARLIC_ID, 'Garlic', { quantity: 1, unit: 'clove' }),
+      usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' }),
+    ],
+  }));
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), { statusCode: 400, code: 'VALIDATION_ERROR' });
+  assert.equal(save.mock.callCount(), 0);
+  assert.equal(create.mock.callCount(), 0);
+  assert.equal(JSON.stringify(list.toObject()), before);
+});
+
+test('selected v2 import rechecks a list inserted after its noncreating read', async (t) => {
+  const winner = buildList([{ ingredientId: CHICKEN_ID, quantity: 1e308,
+    unit: 'kg', isChecked: true, originKind: 'manual' }]);
+  const before = JSON.stringify(winner.toObject());
+  const read = mockImportRead(t);
+  const create = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => winner);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => list);
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' })],
+  }));
+
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), { statusCode: 400, code: 'VALIDATION_ERROR' });
+  assert.equal(read.mock.callCount(), 1);
+  assert.equal(create.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 0);
+  assert.equal(JSON.stringify(winner.toObject()), before);
+});
+
+test('selected v2 import rejects two new usages whose combined quantity overflows', async (t) => {
+  const list = buildList();
+  const before = JSON.stringify(list.toObject());
+  const read = mockImportRead(t);
+  const create = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () =>
+    assert.fail('overflow must not reach the upsert'));
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [
+      usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' }),
+      usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' }),
+    ],
+  }));
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), { statusCode: 400, code: 'VALIDATION_ERROR' });
+  assert.equal(save.mock.callCount(), 0);
+  assert.equal(read.mock.callCount(), 0);
+  assert.equal(create.mock.callCount(), 0);
+  assert.equal(JSON.stringify(list.toObject()), before);
+});
+
+test('invalid first-time selected import never reaches the repository create boundary', async (t) => {
+  let stored = null;
+  const read = t.mock.method(ShoppingList, 'findOne', async (filter) => {
+    assert.deepEqual(filter, { userId: USER_ID });
+    return stored;
+  });
+  const upsert = t.mock.method(ShoppingList, 'findOneAndUpdate', async () => {
+    stored = ShoppingList.hydrate(buildList().toObject());
+    return stored;
+  });
+  const save = t.mock.method(ShoppingList.prototype, 'save', async function persist() {
+    stored = this;
+    return this;
+  });
+  let ingredients = [
+    usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' }),
+    usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' }),
+  ];
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({ ingredients }));
+
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), { statusCode: 400, code: 'VALIDATION_ERROR' });
+  ingredients = Array.from({ length: ShoppingList.MAX_ITEMS + 1 }, (_, index) =>
+    usage(index.toString(16).padStart(24, '0'), 'Ingredient', { quantity: 1, unit: 'piece' }));
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), { statusCode: 400, code: 'SHOPPING_LIST_LIMIT_EXCEEDED' });
+  assert.equal(read.mock.callCount(), 1);
+  assert.equal(upsert.mock.callCount(), 0);
+  assert.equal(save.mock.callCount(), 0);
+  assert.equal(stored, null);
+});
+
+test('valid first-time selected import creates and saves the populated owner list', async (t) => {
+  let stored = null;
+  const read = t.mock.method(ShoppingList, 'findOne', async (filter) => {
+    assert.deepEqual(filter, { userId: USER_ID });
+    return stored;
+  });
+  const upsert = t.mock.method(ShoppingList, 'findOneAndUpdate', async (filter, update, options) => {
+    assert.deepEqual(filter, { userId: USER_ID });
+    assert.deepEqual(update, { $setOnInsert: { userId: USER_ID, items: [] } });
+    assert.equal(options.upsert, true);
+    stored = ShoppingList.hydrate(buildList().toObject());
+    return stored;
+  });
+  const save = t.mock.method(ShoppingList.prototype, 'save', async function persist() {
+    stored = this;
+    return this;
+  });
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [usage(CHICKEN_ID, 'Chicken', { quantity: 2, unit: 'kg' })],
+  }));
+  mockAllIngredientsActive(t);
+  t.mock.method(recipeService, 'findConsumerVisibleShoppingSources', async () => new Map());
+
+  const result = await shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  });
+  assert.equal(read.mock.callCount(), 1);
+  assert.equal(upsert.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(String(stored.userId), USER_ID);
+  assert.equal(stored.items.length, 1);
+  assert.equal(stored.items[0].quantity, 2);
+  assert.equal(result.shoppingList, stored);
+});
+
+test('selected v2 import retry rejects overflow in the winning list without mutation', async (t) => {
+  const stale = buildList();
+  const latest = buildList([{ ingredientId: CHICKEN_ID, quantity: 1e308, unit: 'kg',
+    isChecked: true, originKind: 'manual' }]);
+  const before = JSON.stringify(latest.toObject());
+  const read = t.mock.method(shoppingListRepository, 'findByUserId', async () =>
+    read.mock.callCount() === 0 ? stale : latest);
+  const resolver = t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [
+      usage(GARLIC_ID, 'Garlic', { quantity: 1, unit: 'clove' }),
+      usage(CHICKEN_ID, 'Chicken', { quantity: 1e308, unit: 'kg' }),
+    ],
+  }));
+  const find = t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => stale);
+  const save = t.mock.method(shoppingListRepository, 'save', async (list) => {
+    throw versionError(list);
+  });
+
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, {
+    servings: 4, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z',
+  }), { statusCode: 400, code: 'VALIDATION_ERROR' });
+  assert.equal(resolver.mock.callCount(), 1);
+  assert.equal(read.mock.callCount(), 2);
+  assert.equal(find.mock.callCount(), 1);
+  assert.equal(save.mock.callCount(), 1);
+  assert.equal(JSON.stringify(latest.toObject()), before);
+});
+
+test('new Shopping List rows reject invalid quantities before mutation', async (t) => {
+  mockAllIngredientsActive(t);
+  const list = buildList();
+  const before = JSON.stringify(list.toObject());
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+  for (const quantity of [Infinity, 0, -1]) {
+    await assert.rejects(() => shoppingListService.addItem(USER_ID, {
+      ingredientId: CHICKEN_ID, quantity, unit: 'kg',
+    }), { statusCode: 400, code: 'VALIDATION_ERROR' });
+    assert.equal(JSON.stringify(list.toObject()), before);
+  }
+  assert.equal(save.mock.callCount(), 0);
+});
+
+test('selected v2 import preserves SHOP5 row and source limits before save', async (t) => {
+  const selection = { servings: 6, spiceLevel: 'hot',
+    expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z' };
+  t.mock.method(recipeService, 'resolveShoppingRecipeSelection', async () => ({
+    ingredients: [usage(CHICKEN_ID, 'Chicken', { quantity: 2, unit: 'kg' })],
+  }));
+  const eight = Array.from({ length: 8 }, (_, index) => index.toString(16).padStart(24, '0'));
+  let list = buildList([{ type: 'ingredient', ingredientId: CHICKEN_ID,
+    quantity: 1, unit: 'kg', originKind: 'recipe',
+    sourceRecipeIds: eight, quantityEdited: false }]);
+  t.mock.method(shoppingListRepository, 'findByUserId', async () => list);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
+  const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, selection), {
+    code: 'SHOPPING_LIST_SOURCE_LIMIT_EXCEEDED', statusCode: 400,
+  });
+  list = buildList(Array.from({ length: 200 }, () => ({ type: 'custom', label: 'Milk' })));
+  await assert.rejects(() => shoppingListService.addRecipeIngredients(USER_ID, RECIPE_ID, true, selection), {
+    code: 'SHOPPING_LIST_LIMIT_EXCEEDED', statusCode: 400,
+  });
+  assert.equal(save.mock.callCount(), 0);
 });
 
 test('additive operations do not retry unknown save outcomes', async (t) => {
@@ -1104,8 +1394,9 @@ test('SHOP5 v1 Recipe import retry rechecks the winning custom row', async (t) =
   const old = buildList();
   old.__v = 0;
   const winning = buildList([{ type: 'custom', label: 'Milk' }]);
-  let reads = 0;
-  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => ++reads === 1 ? old : winning);
+  const read = t.mock.method(shoppingListRepository, 'findByUserId', async () =>
+    read.mock.callCount() === 0 ? old : winning);
+  t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => old);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
     ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
   }));
@@ -1172,6 +1463,7 @@ test('SHOP5 empty Clear All still performs an OCC write at version zero', async 
 test('SHOP5 Recipe import records mixed history and projects current visible title', async (t) => {
   const list = buildList([{ type: 'ingredient', ingredientId: CHICKEN_ID,
     quantity: 9, unit: 'kg', originKind: 'manual' }]);
+  mockImportRead(t, list);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
     _id: RECIPE_ID, ingredients: [{ ingredient: { id: CHICKEN_ID }, quantity: 1, unit: 'kg' }],
@@ -1192,6 +1484,7 @@ test('SHOP5 Recipe import records mixed history and projects current visible tit
 test('SHOP5 two distinct Recipe imports retain multiple:false until a manual edit', async (t) => {
   const secondId = '507f1f77bcf86cd799439098';
   const list = buildList();
+  mockImportRead(t, list);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
   mockNoSave(t);
   mockAllIngredientsActive(t);
@@ -1251,6 +1544,7 @@ test('SHOP5 source bounds reject the whole Recipe import before save', async (t)
     sourceRecipeIds: ids.slice(index * 8, index * 8 + 8), quantityEdited: false,
   }));
   const list = buildList(rows);
+  mockImportRead(t, list);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
   const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
@@ -1268,6 +1562,7 @@ test('SHOP5 per-row source bound rejects a ninth distinct Recipe before save', a
     type: 'ingredient', ingredientId: CHICKEN_ID, quantity: 1, unit: 'kg',
     originKind: 'recipe', sourceRecipeIds: eight, quantityEdited: false,
   }]);
+  mockImportRead(t, list);
   t.mock.method(shoppingListRepository, 'findOrCreateByUserId', async () => list);
   const save = t.mock.method(shoppingListRepository, 'save', async (value) => value);
   t.mock.method(recipeService, 'findUsableRecipeById', async () => ({
