@@ -334,8 +334,8 @@ export function ShoppingListProvider({ children }) {
   );
 
   const addRecipe = useCallback(
-    (recipeId) =>
-      runMutation({ type: 'addRecipe', recipeId }, () => shoppingListService.addRecipe(recipeId)),
+    (recipeId, selection) =>
+      runMutation({ type: 'addRecipe', recipeId }, () => shoppingListService.addRecipe(recipeId, selection)),
     [runMutation]
   );
 

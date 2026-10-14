@@ -6,6 +6,7 @@ const babel = require('@babel/core');
 let mockAppStateListener;
 const mockAppStateRemove = jest.fn();
 let mockPreventRemoveState;
+let mockAuth;
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -55,6 +56,7 @@ jest.mock('../src/components/RecipeImage', () => 'RecipeImage');
 jest.mock('../src/context/CookHistoryContext', () => ({
   useCookHistory: () => ({ recordCompletion: mockRecordCompletion }),
 }));
+jest.mock('../src/context/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../src/api/cookHistoryErrors', () => ({
   getCookHistoryErrorMessage: (error) => error?.message || 'Could not save.',
 }));
@@ -164,12 +166,87 @@ beforeEach(() => {
   mockAppStateListener = undefined;
   mockPreventRemoveState = { enabled: false, callback: null };
   mockRecordCompletion.mockResolvedValue(undefined);
+  mockAuth = { status: 'authenticated', user: { id: 'user-a' },
+    sessionIdentity: { ownerId: 'user-a', generation: 1, localSessionRevision: 1 } };
 });
 
 afterEach(() => {
   cleanup();
   jest.restoreAllMocks();
   jest.useRealTimers();
+});
+
+it('shows only the exact authored step/servings/spice preset and retains manual fallback', () => {
+  const profiled = {
+    ...recipe(),
+    ingredients: [{ ingredient: { id: 'i1', name: 'Chicken' }, quantity: 1, unit: 'kg' }],
+    cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild', spiceAlternatives: [{
+      spiceLevel: 'hot', ingredients: [{ ingredient: { id: 'i2', name: 'Chili' }, quantity: 2, unit: 'piece' }],
+    }], stepTimers: [
+      { stepOrder: 2, servings: 5, spiceLevel: 'hot', durationSeconds: 90 },
+      { stepOrder: 2, servings: 2, spiceLevel: 'hot', durationSeconds: 60 },
+      { stepOrder: 1, servings: 5, spiceLevel: 'mild', durationSeconds: 30 },
+    ] },
+  };
+  const view = renderCookMode({ recipeSource: 'api', recipe: profiled, servings: 5, spiceLevel: 'hot', ingredients: [] });
+  expect(view.getByText('Chili')).toBeTruthy();
+  expect(view.queryByText('Chicken')).toBeNull();
+  fireEvent.press(view.getByText('Start cooking'));
+  expect(view.queryByLabelText('Start step timer for 01:30')).toBeNull();
+  expect(view.getByLabelText('Start timer')).toBeTruthy();
+  fireEvent.press(view.getByText('Next Step'));
+  fireEvent.press(view.getByLabelText('Start step timer for 01:30'));
+  expect(view.getByText('01:30')).toBeTruthy();
+  expect(view.queryByLabelText('Start timer')).toBeNull();
+  expect(mockRecordCompletion).not.toHaveBeenCalled();
+  fireEvent.press(view.getByText('Back'));
+  expect(view.getByText('01:30')).toBeTruthy();
+  fireEvent.press(view.getByLabelText('Reset timer'));
+  expect(view.getByLabelText('Start timer')).toBeTruthy();
+});
+
+it('uses a null spice tuple for a timer-only profile and requires an explicit start', () => {
+  const profiled = { ...recipe(), cooking: { schemaVersion: 1, defaultSpiceLevel: null,
+    spiceAlternatives: [], stepTimers: [{ stepOrder: 1, servings: 2, spiceLevel: null, durationSeconds: 12 }] } };
+  const view = renderCookMode({ recipeSource: 'api', recipe: profiled, servings: 2 });
+  fireEvent.press(view.getByText('Start cooking'));
+  expect(view.queryByLabelText('Pause timer')).toBeNull();
+  fireEvent.press(view.getByLabelText('Start step timer for 00:12'));
+  expect(view.getByText('00:12')).toBeTruthy();
+  expect(mockRecordCompletion).not.toHaveBeenCalled();
+});
+
+it('rejects a spice selection absent from the fetched profile without substituting the default', () => {
+  const profiled = { ...recipe(), cooking: { schemaVersion: 1, defaultSpiceLevel: 'mild',
+    spiceAlternatives: [], stepTimers: [] } };
+  const view = renderCookMode({ recipeSource: 'api', recipe: profiled, spiceLevel: 'hot' });
+  expect(view.getByText('That spice level is no longer available. Return to the recipe and choose again.')).toBeTruthy();
+  expect(view.queryByText('Start cooking')).toBeNull();
+  expect(view.queryByLabelText('Start timer')).toBeNull();
+});
+
+it.each(['route', 'relogin', 'account', 'logout'])('discards timer state and suppresses delayed Finish feedback after %s changes', async (change) => {
+  let resolveCompletion;
+  mockRecordCompletion.mockReturnValue(new Promise((resolve) => { resolveCompletion = resolve; }));
+  const params = { recipeSource: 'api', recipe: recipe(), servings: 2 };
+  const view = renderCookMode(params);
+  startTimer(view);
+  enterFinalStep(view);
+  fireEvent.press(view.getByText('Finish Cooking'));
+  if (change === 'route') params.recipe = { ...recipe(), id: 'recipe-2', title: 'New recipe' };
+  if (change === 'relogin') mockAuth = { ...mockAuth,
+    sessionIdentity: { ownerId: 'user-a', generation: 2, localSessionRevision: 2 } };
+  if (change === 'account') mockAuth = { status: 'authenticated', user: { id: 'user-b' },
+    sessionIdentity: { ownerId: 'user-b', generation: 2, localSessionRevision: 2 } };
+  if (change === 'logout') mockAuth = { status: 'anonymous', user: null, sessionIdentity: null };
+  view.rerender(<CookModeScreen navigation={view.navigation} route={{ params }} />);
+  await act(async () => resolveCompletion());
+  expect(notify).not.toHaveBeenCalled();
+  expect(view.navigation.goBack).not.toHaveBeenCalled();
+  if (change === 'logout') expect(view.getByText('Please log in to cook.')).toBeTruthy();
+  else expect(view.getByLabelText('Start timer')).toBeTruthy();
+  act(() => jest.advanceTimersByTime(10000));
+  expect(AccessibilityInfo.announceForAccessibility).not.toHaveBeenCalled();
 });
 
 it('starts only from valid explicit input and rejects zero, malformed, and overflowing entry', () => {

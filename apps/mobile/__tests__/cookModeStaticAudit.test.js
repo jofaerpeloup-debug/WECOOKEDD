@@ -35,7 +35,7 @@ const mainTabs = stripComments(read('navigation/MainTabs.js'));
 describe('CookMode uses only real route recipe data', () => {
   it('uses structured public steps with the real-instructions fallback adapter', () => {
     expect(raw).toMatch(/cookModeSteps\(recipe\)/);
-    expect(raw).toMatch(/cookModeIngredientChecklist\(recipe, cookServings, params\.ingredients\)/);
+    expect(raw).toMatch(/cookModeIngredientChecklist\(recipe, cookServings, params\.ingredients, selectedIngredients\)/);
   });
 
   it('has no mock recipe source or retired classifiers', () => {
@@ -125,7 +125,7 @@ describe('CookMode Finish is real, M5C Cook History backend', () => {
 
   it('on success, shows real completion feedback then pops normally — never before the request resolves', () => {
     expect(code).toMatch(
-      /await recordCompletion\([\s\S]*?notify\('Nicely done! 👏',[\s\S]*?navigation\.goBack\(\)\)/
+      /await recordCompletion\([\s\S]*?if \(!mountedRef\.current\) return;[\s\S]*?notify\('Nicely done! 👏',[\s\S]*?if \(mountedRef\.current\) navigation\.goBack\(\)/
     );
   });
 
@@ -138,9 +138,11 @@ describe('CookMode Finish is real, M5C Cook History backend', () => {
     expect(catchBlock[1]).not.toMatch(/markCooked|setCooked/);
   });
 
-  it('adds only an explicit manual timer and never derives duration from recipe steps', () => {
+  it('keeps explicit manual input alongside exact authored step presets', () => {
     expect(raw).toMatch(/validateCookTimerDuration\(timerInput\)/);
-    expect(raw).toMatch(/createCookTimerEndAt\(Date\.now\(\), validation\.durationMs\)/);
+    expect(raw).toMatch(/beginTimer\(validation\.durationMs\)/);
+    expect(raw).toMatch(/createCookTimerEndAt\(Date\.now\(\), durationMs\)/);
+    expect(raw).toMatch(/matchingCookingTimer\(recipe, step\?\.order, cookServings, cookSpiceLevel\)/);
     expect(code).toMatch(/\['hours', 'Hours', 1\]/);
     expect(code).toMatch(/\['minutes', 'Minutes', 2\]/);
     expect(code).toMatch(/\['seconds', 'Seconds', 2\]/);
@@ -190,7 +192,7 @@ describe('CookMode Finish is real, M5C Cook History backend', () => {
 describe('CookMode route and stack ownership remain intact', () => {
   it('keeps the real RecipeDetail payload exactly', () => {
     expect(recipeDetail).toMatch(
-      /navigation\.navigate\('CookMode', \{\s*recipeSource: 'api',\s*recipe,\s*ingredients: ingredientLines,\s*servings,\s*\}\);/
+      /navigation\.navigate\('CookMode', \{\s*recipeSource: 'api',\s*recipe,\s*ingredients: ingredientLines,\s*servings,\s*spiceLevel,\s*\}\);/
     );
   });
 

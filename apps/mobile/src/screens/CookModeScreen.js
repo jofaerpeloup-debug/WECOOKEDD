@@ -19,7 +19,9 @@ import { useTheme } from '../theme/ThemeContext';
 import RecipeImage from '../components/RecipeImage';
 import { notify } from '../utils/alert';
 import { useCookHistory } from '../context/CookHistoryContext';
+import { useAuth } from '../context/AuthContext';
 import { getCookHistoryErrorMessage } from '../api/cookHistoryErrors';
+import { authoredSpiceLevels, matchingCookingTimer, selectedCookingIngredients } from '../utils/cookingSelection';
 import {
   clampCookStepIndex,
   cookModeIngredientChecklist,
@@ -43,6 +45,19 @@ const IDLE_TIMER = Object.freeze({
 const TIMER_INPUT_LIMITS = Object.freeze({ hours: 1, minutes: 2, seconds: 2 });
 
 export default function CookModeScreen({ navigation, route }) {
+  const { status, user, sessionIdentity } = useAuth();
+  const params = route.params || {};
+  if (status !== 'authenticated' || !user?.id || sessionIdentity?.ownerId !== user.id) {
+    return <View><Text>Please log in to cook.</Text></View>;
+  }
+  const sessionKey = `${user.id}:${sessionIdentity.generation}:${sessionIdentity.localSessionRevision}`;
+  const selectionKey = JSON.stringify([
+    params.recipe?.id, params.recipe?.updatedAt, params.servings, params.spiceLevel,
+  ]);
+  return <CookModeSession key={`${sessionKey}:${selectionKey}`} navigation={navigation} route={route} />;
+}
+
+function CookModeSession({ navigation, route }) {
   const params = route.params || {};
   const recipe = params.recipe || {};
   // Only a real backend recipe (RecipeDetailScreen's ApiRecipeDetail path)
@@ -199,6 +214,19 @@ export default function CookModeScreen({ navigation, route }) {
     setTimerError('');
   };
 
+  const beginTimer = (durationMs) => {
+    if (!mountedRef.current || timerRef.current.status !== COOK_TIMER_STATES.IDLE) return;
+    const endAtMs = createCookTimerEndAt(Date.now(), durationMs);
+    if (endAtMs === null) {
+      setTimerError('The timer could not start. Please try again.');
+      return;
+    }
+    completionAnnouncedRef.current = false;
+    timerGenerationRef.current += 1;
+    setTimerError('');
+    commitTimer({ status: COOK_TIMER_STATES.RUNNING, durationMs, remainingMs: durationMs, endAtMs });
+  };
+
   const startTimer = () => {
     if (timerRef.current.status !== COOK_TIMER_STATES.IDLE) return;
     if (invalidLengthFieldsRef.current.size > 0) {
@@ -210,20 +238,7 @@ export default function CookModeScreen({ navigation, route }) {
       setTimerError(validation.error);
       return;
     }
-    const endAtMs = createCookTimerEndAt(Date.now(), validation.durationMs);
-    if (endAtMs === null) {
-      setTimerError('The timer could not start. Please try again.');
-      return;
-    }
-    completionAnnouncedRef.current = false;
-    timerGenerationRef.current += 1;
-    setTimerError('');
-    commitTimer({
-      status: COOK_TIMER_STATES.RUNNING,
-      durationMs: validation.durationMs,
-      remainingMs: validation.durationMs,
-      endAtMs,
-    });
+    beginTimer(validation.durationMs);
   };
 
   const pauseTimer = () => {
@@ -268,9 +283,13 @@ export default function CookModeScreen({ navigation, route }) {
     : Number.isSafeInteger(params.servings) && params.servings > 0 && params.servings <= 100
       ? params.servings
       : baseServings;
+  const spiceLevels = authoredSpiceLevels(recipe);
+  const cookSpiceLevel = spiceLevels.length > 0
+    ? (params.spiceLevel === undefined ? spiceLevels[0] : params.spiceLevel) : null;
+  const selectedIngredients = selectedCookingIngredients(recipe, cookSpiceLevel);
   const checklist = useMemo(
-    () => cookModeIngredientChecklist(recipe, cookServings, params.ingredients),
-    [recipe, cookServings, params.ingredients]
+    () => cookModeIngredientChecklist(recipe, cookServings, params.ingredients, selectedIngredients),
+    [recipe, cookServings, params.ingredients, selectedIngredients]
   );
 
   const [phase, setPhase] = useState('prep');
@@ -322,14 +341,17 @@ export default function CookModeScreen({ navigation, route }) {
       } else {
         await recordCompletion({ recipeId: recipe.id, servings: cookServings });
       }
-      notify('Nicely done! 👏', `${recipe.title} is cooked. Enjoy your meal.`, () => navigation.goBack());
+      if (!mountedRef.current) return;
+      notify('Nicely done! 👏', `${recipe.title} is cooked. Enjoy your meal.`, () => {
+        if (mountedRef.current) navigation.goBack();
+      });
     } catch (err) {
       // Never pretend it saved: no navigation, no local "cooked" state — the
       // user stays on this step and can tap Finish again to retry.
-      notify('Could not save', getCookHistoryErrorMessage(err));
+      if (mountedRef.current) notify('Could not save', getCookHistoryErrorMessage(err));
     } finally {
       isFinishingRef.current = false;
-      setIsFinishing(false);
+      if (mountedRef.current) setIsFinishing(false);
     }
   };
 
@@ -343,6 +365,8 @@ export default function CookModeScreen({ navigation, route }) {
   };
 
   const title = recipe.title || 'Cook Mode';
+  const preset = phase === 'cook'
+    ? matchingCookingTimer(recipe, step?.order, cookServings, cookSpiceLevel) : null;
   const timerPanel = (
     <CookTimerPanel
       colors={colors}
@@ -352,11 +376,26 @@ export default function CookModeScreen({ navigation, route }) {
       error={timerError}
       onChangeInput={updateTimerInput}
       onStart={startTimer}
+      preset={preset}
+      onStartPreset={() => {
+        if (timerRef.current.status === COOK_TIMER_STATES.IDLE && preset) {
+          beginTimer(preset.durationSeconds * 1000);
+        }
+      }}
       onPause={pauseTimer}
       onResume={resumeTimer}
       onReset={resetTimer}
     />
   );
+
+  if (selectedIngredients === null) {
+    return (
+      <View style={styles.root}>
+        <CookHeader title={title} topInset={insets.top} colors={colors} styles={styles} onBack={() => navigation.goBack()} />
+        <Text style={styles.emptyText}>That spice level is no longer available. Return to the recipe and choose again.</Text>
+      </View>
+    );
+  }
 
   if (phase === 'prep') {
     return (
@@ -519,6 +558,8 @@ function CookTimerPanel({
   error,
   onChangeInput,
   onStart,
+  preset,
+  onStartPreset,
   onPause,
   onResume,
   onReset,
@@ -543,6 +584,18 @@ function CookTimerPanel({
 
       {timer.status === COOK_TIMER_STATES.IDLE ? (
         <>
+          {preset && (
+            <Pressable
+              style={styles.timerPrimaryButton}
+              onPress={onStartPreset}
+              accessibilityRole="button"
+              accessibilityLabel={`Start step timer for ${formatCookTimer(preset.durationSeconds * 1000)}`}
+            >
+              <Text style={styles.timerPrimaryText}>
+                Start step timer · {formatCookTimer(preset.durationSeconds * 1000)}
+              </Text>
+            </Pressable>
+          )}
           <View style={styles.timerInputs}>
             {[
               ['hours', 'Hours', 1],

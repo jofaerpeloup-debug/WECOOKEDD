@@ -21,6 +21,7 @@ import FavoriteHeart from '../components/FavoriteHeart';
 import CollectionPickerSheet from '../components/CollectionPickerSheet';
 import MealPlanSheet from '../components/MealPlanSheet';
 import { useShoppingList } from '../context/ShoppingListContext';
+import { useAuth } from '../context/AuthContext';
 import { getRecipe } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import { getRecipeReviews, createRecipeReview, updateReview } from '../api/reviewService';
@@ -29,6 +30,7 @@ import { getRecipeStatus } from '../api/cookHistoryService';
 import { difficultyLabel, unitLabel } from '../api/recipeOptions';
 import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 import { classifyRecipeDetailFailure } from '../utils/recipeFreshnessState';
+import { authoredSpiceLevels, selectedCookingIngredients } from '../utils/cookingSelection';
 import {
   formatMinutes,
   formatQuantity,
@@ -40,7 +42,8 @@ import {
 } from '../utils/recipe';
 
 const MIN_SERVINGS = 1;
-const MAX_SERVINGS = 20;
+const MAX_SERVINGS = 100;
+const RECIPE_ID = /^[a-f\d]{24}$/i;
 const NUTRITION_ROWS = Object.freeze([
   ['caloriesKcal', 'Calories', 'kcal'],
   ['proteinGrams', 'Protein', 'g'],
@@ -56,27 +59,35 @@ const NUTRITION_ROWS = Object.freeze([
 // rendered as product data.
 // -------------------------------------------------------------------------
 export default function RecipeDetailScreen({ navigation, route }) {
+  const { status, user, sessionIdentity } = useAuth();
   const params = route.params || {};
+  const sessionValid = status === 'authenticated' && user?.id
+    && sessionIdentity?.ownerId === user.id;
+  const sessionKey = sessionValid
+    ? `${user.id}:${sessionIdentity.generation}:${sessionIdentity.localSessionRevision}` : null;
+  const initialSessionKeyRef = useRef(sessionKey);
 
-  if (params.recipeSource === 'api' && params.recipeId) {
+  if (sessionKey && params.recipeSource === 'api' && typeof params.recipeId === 'string'
+    && RECIPE_ID.test(params.recipeId)) {
     // `key` forces a full remount if the route's recipeId ever changes in place
     // (e.g. a future "related recipe" tap or a deep link while already on a
     // detail screen), so no fetched/notFound/servings state from the previous
     // recipe can leak into the next one.
     return (
       <ApiRecipeDetailContainer
-        key={params.recipeId}
+        key={`${sessionKey}:${params.recipeId}`}
         navigation={navigation}
         recipeId={params.recipeId}
-        initialRecipe={params.initialRecipe || null}
+        initialRecipe={initialSessionKeyRef.current === sessionKey && params.initialRecipe?.id === params.recipeId
+          ? params.initialRecipe : null}
       />
     );
   }
 
-  return <InvalidRecipeDetail navigation={navigation} />;
+  return <InvalidRecipeDetail navigation={navigation} message={sessionKey ? undefined : 'Please log in to view recipes.'} />;
 }
 
-function InvalidRecipeDetail({ navigation }) {
+function InvalidRecipeDetail({ navigation, message = "This recipe isn't available." }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
@@ -88,7 +99,7 @@ function InvalidRecipeDetail({ navigation }) {
       colors={colors}
       insets={insets}
       icon="alert-circle-outline"
-      message="This recipe isn't available."
+      message={message}
     />
   );
 }
@@ -103,6 +114,7 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
   const [fetched, setFetched] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [fetchError, setFetchError] = useState(null);
+  const [requiresRefresh, setRequiresRefresh] = useState(false);
   const [nonce, setNonce] = useState(0);
   const genRef = useRef(0);
 
@@ -118,13 +130,18 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
   useEffect(() => {
     let cancelled = false;
     const gen = ++genRef.current;
-    setNotFound(false);
     (async () => {
       try {
         const fresh = await getRecipe(recipeId);
         if (cancelled || gen !== genRef.current) return;
+        if (fresh?.id !== recipeId || !hasRecipeDetailData(fresh)) {
+          setFetchError('Could not load recipe. Please try again.');
+          return;
+        }
         setFetched(fresh);
+        setNotFound(false);
         setFetchError(null);
+        setRequiresRefresh(false);
       } catch (err) {
         if (cancelled || gen !== genRef.current) return;
         const failure = classifyRecipeDetailFailure(err, Boolean(fetched || hasRecipeDetailData(initialRecipe)));
@@ -140,7 +157,19 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
     };
   }, [recipeId, nonce]);
 
-  const retry = () => setNonce((n) => n + 1);
+  const retry = () => {
+    genRef.current += 1;
+    setNonce((n) => n + 1);
+  };
+  const recipeStale = () => {
+    genRef.current += 1;
+    setRequiresRefresh(true);
+    setNonce((n) => n + 1);
+  };
+  const recipeUnavailable = () => {
+    genRef.current += 1;
+    setNotFound(true);
+  };
   // Favorites provide only a recipe summary. Render an initial list payload
   // immediately only when it is a complete PublicRecipe; otherwise wait for
   // the authoritative detail GET so servings/ingredients/steps cannot seed
@@ -185,9 +214,14 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
 
   return (
     <ApiRecipeDetail
+      key={`${recipe.id}:${recipe.updatedAt || ''}`}
       navigation={navigation}
       recipe={recipe}
       canPassRecipeContext={Boolean(fetched)}
+      canImportSelection={Boolean(fetched) && !requiresRefresh}
+      recipeBlocked={requiresRefresh}
+      onRecipeStale={recipeStale}
+      onRecipeUnavailable={recipeUnavailable}
       // A transient refresh failure never discards the last valid detail. Keep
       // it visible and report the refresh problem inline until a later success.
       refreshError={fetchError}
@@ -219,7 +253,7 @@ function ingredientDisplayRow(entry, opts) {
   return { id, name, note: entry.note || null, optional: !!entry.optional, qtyText };
 }
 
-function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshError, onRetryRefresh }) {
+function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, canImportSelection, recipeBlocked, onRecipeStale, onRecipeUnavailable, refreshError, onRetryRefresh }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
@@ -230,6 +264,15 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
   const maxServings = Math.max(MAX_SERVINGS, baseServings || 0);
   const [servings, setServings] = useState(baseServings);
   useEffect(() => setServings(baseServings), [baseServings]);
+  const spiceLevels = authoredSpiceLevels(recipe);
+  const [spiceSelection, setSpiceLevel] = useState(null);
+  const spiceLevel = spiceSelection === null ? spiceLevels[0] || null : spiceSelection;
+  const selectedIngredients = selectedCookingIngredients(recipe, spiceLevel);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const [nutritionOpen, setNutritionOpen] = useState(false);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
   const [mealPlanOpen, setMealPlanOpen] = useState(false);
@@ -407,31 +450,28 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
   const badges = recipeBadges(recipe);
   const totalMins = totalTimeMinutes(recipe);
 
-  // Unchanged contract for Cook Mode: the same ordered, filtered array of
-  // merged display strings this screen has always handed to CookMode (via
-  // the full `recipe` object CookMode also receives, instructions/steps
-  // included — this slice only changes what RecipeDetail itself renders).
+  // The complete authored selection travels with the Cook Mode handoff.
   const ingredientLines = useMemo(
     () =>
-      (recipe.ingredients || [])
+      (selectedIngredients || [])
         .map((entry) => ingredientDisplayText(entry, { selectedServings: servings, baseServings }))
         .filter(Boolean),
-    [recipe.ingredients, servings, baseServings]
+    [selectedIngredients, servings, baseServings]
   );
 
   // Teammate-shape two-column rows for this screen's own display only.
   const ingredientRows = useMemo(
     () =>
-      (recipe.ingredients || [])
+      (selectedIngredients || [])
         .map((entry) => ingredientDisplayRow(entry, { selectedServings: servings, baseServings }))
         .filter(Boolean),
-    [recipe.ingredients, servings, baseServings]
+    [selectedIngredients, servings, baseServings]
   );
   const recipeContext = useMemo(() => {
     const seen = new Set();
     return {
       recipeId: recipe.id,
-      ingredients: (recipe.ingredients || []).reduce((rows, entry) => {
+      ingredients: (selectedIngredients || []).reduce((rows, entry) => {
         const name = typeof entry?.ingredient?.name === 'string' ? entry.ingredient.name.trim() : '';
         if (!name) return rows;
         const candidateId = typeof entry?.ingredient?.id === 'string' ? entry.ingredient.id.trim() : '';
@@ -442,7 +482,7 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
         return rows;
       }, []),
     };
-  }, [recipe]);
+  }, [recipe.id, selectedIngredients]);
 
   const hasPrep = recipe.prepTimeMinutes != null;
   const hasCook = recipe.cookTimeMinutes != null;
@@ -464,25 +504,33 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
   };
 
   const startCooking = () => {
+    if (recipeBlocked || selectedIngredients === null) return;
     navigation.navigate('CookMode', {
       recipeSource: 'api',
       recipe,
       ingredients: ingredientLines,
       servings,
+      spiceLevel,
     });
   };
 
-  // Backed by the Shopping List REST API. Sends ONLY the recipe id — no body,
-  // no multiplier, no servings. The backend imports the recipe's base-serving
-  // quantities and merges them into the user's one list (see the note under the
-  // button and docs/architecture/mobile-shopping-list-integration.md). Never
-  // dual-writes to any local state.
+  // Send the selected list identity to the v2 import; the backend resolves it.
   const addingToShoppingList = pendingAction?.type === 'addRecipe';
+  const importReady = canImportSelection && hasBaseServings && selectedIngredients !== null
+    && typeof recipe.updatedAt === 'string' && Number.isFinite(Date.parse(recipe.updatedAt));
   const addToShoppingList = async () => {
-    const result = await addRecipe(recipe.id);
+    if (!importReady) return;
+    const selection = { servings, expectedRecipeUpdatedAt: recipe.updatedAt };
+    if (spiceLevels.length > 0) selection.spiceLevel = spiceLevel;
+    const result = await addRecipe(recipe.id, selection);
+    if (!mountedRef.current) return;
     if (result.ok) {
       navigation.navigate('List');
     } else if (result.error) {
+      if (result.err?.code === 'RECIPE_STALE'
+        || result.err?.code === 'RECIPE_SPICE_LEVEL_UNAVAILABLE'
+        || result.err?.code === 'RECIPE_SPICE_LEVEL_NOT_OFFERED') onRecipeStale();
+      if (result.err?.code === 'RECIPE_NOT_FOUND') onRecipeUnavailable();
       Alert.alert('Couldn’t add to shopping list', result.error);
     }
     // result.busy (another shopping-list mutation in flight) / result.superseded
@@ -527,9 +575,10 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
               <Pressable
                 style={styles.ddCircleBtn}
                 onPress={addToShoppingList}
-                disabled={isMutating}
+                disabled={isMutating || !importReady}
                 accessibilityRole="button"
                 accessibilityLabel="Add ingredients to grocery list"
+                accessibilityState={{ disabled: isMutating || !importReady }}
               >
                 {addingToShoppingList ? (
                   <ActivityIndicator size="small" color="#FAF9F6" />
@@ -680,6 +729,31 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
             </View>
           </View>
 
+          {spiceLevels.length > 0 && (
+            <View style={styles.spiceSection}>
+              <Text style={styles.ddEyebrow}>Spice level</Text>
+              <View style={styles.spiceChoices}>
+                {spiceLevels.map((level) => (
+                  <Pressable
+                    key={level}
+                    style={[styles.spiceChoice, spiceLevel === level && styles.spiceChoiceSelected]}
+                    onPress={() => setSpiceLevel(level)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Spice level ${level.replace('_', ' ')}`}
+                    accessibilityState={{ selected: spiceLevel === level }}
+                  >
+                    <Text style={[styles.spiceChoiceText, spiceLevel === level && styles.spiceChoiceTextSelected]}>
+                      {level.replace('_', ' ')}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          )}
+          {selectedIngredients === null && (
+            <Text style={styles.ddNutritionUnavailable}>That spice level is no longer available. Choose an available level.</Text>
+          )}
+
           {ingredientRows.length === 0 ? (
             <Text style={styles.mutedText}>No ingredients listed.</Text>
           ) : (
@@ -718,7 +792,11 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
             </View>
             {nutritionOpen && (
               <View style={styles.ddNutritionBody}>
-                {recipe.nutrition === null ? (
+                {spiceLevels.length > 0 && spiceLevel !== spiceLevels[0] ? (
+                  <Text style={styles.ddNutritionUnavailable}>
+                    Nutrition is available for the default spice level only.
+                  </Text>
+                ) : recipe.nutrition === null ? (
                   <Text style={styles.ddNutritionUnavailable}>
                     Nutrition information isn't available for this recipe yet.
                   </Text>
@@ -772,6 +850,7 @@ function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshErro
           title="Start Cooking"
           variant="primary"
           onPress={startCooking}
+          disabled={recipeBlocked || selectedIngredients === null}
           icon={<Ionicons name="play" size={15} color={colors.onAccent} />}
         />
       </View>
@@ -1002,6 +1081,16 @@ function makeStyles(colors) {
       minWidth: 14,
       textAlign: 'center',
     },
+    spiceSection: { marginTop: spacing.md, gap: spacing.xs },
+    spiceChoices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+    spiceChoice: {
+      minHeight: 44, paddingHorizontal: spacing.md, justifyContent: 'center',
+      borderRadius: radius.pill, backgroundColor: colors.creamDeep,
+      borderWidth: 1, borderColor: colors.hairline,
+    },
+    spiceChoiceSelected: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
+    spiceChoiceText: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
+    spiceChoiceTextSelected: { color: colors.onAccent },
     ddIngredientRow: {
       flexDirection: 'row',
       alignItems: 'flex-start',

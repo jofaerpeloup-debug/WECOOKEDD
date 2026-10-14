@@ -50,6 +50,16 @@ export function getShoppingListErrorMessage(err, fallback = FALLBACK) {
       return 'Update WeCooked to use this shopping list.';
     case 'RECIPE_NOT_FOUND':
       return 'This recipe isn’t available anymore.';
+    case 'RECIPE_STALE':
+      return 'This recipe changed. Refresh it and review your selection before adding.';
+    case 'RECIPE_SPICE_LEVEL_UNAVAILABLE':
+      return 'That spice level is no longer available. Refresh the recipe and choose again.';
+    case 'RECIPE_SPICE_LEVEL_NOT_OFFERED':
+      return 'That spice level is not offered for this recipe. Refresh and choose again.';
+    case 'RECIPE_SERVINGS_UNAVAILABLE':
+      return 'This recipe has no usable serving count for a selected import.';
+    case 'RECIPE_QUANTITY_UNSCALABLE':
+      return 'This recipe quantity cannot be scaled to your selected servings.';
     case 'SHOPPING_LIST_ITEM_NOT_FOUND':
       return 'That item is no longer on your list.';
     case 'SHOPPING_LIST_ITEM_ALREADY_EXISTS':

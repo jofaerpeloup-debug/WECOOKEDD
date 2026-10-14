@@ -51,7 +51,7 @@ describe('RecipeDetail (API mode) keeps our real recipe data architecture', () =
 
   it('treats recipeId as authoritative and remounts on change', () => {
     expect(code).toMatch(/params\.recipeSource === 'api'/);
-    expect(code).toMatch(/key=\{params\.recipeId\}/);
+    expect(code).toMatch(/key=\{`\$\{sessionKey\}:\$\{params\.recipeId\}`\}/);
     expect(code).toMatch(/recipeId=\{params\.recipeId\}/);
     expect(apiCode).toMatch(/useEffect\(\(\) => \{/);
     expect(apiCode).toMatch(/gen !== genRef\.current/);
@@ -409,7 +409,7 @@ describe('RecipeDetail (API mode) keeps cooking instructions in Cook Mode', () =
     expect(apiCode).toMatch(/hasBaseServings \? recipe\.servings : null/);
     expect(apiCode).toMatch(/useEffect\(\(\) => setServings\(baseServings\), \[baseServings\]\)/);
     expect(apiCode).toMatch(/disabled=\{!hasBaseServings \|\| servings >= maxServings\}/);
-    expect(apiCode).toMatch(/const startCooking = \(\) => \{\s*navigation\.navigate\('CookMode'/);
+    expect(apiCode).toMatch(/const startCooking = \(\) => \{\s*if \(recipeBlocked \|\| selectedIngredients === null\) return;\s*navigation\.navigate\('CookMode'/);
   });
 
   it('uses only present timing fields and preserves fetched ingredient rows', () => {
@@ -443,16 +443,17 @@ describe('RecipeDetail (API mode) keeps real Favorites / Shopping List / CookMod
     expect(apiCode).not.toMatch(/useSavedRecipes|SavedRecipesContext/);
   });
 
-  it('adds to the real Shopping List via the recipe id only, no local dual-write, no bottom button', () => {
+  it('adds the real selected Recipe snapshot through Shopping List v2 without local dual-write', () => {
     expect(apiCode).toMatch(/const \{ addRecipe, isMutating, pendingAction \} = useShoppingList\(\);/);
-    expect(apiCode).toMatch(/await addRecipe\(recipe\.id\)/);
+    expect(apiCode).toMatch(/await addRecipe\(recipe\.id, selection\)/);
+    expect(apiCode).toMatch(/expectedRecipeUpdatedAt: recipe\.updatedAt/);
     expect(apiCode).not.toMatch(/addFromRecipe/);
     expect(apiCode).not.toMatch(/Add All to Shopping List/);
   });
 
   it('preserves the CookMode route contract exactly, with the full recipe object (steps/instructions intact)', () => {
     expect(apiCode).toMatch(
-      /navigation\.navigate\('CookMode', \{\s*recipeSource: 'api',\s*recipe,\s*ingredients: ingredientLines,\s*servings,\s*\}\);/
+      /navigation\.navigate\('CookMode', \{\s*recipeSource: 'api',\s*recipe,\s*ingredients: ingredientLines,\s*servings,\s*spiceLevel,\s*\}\);/
     );
   });
 
@@ -491,9 +492,10 @@ describe('RecipeDetail (API mode) does not cross security / navigation boundarie
 
 describe('RecipeDetail rejects legacy/mock route payloads', () => {
   it('renders an honest unavailable notice unless recipeSource and recipeId identify API data', () => {
-    expect(code).toMatch(/params\.recipeSource === 'api' && params\.recipeId/);
-    expect(code).toMatch(/return <InvalidRecipeDetail navigation=\{navigation\} \/>/);
-    expect(code).toMatch(/message="This recipe isn't available\."/);
+    expect(code).toMatch(/params\.recipeSource === 'api' && typeof params\.recipeId === 'string'/);
+    expect(code).toMatch(/RECIPE_ID\.test\(params\.recipeId\)/);
+    expect(code).toMatch(/return <InvalidRecipeDetail navigation=\{navigation\}/);
+    expect(code).toMatch(/message = "This recipe isn't available\."/);
     expect(code).not.toMatch(/params\.recipe\b|function LegacyRecipeDetail\(/);
   });
 

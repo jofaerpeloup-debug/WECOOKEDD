@@ -148,16 +148,19 @@ export function getShoppingList() {
  * POST /api/v1/shopping-list/v2/recipes/:recipeId
  * Imports a recipe's currently-usable ingredient usages (incl. active optional
  * ones) into the caller's list, merged by `ingredientId` + exact `unit`.
- * NO body, NO multiplier, NO servings parameter — the backend uses the recipe's
- * base quantities only.
+ * A selected import sends servings and the detail snapshot's updatedAt,
+ * plus spiceLevel only for an authored spice profile. Older callers may omit
+ * the selection to keep the default-list/base-serving import.
  * @param {string} recipeId  a real backend Recipe id (never a legacy mock id
  *   like "r4" — that fails the ObjectId param with 400 VALIDATION_ERROR).
  * @returns {Promise<object>} the full post-import list. Throws ApiError:
  *   - RECIPE_NOT_FOUND (404) — recipe unknown / archived / unusable
  *   - SHOPPING_LIST_LIMIT_EXCEEDED (400) — post-merge count would exceed 200
  */
-export function addRecipe(recipeId) {
-  return api.post(`/shopping-list/v2/recipes/${encodeURIComponent(recipeId)}`).then(parseShoppingListResponse);
+export function addRecipe(recipeId, selection) {
+  const path = `/shopping-list/v2/recipes/${encodeURIComponent(recipeId)}`;
+  return (selection === undefined ? api.post(path) : api.post(path, selection))
+    .then(parseShoppingListResponse);
 }
 
 /**

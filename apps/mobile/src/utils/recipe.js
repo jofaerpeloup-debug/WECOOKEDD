@@ -136,8 +136,9 @@ export function cookModeSteps(recipe) {
 // Builds the teammate-style two-column prep checklist from real structured
 // ingredient usage. The fallback strings preserve the existing route contract
 // for compatibility. Scaling is display-only and never mutates the recipe.
-export function cookModeIngredientChecklist(recipe, selectedServings, fallbackLines = []) {
-  const entries = Array.isArray(recipe && recipe.ingredients) ? recipe.ingredients : [];
+export function cookModeIngredientChecklist(recipe, selectedServings, fallbackLines = [], selectedEntries = null) {
+  const entries = Array.isArray(selectedEntries) ? selectedEntries
+    : Array.isArray(recipe && recipe.ingredients) ? recipe.ingredients : [];
   const baseServings = Number(recipe && recipe.servings);
   const displayServings = Number(selectedServings);
 
@@ -163,7 +164,8 @@ export function cookModeIngredientChecklist(recipe, selectedServings, fallbackLi
     })
     .filter(Boolean);
 
-  if (structured.length > 0) return structured;
+  if (structured.length > 0
+    || (Array.isArray(selectedEntries) && recipe?.cooking?.defaultSpiceLevel != null)) return structured;
 
   return (Array.isArray(fallbackLines) ? fallbackLines : [])
     .filter((line) => typeof line === 'string' && line.trim().length > 0)

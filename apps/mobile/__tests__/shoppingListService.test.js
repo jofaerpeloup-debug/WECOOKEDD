@@ -82,6 +82,35 @@ it('uses the frozen endpoints and returns each complete authoritative list uncha
   expect(api.del).toHaveBeenNthCalledWith(3, '/shopping-list/v2/items');
 });
 
+it('sends the exact selected Recipe import body and preserves the old no-body call', async () => {
+  api.post.mockResolvedValue({ shoppingListFormat: 2, shoppingList: validList() });
+  const path = `/shopping-list/v2/recipes/${RECIPE_ID}`;
+  const selected = { servings: 6, expectedRecipeUpdatedAt: '2026-10-14T00:00:00.000Z', spiceLevel: 'hot' };
+  await shoppingListService.addRecipe(RECIPE_ID, selected);
+  await shoppingListService.addRecipe(RECIPE_ID, {
+    servings: 4, expectedRecipeUpdatedAt: selected.expectedRecipeUpdatedAt,
+  });
+  await shoppingListService.addRecipe(RECIPE_ID);
+  expect(api.post).toHaveBeenNthCalledWith(1, path, selected);
+  expect(api.post).toHaveBeenNthCalledWith(2, path, {
+    servings: 4, expectedRecipeUpdatedAt: selected.expectedRecipeUpdatedAt,
+  });
+  expect(api.post).toHaveBeenNthCalledWith(3, path);
+});
+
+it.each([
+  ['RECIPE_STALE', 'changed'],
+  ['RECIPE_NOT_FOUND', 'available'],
+  ['RECIPE_SPICE_LEVEL_UNAVAILABLE', 'no longer available'],
+  ['RECIPE_SPICE_LEVEL_NOT_OFFERED', 'not offered'],
+  ['RECIPE_SERVINGS_UNAVAILABLE', 'serving count'],
+  ['RECIPE_QUANTITY_UNSCALABLE', 'cannot be scaled'],
+])('explains selected import error %s without exposing server details', (code, phrase) => {
+  const message = getShoppingListErrorMessage(new ApiError('internal detail', { code, status: 409 }));
+  expect(message).toContain(phrase);
+  expect(message).not.toContain('internal detail');
+});
+
 it.each([
   ['missing envelope data', {}],
   ['missing shoppingList', { other: validList() }],
