@@ -74,6 +74,8 @@ jest.mock('../src/api/recipeErrors', () => ({
 }));
 jest.mock('../src/api/recipeOptions', () => ({
   difficultyLabel: (value) => value || '',
+  RECIPE_CATEGORIES: ['breakfast', 'lunch', 'dinner', 'snack'],
+  categoryLabel: (value) => value[0].toUpperCase() + value.slice(1),
 }));
 jest.mock('../src/hooks/useRecipeScreenRefresh', () => jest.fn());
 
@@ -99,6 +101,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   jest.useRealTimers();
+});
+
+it('offers four canonical category cards and a category-only Browse reset', async () => {
+  const view = render(<DashboardScreen navigation={mockNativeNavigation} />);
+  await view.findByText('No recipes yet.');
+  for (const category of ['Breakfast', 'Lunch', 'Dinner', 'Snack']) {
+    fireEvent.press(view.getByLabelText(`Browse ${category} recipes`));
+    expect(mockNativeNavigation.navigate).toHaveBeenLastCalledWith('Discover', {
+      initialCategory: category.toLowerCase(),
+    });
+  }
+  fireEvent.press(view.getByLabelText('See all recipe categories'));
+  expect(mockNativeNavigation.navigate).toHaveBeenLastCalledWith('Discover', { initialCategory: '' });
+});
+
+it('keeps category navigation available after the latest recipes request fails', async () => {
+  listRecipes.mockImplementation((query) =>
+    query.sort === 'newest' ? Promise.reject(new Error('Latest request failed')) : Promise.resolve(emptyRecipePage)
+  );
+
+  const view = render(<DashboardScreen navigation={mockNativeNavigation} />);
+  await view.findByText('Recipe request failed.');
+  expect(listRecipes).toHaveBeenCalledWith({ sort: 'newest', limit: 8 });
+
+  for (const [label, category] of [
+    ['Breakfast', 'breakfast'],
+    ['Lunch', 'lunch'],
+    ['Dinner', 'dinner'],
+    ['Snack', 'snack'],
+  ]) {
+    expect(view.getByText(label)).toBeOnTheScreen();
+    fireEvent.press(view.getByLabelText(`Browse ${label} recipes`));
+    expect(mockNativeNavigation.navigate).toHaveBeenLastCalledWith('Discover', {
+      initialCategory: category,
+    });
+  }
+  expect(mockNativeNavigation.navigate).toHaveBeenCalledTimes(4);
 });
 
 const queryShoppingBadge = (view) =>

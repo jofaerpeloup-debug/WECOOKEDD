@@ -23,6 +23,7 @@ import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
 import {
   categoryLabel,
+  RECIPE_CATEGORIES,
   DISCOVER_SORT_OPTIONS,
   discoverSortLabel,
   DISCOVER_FILTERS,
@@ -34,6 +35,7 @@ import { recipeCollectionPhaseAfterFailure } from '../utils/recipeFreshnessState
 import {
   activeFilterCount,
   discoverFilterQuery,
+  normalizeDiscoverFilters,
   presetFilters,
   presetFiltersState,
   selectedPresetKey,
@@ -57,8 +59,8 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 //     (backend `imageUrl` + the bundled fallback).
 //   - navigation stays ours: RecipeDetail takes
 //     `{ recipeSource:'api', recipeId, initialRecipe }`; the Dashboard handoff
-//     param `initialFilter` ('all' | 'easy' | 'vegetarian' | 'vegan') is still
-//     consumed on the already-mounted tab.
+//     param `initialFilter` ('all' | 'easy' | 'vegetarian' | 'vegan') and the
+//     canonical `initialCategory` are consumed on an already-mounted screen.
 //   - this stays a root-stack destination with the shared
 //     `<TopBar mode="back">`; no PlusMenu or tab-arch port.
 //
@@ -68,8 +70,8 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 //     apply-then-show flow. Our filters refetch immediately and the Dashboard
 //     handoff carries exactly ONE filter key, so we keep a single-select chip
 //     row mapped to the four real M2 filters. `cuisine` is intentionally NOT a
-//     chip here — it was retired from the Recipe domain in M3. Real category +
-//     Philippine-region browsing waits on a content-classification milestone.
+//     chip here — it was retired from the Recipe domain in M3. Canonical
+//     category and Philippine-region filtering remain in the real filter panel.
 //   - Dashboard and Search read one authenticated-account-scoped, device-local
 //     SearchHistory provider. Neither screen owns a second persisted store.
 
@@ -79,8 +81,8 @@ const SEARCH_DEBOUNCE_MS = 300;
 // The four real M2 Discover filters — the exact Dashboard handoff contract
 // ('all' | 'easy' | 'vegetarian' | 'vegan'), taken from the shared
 // `DISCOVER_FILTERS` source of truth so each keeps its real backend query.
-// There is no cuisine/region/category chip: cuisine was retired in M3 and
-// region/category have no controlled vocabulary yet.
+// Region and category remain independent advanced filters; this row contains
+// only the original four quick presets.
 const M2_FILTER_KEYS = ['all', 'easy', 'vegetarian', 'vegan'];
 const M2_FILTERS = M2_FILTER_KEYS
   .map((key) => DISCOVER_FILTERS.find((f) => f.key === key))
@@ -127,7 +129,10 @@ export default function DiscoverScreen({ navigation, route }) {
   // right filter once, instead of fetching "all" and then re-fetching.
   const [appliedFilters, setAppliedFilters] = useState(() => {
     const k = route.params?.initialFilter;
-    return presetFilters(k && FILTER_BY_KEY[k] ? k : 'all');
+    const filters = presetFilters(k && FILTER_BY_KEY[k] ? k : 'all');
+    const category = route.params?.initialCategory;
+    return RECIPE_CATEGORIES.includes(category)
+      ? normalizeDiscoverFilters({ ...filters, category }) : filters;
   });
   const [filtersOpen, setFiltersOpen] = useState(false);
   const activePresetKey = selectedPresetKey(appliedFilters);
@@ -161,6 +166,7 @@ export default function DiscoverScreen({ navigation, route }) {
   const mountedRef = useRef(true);
   const recipesRef = useRef([]);
   const ownerRef = useRef(ownerKey);
+  const initialHandoffRef = useRef(true);
   ownerRef.current = ownerKey;
 
   const invalidateForReplacement = useCallback(() => {
@@ -188,20 +194,38 @@ export default function DiscoverScreen({ navigation, route }) {
     };
   }, []);
 
-  // Consume an initial filter handed over from Home, then clear it so a repeat
-  // tap re-applies even when the value is unchanged. A fresh filter intent also
-  // clears any search the user had typed, so "Home -> Vegan" lands on the plain
-  // Vegan list.
+  // Consume Home intents and clear their route params. The first mount already
+  // seeded its query above; later intents must replace even an identical query.
   useEffect(() => {
     const key = route.params?.initialFilter;
+    const category = route.params?.initialCategory;
+    if (initialHandoffRef.current) {
+      initialHandoffRef.current = false;
+      if (key && FILTER_BY_KEY[key]) navigation.setParams({ initialFilter: undefined });
+      else if (category !== undefined) navigation.setParams({ initialCategory: undefined });
+      return;
+    }
     if (key && FILTER_BY_KEY[key]) {
       invalidateForReplacement();
+      setFiltersOpen(false);
       setAppliedFilters((current) => presetFiltersState(current, key));
       setSearch('');
       setDebouncedSearch('');
+      setSearchRequestNonce((nonce) => nonce + 1);
       navigation.setParams({ initialFilter: undefined });
+    } else if (category === '' || RECIPE_CATEGORIES.includes(category)) {
+      invalidateForReplacement();
+      setFiltersOpen(false);
+      setAppliedFilters((current) => normalizeDiscoverFilters({
+        ...current,
+        category: category || undefined,
+      }));
+      setSearch('');
+      setDebouncedSearch('');
+      setSearchRequestNonce((nonce) => nonce + 1);
+      navigation.setParams({ initialCategory: undefined });
     }
-  }, [route.params?.initialFilter, navigation, invalidateForReplacement]);
+  }, [route.params?.initialFilter, route.params?.initialCategory, navigation, invalidateForReplacement]);
 
   // Debounce the search field into `debouncedSearch`. Whitespace-only collapses
   // to '' (an unfiltered search), matching Dashboard.

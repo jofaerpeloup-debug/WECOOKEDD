@@ -21,7 +21,7 @@ import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
 import { listRecipes } from '../api/recipeService';
 import { getRecipeErrorMessage } from '../api/recipeErrors';
-import { difficultyLabel } from '../api/recipeOptions';
+import { categoryLabel, RECIPE_CATEGORIES, difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 import { shouldBlockRecipeFailure } from '../utils/recipeFreshnessState';
 import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
@@ -54,9 +54,8 @@ import { tabBarScrollClearance } from '../navigation/tabBarLayout';
 //
 // Teammate parts that need a backend we don't have yet are represented
 // honestly, never faked:
-//   - The browse row links to supported Discover filters (difficulty / dietary)
-//     rather than inventing category tiles or imagery. Category and region
-//     remain available through the real Discover filters.
+//   - The browse row uses canonical Recipe categories. Production imagery
+//     remains deferred pending approval of four asset paths.
 //   - "Today's Pick" is a deterministic daily rotation FROM the real latest
 //     recipes — not a curated/editorial "featured" flag (the backend has none).
 //   - the notifications bell stays the shared TopBar affordance (a real
@@ -71,15 +70,16 @@ const LATEST_LIMIT = 8;
 const SEARCH_LIMIT = 20;
 const TRENDING_LIMIT = 6;
 
-// Each shortcut maps to an EXACT backend-supported Discover filter key
-// (see api/recipeOptions.js DISCOVER_FILTERS). No cuisine entry — `cuisine`
-// was retired from the Recipe domain in M3 and the M2 decisions forbid new
-// cuisine UX on Home.
-const BROWSE_SHORTCUTS = [
-  { key: 'easy', label: 'Easy', icon: 'flash-outline' },
-  { key: 'vegetarian', label: 'Vegetarian', icon: 'leaf-outline' },
-  { key: 'vegan', label: 'Vegan', icon: 'nutrition-outline' },
-];
+// Canonical recipe categories from the shared API contract. Image-backed
+// Home cards await four provenance-approved production assets.
+const BROWSE_SHORTCUTS = RECIPE_CATEGORIES.map((key) => ({
+  key,
+  label: categoryLabel(key),
+  icon: {
+    breakfast: 'sunny-outline', lunch: 'restaurant-outline',
+    dinner: 'moon-outline', snack: 'cafe-outline',
+  }[key],
+}));
 
 function greetingForNow(date = new Date()) {
   const h = date.getHours();
@@ -269,6 +269,8 @@ export default function DashboardScreen({ navigation }) {
   // "See all" / the filter button reliably clear a previously chosen shortcut.
   const openDiscover = (filterKey) =>
     navigation.navigate('Discover', { initialFilter: filterKey || 'all' });
+  const openCategory = (category) =>
+    navigation.navigate('Discover', { initialCategory: category });
 
   const feature = useMemo(() => {
     if (latest.length === 0) return null;
@@ -369,6 +371,33 @@ export default function DashboardScreen({ navigation }) {
       </Pressable>
       <FavoriteHeart recipe={recipe} size={16} variant="plain" style={styles.resultHeart} />
     </View>
+  );
+
+  const renderBrowse = () => (
+    <>
+      <View style={styles.eyebrowRow}>
+        <Text style={styles.eyebrow}>Browse</Text>
+        <Pressable hitSlop={8} onPress={() => openCategory('')} accessibilityRole="button" accessibilityLabel="See all recipe categories">
+          <Text style={styles.linkText}>See all</Text>
+        </Pressable>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.browseRow}>
+        {BROWSE_SHORTCUTS.map((shortcut) => (
+          <Pressable
+            key={shortcut.key}
+            style={styles.browseChip}
+            onPress={() => openCategory(shortcut.key)}
+            accessibilityRole="button"
+            accessibilityLabel={`Browse ${shortcut.label} recipes`}
+          >
+            <View style={styles.browseIcon}>
+              <Ionicons name={shortcut.icon} size={21} color={colors.sageDeep} />
+            </View>
+            <Text style={styles.browseLabel}>{shortcut.label}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+    </>
   );
 
   return (
@@ -510,9 +539,9 @@ export default function DashboardScreen({ navigation }) {
 
             {/* Today's Pick — a daily rotation from the real latest recipes. */}
             {latestLoading && latest.length === 0 ? (
-              renderLoadingBlock()
+              <>{renderLoadingBlock()}{renderBrowse()}</>
             ) : shouldBlockRecipeFailure(latestError, latest, { background: true }) ? (
-              renderErrorBlock(latestError, loadLatest)
+              <>{renderErrorBlock(latestError, loadLatest)}{renderBrowse()}</>
             ) : feature ? (
               <>
                 <Pressable style={styles.hero} onPress={() => openRecipe(feature)} accessibilityRole="button" accessibilityLabel={`Open ${feature.title}`}>
@@ -538,32 +567,7 @@ export default function DashboardScreen({ navigation }) {
                   </View>
                 </Pressable>
 
-                <View style={styles.eyebrowRow}>
-                  <Text style={styles.eyebrow}>Browse</Text>
-                  <Pressable hitSlop={8} onPress={() => openDiscover()}>
-                    <Text style={styles.linkText}>See all</Text>
-                  </Pressable>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.browseRow}
-                >
-                  {BROWSE_SHORTCUTS.map((shortcut) => (
-                    <Pressable
-                      key={shortcut.key}
-                      style={styles.browseChip}
-                      onPress={() => openDiscover(shortcut.key)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Browse ${shortcut.label} recipes`}
-                    >
-                      <View style={styles.browseIcon}>
-                        <Ionicons name={shortcut.icon} size={21} color={colors.sageDeep} />
-                      </View>
-                      <Text style={styles.browseLabel}>{shortcut.label}</Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
+                {renderBrowse()}
 
                 <View style={styles.eyebrowRow}>
                   <Text style={styles.eyebrow}>Latest recipes</Text>
@@ -584,7 +588,7 @@ export default function DashboardScreen({ navigation }) {
                 )}
               </>
             ) : (
-              renderEmptyBlock('No recipes yet.')
+              <>{renderEmptyBlock('No recipes yet.')}{renderBrowse()}</>
             )}
           </>
         )}

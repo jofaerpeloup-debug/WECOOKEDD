@@ -508,3 +508,18 @@ The three test paths above use the existing `__tests__` directory identified in 
 **Verification boundary:** The owner will run focused Jest locally. Source, rendered-state and static checks by the builder do not establish native/device, live API, backend consent or deployment readiness.
 
 **Focused review finding fix:** An independent source review blocked the first registration implementation because submitting a password without a symbol exposed the shared validator's raw symbol list. Register now translates only exact known password-rule messages at local submit, password-specific API field details, and the existing validation-error fallback. The underlying `validateNewPassword` decisions and unknown or unrelated API messages remain unchanged. Rendered tests cover these paths; the owner will rerun the focused suites and request findings-only re-review.
+
+## Home/Discover category behavior slice — 2026-10-14 (Asia/Singapore)
+
+**Frozen before category code edits.** Baseline: clean `c36dded9c5edbc4130383a084dc85930d66c169d`. Exact implementation and test edit allowlist:
+
+1. `apps/mobile/src/screens/DashboardScreen.js`
+2. `apps/mobile/src/screens/DiscoverScreen.js`
+3. `apps/mobile/__tests__/dashboardInteraction.test.js`
+4. `apps/mobile/__tests__/discoverInteraction.test.js`
+5. `apps/mobile/__tests__/dashboardStaticAudit.test.js`
+6. `docs/milestones/UI-FINAL1-mobile-ui-adoption.md`
+
+**Narrowed asset boundary:** The checked-out contract still requires four approved, provenance-checked Home images and exact paths; no such approval or four-image set is present in this worktree. This slice uses the existing icon-card browse presentation for Breakfast, Lunch, Dinner and Snack and establishes independently testable behavior only. Image-card visual parity remains deferred. No asset, package, backend, shared utility, navigation definition or unrelated path edit is authorized.
+
+**Behavior:** Home cards hand off only canonical `breakfast`, `lunch`, `dinner`, `snack` values through the existing Discover route. Repeated card taps replace already-mounted Discover results, invalidate older requests, clear search and load page 1. The Browse “See all” clears category while retaining independent dietary filters. Other existing Home preset navigation keeps its meaning. Discover continues to use `discoverFilterQuery`/`listRecipes`, server ranking and pagination, and existing generation/account guards. Vibe and broad Cuisine are absent. The owner runs focused Jest locally; source review does not claim native, live API or image parity.

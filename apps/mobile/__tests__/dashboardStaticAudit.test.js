@@ -55,6 +55,14 @@ describe('Dashboard production authority and shared recent searches', () => {
     expect(source).toMatch(/navigation\.navigate\('Discover', \{ initialFilter: filterKey \|\| 'all' \}\)/);
   });
 
+  it('uses only canonical category cards without unapproved production images', () => {
+    expect(source).toMatch(/RECIPE_CATEGORIES\.map\(\(key\) => \(\{/);
+    expect(source).toMatch(/label: categoryLabel\(key\)/);
+    expect(source).toMatch(/navigation\.navigate\('Discover', \{ initialCategory: category \}\)/);
+    expect(source).toMatch(/onPress=\{\(\) => openCategory\(''\)\}/);
+    expect(source).not.toMatch(/<Text[^>]*>(?:Vibe|Cuisine)<\/Text>|browseKeys|https?:\/\/[^'"`]*\.(?:jpg|png|webp)/i);
+  });
+
   it('consumes only the existing Shopping provider and derives a ready unchecked-entry count', () => {
     expect(source).toMatch(/import \{ useShoppingList \} from '\.\.\/context\/ShoppingListContext'/);
     expect(source).toMatch(/items: shoppingItems, status: shoppingStatus/);

@@ -665,6 +665,58 @@ it('replaces an old query with a Dashboard preset and keeps the preset result au
   expect(view.queryByText('Stale Query')).toBeNull();
 });
 
+it.each(['breakfast', 'lunch', 'dinner', 'snack'])(
+  'loads the canonical %s category on first mount without an unfiltered request', async (category) => {
+    listRecipes.mockResolvedValueOnce(page([]));
+    const { navigation } = renderSearch({ initialCategory: category });
+    await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+    expect(listRecipes).toHaveBeenCalledWith({ category, sort: 'titleAsc', page: 1, limit: 20 });
+    expect(navigation.setParams).toHaveBeenCalledWith({ initialCategory: undefined });
+  }
+);
+
+it('repeats an already-mounted category, clears stale results and rejects an older page', async () => {
+  const old = deferred();
+  const fresh = deferred();
+  listRecipes.mockResolvedValueOnce(page([recipe('original', 'Original')], 1, 2))
+    .mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() };
+  const view = render(<DiscoverScreen navigation={navigation} route={{ params: { initialCategory: 'breakfast' } }} />);
+  await view.findByText('Original');
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledWith({
+    category: 'breakfast', sort: 'titleAsc', page: 2, limit: 20,
+  }));
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: { initialCategory: 'breakfast' } }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(3));
+  expect(listRecipes).toHaveBeenLastCalledWith({ category: 'breakfast', sort: 'titleAsc', page: 1, limit: 20 });
+  expect(view.queryByText('Original')).toBeNull();
+  await settle(old, 'resolve', page([recipe('stale', 'Stale')], 2, 2));
+  expect(view.queryByText('Stale')).toBeNull();
+  await settle(fresh, 'resolve', page([recipe('current', 'Current')]));
+  expect(view.getByText('Current')).toBeOnTheScreen();
+});
+
+it('combines category with dietary tags and clears only category for Browse See all', async () => {
+  listRecipes.mockResolvedValue(page([]));
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() };
+  const view = render(<DiscoverScreen navigation={navigation} route={{ params: { initialCategory: 'lunch' } }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  fireEvent.press(view.getByLabelText('Filters, 1 active'));
+  fireEvent.press(view.getByLabelText('Dietary: Vegetarian'));
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({
+    category: 'lunch', dietaryTags: 'vegetarian', sort: 'titleAsc', page: 1, limit: 20,
+  }));
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: { initialCategory: '' } }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({
+    dietaryTags: 'vegetarian', sort: 'titleAsc', page: 1, limit: 20,
+  }));
+  expect(navigation.setParams).toHaveBeenLastCalledWith({ initialCategory: undefined });
+});
+
 it('keeps a preset replacement loading when the superseded query fails and finalizes', async () => {
   const old = deferred();
   const preset = deferred();
