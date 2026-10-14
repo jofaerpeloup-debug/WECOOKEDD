@@ -184,6 +184,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
       'IngredientStudio',
       'SwapDetail',
       'RecipeDetail',
+      'RecipeIngredients',
       'RecipeReviews',
       'CookingHistory',
       'CookMode',
@@ -223,7 +224,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(rootNav).not.toMatch(/name="(?:Guest|GuestBrowse|PublicRecipes)"/);
   });
 
-  it.each(['MainTabs', 'Discover', 'Trending', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'RecipeReviews', 'CookingHistory', 'CookMode', 'AccountDetails', 'Settings'])(
+  it.each(['MainTabs', 'Discover', 'Trending', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'RecipeIngredients', 'RecipeReviews', 'CookingHistory', 'CookMode', 'AccountDetails', 'Settings'])(
     'registers the "%s" stack route',
     (name) => {
       expect(stack).toContain(name);
@@ -239,6 +240,7 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
     expect(rootNav).toMatch(/name="List"\s+component=\{ShoppingListScreen\}/);
     expect(rootNav).toMatch(/name="IngredientStudio"\s+component=\{IngredientStudioScreen\}/);
     expect(rootNav).toMatch(/name="SwapDetail"\s+component=\{SwapDetailScreen\}/);
+    expect(rootNav).toMatch(/name="RecipeIngredients"\s+component=\{RecipeIngredientsScreen\}/);
     expect(rootNav).toMatch(/name="RecipeReviews"\s+component=\{RecipeReviewsScreen\}/);
     expect(rootNav).toMatch(/name="CookingHistory"\s+component=\{CookingHistoryScreen\}/);
   });

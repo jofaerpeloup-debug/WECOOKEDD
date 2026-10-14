@@ -846,6 +846,7 @@ export default function CommunityScreen({ navigation }) {
           const canViewRecipe = attachment?.isAvailable === true
             && typeof attachment.recipe?.id === 'string'
             && attachment.recipe.id.trim().length > 0;
+          const canViewIngredients = canViewRecipe && /^[a-f\d]{24}$/i.test(attachment.recipe.id);
           const likePending = pendingLikesRef.current.has(post.id);
           const deletePending = pendingDeletesRef.current.has(post.id);
           const followPending = post.author ? pendingFollowsRef.current.has(post.author.id) : false;
@@ -898,6 +899,18 @@ export default function CommunityScreen({ navigation }) {
                     accessibilityLabel="View Recipe"
                   >
                     <Text style={styles.viewRecipeText}>View Recipe</Text>
+                  </Pressable>
+                )}
+                {canViewIngredients && (
+                  <Pressable
+                    style={styles.viewRecipeButton}
+                    onPress={() => navigation.navigate('RecipeIngredients', {
+                      recipeId: attachment.recipe.id,
+                    })}
+                    accessibilityRole="button"
+                    accessibilityLabel="View Ingredients"
+                  >
+                    <Text style={styles.viewRecipeText}>View Ingredients</Text>
                   </Pressable>
                 )}
                 <View style={styles.actionRow}>

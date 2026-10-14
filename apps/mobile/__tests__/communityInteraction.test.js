@@ -174,6 +174,35 @@ it('opens an available attached recipe with the exact authoritative RecipeDetail
   });
 });
 
+it('opens ingredients with only a real Recipe ID while preserving View Recipe', async () => {
+  const recipeId = '507f1f77bcf86cd799439099';
+  const navigation = { navigate: jest.fn() };
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('p1', 0, { recipeAttachment: {
+      isAvailable: true,
+      recipe: { id: recipeId, title: 'Server Recipe', imageUrl: null },
+    } }),
+  ], 1, 1));
+  const view = render(<CommunityScreen navigation={navigation} />);
+  const ingredients = await view.findByLabelText('View Ingredients');
+  expect(view.getByLabelText('View Recipe')).toBeOnTheScreen();
+  fireEvent.press(ingredients);
+  expect(navigation.navigate).toHaveBeenCalledTimes(1);
+  expect(navigation.navigate).toHaveBeenCalledWith('RecipeIngredients', { recipeId });
+});
+
+it('does not expose ingredients for an invalid attachment ID', async () => {
+  communityService.listCommunityPosts.mockResolvedValue(feed([
+    post('p1', 0, { recipeAttachment: {
+      isAvailable: true,
+      recipe: { id: 'recipe-1', title: 'Legacy Recipe', imageUrl: null },
+    } }),
+  ], 1, 1));
+  const view = render(<CommunityScreen navigation={{ navigate: jest.fn() }} />);
+  await view.findByLabelText('View Recipe');
+  expect(view.queryByLabelText('View Ingredients')).toBeNull();
+});
+
 it.each([
   ['unavailable attachment', { isAvailable: false, recipe: { id: 'recipe-1', title: 'Unavailable' } }],
   ['null attachment', null],
@@ -190,6 +219,7 @@ it.each([
   await waitFor(() => expect(view.getByText('Post p1')).toBeOnTheScreen());
 
   expect(view.queryByLabelText('View Recipe')).toBeNull();
+  expect(view.queryByLabelText('View Ingredients')).toBeNull();
   if (label === 'unavailable attachment') {
     expect(view.getByText('Recipe unavailable')).toBeOnTheScreen();
   }
