@@ -14,6 +14,12 @@ const users = require('../src/modules/users/user.service');
 
 const AUTH = { sessionId: 'session-1', userId: 'user-1', role: 'admin' };
 const END = new Date('2026-01-01T16:00:00.000Z');
+const ACCOUNT_DAILY = [
+  { _id: '2025-10-10', count: 1 },
+  { _id: '2025-12-15', count: 1 },
+  { _id: '2026-01-01', count: 1 },
+];
+const POST_DAILY = ACCOUNT_DAILY.map((row) => ({ ...row, count: 2 }));
 
 function mockAuthority(t, { role = 'admin', session = true, generation = 0 } = {}) {
   t.mock.method(sessions, 'getActiveSessionById', async () => session
@@ -30,8 +36,8 @@ function mockAggregates(t, overrides = {}) {
     ...overrides.account,
   }));
   t.mock.method(repository, 'postSnapshot', async () => ({ total: 8 }));
-  t.mock.method(repository, 'accountPeriods', async () => ({ days7: 1, days30: 2, days90: 3 }));
-  t.mock.method(repository, 'postPeriods', async () => ({ days7: 2, days30: 4, days90: 6 }));
+  t.mock.method(repository, 'accountPeriods', async () => overrides.accountDaily ?? ACCOUNT_DAILY);
+  t.mock.method(repository, 'postPeriods', async () => overrides.postDaily ?? POST_DAILY);
 }
 
 test('Manila windows include current partial day across month and year edges', () => {
@@ -41,14 +47,18 @@ test('Manila windows include current partial day across month and year edges', (
   assert.equal(atMidnight.days7.toISOString(), '2025-12-26T16:00:00.000Z');
   assert.equal(atMidnight.days30.toISOString(), '2025-12-03T16:00:00.000Z');
   assert.equal(atMidnight.days90.toISOString(), '2025-10-04T16:00:00.000Z');
+  const leap = service.dailySpine(new Date('2024-03-01T00:00:00.000Z'));
+  assert.equal(leap[88].localDate, '2024-02-29');
+  assert.equal(leap[89].localDate, '2024-03-01');
+  assert.equal(leap[88].toUtc, leap[89].fromUtc);
 });
 
-test('fixed response contains only approved aggregate fields and period boundaries', async (t) => {
+test('fixed response preserves snapshots and periods while adding exactly 90 daily buckets', async (t) => {
   mockAggregates(t);
   mockAuthority(t);
   const result = await service.getOverview(AUTH, END);
   assert.deepEqual(Object.keys(result), [
-    'periodEndUtc', 'generatedAtUtc', 'timeZone', 'accounts', 'communityPosts', 'periods',
+    'periodEndUtc', 'generatedAtUtc', 'timeZone', 'accounts', 'communityPosts', 'periods', 'daily',
   ]);
   assert.deepEqual(result.accounts, {
     total: 5, byRole: { user: 3, moderator: 1, admin: 1 },
@@ -58,12 +68,33 @@ test('fixed response contains only approved aggregate fields and period boundari
     fromUtc: '2025-12-26T16:00:00.000Z', toUtc: END.toISOString(),
     accountsRegistered: 1, postsCreated: 2,
   });
+  assert.equal(result.daily.buckets.length, 90);
+  assert.deepEqual(Object.keys(result.daily.buckets[0]), [
+    'localDate', 'fromUtc', 'toUtc', 'accountsRegistered', 'postsCreated',
+  ]);
+  assert.equal(result.daily.buckets[0].fromUtc, result.periods.days90.fromUtc);
+  assert.equal(result.daily.buckets[89].toUtc, END.toISOString());
+  assert.deepEqual(result.daily.buckets[89], {
+    localDate: '2026-01-02', fromUtc: END.toISOString(), toUtc: END.toISOString(),
+    accountsRegistered: 0, postsCreated: 0,
+  });
+  for (const days of [7, 30, 90]) {
+    const selected = result.daily.buckets.slice(-days);
+    assert.equal(selected[0].fromUtc, result.periods['days' + days].fromUtc);
+    assert.equal(selected.reduce((sum, bucket) => sum + bucket.accountsRegistered, 0),
+      result.periods['days' + days].accountsRegistered);
+    assert.equal(selected.reduce((sum, bucket) => sum + bucket.postsCreated, 0),
+      result.periods['days' + days].postsCreated);
+  }
   assert.ok(Date.parse(result.generatedAtUtc) >= END.getTime());
   assert.doesNotMatch(JSON.stringify(result), /user-1|session-1|email|caption|password/i);
 });
 
 test('successful empty collections produce all keys with real zeroes', async (t) => {
-  for (const name of ['accountSnapshot', 'postSnapshot', 'accountPeriods', 'postPeriods']) {
+  for (const name of ['accountSnapshot', 'postSnapshot']) {
+    t.mock.method(repository, name, async () => null);
+  }
+  for (const name of ['accountPeriods', 'postPeriods']) {
     t.mock.method(repository, name, async () => null);
   }
   mockAuthority(t);
@@ -73,6 +104,70 @@ test('successful empty collections produce all keys with real zeroes', async (t)
   for (const period of Object.values(result.periods)) {
     assert.equal(period.accountsRegistered, 0);
     assert.equal(period.postsCreated, 0);
+  }
+  assert.equal(result.daily.buckets.length, 90);
+  assert.ok(result.daily.buckets.every((bucket) => bucket.accountsRegistered === 0
+    && bucket.postsCreated === 0));
+});
+
+test('a non-midnight request includes the current partial Manila day', async (t) => {
+  mockAggregates(t, {
+    accountDaily: [{ _id: '2026-01-01', count: 2 }],
+    postDaily: [{ _id: '2026-01-01', count: 3 }],
+  });
+  mockAuthority(t);
+  const end = new Date('2026-01-01T15:59:59.999Z');
+  const result = await service.getOverview(AUTH, end);
+  assert.equal(result.daily.buckets[89].localDate, '2026-01-01');
+  assert.equal(result.daily.buckets[89].toUtc, end.toISOString());
+  assert.equal(result.daily.buckets[89].accountsRegistered, 2);
+  assert.equal(result.periods.days7.postsCreated, 3);
+});
+
+test('exact Manila midnight retains an empty final bucket for both series', async (t) => {
+  mockAggregates(t);
+  mockAuthority(t);
+  const result = await service.getOverview(AUTH, END);
+  const final = result.daily.buckets[89];
+  assert.equal(final.localDate, '2026-01-02');
+  assert.equal(final.fromUtc, END.toISOString());
+  assert.equal(final.toUtc, END.toISOString());
+  assert.equal(final.accountsRegistered, 0);
+  assert.equal(final.postsCreated, 0);
+  for (const days of [7, 30, 90]) {
+    const selected = result.daily.buckets.slice(-days);
+    assert.equal(result.periods[`days${days}`].accountsRegistered,
+      selected.reduce((sum, bucket) => sum + bucket.accountsRegistered, 0));
+    assert.equal(result.periods[`days${days}`].postsCreated,
+      selected.reduce((sum, bucket) => sum + bucket.postsCreated, 0));
+  }
+});
+
+test('positive grouped count for a zero-duration midnight bucket fails closed', async (t) => {
+  for (const source of ['accountDaily', 'postDaily']) {
+    mockAggregates(t, { [source]: [
+      ...(source === 'accountDaily' ? ACCOUNT_DAILY : POST_DAILY),
+      { _id: '2026-01-02', count: 1 },
+    ] });
+    mockAuthority(t);
+    await assert.rejects(service.getOverview(AUTH, END),
+      /Inconsistent analytics zero-duration bucket/);
+    t.mock.reset();
+  }
+});
+
+test('duplicate, out-of-range, malformed and overflowing daily rows fail closed', async (t) => {
+  for (const rows of [
+    [ACCOUNT_DAILY[0], ACCOUNT_DAILY[0]],
+    [{ _id: '2025-01-01', count: 1 }],
+    [{ _id: '2026-01-01', count: '1' }],
+    [{ _id: '2026-01-01', count: Number.MAX_SAFE_INTEGER },
+      { _id: '2025-12-31', count: 1 }],
+  ]) {
+    mockAggregates(t, { accountDaily: rows });
+    mockAuthority(t);
+    await assert.rejects(service.getOverview(AUTH, END));
+    t.mock.reset();
   }
 });
 

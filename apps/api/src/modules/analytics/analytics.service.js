@@ -21,6 +21,23 @@ function periodStarts(periodEndUtc) {
   }));
 }
 
+function dailySpine(periodEndUtc) {
+  const date = Temporal.Instant.from(periodEndUtc.toISOString())
+    .toZonedDateTimeISO(TIME_ZONE).toPlainDate();
+  const dates = Array.from({ length: 90 }, (_, index) => date.subtract({ days: 89 - index }));
+  const starts = dates.map((day) => new Date(Temporal.ZonedDateTime.from({
+    timeZone: TIME_ZONE, year: day.year, month: day.month, day: day.day,
+    hour: 0, minute: 0, second: 0,
+  }).epochMilliseconds).toISOString());
+  return dates.map((day, index) => ({
+    localDate: day.toString(),
+    fromUtc: starts[index],
+    toUtc: index === 89 ? periodEndUtc.toISOString() : starts[index + 1],
+    accountsRegistered: 0,
+    postsCreated: 0,
+  }));
+}
+
 function count(value) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error('Invalid analytics aggregate count.');
@@ -30,6 +47,25 @@ function count(value) {
 
 function counts(row, fields) {
   return Object.fromEntries(fields.map((field) => [field, count(row === null ? 0 : row?.[field])]));
+}
+
+function dailyCounts(rows, buckets) {
+  if (rows === null) return new Map();
+  if (!Array.isArray(rows)) throw new Error('Invalid analytics daily rows.');
+  const dates = new Set(buckets.map((bucket) => bucket.localDate));
+  const result = new Map();
+  for (const row of rows) {
+    if (!row || typeof row._id !== 'string' || !dates.has(row._id)
+      || result.has(row._id)) {
+      throw new Error('Invalid analytics daily date.');
+    }
+    result.set(row._id, count(row.count));
+  }
+  return result;
+}
+
+function sumBuckets(buckets, field) {
+  return buckets.reduce((total, bucket) => count(total + bucket[field]), 0);
 }
 
 function invalidSession() {
@@ -57,7 +93,7 @@ async function assertCurrentAdmin(auth) {
 
 async function getOverview(auth, periodEndUtc) {
   const from = periodStarts(periodEndUtc);
-  const [accountRow, postRow, accountPeriodRow, postPeriodRow] = await Promise.all([
+  const [accountRow, postRow, accountDailyRows, postDailyRows] = await Promise.all([
     repository.accountSnapshot(), repository.postSnapshot(),
     repository.accountPeriods(from, periodEndUtc), repository.postPeriods(from, periodEndUtc),
   ]);
@@ -65,22 +101,37 @@ async function getOverview(auth, periodEndUtc) {
     'total', 'user', 'moderator', 'admin', 'active', 'suspended', 'eligibleActive',
   ]);
   const posts = counts(postRow, ['total']);
-  const registrations = counts(accountPeriodRow, ['days7', 'days30', 'days90']);
-  const postCreations = counts(postPeriodRow, ['days7', 'days30', 'days90']);
+  const spine = dailySpine(periodEndUtc);
+  const registrations = dailyCounts(accountDailyRows, spine);
+  const postCreations = dailyCounts(postDailyRows, spine);
+  const currentDay = spine[89];
+  if (currentDay.fromUtc === currentDay.toUtc
+    && ((registrations.get(currentDay.localDate) ?? 0) !== 0
+      || (postCreations.get(currentDay.localDate) ?? 0) !== 0)) {
+    throw new Error('Inconsistent analytics zero-duration bucket.');
+  }
+  const buckets = spine.map((bucket) => ({
+    ...bucket,
+    accountsRegistered: registrations.get(bucket.localDate) ?? 0,
+    postsCreated: postCreations.get(bucket.localDate) ?? 0,
+  }));
   if (account.total !== account.user + account.moderator + account.admin
     || account.total !== account.active + account.suspended
-    || account.eligibleActive > account.active
-    || registrations.days7 > registrations.days30 || registrations.days30 > registrations.days90
-    || postCreations.days7 > postCreations.days30 || postCreations.days30 > postCreations.days90) {
+    || account.eligibleActive > account.active) {
     throw new Error('Inconsistent analytics aggregates.');
   }
 
   const toUtc = periodEndUtc.toISOString();
   const periods = Object.fromEntries(PERIODS.map((days) => {
     const key = `days${days}`;
+    if (from[key].toISOString() !== buckets[90 - days].fromUtc) {
+      throw new Error('Inconsistent analytics period boundary.');
+    }
+    const selected = buckets.slice(-days);
     return [key, {
       fromUtc: from[key].toISOString(), toUtc,
-      accountsRegistered: registrations[key], postsCreated: postCreations[key],
+      accountsRegistered: sumBuckets(selected, 'accountsRegistered'),
+      postsCreated: sumBuckets(selected, 'postsCreated'),
     }];
   }));
   const result = {
@@ -95,10 +146,11 @@ async function getOverview(auth, periodEndUtc) {
     },
     communityPosts: { retainedTotal: posts.total },
     periods,
+    daily: { buckets },
   };
   await assertCurrentAdmin(auth);
   result.generatedAtUtc = new Date().toISOString();
   return result;
 }
 
-module.exports = { getOverview, periodStarts, assertCurrentAdmin };
+module.exports = { getOverview, periodStarts, dailySpine, assertCurrentAdmin };

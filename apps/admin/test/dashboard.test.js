@@ -38,10 +38,27 @@ test.after(async () => {
   await server.close();
 });
 
+const analyticsEndUtc = '2026-10-12T04:00:00.000Z';
+const analyticsBuckets = Array.from({ length: 90 }, (_, index) => {
+  const localMidnight = new Date('2026-10-12T00:00:00.000Z');
+  localMidnight.setUTCDate(localMidnight.getUTCDate() - (89 - index));
+  const fromUtc = new Date(localMidnight.getTime() - 8 * 60 * 60 * 1000);
+  const nextMidnight = new Date(localMidnight);
+  nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
+  return {
+    localDate: localMidnight.toISOString().slice(0, 10),
+    fromUtc: fromUtc.toISOString(),
+    toUtc: index === 89 ? analyticsEndUtc
+      : new Date(nextMidnight.getTime() - 8 * 60 * 60 * 1000).toISOString(),
+    accountsRegistered: 0,
+    postsCreated: 0,
+  };
+});
+
 const analyticsState = {
   status: 'ready',
   data: {
-    periodEndUtc: '2026-10-12T04:00:00.000Z',
+    periodEndUtc: analyticsEndUtc,
     generatedAtUtc: '2026-10-12T04:00:01.000Z',
     timeZone: 'Asia/Manila',
     accounts: {
@@ -51,12 +68,16 @@ const analyticsState = {
       eligibleActive: 100,
     },
     communityPosts: { retainedTotal: 39 },
-    periods: Object.fromEntries([7, 30, 90].map((days) => [`days${days}`, {
-      fromUtc: '2026-10-01T16:00:00.000Z',
-      toUtc: '2026-10-12T04:00:00.000Z',
-      accountsRegistered: 0,
-      postsCreated: 0,
-    }])),
+    periods: Object.fromEntries([7, 30, 90].map((days) => {
+      const selected = analyticsBuckets.slice(-days);
+      return [`days${days}`, {
+        fromUtc: selected[0].fromUtc,
+        toUtc: analyticsEndUtc,
+        accountsRegistered: selected.reduce((total, bucket) => total + bucket.accountsRegistered, 0),
+        postsCreated: selected.reduce((total, bucket) => total + bucket.postsCreated, 0),
+      }];
+    })),
+    daily: { buckets: analyticsBuckets },
   },
 };
 
@@ -141,6 +162,16 @@ test('Admin Overview presents only supported REST-backed totals and latest recip
   assert.match(markup, /Latest recipes/);
   assert.equal((markup.match(/wc-dashboard-stat-icon/g) || []).length, 1);
   assert.match(markup, /Active-status accounts/);
+});
+
+test('Admin Overview rejects a ready Analytics response missing daily buckets', () => {
+  const invalidData = { ...analyticsState.data };
+  delete invalidData.daily;
+  const markup = renderOverview({ analyticsState: { status: 'ready', data: invalidData } });
+
+  assert.match(markup, /Analytics could not be loaded/);
+  assert.doesNotMatch(markup, />117<|>104<|>13</);
+  assert.match(markup, /Real API Recipe/);
 });
 
 test('Admin metadata controls render the exact ordered Region/category labels and unset choices', () => {

@@ -22,13 +22,19 @@ const FROM = {
 };
 const TO = new Date('2026-10-07T03:00:00.000Z');
 
-// This deliberately small fixture evaluator checks the predicates and group
-// thresholds we send to Mongo. It is not a substitute for Mongo execution.
-function evaluatePeriodFixture(pipeline, documents) {
+// This fixture evaluator checks the predicates and day key sent to Mongo.
+// It is not a substitute for physical Mongo execution.
+function evaluateDailyFixture(pipeline, documents) {
   const [rangeStage, typeStage, groupStage] = pipeline;
   const { $gte: lower, $lt: upper } = rangeStage.$match.createdAt;
   const [typeExpression, requiredType] = typeStage.$match.$expr.$eq;
   assert.deepEqual(typeExpression, { $type: '$createdAt' });
+  assert.deepEqual(groupStage.$group, {
+    _id: { $dateToString: {
+      format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Manila',
+    } },
+    count: { $sum: 1 },
+  });
 
   function scalarType(value) {
     if (value === undefined) return 'missing';
@@ -46,17 +52,15 @@ function evaluatePeriodFixture(pipeline, documents) {
       && Number.isFinite(value.getTime()) && value >= lower && value < upper)
       && scalarType(createdAt) === requiredType;
   });
-  const threshold = (field) => {
-    const expression = groupStage.$group[field].$sum.$cond[0].$gte;
-    assert.equal(expression[0], '$createdAt');
-    return expression[1];
-  };
-  assert.deepEqual(groupStage.$group.days90, { $sum: 1 });
-  return {
-    days7: rows.filter(({ createdAt }) => createdAt >= threshold('days7')).length,
-    days30: rows.filter(({ createdAt }) => createdAt >= threshold('days30')).length,
-    days90: rows.length,
-  };
+  const daily = new Map();
+  for (const { createdAt } of rows) {
+    // The 2026 Manila fixture dates use +08:00. The pipeline assertion above
+    // independently requires the IANA timezone for actual Mongo grouping.
+    const day = new Date(createdAt.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    daily.set(day, (daily.get(day) || 0) + 1);
+  }
+  return [...daily].map(([_id, count]) => ({ _id, count }))
+    .sort((a, b) => a._id.localeCompare(b._id));
 }
 
 test('current snapshots aggregate on server with bounded non-spilling operations', async (t) => {
@@ -73,7 +77,7 @@ test('current snapshots aggregate on server with bounded non-spilling operations
   assert.match(JSON.stringify(group.eligibleActive), /deactivatedAt/);
 });
 
-test('period pipelines keep the 90-day range first and require a scalar BSON Date before grouping', async (t) => {
+test('daily pipelines keep the 90-day range and scalar BSON Date check before Manila grouping', async (t) => {
   const userCalls = capture(t, User);
   const postCalls = capture(t, CommunityPost);
   assert.equal(await repository.accountPeriods(FROM, TO), null);
@@ -85,13 +89,18 @@ test('period pipelines keep the 90-day range first and require a scalar BSON Dat
     assert.deepEqual(call.pipeline[1], {
       $match: { $expr: { $eq: [{ $type: '$createdAt' }, 'date'] } },
     });
-    assert.deepEqual(Object.keys(call.pipeline[2].$group), ['_id', 'days7', 'days30', 'days90']);
+    assert.deepEqual(call.pipeline[2].$group, {
+      _id: { $dateToString: {
+        format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Manila',
+      } },
+      count: { $sum: 1 },
+    });
     assert.deepEqual(call.options, { maxTimeMS: 2000, allowDiskUse: false });
     assert.doesNotMatch(JSON.stringify(call.pipeline), /\$lookup|\$sort|\$where|\$out/);
   }
 });
 
-test('synthetic adversarial timestamps and half-open boundaries use only scalar Dates', async (t) => {
+test('synthetic malformed timestamps and half-open boundaries preserve prior eligibility', async (t) => {
   const userCalls = capture(t, User);
   const postCalls = capture(t, CommunityPost);
   await repository.accountPeriods(FROM, TO);
@@ -101,32 +110,35 @@ test('synthetic adversarial timestamps and half-open boundaries use only scalar 
   const justAfter = (date) => new Date(date.getTime() + 1);
   const inWindow = justBefore(TO);
   const fixtures = [
-    [{ createdAt: justBefore(FROM.days90) }, [0, 0, 0]],
-    [{ createdAt: FROM.days90 }, [0, 0, 1]],
-    [{ createdAt: justBefore(FROM.days30) }, [0, 0, 1]],
-    [{ createdAt: FROM.days30 }, [0, 1, 1]],
-    [{ createdAt: justBefore(FROM.days7) }, [0, 1, 1]],
-    [{ createdAt: FROM.days7 }, [1, 1, 1]],
-    [{ createdAt: inWindow }, [1, 1, 1]],
-    [{ createdAt: TO }, [0, 0, 0]],
-    [{ createdAt: justAfter(TO) }, [0, 0, 0]],
-    [{ createdAt: [inWindow] }, [0, 0, 0]],
-    [{ createdAt: [FROM.days90, inWindow] }, [0, 0, 0]],
-    [{ createdAt: inWindow.toISOString() }, [0, 0, 0]],
-    [{ createdAt: null }, [0, 0, 0]],
-    [{}, [0, 0, 0]],
-    [{ createdAt: 1 }, [0, 0, 0]],
-    [{ createdAt: { date: inWindow } }, [0, 0, 0]],
+    { createdAt: justBefore(FROM.days90) },
+    { createdAt: FROM.days90 },
+    { createdAt: justBefore(FROM.days30) },
+    { createdAt: FROM.days30 },
+    { createdAt: justBefore(FROM.days7) },
+    { createdAt: FROM.days7 },
+    { createdAt: inWindow },
+    { createdAt: TO },
+    { createdAt: justAfter(TO) },
+    { createdAt: [inWindow] },
+    { createdAt: [FROM.days90, inWindow] },
+    { createdAt: inWindow.toISOString() },
+    { createdAt: null },
+    {},
+    { createdAt: 1 },
+    { createdAt: { date: inWindow } },
   ];
 
   for (const call of [userCalls[0], postCalls[0]]) {
-    for (const [document, [days7, days30, days90]] of fixtures) {
-      assert.deepEqual(evaluatePeriodFixture(call.pipeline, [document]), {
-        days7, days30, days90,
-      }, JSON.stringify(document));
-    }
-    assert.deepEqual(evaluatePeriodFixture(call.pipeline, fixtures.map(([document]) => document)), {
-      days7: 2, days30: 4, days90: 6,
-    });
+    const daily = evaluateDailyFixture(call.pipeline, fixtures);
+    const periodSum = (from) => daily
+      .filter(({ _id }) => _id >= new Date(from.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10))
+      .reduce((total, row) => total + row.count, 0);
+    assert.deepEqual([periodSum(FROM.days7), periodSum(FROM.days30), periodSum(FROM.days90)],
+      [2, 4, 6]);
+    assert.deepEqual(evaluateDailyFixture(call.pipeline, [
+      { createdAt: justBefore(FROM.days7) }, { createdAt: FROM.days7 },
+    ]), [
+      { _id: '2026-09-30', count: 1 }, { _id: '2026-10-01', count: 1 },
+    ]);
   }
 });

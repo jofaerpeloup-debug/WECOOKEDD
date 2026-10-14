@@ -8,6 +8,11 @@ async function aggregateOne(Model, pipeline) {
   return rows[0] || null;
 }
 
+async function aggregateRows(Model, pipeline) {
+  const rows = await Model.aggregate(pipeline).option(OPTIONS);
+  return rows.length ? rows : null;
+}
+
 function sumWhen(field, value) {
   return { $sum: { $cond: [{ $eq: [`$${field}`, value] }, 1, 0] } };
 }
@@ -38,27 +43,27 @@ async function postSnapshot() {
   return aggregateOne(CommunityPost, [{ $group: { _id: null, total: { $sum: 1 } } }]);
 }
 
-function periodPipeline(from, to) {
+function dailyPipeline(from, to) {
   return [
     { $match: { createdAt: { $gte: from.days90, $lt: to } } },
     // Query $type matches Date elements inside arrays; aggregation $type checks
     // the field itself. Keep the bounded range first for index eligibility.
     { $match: { $expr: { $eq: [{ $type: '$createdAt' }, 'date'] } } },
     { $group: {
-      _id: null,
-      days7: { $sum: { $cond: [{ $gte: ['$createdAt', from.days7] }, 1, 0] } },
-      days30: { $sum: { $cond: [{ $gte: ['$createdAt', from.days30] }, 1, 0] } },
-      days90: { $sum: 1 },
+      _id: { $dateToString: {
+        format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Manila',
+      } },
+      count: { $sum: 1 },
     } },
   ];
 }
 
 function accountPeriods(from, to) {
-  return aggregateOne(User, periodPipeline(from, to));
+  return aggregateRows(User, dailyPipeline(from, to));
 }
 
 function postPeriods(from, to) {
-  return aggregateOne(CommunityPost, periodPipeline(from, to));
+  return aggregateRows(CommunityPost, dailyPipeline(from, to));
 }
 
 module.exports = { accountSnapshot, postSnapshot, accountPeriods, postPeriods };
