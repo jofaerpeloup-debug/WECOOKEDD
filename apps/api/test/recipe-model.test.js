@@ -26,6 +26,37 @@ function baseRecipe(overrides = {}) {
   });
 }
 
+test('optional cooking persists full authored alternatives while old recipe detail remains compatible', async () => {
+  const legacy = baseRecipe();
+  await legacy.validate();
+  assert.equal(legacy.cooking, undefined);
+  assert.equal('cooking' in toPublicRecipe(legacy), false);
+  assert.equal(toPublicRecipe(legacy, { includeCooking: true }).cooking, null);
+
+  const recipe = baseRecipe({ cooking: {
+    schemaVersion: 1,
+    defaultSpiceLevel: 'mild',
+    spiceAlternatives: [{ spiceLevel: 'hot', ingredients: [
+      { ingredientId: OTHER_INGREDIENT_ID, quantity: 2, unit: 'piece', optional: false },
+    ] }],
+    stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 90 }],
+  } });
+  await recipe.validate();
+  assert.equal(String(recipe.ingredients[0].ingredientId), INGREDIENT_ID);
+  assert.equal(String(recipe.cooking.spiceAlternatives[0].ingredients[0].ingredientId), OTHER_INGREDIENT_ID);
+  const roundTrip = Recipe.hydrate(recipe.toObject({ depopulate: true }));
+  assert.equal(roundTrip.cooking.stepTimers[0].stepOrder, 2);
+  assert.equal(toPublicRecipe(roundTrip).cooking, undefined);
+  assert.equal(toPublicRecipe(roundTrip, { includeCooking: true }).cooking.stepTimers[0].durationSeconds, 90);
+  assert.equal(toStaffRecipe(roundTrip, { includeCooking: true }).cooking.spiceAlternatives[0]
+    .ingredients[0].ingredientId, OTHER_INGREDIENT_ID);
+  await assert.rejects(() => baseRecipe({ cooking: {
+    schemaVersion: 1, defaultSpiceLevel: 'hot', spiceAlternatives: [{
+      spiceLevel: 'mild', ingredients: [{ ingredientId: OTHER_INGREDIENT_ID, unit: 'piece' }],
+    }], stepTimers: [],
+  } }).validate());
+});
+
 test('Recipe exposes the exact 17-value canonical measurement-unit contract', () => {
   assert.deepEqual(Recipe.UNITS, [
     'g', 'kg', 'lb', 'oz', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'piece', 'clove', 'slice', 'can', 'pack',

@@ -20,6 +20,48 @@ function toPublicRecipeIngredient(entry) {
   };
 }
 
+function toPublicCooking(cooking) {
+  if (cooking == null) return null;
+  return {
+    schemaVersion: 1,
+    defaultSpiceLevel: cooking.defaultSpiceLevel ?? null,
+    spiceAlternatives: (cooking.spiceAlternatives || []).map((alternative) => ({
+      spiceLevel: alternative.spiceLevel,
+      ingredients: alternative.ingredients.map(toPublicRecipeIngredient),
+    })),
+    stepTimers: (cooking.stepTimers || []).map((timer) => ({
+      stepOrder: timer.stepOrder,
+      servings: timer.servings,
+      spiceLevel: timer.spiceLevel ?? null,
+      durationSeconds: timer.durationSeconds,
+    })),
+  };
+}
+
+function toStaffCooking(cooking) {
+  if (cooking == null) return null;
+  return {
+    schemaVersion: 1,
+    defaultSpiceLevel: cooking.defaultSpiceLevel ?? null,
+    spiceAlternatives: (cooking.spiceAlternatives || []).map((alternative) => ({
+      spiceLevel: alternative.spiceLevel,
+      ingredients: alternative.ingredients.map((entry) => ({
+        ingredientId: entry.ingredientId == null ? null : String(entry.ingredientId._id || entry.ingredientId),
+        quantity: entry.quantity ?? null,
+        unit: entry.unit,
+        note: entry.note ?? null,
+        optional: entry.optional ?? false,
+      })),
+    })),
+    stepTimers: (cooking.stepTimers || []).map((timer) => ({
+      stepOrder: timer.stepOrder,
+      servings: timer.servings,
+      spiceLevel: timer.spiceLevel ?? null,
+      durationSeconds: timer.durationSeconds,
+    })),
+  };
+}
+
 // Derived structured cooking steps. Mongo persists `instructions: string[]`
 // as the source of truth (see docs/architecture/recipes.md); `steps` is a
 // deterministic 1-based view of that same array, given to later
@@ -95,7 +137,7 @@ function toStaffNutritionSource(provenance) {
 // property, and any other internal field is never leaked. `cuisine` is
 // retired from the target contract (M3) — old documents may still carry it
 // in Mongo but it is never read here.
-function toPublicRecipe(recipe, { includeRatingSummary = false } = {}) {
+function toPublicRecipe(recipe, { includeRatingSummary = false, includeCooking = false } = {}) {
   const serialized = {
     id: String(recipe._id),
     title: recipe.title,
@@ -116,6 +158,7 @@ function toPublicRecipe(recipe, { includeRatingSummary = false } = {}) {
     createdAt: recipe.createdAt,
     updatedAt: recipe.updatedAt,
   };
+  if (includeCooking) serialized.cooking = toPublicCooking(recipe.cooking);
   if (includeRatingSummary) {
     serialized.ratingSummary = {
       averageRating: recipe._ratingSummary.averageRating,
@@ -135,6 +178,7 @@ function actorId(value) {
 function toStaffRecipe(recipe, options) {
   return {
     ...toPublicRecipe(recipe, options),
+    ...(options?.includeCooking ? { cooking: toStaffCooking(recipe.cooking) } : {}),
     publicationStatus: recipe.publicationStatus === undefined ? 'published' : recipe.publicationStatus,
     createdBy: actorId(recipe.createdBy),
     updatedBy: actorId(recipe.updatedBy),

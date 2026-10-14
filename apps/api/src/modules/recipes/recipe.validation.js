@@ -18,6 +18,7 @@ const {
   MAX_IMAGE_URL_LENGTH,
   MAX_IMAGE_ASSET_ID_LENGTH,
   MAX_NUTRITION_SOURCE_LABEL_LENGTH,
+  SPICE_LEVELS,
 } = require('./recipe.model');
 
 function collapseWhitespace(value) {
@@ -320,6 +321,67 @@ const draftIngredientsArraySchema = z
   .array(recipeIngredientUsageSchema)
   .max(MAX_INGREDIENTS, `A maximum of ${MAX_INGREDIENTS} ingredients is allowed.`);
 
+const spiceLevelSchema = z.enum(SPICE_LEVELS, 'Invalid spice level.');
+const cookingSchema = z.object({
+  schemaVersion: z.literal(1),
+  defaultSpiceLevel: spiceLevelSchema.nullable(),
+  spiceAlternatives: z.array(z.object({
+    spiceLevel: spiceLevelSchema,
+    ingredients: ingredientsArraySchema,
+  }).strict()).max(SPICE_LEVELS.length - 1),
+  stepTimers: z.array(z.object({
+    stepOrder: z.number().int().min(1).max(MAX_INSTRUCTIONS),
+    servings: servingsSchema,
+    spiceLevel: spiceLevelSchema.nullable(),
+    durationSeconds: z.number().int().min(1).max(10800),
+  }).strict()),
+}).strict().superRefine((cooking, ctx) => {
+  const alternatives = cooking.spiceAlternatives.map((entry) => entry.spiceLevel);
+  if (new Set(alternatives).size !== alternatives.length
+    || alternatives.includes(cooking.defaultSpiceLevel)) {
+    ctx.addIssue({ code: 'custom', path: ['spiceAlternatives'], message: 'Spice levels must be unique and different from the default.' });
+  }
+  if (cooking.defaultSpiceLevel === null && alternatives.length > 0) {
+    ctx.addIssue({ code: 'custom', path: ['defaultSpiceLevel'], message: 'Spice alternatives require an authored default level.' });
+  }
+  const offered = new Set([cooking.defaultSpiceLevel, ...alternatives]);
+  const tuples = new Set();
+  cooking.stepTimers.forEach((timer, index) => {
+    if (!offered.has(timer.spiceLevel)) {
+      ctx.addIssue({ code: 'custom', path: ['stepTimers', index, 'spiceLevel'], message: 'Timer spice level must be authored for this recipe.' });
+    }
+    const key = `${timer.stepOrder}:${timer.servings}:${timer.spiceLevel}`;
+    if (tuples.has(key)) {
+      ctx.addIssue({ code: 'custom', path: ['stepTimers', index], message: 'Timer tuple must be unique.' });
+    }
+    tuples.add(key);
+  });
+});
+
+// Persisted instructions are the only step authority. `steps` is a 1-based
+// view and authoring input must be checked against that same order.
+function cookingContextIssues(recipe) {
+  if (recipe.cooking == null) return [];
+  const cooking = recipe.cooking;
+  const issues = [];
+  const instructions = recipe.instructions || recipe.steps?.map((step) => step.text) || [];
+  if (cooking.spiceAlternatives?.length > 0
+    && (!Number.isInteger(recipe.servings) || recipe.servings < 1 || recipe.servings > MAX_SERVINGS
+      || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0)) {
+    issues.push({ path: ['cooking', 'spiceAlternatives'], message: 'Spice alternatives require base servings and a nonempty default ingredient list.' });
+  }
+  (cooking.stepTimers || []).forEach((timer, index) => {
+    if (!Number.isInteger(timer.stepOrder) || timer.stepOrder > instructions.length) {
+      issues.push({ path: ['cooking', 'stepTimers', index, 'stepOrder'], message: 'Timer step must reference a current 1-based instruction.' });
+    }
+  });
+  return issues;
+}
+
+function refineCookingContext(recipe, ctx) {
+  cookingContextIssues(recipe).forEach(({ path, message }) => ctx.addIssue({ code: 'custom', path, message }));
+}
+
 const imageUrlSchema = z
   .string()
   .trim()
@@ -463,6 +525,7 @@ const publishedRecipeFields = {
   nutrition: nutritionSchema.nullable().optional(),
   nutritionSource: nutritionSourceSchema.optional(),
   ingredients: ingredientsArraySchema,
+  cooking: cookingSchema.nullable().optional(),
   // Steps may arrive as legacy `instructions: string[]` or as structured
   // `steps: [{ order, text }]`. At least one is required on create; when
   // both are given they must be equivalent (refineStepConsistency).
@@ -484,6 +547,7 @@ function refinePublishedRecipe(body, ctx) {
   refineStepConsistency(body, ctx);
   refineImageConsistency(body, ctx);
   refineNutritionSource(body, ctx);
+  refineCookingContext(body, ctx);
 }
 
 // Authoritative completeness contract reused by Publish, Published edits,
@@ -539,6 +603,7 @@ const createDraftSchema = z.object({
       nutrition: nutritionSchema.nullable().optional(),
       nutritionSource: nutritionSourceSchema.optional(),
       ingredients: draftIngredientsArraySchema.optional(),
+      cooking: cookingSchema.nullable().optional(),
       instructions: draftInstructionsArraySchema.optional(),
       steps: draftStepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.optional(),
@@ -550,6 +615,7 @@ const createDraftSchema = z.object({
       refineStepConsistency(body, ctx);
       refineImageConsistency(body, ctx);
       refineNutritionSource(body, ctx);
+      refineCookingContext(body, ctx);
     }),
 });
 
@@ -575,6 +641,7 @@ const updateRecipeSchema = z.object({
       nutrition: nutritionSchema.nullable().optional(),
       nutritionSource: nutritionSourceSchema.optional(),
       ingredients: draftIngredientsArraySchema.optional(),
+      cooking: cookingSchema.nullable().optional(),
       instructions: draftInstructionsArraySchema.optional(),
       steps: draftStepsArraySchema.optional(),
       dietaryTags: dietaryTagsArraySchema.optional(),
@@ -587,6 +654,12 @@ const updateRecipeSchema = z.object({
       refineStepConsistency(body, ctx);
       refineImageConsistency(body, ctx, { update: true });
       refineNutritionSource(body, ctx);
+      if (body.cooking !== undefined && body.expectedUpdatedAt === undefined) {
+        ctx.addIssue({
+          code: 'custom', path: ['expectedUpdatedAt'],
+          message: 'expectedUpdatedAt is required when cooking is written.',
+        });
+      }
     })
     .refine((body) => Object.keys(body).some((field) => field !== 'expectedUpdatedAt'), {
       message: 'At least one recipe content field must be provided.',
@@ -652,4 +725,6 @@ module.exports = {
   draftStepsArraySchema,
   nutritionSchema,
   nutritionSourceSchema,
+  cookingSchema,
+  cookingContextIssues,
 };

@@ -21,6 +21,7 @@ const MAX_INGREDIENT_NOTE_LENGTH = 200;
 const MAX_IMAGE_URL_LENGTH = 2000;
 const MAX_IMAGE_ASSET_ID_LENGTH = 255;
 const MAX_NUTRITION_SOURCE_LABEL_LENGTH = 500;
+const SPICE_LEVELS = ['none', 'mild', 'medium', 'hot', 'extra_hot'];
 
 function collapseWhitespace(value) {
   return typeof value === 'string' ? value.trim().replace(/\s+/gu, ' ') : value;
@@ -70,6 +71,28 @@ const recipeIngredientSchema = new mongoose.Schema(
 // pairs the same quantity/unit semantics — see
 // shared/constants/measurement-units.js.
 recipeIngredientSchema.pre('validate', validateQuantityForUnit);
+
+const spiceAlternativeSchema = new mongoose.Schema({
+  spiceLevel: { type: String, required: true, enum: SPICE_LEVELS },
+  ingredients: {
+    type: [recipeIngredientSchema], required: true,
+    validate: (entries) => Array.isArray(entries) && entries.length >= 1 && entries.length <= MAX_INGREDIENTS,
+  },
+}, { _id: false, strict: 'throw' });
+
+const stepTimerSchema = new mongoose.Schema({
+  stepOrder: { type: Number, required: true, min: 1, max: MAX_INSTRUCTIONS, validate: Number.isInteger },
+  servings: { type: Number, required: true, min: 1, max: MAX_SERVINGS, validate: Number.isInteger },
+  spiceLevel: { type: String, enum: SPICE_LEVELS, default: null },
+  durationSeconds: { type: Number, required: true, min: 1, max: 10800, validate: Number.isInteger },
+}, { _id: false, strict: 'throw' });
+
+const cookingSchema = new mongoose.Schema({
+  schemaVersion: { type: Number, required: true, enum: [1] },
+  defaultSpiceLevel: { type: String, enum: SPICE_LEVELS, default: null },
+  spiceAlternatives: { type: [spiceAlternativeSchema], required: true },
+  stepTimers: { type: [stepTimerSchema], required: true },
+}, { _id: false, strict: 'throw' });
 
 const nonnegativeFiniteNumber = {
   validator: (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0,
@@ -212,6 +235,7 @@ const recipeSchema = new mongoose.Schema(
         message: `ingredients must contain no more than ${MAX_INGREDIENTS} entries.`,
       },
     },
+    cooking: { type: cookingSchema, default: undefined },
     instructions: {
       type: [{ type: String, trim: true, maxlength: MAX_INSTRUCTION_LENGTH }],
       validate: {
@@ -333,6 +357,7 @@ const Recipe = mongoose.model('Recipe', recipeSchema);
 module.exports = Recipe;
 module.exports.DIFFICULTIES = DIFFICULTIES;
 module.exports.PUBLICATION_STATUSES = PUBLICATION_STATUSES;
+module.exports.SPICE_LEVELS = SPICE_LEVELS;
 module.exports.UNITS = UNITS;
 module.exports.DIETARY_TAGS = DIETARY_TAGS;
 module.exports.REGIONS = RECIPE_REGIONS;

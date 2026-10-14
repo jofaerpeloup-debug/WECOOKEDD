@@ -83,17 +83,19 @@ const getRecipe = asyncHandler(async (req, res) => {
   const canReadAll = hasCapability(req.auth.role, CAPABILITIES.CATALOG_READ_ALL);
 
   const recipe = await recipeService.getRecipeById(recipeId, { isAdmin: canReadAll });
-  sendSuccess(res, { recipe: canReadAll ? toStaffRecipe(recipe) : toPublicRecipe(recipe) });
+  sendSuccess(res, { recipe: canReadAll
+    ? toStaffRecipe(recipe, { includeCooking: true })
+    : toPublicRecipe(recipe, { includeCooking: true }) });
 });
 
 const createRecipe = asyncHandler(async (req, res) => {
   const recipe = await recipeService.createRecipe(req.body, { actorId: req.auth.userId });
-  sendSuccess(res, { recipe: toStaffRecipe(recipe) }, 201);
+  sendSuccess(res, { recipe: toStaffRecipe(recipe, { includeCooking: true }) }, 201);
 });
 
 const createDraft = asyncHandler(async (req, res) => {
   const recipe = await recipeService.createDraft(req.body, { actorId: req.auth.userId });
-  sendSuccess(res, { recipe: toStaffRecipe(recipe) }, 201);
+  sendSuccess(res, { recipe: toStaffRecipe(recipe, { includeCooking: true }) }, 201);
 });
 
 const checkRecipeDuplicates = asyncHandler(async (req, res) => {
@@ -104,13 +106,13 @@ const checkRecipeDuplicates = asyncHandler(async (req, res) => {
 const updateRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const recipe = await recipeService.updateRecipe(recipeId, req.body, { actorId: req.auth.userId });
-  sendSuccess(res, { recipe: toStaffRecipe(recipe) });
+  sendSuccess(res, { recipe: toStaffRecipe(recipe, { includeCooking: true }) });
 });
 
 const publishRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const recipe = await recipeService.publishRecipe(recipeId, req.body, { actorId: req.auth.userId });
-  sendSuccess(res, { recipe: toStaffRecipe(recipe) });
+  sendSuccess(res, { recipe: toStaffRecipe(recipe, { includeCooking: true }) });
 });
 
 const getRecipePublishReadiness = asyncHandler(async (req, res) => {
@@ -122,13 +124,13 @@ const getRecipePublishReadiness = asyncHandler(async (req, res) => {
 const archiveRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const recipe = await recipeService.archiveRecipe(recipeId, req.body || {}, { actorId: req.auth.userId });
-  sendSuccess(res, { recipe: toStaffRecipe(recipe) });
+  sendSuccess(res, { recipe: toStaffRecipe(recipe, { includeCooking: true }) });
 });
 
 const restoreRecipe = asyncHandler(async (req, res) => {
   const { recipeId } = req.params;
   const recipe = await recipeService.restoreRecipe(recipeId, req.body, { actorId: req.auth.userId });
-  sendSuccess(res, { recipe: toStaffRecipe(recipe) });
+  sendSuccess(res, { recipe: toStaffRecipe(recipe, { includeCooking: true }) });
 });
 
 const importRecipeUrl = asyncHandler(async (req, res) => {

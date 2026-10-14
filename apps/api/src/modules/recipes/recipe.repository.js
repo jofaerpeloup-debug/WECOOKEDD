@@ -42,9 +42,19 @@ function withIngredientSummaries(query) {
   return query.populate('ingredients.ingredientId', INGREDIENT_SUMMARY_FIELDS);
 }
 
+function withCookingSummaries(query) {
+  return query.populate([
+    { path: 'ingredients.ingredientId', select: INGREDIENT_SUMMARY_FIELDS },
+    { path: 'cooking.spiceAlternatives.ingredients.ingredientId', select: INGREDIENT_SUMMARY_FIELDS },
+  ]);
+}
+
 async function createRecipe(data) {
   const doc = await Recipe.create(data);
-  return doc.populate('ingredients.ingredientId', INGREDIENT_SUMMARY_FIELDS);
+  return doc.populate([
+    { path: 'ingredients.ingredientId', select: INGREDIENT_SUMMARY_FIELDS },
+    { path: 'cooking.spiceAlternatives.ingredients.ingredientId', select: INGREDIENT_SUMMARY_FIELDS },
+  ]);
 }
 
 // Unpopulated lookup for internal service logic (existence checks, patch
@@ -55,7 +65,7 @@ function findRawById(id) {
 }
 
 function findByIdWithIngredients(id) {
-  return withIngredientSummaries(Recipe.findById(id));
+  return withCookingSummaries(Recipe.findById(id));
 }
 
 function findShoppingSourceCandidates(ids) {
@@ -76,23 +86,25 @@ function mutationFilter(id, expectedRevision, expectedUpdatedAt) {
   return filter;
 }
 
-function updateById(id, update, { expectedUpdatedAt, expectedRevision } = {}) {
-  return withIngredientSummaries(
+function updateById(id, update, { expectedUpdatedAt, expectedRevision, nextUpdatedAt } = {}) {
+  return withCookingSummaries(
     Recipe.findOneAndUpdate(mutationFilter(id, expectedRevision, expectedUpdatedAt), {
       ...update,
+      $set: { ...update.$set, updatedAt: nextUpdatedAt },
       $inc: { __v: 1 },
     }, {
       returnDocument: 'after',
       runValidators: true,
+      timestamps: false,
     })
   );
 }
 
 function publishById(id, {
-  actorId, publishedAt, expectedUpdatedAt, expectedRevision,
+  actorId, publishedAt, expectedUpdatedAt, expectedRevision, nextUpdatedAt,
   imageUrlIsPublicHttps, nutritionSourceUrlIsPublicHttps,
 }) {
-  return withIngredientSummaries(
+  return withCookingSummaries(
     Recipe.findOneAndUpdate(
       {
         ...mutationFilter(id, expectedRevision, expectedUpdatedAt),
@@ -107,37 +119,38 @@ function publishById(id, {
           updatedBy: actorId,
           imageUrlIsPublicHttps,
           nutritionSourceUrlIsPublicHttps,
+          updatedAt: nextUpdatedAt,
         },
         $inc: { __v: 1 },
       },
-      { returnDocument: 'after', runValidators: true }
+      { returnDocument: 'after', runValidators: true, timestamps: false }
     )
   );
 }
 
-function archiveById(id, { actorId, expectedUpdatedAt, expectedRevision } = {}) {
-  const update = { isActive: false };
+function archiveById(id, { actorId, expectedUpdatedAt, expectedRevision, nextUpdatedAt } = {}) {
+  const update = { isActive: false, updatedAt: nextUpdatedAt };
   if (actorId) update.updatedBy = actorId;
-  return withIngredientSummaries(
+  return withCookingSummaries(
     Recipe.findOneAndUpdate(
       mutationFilter(id, expectedRevision, expectedUpdatedAt),
       { $set: update, $inc: { __v: 1 } },
-      { returnDocument: 'after' }
+      { returnDocument: 'after', timestamps: false }
     )
   );
 }
 
 function restoreById(id, {
-  actorId, expectedUpdatedAt, expectedRevision,
+  actorId, expectedUpdatedAt, expectedRevision, nextUpdatedAt,
   imageUrlIsPublicHttps, nutritionSourceUrlIsPublicHttps,
 } = {}) {
-  const update = { isActive: true, imageUrlIsPublicHttps, nutritionSourceUrlIsPublicHttps };
+  const update = { isActive: true, imageUrlIsPublicHttps, nutritionSourceUrlIsPublicHttps, updatedAt: nextUpdatedAt };
   if (actorId) update.updatedBy = actorId;
-  return withIngredientSummaries(
+  return withCookingSummaries(
     Recipe.findOneAndUpdate(
       mutationFilter(id, expectedRevision, expectedUpdatedAt),
       { $set: update, $inc: { __v: 1 } },
-      { returnDocument: 'after' }
+      { returnDocument: 'after', timestamps: false }
     )
   );
 }
@@ -618,8 +631,13 @@ async function findDuplicateCandidates({ excludeId, limit }) {
 async function hasActiveConsumerRecipeUsingIngredient(ingredientId) {
   const match = await Recipe.exists({
     isActive: true,
-    'ingredients.ingredientId': ingredientId,
-    ...consumerPublicationFilter(),
+    $and: [
+      consumerPublicationFilter(),
+      { $or: [
+        { 'ingredients.ingredientId': ingredientId },
+        { 'cooking.spiceAlternatives.ingredients.ingredientId': ingredientId },
+      ] },
+    ],
   });
   return Boolean(match);
 }

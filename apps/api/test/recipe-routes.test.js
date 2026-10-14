@@ -630,6 +630,30 @@ test('GET /api/v1/recipes/:id returns 404 for an unknown id', async (t) => {
   assert.equal(response.body.error.code, 'RECIPE_NOT_FOUND');
 });
 
+test('Recipe detail adds authored cooking while list and old Recipe ingredients keep their legacy shape', async (t) => {
+  mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const recipe = fakeRecipeDoc({ cooking: {
+    schemaVersion: 1, defaultSpiceLevel: 'mild',
+    spiceAlternatives: [{ spiceLevel: 'hot', ingredients: [{
+      ingredientId: activeIngredient(GARLIC_ID, 'Garlic'), quantity: 2, unit: 'clove', optional: false,
+    }] }],
+    stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 90 }],
+  } });
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({ items: [recipe], total: 1 }));
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  const token = tokenFor({ id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
+  const headers = { Authorization: `Bearer ${token}` };
+  const list = await request(app).get('/api/v1/recipes').set(headers);
+  const detail = await request(app).get(`/api/v1/recipes/${RECIPE_ID}`).set(headers);
+  assert.equal(list.status, 200);
+  assert.equal(detail.status, 200);
+  assert.equal('cooking' in list.body.data.recipes[0], false);
+  assert.deepEqual(detail.body.data.recipe.ingredients, list.body.data.recipes[0].ingredients);
+  assert.equal(detail.body.data.recipe.cooking.spiceAlternatives[0].ingredients[0].ingredient.id, GARLIC_ID);
+  assert.equal(detail.body.data.recipe.cooking.stepTimers[0].stepOrder,
+    detail.body.data.recipe.steps[1].order);
+});
+
 test('GET /api/v1/recipes/:id returns 404 for a normal user when the recipe is archived', async (t) => {
   mockAuth(t, { id: USER_ID, role: 'user', sessionId: USER_SESSION_ID });
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => fakeRecipeDoc({ isActive: false }));

@@ -92,6 +92,19 @@ function completeStoredRecipe(overrides = {}) {
   return recipe;
 }
 
+function cookingProfile(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    defaultSpiceLevel: 'mild',
+    spiceAlternatives: [{
+      spiceLevel: 'hot',
+      ingredients: [{ ingredientId: GARLIC_ID, quantity: 2, unit: 'clove', optional: false }],
+    }],
+    stepTimers: [{ stepOrder: 1, servings: 4, spiceLevel: 'hot', durationSeconds: 90 }],
+    ...overrides,
+  };
+}
+
 function smartRecipe(id, title, overrides = {}) {
   const recipe = completeStoredRecipe({
     _id: id,
@@ -760,10 +773,15 @@ test('recipe dependency lookup matches active Published and legacy consumer-visi
   assert.equal(exists, true);
   assert.deepEqual(capturedFilter, {
     isActive: true,
-    'ingredients.ingredientId': CHICKEN_ID,
-    $or: [
-      { publicationStatus: 'published' },
-      { publicationStatus: { $exists: false } },
+    $and: [
+      { $or: [
+        { publicationStatus: 'published' },
+        { publicationStatus: { $exists: false } },
+      ] },
+      { $or: [
+        { 'ingredients.ingredientId': CHICKEN_ID },
+        { 'cooking.spiceAlternatives.ingredients.ingredientId': CHICKEN_ID },
+      ] },
     ],
   });
   assert.equal(JSON.stringify(capturedFilter).includes('optional'), false);
@@ -1300,11 +1318,13 @@ test('publish and restore repository mutations persist the server-derived image 
     publishedAt: new Date('2026-10-05T00:00:00.000Z'),
     expectedUpdatedAt: '2026-10-04T00:00:00.000Z',
     imageUrlIsPublicHttps: true,
+    nextUpdatedAt: new Date('2026-10-05T00:00:00.001Z'),
   });
   await recipeRepository.restoreById('recipe1', {
     actorId: 'moderator1',
     expectedUpdatedAt: '2026-10-04T00:00:00.000Z',
     imageUrlIsPublicHttps: false,
+    nextUpdatedAt: new Date('2026-10-05T00:00:00.001Z'),
   });
 
   assert.equal(calls[0].update.$set.imageUrlIsPublicHttps, true);
@@ -1321,16 +1341,23 @@ test('repository CAS distinguishes absent, zero, and positive revisions on every
     return { populate: async () => ({ _id: filter._id }) };
   });
   const operations = [
-    (revision) => recipeRepository.updateById('recipe1', { $set: { title: 'New' } }, { expectedRevision: revision }),
+    (revision) => recipeRepository.updateById('recipe1', { $set: { title: 'New' } }, {
+      expectedRevision: revision, nextUpdatedAt: new Date('2026-10-11T00:00:00.001Z'),
+    }),
     (revision) => recipeRepository.publishById('recipe1', {
       actorId: CHICKEN_ID, publishedAt: new Date(0), expectedRevision: revision,
       imageUrlIsPublicHttps: false, nutritionSourceUrlIsPublicHttps: false,
+      nextUpdatedAt: new Date('2026-10-11T00:00:00.001Z'),
     }),
     (revision) => recipeRepository.restoreById('recipe1', {
       actorId: CHICKEN_ID, expectedRevision: revision,
       imageUrlIsPublicHttps: false, nutritionSourceUrlIsPublicHttps: false,
+      nextUpdatedAt: new Date('2026-10-11T00:00:00.001Z'),
     }),
-    (revision) => recipeRepository.archiveById('recipe1', { actorId: CHICKEN_ID, expectedRevision: revision }),
+    (revision) => recipeRepository.archiveById('recipe1', {
+      actorId: CHICKEN_ID, expectedRevision: revision,
+      nextUpdatedAt: new Date('2026-10-11T00:00:00.001Z'),
+    }),
   ];
   for (const revision of [undefined, 0, 5]) {
     for (const operation of operations) await operation(revision);
@@ -1341,6 +1368,7 @@ test('repository CAS distinguishes absent, zero, and positive revisions on every
       expected === undefined ? { $exists: false } : expected);
     assert.deepEqual(calls[i].update.$inc, { __v: 1 });
     assert.equal(calls[i].update.$set.__v, undefined);
+    assert.equal(calls[i].update.$set.updatedAt.toISOString(), '2026-10-11T00:00:00.001Z');
   }
 });
 
@@ -1356,7 +1384,10 @@ test('same-millisecond competing writes have one revision winner and no stale re
     }
     return { populate: async () => winner ? { ...stored } : null };
   });
-  const options = { expectedRevision: 5, expectedUpdatedAt: '2026-10-11T00:00:00.000Z' };
+  const options = {
+    expectedRevision: 5, expectedUpdatedAt: '2026-10-11T00:00:00.000Z',
+    nextUpdatedAt: new Date('2026-10-11T00:00:00.001Z'),
+  };
   const [first, stale] = await Promise.all([
     recipeRepository.updateById('recipe1', { $set: { title: 'Winner' } }, options),
     recipeRepository.updateById('recipe1', { $set: { title: 'Stale' } }, options),
@@ -1367,6 +1398,264 @@ test('same-millisecond competing writes have one revision winner and no stale re
   assert.equal(stored.nutritionSourceUrlIsPublicHttps, true);
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map((call) => call.filter.__v), [5, 5]);
+  assert.equal(stored.updatedAt.toISOString(), '2026-10-11T00:00:00.001Z');
+});
+
+test('sequential Recipe edits in one millisecond advance updatedAt on every write', async (t) => {
+  const clock = new Date('2026-10-11T00:00:00.000Z');
+  let stored = completeStoredRecipe({
+    publicationStatus: 'draft', updatedAt: clock, __v: 2,
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => ({ ...stored }));
+  t.mock.method(recipeRepository, 'updateById', async (_id, ops, options) => {
+    assert.equal(options.expectedRevision, stored.__v);
+    assert.ok(options.nextUpdatedAt > stored.updatedAt);
+    stored = { ...stored, ...ops.$set, updatedAt: options.nextUpdatedAt, __v: stored.__v + 1 };
+    return stored;
+  });
+  await recipeService.updateRecipe('recipe1', { title: 'First edit' }, { now: clock });
+  assert.equal(stored.updatedAt.toISOString(), '2026-10-11T00:00:00.001Z');
+  await recipeService.updateRecipe('recipe1', { title: 'Second edit' }, { now: clock });
+  assert.equal(stored.updatedAt.toISOString(), '2026-10-11T00:00:00.002Z');
+  assert.equal(stored.__v, 4);
+});
+
+test('cooking PATCH requires reaffirmation and validates timers against the merged instruction order', async (t) => {
+  const updatedAt = new Date('2026-10-11T00:00:00.000Z');
+  const existing = completeStoredRecipe({
+    publicationStatus: 'draft', __v: 3, updatedAt,
+    ingredients: [{ ingredientId: CHICKEN_ID }],
+    instructions: ['Prepare ingredients.', 'Cook thoroughly.'],
+    cooking: cookingProfile({ stepTimers: [{
+      stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 90,
+    }] }),
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => existing);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  const writes = [];
+  t.mock.method(recipeRepository, 'updateById', async (_id, ops, options) => {
+    writes.push({ ops, options });
+    return { ...existing, ...ops.$set };
+  });
+  await assert.rejects(() => recipeService.updateRecipe('recipe1', { servings: 6 }), {
+    code: 'RECIPE_COOKING_REVIEW_REQUIRED', statusCode: 409,
+  });
+  await assert.rejects(() => recipeService.updateRecipe('recipe1', { cooking: cookingProfile() }), {
+    code: 'VALIDATION_ERROR', statusCode: 400,
+  });
+  await assert.rejects(() => recipeService.updateRecipe('recipe1', {
+    instructions: ['Only one step.'],
+    expectedUpdatedAt: updatedAt.toISOString(),
+    cooking: cookingProfile({ stepTimers: [{
+      stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 90,
+    }] }),
+  }), { code: 'RECIPE_INCOMPLETE' });
+  assert.equal(writes.length, 0);
+
+  await recipeService.updateRecipe('recipe1', {
+    servings: 6,
+    expectedUpdatedAt: updatedAt.toISOString(),
+    cooking: cookingProfile({ stepTimers: [{
+      stepOrder: 2, servings: 6, spiceLevel: 'hot', durationSeconds: 120,
+    }] }),
+  }, { now: updatedAt });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].options.expectedRevision, 3);
+  assert.equal(writes[0].options.nextUpdatedAt.toISOString(), '2026-10-11T00:00:00.001Z');
+  assert.equal(writes[0].ops.$set.cooking.stepTimers[0].servings, 6);
+  await recipeService.updateRecipe('recipe1', {
+    instructions: ['Only one step.'], cooking: null, expectedUpdatedAt: updatedAt.toISOString(),
+  });
+  assert.equal(writes[1].ops.$unset.cooking, '');
+});
+
+for (const [label, invalidIngredient, code, statusCode] of [
+  ['inactive', inactiveIngredient(GARLIC_ID), 'RECIPE_INGREDIENT_INACTIVE', 400],
+  ['deleted', null, 'RECIPE_INGREDIENT_NOT_FOUND', 404],
+]) {
+  test(`cooking PATCH rejects ${label} saved alternatives before an unrelated write and permits repair`, async (t) => {
+    const clock = new Date('2026-10-11T00:00:00.000Z');
+    let stored = completeStoredRecipe({
+      publicationStatus: 'draft', __v: 5, updatedAt: clock,
+      ingredients: [{ ingredientId: CHICKEN_ID }], cooking: cookingProfile(),
+    });
+    const writes = [];
+    t.mock.method(recipeRepository, 'findRawById', async () => stored);
+    t.mock.method(ingredientService, 'findIngredientById', async (id) =>
+      id === GARLIC_ID ? invalidIngredient : activeIngredient(id));
+    t.mock.method(recipeRepository, 'updateById', async (_id, ops, options) => {
+      writes.push({ ops, options });
+      assert.equal(options.expectedRevision, stored.__v);
+      assert.equal(new Date(options.expectedUpdatedAt).getTime(), stored.updatedAt.getTime());
+      assert.ok(options.nextUpdatedAt > stored.updatedAt);
+      stored = { ...stored, ...ops.$set, updatedAt: options.nextUpdatedAt, __v: stored.__v + 1 };
+      for (const field of Object.keys(ops.$unset || {})) delete stored[field];
+      return stored;
+    });
+
+    await assert.rejects(() => recipeService.updateRecipe('recipe1', {
+      title: 'Unrelated edit',
+    }, { now: clock }), { code, statusCode });
+    await assert.rejects(() => recipeService.updateRecipe('recipe1', {
+      cooking: cookingProfile(), expectedUpdatedAt: clock.toISOString(),
+    }, { now: clock }), { code, statusCode });
+    assert.equal(writes.length, 0, 'both failed PATCH requests must leave the Recipe untouched');
+    assert.equal(stored.title, 'Chicken Adobo');
+    assert.equal(stored.__v, 5);
+    assert.equal(stored.updatedAt.getTime(), clock.getTime());
+
+    await recipeService.updateRecipe('recipe1', {
+      cooking: cookingProfile({
+        spiceAlternatives: [{
+          spiceLevel: 'hot',
+          ingredients: [{ ingredientId: OTHER_ID, quantity: 2, unit: 'clove', optional: false }],
+        }],
+      }),
+      expectedUpdatedAt: clock.toISOString(),
+    }, { now: clock });
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].ops.$set.cooking.spiceAlternatives[0].ingredients[0].ingredientId, OTHER_ID);
+    assert.equal('ingredients' in writes[0].ops.$set, false);
+    assert.equal(stored.__v, 6);
+    assert.equal(stored.updatedAt.toISOString(), '2026-10-11T00:00:00.001Z');
+  });
+}
+
+test('cooking PATCH preserves a valid omitted profile and clears a broken Draft without checking old references', async (t) => {
+  const clock = new Date('2026-10-11T00:00:00.000Z');
+  let stored = completeStoredRecipe({
+    publicationStatus: 'draft', __v: 2, updatedAt: clock,
+    ingredients: [{ ingredientId: CHICKEN_ID }], cooking: cookingProfile(),
+  });
+  let alternativeActive = true;
+  const checkedIds = [];
+  const writes = [];
+  t.mock.method(recipeRepository, 'findRawById', async () => stored);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => {
+    checkedIds.push(id);
+    return id === GARLIC_ID && !alternativeActive ? inactiveIngredient(id) : activeIngredient(id);
+  });
+  t.mock.method(recipeRepository, 'updateById', async (_id, ops, options) => {
+    writes.push({ ops, options });
+    assert.equal(options.expectedRevision, stored.__v);
+    assert.ok(options.nextUpdatedAt > stored.updatedAt);
+    stored = { ...stored, ...ops.$set, updatedAt: options.nextUpdatedAt, __v: stored.__v + 1 };
+    for (const field of Object.keys(ops.$unset || {})) delete stored[field];
+    return stored;
+  });
+
+  await recipeService.updateRecipe('recipe1', { title: 'Valid edit' }, { now: clock });
+  assert.deepEqual(checkedIds, [GARLIC_ID]);
+  assert.equal('cooking' in writes[0].ops.$set, false);
+  assert.equal(writes[0].ops.$unset?.cooking, undefined);
+  assert.equal(stored.cooking.spiceAlternatives[0].ingredients[0].ingredientId, GARLIC_ID);
+
+  alternativeActive = false;
+  await recipeService.updateRecipe('recipe1', {
+    cooking: null, expectedUpdatedAt: stored.updatedAt.toISOString(),
+  }, { now: clock });
+  assert.deepEqual(checkedIds, [GARLIC_ID], 'clearing cooking must not inspect removed references');
+  assert.equal(writes[1].ops.$unset.cooking, '');
+  assert.equal(stored.cooking, undefined);
+  assert.equal(stored.__v, 4);
+  assert.equal(stored.updatedAt.toISOString(), '2026-10-11T00:00:00.002Z');
+});
+
+test('authored timer stepOrder follows persisted 1-based instruction positions', async (t) => {
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  let saved;
+  t.mock.method(recipeRepository, 'createRecipe', async (doc) => { saved = doc; return doc; });
+  await recipeService.createDraft({
+    title: 'Draft Adobo', servings: 4,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece' }],
+    steps: [{ order: 2, text: 'Simmer gently.' }, { order: 1, text: 'Prepare ingredients.' }],
+    cooking: cookingProfile({ stepTimers: [{
+      stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 90,
+    }] }),
+  });
+  assert.deepEqual(saved.instructions, ['Prepare ingredients.', 'Simmer gently.']);
+  assert.equal(saved.instructions[saved.cooking.stepTimers[0].stepOrder - 1], 'Simmer gently.');
+});
+
+test('inactive alternative ingredients block authoring and restore without a Recipe write', async (t) => {
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', isActive: false, __v: 1,
+    updatedAt: new Date('2026-10-11T00:00:00.000Z'),
+    ingredients: [{ ingredientId: CHICKEN_ID }],
+    cooking: cookingProfile(),
+  });
+  t.mock.method(ingredientService, 'findIngredientById', async (id) =>
+    id === GARLIC_ID ? inactiveIngredient(id) : activeIngredient(id));
+  t.mock.method(recipeRepository, 'createRecipe', async () => assert.fail('inactive alternative must not save'));
+  t.mock.method(recipeRepository, 'restoreById', async () => assert.fail('inactive alternative must not restore'));
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  await assert.rejects(() => recipeService.createDraft({
+    title: 'Draft Adobo', servings: 4,
+    ingredients: [{ ingredientId: CHICKEN_ID, quantity: 1, unit: 'piece' }],
+    instructions: ['Cook thoroughly.'], cooking: cookingProfile(),
+  }), { code: 'RECIPE_INGREDIENT_INACTIVE' });
+  await assert.rejects(() => recipeService.restoreRecipe('recipe1'), {
+    code: 'RECIPE_INGREDIENT_INACTIVE',
+  });
+});
+
+test('Publish rechecks alternative Ingredient activity and saved timer references', async (t) => {
+  const draft = completeStoredRecipe({
+    publicationStatus: 'draft', __v: 1,
+    updatedAt: new Date('2026-10-11T00:00:00.000Z'),
+    ingredients: [{ ingredientId: CHICKEN_ID }],
+    cooking: cookingProfile(),
+  });
+  t.mock.method(recipeRepository, 'findRawById', async () => draft);
+  t.mock.method(recipeRepository, 'publishById', async () => assert.fail('invalid profile must not publish'));
+  t.mock.method(ingredientService, 'findIngredientById', async (id) =>
+    id === GARLIC_ID ? inactiveIngredient(id) : activeIngredient(id));
+  const readiness = await recipeService.getRecipePublishReadiness('recipe1', {});
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.issues[0].path, 'cooking.spiceAlternatives.0.ingredients.0.ingredientId');
+  await assert.rejects(() => recipeService.publishRecipe('recipe1'), {
+    code: 'RECIPE_INGREDIENT_INACTIVE',
+  });
+  draft.cooking = cookingProfile({ stepTimers: [{
+    stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 90,
+  }] });
+  const staleTimer = await recipeService.getRecipePublishReadiness('recipe1', {});
+  assert.equal(staleTimer.ready, false);
+  assert.equal(staleTimer.issues[0].path, 'cooking.stepTimers.0.stepOrder');
+  await assert.rejects(() => recipeService.publishRecipe('recipe1'), {
+    code: 'RECIPE_INCOMPLETE',
+  });
+});
+
+test('consumer detail offers only usable authored alternatives and their exact timers', async (t) => {
+  const recipe = completeStoredRecipe({
+    publicationStatus: 'published',
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
+    cooking: cookingProfile({
+      defaultSpiceLevel: 'none',
+      spiceAlternatives: [
+        { spiceLevel: 'mild', ingredients: [
+          { ingredientId: activeIngredient(CHICKEN_ID), quantity: 1, unit: 'piece', optional: false },
+          { ingredientId: inactiveIngredient(GARLIC_ID), quantity: 1, unit: 'clove', optional: true },
+        ] },
+        { spiceLevel: 'hot', ingredients: [
+          { ingredientId: inactiveIngredient(GARLIC_ID), quantity: 2, unit: 'clove', optional: false },
+        ] },
+      ],
+      stepTimers: [
+        { stepOrder: 1, servings: 4, spiceLevel: 'none', durationSeconds: 30 },
+        { stepOrder: 1, servings: 4, spiceLevel: 'mild', durationSeconds: 60 },
+        { stepOrder: 1, servings: 4, spiceLevel: 'hot', durationSeconds: 90 },
+      ],
+    }),
+  });
+  t.mock.method(recipeRepository, 'findByIdWithIngredients', async () => recipe);
+  const view = await recipeService.getRecipeById('recipe1', { isAdmin: false });
+  assert.deepEqual(view.cooking.spiceAlternatives.map((entry) => entry.spiceLevel), ['mild']);
+  assert.equal(view.cooking.spiceAlternatives[0].ingredients.length, 1);
+  assert.deepEqual(view.cooking.stepTimers.map((entry) => entry.spiceLevel), ['none', 'mild']);
+  const staff = await recipeService.getRecipeById('recipe1', { isAdmin: true });
+  assert.equal(staff.cooking.spiceAlternatives.length, 2);
 });
 
 test('stale title edit cannot erase a newer nutrition source or derived eligibility fact', async (t) => {
@@ -1938,6 +2227,7 @@ test('readiness and Publish have decision parity, and Publish reruns DUP1 before
     publishedAt: new Date('2026-09-30T02:00:00.000Z'),
     expectedUpdatedAt: updatedAt.toISOString(),
     expectedRevision: undefined,
+    nextUpdatedAt: new Date('2026-09-30T02:00:00.000Z'),
     imageUrlIsPublicHttps: false,
     nutritionSourceUrlIsPublicHttps: false,
   });

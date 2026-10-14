@@ -17,6 +17,8 @@ const {
   draftStepsArraySchema,
   nutritionSchema,
   nutritionSourceSchema,
+  cookingSchema,
+  cookingContextIssues,
 } = require('./recipe.validation');
 const { consumerPublicationFilter } = require('./recipe.visibility');
 const { isPublicHttpsUrl } = require('../../shared/validation/public-https-url');
@@ -201,6 +203,13 @@ function snapshotRevision(recipe) {
   return revision;
 }
 
+function nextRecipeUpdatedAt(recipe, now = new Date()) {
+  const previous = recipe.updatedAt == null ? 0 : new Date(recipe.updatedAt).getTime();
+  const current = new Date(now).getTime();
+  if (!Number.isSafeInteger(previous) || !Number.isSafeInteger(current)) throw conflictError();
+  return new Date(Math.max(current, previous + 1));
+}
+
 // Reduces validated step input to the persisted `instructions: string[]`
 // shape (Mongo's source of truth). A structured `steps` array wins when
 // present — the validation layer has already guaranteed contiguous 1..N
@@ -271,6 +280,81 @@ function normalizeIngredients(ingredients) {
   }));
 }
 
+function normalizeCooking(cooking) {
+  if (cooking == null) return null;
+  return {
+    schemaVersion: 1,
+    defaultSpiceLevel: cooking.defaultSpiceLevel,
+    spiceAlternatives: cooking.spiceAlternatives.map((alternative) => ({
+      spiceLevel: alternative.spiceLevel,
+      ingredients: normalizeIngredients(alternative.ingredients),
+    })),
+    stepTimers: cooking.stepTimers.map((timer) => ({ ...timer })),
+  };
+}
+
+function cookingForValidation(cooking) {
+  if (cooking == null) return null;
+  return {
+    schemaVersion: cooking.schemaVersion,
+    defaultSpiceLevel: cooking.defaultSpiceLevel ?? null,
+    spiceAlternatives: (cooking.spiceAlternatives || []).map((alternative) => ({
+      spiceLevel: alternative.spiceLevel,
+      ingredients: alternative.ingredients.map((entry) => ({
+        ingredientId: entry.ingredientId == null
+          ? '000000000000000000000000'
+          : String(entry.ingredientId._id || entry.ingredientId),
+        quantity: entry.quantity ?? null,
+        unit: entry.unit,
+        note: entry.note ?? null,
+        optional: entry.optional ?? false,
+      })),
+    })),
+    stepTimers: (cooking.stepTimers || []).map((timer) => ({
+      stepOrder: timer.stepOrder, servings: timer.servings,
+      spiceLevel: timer.spiceLevel ?? null, durationSeconds: timer.durationSeconds,
+    })),
+  };
+}
+
+function cookingValidationIssues(recipe) {
+  if (recipe.cooking == null) return [];
+  const input = cookingForValidation(recipe.cooking);
+  const parsed = cookingSchema.safeParse(input);
+  return [
+    ...(parsed.success ? [] : parsed.error.issues.map((issue) => ({
+      path: ['cooking', ...issue.path], message: issue.message,
+    }))),
+    ...cookingContextIssues({
+      cooking: input,
+      servings: recipe.servings,
+      ingredients: recipe.ingredients,
+      instructions: recipe.instructions,
+    }),
+  ];
+}
+
+function assertCookingValid(recipe) {
+  const issues = cookingValidationIssues(recipe);
+  if (issues.length) throw incompleteRecipeError(issues);
+}
+
+async function evaluateCookingIngredientEligibility(cooking) {
+  if (cooking == null) return [];
+  const issues = [];
+  for (const [index, alternative] of cooking.spiceAlternatives.entries()) {
+    const found = await evaluateIngredientEligibility(alternative.ingredients);
+    issues.push(...found.map((issue) => ({ ...issue, path: `cooking.spiceAlternatives.${index}.${issue.path}` })));
+  }
+  return issues;
+}
+
+async function assertCookingIngredientsActive(cooking) {
+  const issues = await evaluateCookingIngredientEligibility(cooking);
+  if (issues.some((issue) => issue.code === 'RECIPE_INGREDIENT_NOT_FOUND')) throw ingredientNotFoundError();
+  if (issues.length) throw ingredientInactiveError();
+}
+
 function toPublishedValidationInput(recipe, { nutritionSource } = {}) {
   // A populated reference becomes null when its target Ingredient was deleted.
   // The stored usage was still structurally complete, so use a validation-only
@@ -294,6 +378,7 @@ function toPublishedValidationInput(recipe, { nutritionSource } = {}) {
       note: entry.note,
       optional: entry.optional ?? false,
     })),
+    cooking: cookingForValidation(recipe.cooking),
     instructions: recipe.instructions || [],
     dietaryTags: recipe.dietaryTags || [],
     imageUrl: recipe.imageUrl ?? null,
@@ -375,13 +460,28 @@ function isIngredientEntryVisibleToNonAdmin(entry) {
 // purposes, regardless of the requested `status`.
 function toNonAdminView(recipe) {
   const plain = typeof recipe.toObject === 'function' ? recipe.toObject() : recipe;
-  return { ...plain, ingredients: plain.ingredients.filter(isIngredientEntryVisibleToNonAdmin) };
+  const cooking = plain.cooking == null ? null : {
+    ...plain.cooking,
+    spiceAlternatives: plain.cooking.spiceAlternatives
+      .filter((alternative) => alternative.ingredients.every((entry) =>
+        entry.optional || Boolean(entry.ingredientId && entry.ingredientId.isActive)))
+      .map((alternative) => ({
+        ...alternative,
+        ingredients: alternative.ingredients.filter(isIngredientEntryVisibleToNonAdmin),
+      })),
+  };
+  if (cooking) {
+    const offered = new Set([cooking.defaultSpiceLevel,
+      ...cooking.spiceAlternatives.map((alternative) => alternative.spiceLevel)]);
+    cooking.stepTimers = cooking.stepTimers.filter((timer) => offered.has(timer.spiceLevel));
+  }
+  return { ...plain, ingredients: plain.ingredients.filter(isIngredientEntryVisibleToNonAdmin), cooking };
 }
 
 function buildPublishedRecipeDocument({
   title, description, region, category, difficulty, prepTimeMinutes,
   cookTimeMinutes, servings, ingredients, instructions, steps,
-  dietaryTags = [], imageUrl, imageAssetId, nutrition, nutritionSource,
+  dietaryTags = [], imageUrl, imageAssetId, nutrition, nutritionSource, cooking,
 }, { actorId, now = new Date() } = {}) {
   const doc = {
     title: normalizeTitle(title),
@@ -391,6 +491,7 @@ function buildPublishedRecipeDocument({
     cookTimeMinutes: normalizeOptionalTime(cookTimeMinutesSchema, cookTimeMinutes, 'cookTimeMinutes'),
     servings,
     ingredients: normalizeIngredients(ingredients),
+    ...(cooking != null ? { cooking: normalizeCooking(cooking) } : {}),
     instructions: toInstructionsList({ instructions, steps }),
     dietaryTags: normalizeDietaryTags(dietaryTags),
     imageUrl: imageUrl ?? null,
@@ -501,8 +602,9 @@ async function evaluatePublishReadiness(recipe, { duplicateReview, collectAllIss
   }
   const ingredientIssues = await evaluateIngredientEligibility(recipe.ingredients || []);
   issues.push(...ingredientIssues);
+  if (completenessIssues.length === 0) issues.push(...await evaluateCookingIngredientEligibility(recipe.cooking));
 
-  if (completenessIssues.length > 0 || ingredientIssues.length > 0) {
+  if (issues.length > 0) {
     return { issues, duplicateReview: null, completenessIssues };
   }
 
@@ -545,6 +647,7 @@ async function createRecipe(input, { actorId, now = new Date() } = {}) {
   const doc = buildPublishedRecipeDocument(candidate, { actorId, now });
 
   assertPublishedComplete(doc);
+  await assertCookingIngredientsActive(doc.cooking);
   const freshReview = await compareRecipeSubject(doc);
   enforceDuplicateReview(freshReview, duplicateReview);
   return recipeRepository.createRecipe(doc);
@@ -603,9 +706,14 @@ async function createDraft(input, { actorId, now = new Date() } = {}) {
     if (input.ingredients.length > 0) await assertIngredientsActive(input.ingredients);
     doc.ingredients = normalizeIngredients(input.ingredients);
   }
+  if (input.cooking != null) {
+    doc.cooking = normalizeCooking(input.cooking);
+    await assertCookingIngredientsActive(doc.cooking);
+  }
   if (input.instructions !== undefined || input.steps !== undefined) {
     doc.instructions = toInstructionsList(input);
   }
+  assertCookingValid(doc);
   if (input.dietaryTags !== undefined) doc.dietaryTags = normalizeDietaryTags(input.dietaryTags);
   if (input.imageUrl !== undefined) doc.imageUrl = input.imageUrl;
   if (input.imageAssetId !== undefined) doc.imageAssetId = input.imageAssetId;
@@ -893,6 +1001,19 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
   patch = contentPatch;
   assertCurrentPrecondition(existing, expectedUpdatedAt);
   const expectedRevision = snapshotRevision(existing);
+  if (existing.cooking != null && patch.cooking === undefined
+    && (patch.ingredients !== undefined || patch.servings !== undefined
+      || patch.instructions !== undefined || patch.steps !== undefined)) {
+    throw new AppError('Reaffirm or clear cooking data when dependent Recipe fields change.', {
+      statusCode: 409, code: 'RECIPE_COOKING_REVIEW_REQUIRED',
+    });
+  }
+  if (patch.cooking !== undefined && expectedUpdatedAt === undefined) {
+    throw new AppError('expectedUpdatedAt is required when cooking is written.', {
+      statusCode: 400, code: 'VALIDATION_ERROR',
+      details: [{ field: 'expectedUpdatedAt', message: 'Required for cooking writes.' }],
+    });
+  }
 
   const update = {};
   // Fields removed from the document rather than set — an explicit `null` for
@@ -963,6 +1084,10 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
     await assertIngredientsActive(patch.ingredients);
     update.ingredients = normalizeIngredients(patch.ingredients);
   }
+  if (patch.cooking !== undefined) {
+    if (patch.cooking === null) unset.cooking = '';
+    else update.cooking = normalizeCooking(patch.cooking);
+  }
   if (actorId) update.updatedBy = actorId;
 
   const merged = {
@@ -970,6 +1095,8 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
     ...update,
   };
   for (const field of Object.keys(unset)) delete merged[field];
+  assertCookingValid(merged);
+  await assertCookingIngredientsActive(merged.cooking);
   update.imageUrlIsPublicHttps = deriveImageUrlIsPublicHttps(merged.imageUrl);
   merged.imageUrlIsPublicHttps = update.imageUrlIsPublicHttps;
   update.nutritionSourceUrlIsPublicHttps = deriveNutritionSourceUrlIsPublicHttps(merged.nutritionProvenance);
@@ -1009,7 +1136,9 @@ async function updateRecipe(id, patch, { actorId, now = new Date() } = {}) {
   if (Object.keys(update).length > 0) ops.$set = update;
   if (Object.keys(unset).length > 0) ops.$unset = unset;
 
-  const updated = await recipeRepository.updateById(id, ops, { expectedUpdatedAt, expectedRevision });
+  const updated = await recipeRepository.updateById(id, ops, {
+    expectedUpdatedAt, expectedRevision, nextUpdatedAt: nextRecipeUpdatedAt(existing, now),
+  });
   if (!updated) {
     throw conflictError();
   }
@@ -1044,6 +1173,7 @@ async function publishRecipe(id, { expectedUpdatedAt, duplicateReview } = {}, { 
     collectAllIssues: false,
   });
   throwPublishReadinessIssue(evaluation);
+  await assertCookingIngredientsActive(existing.cooking);
 
   const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;
   const published = await recipeRepository.publishById(id, {
@@ -1051,6 +1181,7 @@ async function publishRecipe(id, { expectedUpdatedAt, duplicateReview } = {}, { 
     publishedAt: existing.publishedAt || now,
     expectedUpdatedAt: atomicUpdatedAt,
     expectedRevision,
+    nextUpdatedAt: nextRecipeUpdatedAt(existing, now),
     imageUrlIsPublicHttps: deriveImageUrlIsPublicHttps(existing.imageUrl),
     nutritionSourceUrlIsPublicHttps: deriveNutritionSourceUrlIsPublicHttps(existing.nutritionProvenance),
   });
@@ -1063,7 +1194,9 @@ async function archiveRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
   if (!existing) throw notFoundError();
   assertCurrentPrecondition(existing, expectedUpdatedAt);
   const expectedRevision = snapshotRevision(existing);
-  const archived = await recipeRepository.archiveById(id, { actorId, expectedUpdatedAt, expectedRevision });
+  const archived = await recipeRepository.archiveById(id, {
+    actorId, expectedUpdatedAt, expectedRevision, nextUpdatedAt: nextRecipeUpdatedAt(existing),
+  });
   if (!archived) {
     throw conflictError();
   }
@@ -1079,11 +1212,14 @@ async function restoreRecipe(id, { expectedUpdatedAt } = {}, { actorId } = {}) {
     assertLegacyPublishedComplete(existing);
     await assertIngredientsActive(existing.ingredients || []);
   }
+  assertCookingValid(existing);
+  await assertCookingIngredientsActive(existing.cooking);
   const atomicUpdatedAt = expectedUpdatedAt || existing.updatedAt?.toISOString?.() || existing.updatedAt;
   const restored = await recipeRepository.restoreById(id, {
     actorId,
     expectedUpdatedAt: atomicUpdatedAt,
     expectedRevision,
+    nextUpdatedAt: nextRecipeUpdatedAt(existing),
     imageUrlIsPublicHttps: deriveImageUrlIsPublicHttps(existing.imageUrl),
     nutritionSourceUrlIsPublicHttps: deriveNutritionSourceUrlIsPublicHttps(existing.nutritionProvenance),
   });

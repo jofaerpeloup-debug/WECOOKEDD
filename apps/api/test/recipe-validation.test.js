@@ -71,6 +71,55 @@ function validPayload(overrides = {}) {
   };
 }
 
+function authoredCooking(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    defaultSpiceLevel: 'mild',
+    spiceAlternatives: [{
+      spiceLevel: 'hot',
+      ingredients: [{ ingredientId: INGREDIENT_ID, quantity: 2, unit: 'kg', optional: false }],
+    }],
+    stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 1800 }],
+    ...overrides,
+  };
+}
+
+test('cooking authoring accepts complete alternatives and exact 1-based timer tuples', () => {
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ cooking: authoredCooking() }) }).success, true);
+  assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: {
+    cooking: authoredCooking(),
+  } }).success, false);
+  assert.equal(updateRecipeSchema.safeParse({ params: { recipeId: RECIPE_ID }, body: {
+    cooking: authoredCooking(), expectedUpdatedAt: '2026-10-11T00:00:00.000Z',
+  } }).success, true);
+  assert.equal(createDraftSchema.safeParse({ body: {
+    title: 'Draft Adobo', servings: 4,
+    ingredients: validPayload().ingredients,
+    steps: [{ order: 2, text: 'Simmer gently.' }, { order: 1, text: 'Prepare ingredients.' }],
+    cooking: authoredCooking({ stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 30 }] }),
+  } }).success, true);
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({
+    cooking: authoredCooking({ stepTimers: [{ stepOrder: 0, servings: 4, spiceLevel: 'hot', durationSeconds: 30 }] }),
+  }) }).success, false);
+  for (const cooking of [
+    authoredCooking({ spiceAlternatives: [authoredCooking().spiceAlternatives[0], authoredCooking().spiceAlternatives[0]] }),
+    authoredCooking({ spiceAlternatives: [{ ...authoredCooking().spiceAlternatives[0], spiceLevel: 'mild' }] }),
+    authoredCooking({ stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'medium', durationSeconds: 30 }] }),
+    authoredCooking({ stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 30 },
+      { stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 40 }] }),
+    authoredCooking({ stepTimers: [{ stepOrder: 5, servings: 4, spiceLevel: 'hot', durationSeconds: 30 }] }),
+    authoredCooking({ stepTimers: [{ stepOrder: 2, servings: 101, spiceLevel: 'hot', durationSeconds: 30 }] }),
+    authoredCooking({ stepTimers: [{ stepOrder: 2, servings: 4, spiceLevel: 'hot', durationSeconds: 10801 }] }),
+  ]) {
+    assert.equal(createRecipeSchema.safeParse({ body: validPayload({ cooking }) }).success, false);
+  }
+  assert.equal(createDraftSchema.safeParse({ body: { title: 'Draft Adobo', cooking: authoredCooking() } }).success, false);
+  assert.equal(createRecipeSchema.safeParse({ body: validPayload({ cooking: {
+    schemaVersion: 1, defaultSpiceLevel: null, spiceAlternatives: [],
+    stepTimers: [{ stepOrder: 1, servings: 2, spiceLevel: null, durationSeconds: 60 }],
+  } }) }).success, true);
+});
+
 test('duplicate-check validation accepts exactly one strict subject form', () => {
   const expectedUpdatedAt = '2026-09-29T00:00:00.000Z';
   const { confirmFilipinoCuisine, ...candidate } = validPayload();
