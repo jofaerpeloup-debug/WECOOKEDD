@@ -20,9 +20,12 @@ const PAGE_LIMIT = 20;
 
 function formatCompletedAt(completedAt) {
   return new Date(completedAt).toLocaleDateString(undefined, {
+    weekday: 'short',
     year: 'numeric',
     month: 'short',
     day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   });
 }
 
@@ -180,11 +183,10 @@ export default function CookingHistoryScreen({ navigation }) {
           </View>
         )}
         <View style={styles.cardBody}>
-          <Text style={styles.title} numberOfLines={2}>{item.recipe.title}</Text>
-          {metadata ? <Text style={styles.meta} numberOfLines={2}>{metadata}</Text> : null}
-          <Text style={styles.date}>Cooked {completedDate}</Text>
+          <Text style={styles.title} numberOfLines={1}>{item.recipe.title}</Text>
+          {metadata ? <Text style={styles.meta} numberOfLines={1}>{metadata}</Text> : null}
         </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.inkFaint} />
+        <Text style={styles.date} numberOfLines={2}>{completedDate}</Text>
       </Pressable>
     );
   };
@@ -245,15 +247,18 @@ export default function CookingHistoryScreen({ navigation }) {
 
   return (
     <View style={styles.root} accessibilityState={{ busy: refreshing }}>
-      <TopBar mode="back" title="History" onBack={() => navigation.goBack()} />
+      <TopBar mode="back" title="Cooking History" onBack={() => navigation.goBack()} />
       <FlatList
         data={history}
         keyExtractor={(item) => item.id}
         renderItem={renderHistoryItem}
         ListHeaderComponent={(
           <View style={styles.header}>
-            <Text style={styles.heading} accessibilityRole="header">Cooking history</Text>
-            <Text style={styles.subheading}>Your completed recipes, newest first.</Text>
+            {history.length > 0 ? (
+              <Text style={styles.subheading} accessibilityRole="header">
+                {history.length} {history.length === 1 ? 'dish' : 'dishes'} loaded
+              </Text>
+            ) : null}
             {error && phase === 'ready' ? <Text style={styles.inlineError}>{error}</Text> : null}
           </View>
         )}
@@ -280,16 +285,15 @@ function makeStyles(colors) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxxl, flexGrow: 1 },
-    header: { paddingTop: spacing.lg, paddingBottom: spacing.lg },
-    heading: { fontFamily: typography.display.fontFamily, fontSize: typography.sizes.xxl, color: colors.ink },
-    subheading: { marginTop: spacing.xs, fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.inkSoft },
-    card: { minHeight: 92, flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md, padding: spacing.sm, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.hairline, borderRadius: radius.lg },
-    image: { width: 76, height: 76, borderRadius: radius.md, backgroundColor: colors.creamDeep },
-    imageFallback: { width: 76, height: 76, borderRadius: radius.md, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
+    header: { paddingTop: spacing.md, paddingBottom: spacing.sm },
+    subheading: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.inkSoft },
+    card: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.sm, padding: spacing.md, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.hairline, borderRadius: radius.lg },
+    image: { width: 52, height: 52, borderRadius: radius.md, backgroundColor: colors.creamDeep },
+    imageFallback: { width: 52, height: 52, borderRadius: radius.md, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
     cardBody: { flex: 1, minWidth: 0 },
-    title: { fontFamily: typography.body.semibold, fontSize: typography.sizes.base, color: colors.ink },
-    meta: { marginTop: spacing.xs, fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, lineHeight: 16, color: colors.inkSoft, textTransform: 'capitalize' },
-    date: { marginTop: spacing.sm, fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.sageDeep },
+    title: { fontFamily: typography.body.semibold, fontSize: 14, color: colors.ink },
+    meta: { marginTop: 3, fontFamily: typography.body.fontFamily, fontSize: 11.5, lineHeight: 16, color: colors.inkSoft, textTransform: 'capitalize' },
+    date: { maxWidth: 104, fontFamily: typography.body.medium, fontSize: 11.5, color: colors.inkSoft, textAlign: 'right' },
     stateBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.xxxl, paddingHorizontal: spacing.lg, gap: spacing.sm },
     stateTitle: { fontFamily: typography.body.bold, fontSize: typography.sizes.md, color: colors.ink, textAlign: 'center' },
     stateText: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.inkSoft, textAlign: 'center' },

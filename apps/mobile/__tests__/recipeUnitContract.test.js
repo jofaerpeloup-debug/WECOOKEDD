@@ -57,12 +57,12 @@ describe('canonical Recipe unit contract', () => {
     const dataPath = sourceRegion(
       recipeDetailSource,
       'const ingredientRows = useMemo(',
-      'const instructionSteps = useMemo('
+      'const recipeContext = useMemo('
     );
     const renderPath = sourceRegion(
       recipeDetailSource,
       '{ingredientRows.length === 0 ? (',
-      '<View style={styles.ddInstructionsSection}>'
+      'style={styles.ddNutritionCard}'
     );
 
     expect(formatter).toMatch(/scaleQuantity\(entry\.quantity, opts\.selectedServings, opts\.baseServings\)/);

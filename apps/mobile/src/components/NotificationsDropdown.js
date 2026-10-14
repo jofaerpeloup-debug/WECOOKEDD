@@ -9,7 +9,6 @@ import { useNotifications } from '../context/NotificationsContext';
 import { actionDestination } from '../navigation/notificationAction';
 
 const EMPTY_COPY = "You're all caught up. Real activity — saves, cooked dishes, cook reminders — will show up here.";
-const MARK_READ_DELAY_MS = 250;
 
 function relativeTime(value, now = Date.now()) {
   const elapsed = Math.max(0, now - new Date(value).getTime());
@@ -26,8 +25,6 @@ export default function NotificationsDropdown({ visible, onClose, topOffset, nav
   const { colors, shadow } = useTheme();
   const styles = makeStyles(colors, shadow);
   const {
-    ownerId,
-    generation,
     notifications,
     status,
     error,
@@ -35,16 +32,14 @@ export default function NotificationsDropdown({ visible, onClose, topOffset, nav
     refreshing,
     loadingMore,
     inboxPending,
+    pendingReads,
     retry,
     reload,
     loadMore,
     markRead,
-    markAllRead,
     archiveAll,
   } = useNotifications();
   const anim = useRef(new Animated.Value(0)).current;
-  const ownershipRef = useRef({ ownerId, generation });
-  ownershipRef.current = { ownerId, generation };
 
   useEffect(() => {
     Animated.timing(anim, {
@@ -53,20 +48,6 @@ export default function NotificationsDropdown({ visible, onClose, topOffset, nav
       useNativeDriver: true,
     }).start();
   }, [anim, visible]);
-
-  useEffect(() => {
-    if (!visible || status !== 'ready' || notifications.length === 0) return undefined;
-    const capturedOwner = ownerId;
-    const capturedGeneration = generation;
-    const anchorId = notifications[0].id;
-    const timer = setTimeout(() => {
-      const current = ownershipRef.current;
-      if (capturedOwner === current.ownerId && capturedGeneration === current.generation) {
-        void markAllRead(anchorId);
-      }
-    }, MARK_READ_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [visible, status, notifications[0]?.id, ownerId, generation, markAllRead]);
 
   const openSettings = () => {
     onClose();
@@ -144,12 +125,12 @@ export default function NotificationsDropdown({ visible, onClose, topOffset, nav
               const destination = actionDestination(notification.action);
               const row = (
                 <View style={styles.row}>
-                  <View style={styles.rowTop}>
+                  <View style={[styles.unreadDot, notification.readAt && styles.readDot]} accessibilityLabel={notification.readAt ? 'Read' : 'Unread'} />
+                  <View style={styles.rowCopy}>
                     <Text style={styles.title}>{notification.content.title}</Text>
-                    {!notification.readAt ? <View style={styles.unreadDot} accessibilityLabel="Unread" /> : null}
+                    <Text style={styles.body}>{notification.content.body}</Text>
+                    <Text style={styles.time}>{relativeTime(notification.createdAt)}</Text>
                   </View>
-                  <Text style={styles.body}>{notification.content.body}</Text>
-                  <Text style={styles.time}>{relativeTime(notification.createdAt)}</Text>
                 </View>
               );
               return destination ? (
@@ -161,7 +142,18 @@ export default function NotificationsDropdown({ visible, onClose, topOffset, nav
                 >
                   {row}
                 </Pressable>
-              ) : <View key={notification.id}>{row}</View>;
+              ) : notification.readAt ? <View key={notification.id}>{row}</View> : (
+                <Pressable
+                  key={notification.id}
+                  onPress={() => void markRead(notification.id)}
+                  disabled={!!pendingReads?.[notification.id]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Mark notification as read: ${notification.content.title}`}
+                  accessibilityState={{ busy: !!pendingReads?.[notification.id] }}
+                >
+                  {row}
+                </Pressable>
+              );
             })}
             {error ? <Text style={styles.inlineError}>{error}</Text> : null}
             {hasMore ? (
@@ -187,9 +179,9 @@ function makeStyles(colors, shadow) {
   return StyleSheet.create({
     backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
     panel: {
-      position: 'absolute', right: spacing.lg, width: 330, maxWidth: '90%', maxHeight: 480,
+      position: 'absolute', right: spacing.xl, width: 320, maxWidth: '86%', maxHeight: 480,
       backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1,
-      borderColor: colors.hairline, overflow: 'hidden', ...shadow.card,
+      borderColor: colors.hairline, overflow: 'hidden', paddingTop: spacing.sm, ...shadow.card,
     },
     caret: {
       position: 'absolute', top: -6, right: 16, width: 12, height: 12,
@@ -197,11 +189,11 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline, transform: [{ rotate: '45deg' }],
     },
     header: {
-      minHeight: 52, paddingHorizontal: spacing.md, flexDirection: 'row',
+      minHeight: 52, paddingHorizontal: spacing.lg, flexDirection: 'row',
       alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
     },
-    headerText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.md, color: colors.ink },
+    headerText: { fontFamily: typography.display.fontFamily, fontSize: typography.sizes.md, color: colors.ink },
     actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     actionText: { fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.sageDeep },
     disabled: { opacity: 0.4 },
@@ -211,15 +203,16 @@ function makeStyles(colors, shadow) {
     retryText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.sageDeep },
     list: { maxHeight: 410 },
     listContent: { paddingBottom: spacing.sm },
-    row: { minHeight: 88, padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.hairline },
-    rowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    title: { flex: 1, fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.ink },
-    unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.sageDeep },
-    body: { marginTop: 3, fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, color: colors.inkSoft, lineHeight: 17 },
-    time: { marginTop: spacing.xs, fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint },
+    row: { minHeight: 82, flexDirection: 'row', gap: 10, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.hairline },
+    rowCopy: { flex: 1 },
+    title: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
+    unreadDot: { width: 7, height: 7, borderRadius: 4, marginTop: 5, backgroundColor: colors.stone, borderWidth: 1, borderColor: colors.inkSoft },
+    readDot: { backgroundColor: 'transparent', borderColor: 'transparent' },
+    body: { marginTop: 2, fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.inkSoft, lineHeight: 16 },
+    time: { marginTop: 3, fontFamily: typography.body.fontFamily, fontSize: 10.5, color: colors.inkFaint },
     inlineError: { padding: spacing.sm, textAlign: 'center', color: colors.error, fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs },
     more: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   });
 }
 
-export { EMPTY_COPY, MARK_READ_DELAY_MS, actionDestination, relativeTime };
+export { EMPTY_COPY, actionDestination, relativeTime };

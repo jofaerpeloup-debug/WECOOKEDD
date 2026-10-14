@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
@@ -14,7 +15,7 @@ const LINKS = [
 export default function AboutScreen({ navigation }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const version = '1.0.0';
+  const version = Constants.expoConfig?.version || Constants.nativeAppVersion;
 
   return (
     <View style={styles.root}>
@@ -26,7 +27,7 @@ export default function AboutScreen({ navigation }) {
             <Ionicons name="leaf" size={22} color={colors.onAccent} />
           </View>
           <Text style={styles.appName}>WeCooked</Text>
-          <Text style={styles.version}>Version {version}</Text>
+          <Text style={styles.version}>{version ? `Version ${version}` : 'Version unavailable'}</Text>
         </View>
 
         <View style={styles.card}>
@@ -35,12 +36,14 @@ export default function AboutScreen({ navigation }) {
               key={item.id}
               style={[styles.row, i < LINKS.length - 1 && styles.rowBorder]}
               onPress={() => navigation.navigate(item.route)}
+              accessibilityRole="button"
+              accessibilityLabel={item.label}
             >
               <View style={styles.iconWrap}>
                 <Ionicons name={item.icon} size={17} color={colors.sageDeep} />
               </View>
               <Text style={styles.rowLabel}>{item.label}</Text>
-              <Ionicons name="chevron-forward" size={17} color={colors.inkFaint} />
+              <Ionicons name="chevron-forward" size={17} color={colors.inkSoft} />
             </Pressable>
           ))}
         </View>
@@ -73,7 +76,7 @@ function makeStyles(colors) {
     version: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
     },
     card: {
       backgroundColor: colors.paper,
@@ -101,7 +104,7 @@ function makeStyles(colors) {
     credits: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       textAlign: 'center',
       marginTop: spacing.xxl,
     },

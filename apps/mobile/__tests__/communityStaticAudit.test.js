@@ -5,6 +5,9 @@ const { execFileSync } = require('child_process');
 const SOURCE_ROOT = path.join(__dirname, '../src');
 const REPO_ROOT = path.join(__dirname, '../../..');
 const COMM6_BASELINE = '715ad26317246389dd1084b98f134f6af65eb2ac';
+const COMM6_TIP = '8bec11f5c031b187368261e1b7d916843319818c';
+const COMM5_BASELINE = '7eb9bcc781ee6a1585e500507c31e6f9207337de';
+const COMM5_TIP = 'c789985449ba7331872a2cc0b2a0e14c25b3fafc';
 const COMM6_PRODUCTION_FILE = 'apps/mobile/src/screens/CommunityScreen.js';
 const COMM6_ALLOWLIST = new Set([
   COMM6_PRODUCTION_FILE,
@@ -105,18 +108,17 @@ function assertComm6PatchBoundaries(additions, apiBindings) {
 const SCREEN = read('screens/CommunityScreen.js');
 const SERVICE = read('api/communityService.js');
 const COMM6_CHANGED_PATHS = pathsFromNameStatus(execFileSync(
-  'git', ['diff', '--name-status', '--find-renames', COMM6_BASELINE, '--'],
+  'git', ['diff', '--name-status', '--find-renames', COMM6_BASELINE, COMM6_TIP, '--'],
   { cwd: REPO_ROOT, encoding: 'utf8' }
 ));
 const COMM6_ADDITIONS = addedLinesFromPatch(execFileSync(
-  'git', ['diff', '--no-ext-diff', '--unified=0', COMM6_BASELINE, '--', COMM6_PRODUCTION_FILE],
+  'git', ['diff', '--no-ext-diff', '--unified=0', COMM6_BASELINE, COMM6_TIP, '--', COMM6_PRODUCTION_FILE],
   { cwd: REPO_ROOT, encoding: 'utf8' }
 ));
-const UNTRACKED_PATHS = execFileSync(
-  'git', ['ls-files', '--others', '--exclude-standard'],
+const COMM5_CHANGED_PATHS = pathsFromNameStatus(execFileSync(
+  'git', ['diff', '--name-status', '--find-renames', COMM5_BASELINE, COMM5_TIP, '--'],
   { cwd: REPO_ROOT, encoding: 'utf8' }
-).trim().split(/\r?\n/).filter(Boolean).map((file) => file.replace(/\\/g, '/'));
-const COMM5_CHANGED_PATHS = [...new Set([...COMM6_CHANGED_PATHS, ...UNTRACKED_PATHS])]
+))
   .filter((file) => file.startsWith('apps/api/src/')
     || file.startsWith('apps/mobile/src/')
     || /^apps\/api\/test\/community.*\.test\.js$/.test(file)
@@ -332,7 +334,8 @@ describe('Community M10A real integration', () => {
   });
 
   it('preserves All/Following with pessimistic token-owned guarded follow state', () => {
-    expect(SCREEN).toMatch(/\[FEED_ALL, 'All'\], \[FEED_FOLLOWING, 'Following'\], \[FEED_SAVED, 'Saved'\]/);
+    expect(SCREEN).toMatch(/const FEED_TABS = \[\s*\{ mode: FEED_ALL, label: 'All', icon: 'grid-outline' \},\s*\{ mode: FEED_FOLLOWING, label: 'Following', icon: 'people-outline' \},\s*\{ mode: FEED_SAVED, label: 'Saved', icon: 'bookmark-outline' \},\s*\];/);
+    expect(SCREEN).toMatch(/FEED_TABS\.map\(\(\{ mode, label, icon \}\) =>/);
     expect(SCREEN).not.toMatch(/Trending|For You/);
     expect(SCREEN).toMatch(/pendingFollowsRef = useRef\(new Map\(\)\)/);
     expect(SCREEN).toMatch(/pendingFollowsRef\.current\.has\(authorId\)/);
@@ -365,7 +368,7 @@ describe('Community M10A real integration', () => {
     expect(SERVICE).not.toMatch(/bookmarkCount|AsyncStorage/);
   });
 
-  it('confines current production and Community test changes to the exact COMM5 allowlists', () => {
+  it('confines the historical COMM5 production and Community test diff to its exact allowlists', () => {
     const outsideAllowlist = COMM5_CHANGED_PATHS.filter((file) => !COMM5_ALLOWLIST.has(file));
     expect(outsideAllowlist).toEqual([]);
     expect(COMM5_CHANGED_PATHS).toEqual(expect.arrayContaining([

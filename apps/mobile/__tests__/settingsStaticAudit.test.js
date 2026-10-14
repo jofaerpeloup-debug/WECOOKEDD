@@ -45,6 +45,21 @@ describe('Settings appearance uses the real ThemeContext', () => {
     expect(options).toMatch(/id: 'dark'/);
     expect(options).toMatch(/id: 'system'/);
   });
+
+  it('gives each segmented option a distinct 48dp minimum pressable area', () => {
+    const segment = region('segment: {', 'segmentActive:');
+    const width = Number(segment.match(/minWidth:\s*(\d+)/)?.[1]);
+    const height = Number(segment.match(/minHeight:\s*(\d+)/)?.[1]);
+    expect(width).toBeGreaterThanOrEqual(48);
+    expect(height).toBeGreaterThanOrEqual(48);
+    expect(segment).toMatch(/flex: 1/);
+    expect(segment).toMatch(/alignItems: 'center'/);
+    expect(segment).toMatch(/justifyContent: 'center'/);
+    const row = region('segmentRow: {', 'segment: {');
+    expect(row).toMatch(/gap: 4/);
+    const appearance = region('APPEARANCE_OPTIONS.map', '</View>');
+    expect(appearance).not.toMatch(/hitSlop/);
+  });
 });
 
 describe('Settings rows map exactly to live destinations', () => {
@@ -61,7 +76,7 @@ describe('Settings rows map exactly to live destinations', () => {
   it('describes only behavior the destination screens actually support', () => {
     const groups = region('const SETTINGS_GROUPS', 'const ROUTES');
     expect(groups).toMatch(/Password, verification, sessions/);
-    expect(groups).toMatch(/Account-wide on or off/);
+    expect(groups).toMatch(/Notification types and delivery/);
     expect(groups).not.toMatch(/2FA|Push, email alerts|contact/);
   });
 
@@ -87,23 +102,22 @@ describe('Settings rows map exactly to live destinations', () => {
     expect(securityCode).toMatch(/onPress=\{handleSignOutEverywhere\}/);
   });
 
-  it('backs Notifications copy with the real account boolean and pessimistic account mutation', () => {
+  it('backs Notifications copy with the current owner-scoped preference context', () => {
     const groups = region('const SETTINGS_GROUPS', 'const ROUTES');
     const routes = region('const ROUTES', 'const APPEARANCE_OPTIONS');
-    expect(groups).toMatch(/id: 'notifications'[\s\S]*?sub: 'Account-wide on or off'/);
+    expect(groups).toMatch(/id: 'notifications'[\s\S]*?sub: 'Notification types and delivery'/);
     expect(routes).toMatch(/notifications: 'Notifications'/);
 
-    expect(notificationsCode).toMatch(/const \{ user, syncUser \} = useAuth\(\)/);
-    expect(notificationsCode).toMatch(/const enabled = !!user\?\.preferences\?\.notifications\?\.enabled/);
-    expect(notificationsCode).not.toMatch(/\[enabled, setEnabled\] = useState/);
-    const toggle = sourceRegion(notificationsCode, 'const toggle = async (next) => {', 'return (');
-    expect(toggle).toMatch(/if \(savingRef\.current\) return/);
-    expect(toggle).toMatch(/updateProfile\(\{[\s\S]*?preferences: \{ notifications: \{ enabled: next \} \}/);
-    expect(toggle).toMatch(/syncUser\(updated\)/);
+    expect(notificationsCode).toMatch(/useNotifications\(\)/);
+    expect(notificationsCode).toMatch(/const busy = !!preferencePending\[setting\.key\]/);
     const notificationSwitch = sourceRegion(notificationsCode, '<Switch', '/>');
-    expect(notificationSwitch).toMatch(/value=\{enabled\}/);
-    expect(notificationSwitch).toMatch(/onValueChange=\{toggle\}/);
-    expect(notificationSwitch).toMatch(/disabled=\{saving\}/);
+    expect(notificationSwitch).toMatch(/value=\{preferences\[setting\.key\]\}/);
+    expect(notificationSwitch).toMatch(/onValueChange=\{\(value\) => setPreference\(setting\.key, value\)\}/);
+    expect(notificationSwitch).toMatch(/disabled=\{busy\}/);
+    expect(notificationsCode).toMatch(/preferenceError/);
+    const context = fs.readFileSync(path.join(SRC, 'context/NotificationsContext.js'), 'utf8');
+    expect(context).toMatch(/updateNotificationPreference\(/);
+    expect(context).toMatch(/ownerRef\.current/);
   });
 
   it('labels the heading and every generated navigation row', () => {

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -199,10 +200,12 @@ export default function AssistantScreen({ navigation, route }) {
         <Text style={styles.headerTitle}>Ask the Chef</Text>
         <Pressable
           style={styles.clearBtn}
+          hitSlop={4}
           onPress={resetConversation}
           accessibilityRole="button"
           accessibilityLabel="Clear conversation"
         >
+          <Ionicons name="trash-outline" size={16} color={colors.inkFaint} />
           <Text style={styles.clearText}>Clear</Text>
         </Pressable>
       </View>
@@ -215,15 +218,15 @@ export default function AssistantScreen({ navigation, route }) {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
-        <View style={styles.introIcon}>
-          <MaterialCommunityIcons name="chef-hat" size={20} color={colors.sageDeep} />
-        </View>
-        <Text style={styles.introText}>
-          Ask Chef Assistant for cooking ideas, recipe guidance, or ingredient swaps.
-        </Text>
-
-        <View style={styles.prompts}>
-          {QUICK_PROMPTS.map((prompt) => (
+        {renderedAssistantState.messages.length === 0 ? <>
+          <View style={styles.introIcon}>
+            <MaterialCommunityIcons name="chef-hat" size={20} color={colors.sageDeep} />
+          </View>
+          <Text style={styles.introText}>
+            Ask Chef Assistant for cooking ideas, recipe guidance, or ingredient swaps.
+          </Text>
+          <View style={styles.prompts}>
+            {QUICK_PROMPTS.map((prompt) => (
             <Pressable
               key={prompt}
               style={[styles.prompt, isSending && styles.controlDisabled]}
@@ -235,8 +238,9 @@ export default function AssistantScreen({ navigation, route }) {
             >
               <Text style={styles.promptText}>{prompt}</Text>
             </Pressable>
-          ))}
-        </View>
+            ))}
+          </View>
+        </> : null}
 
         {renderedAssistantState.messages.map((message, index) => (
           <View
@@ -267,7 +271,8 @@ export default function AssistantScreen({ navigation, route }) {
         {isSending ? (
           <View style={styles.msgRow} accessibilityLabel="Chef Assistant is thinking">
             <Text style={styles.sender}>CHEF ASSISTANT</Text>
-            <View style={[styles.bubble, styles.bubbleAssistant]}>
+            <View style={[styles.bubble, styles.bubbleAssistant, styles.thinkingBubble]}>
+              <ActivityIndicator size="small" color={colors.inkSoft} />
               <Text style={styles.thinkingText}>Thinking...</Text>
             </View>
           </View>
@@ -351,7 +356,7 @@ function makeStyles(colors) {
       fontSize: 19,
       color: colors.ink,
     },
-    clearBtn: { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
+    clearBtn: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: spacing.sm },
     clearText: {
       fontFamily: typography.body.semibold,
       fontSize: 12,
@@ -407,6 +412,7 @@ function makeStyles(colors) {
       color: colors.ink,
     },
     bubbleTextUser: { color: colors.onAccent },
+    thinkingBubble: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     thinkingText: {
       fontFamily: typography.body.medium,
       fontSize: 14,

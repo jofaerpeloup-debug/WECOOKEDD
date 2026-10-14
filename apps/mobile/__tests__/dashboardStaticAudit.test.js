@@ -5,6 +5,23 @@ const source = fs.readFileSync(path.join(__dirname, '../src/screens/DashboardScr
 const topBar = fs.readFileSync(path.join(__dirname, '../src/components/TopBar.js'), 'utf8');
 
 describe('Dashboard production authority and shared recent searches', () => {
+  it('keeps the pinned hero and search hierarchy with accessible API recipe actions', () => {
+    expect(source).toMatch(/height: 190/);
+    expect(source).toMatch(/borderRadius: 20/);
+    expect(source).toMatch(/accessibilityLabel=\{`Open \$\{feature\.title\}`\}/);
+    expect(source).toMatch(/accessibilityLabel=\{`Browse \$\{shortcut\.label\} recipes`\}/);
+    expect(source).toMatch(/accessibilityLabel="Retry loading recipes"/);
+  });
+  it('uses a Home-only left wordmark and a graded hero scrim', () => {
+    expect(source).toMatch(/mode="brand"\s+variant="home"\s+transparent/);
+    expect(topBar).toMatch(/brandRowLeft: \{ justifyContent: 'flex-start' \}/);
+    expect(topBar).toMatch(/fontFamily: typography\.display\.fontFamilyItalic, fontSize: 22/);
+    expect(topBar).toMatch(/transparent && \{ backgroundColor: 'transparent', borderBottomWidth: 0 \}/);
+    expect(source).toMatch(/<SvgLinearGradient id="dashboardHeroScrim"/);
+    expect(source).toMatch(/<Stop offset="0%" stopColor="#12160e" stopOpacity=\{0\}/);
+    expect(source).toMatch(/<Stop offset="100%" stopColor="#12160e" stopOpacity=\{0\.92\}/);
+    expect(source).not.toMatch(/backgroundColor: 'rgba\(18,22,14,0\.42\)'/);
+  });
   it('keeps real Recipe service, image, favorites, and Recipe Detail navigation', () => {
     expect(source).toMatch(/import \{ listRecipes \} from '\.\.\/api\/recipeService'/);
     expect(source).toMatch(/<RecipeImage\b/);

@@ -3,11 +3,11 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
-import { licenses } from '../data/mockData';
+import { licenses } from '../data/licenses';
 
 export default function LicensesScreen({ navigation }) {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const { colors, isDark } = useTheme();
+  const styles = makeStyles(colors, isDark);
 
   return (
     <View style={styles.root}>
@@ -15,7 +15,7 @@ export default function LicensesScreen({ navigation }) {
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.subtitle}>
-          WeCooked is built with these open source packages. Thanks to their maintainers.
+          Direct third-party mobile packages in this build, with versions and declared licenses from the lockfile.
         </Text>
 
         <View style={styles.card}>
@@ -34,7 +34,7 @@ export default function LicensesScreen({ navigation }) {
   );
 }
 
-function makeStyles(colors) {
+function makeStyles(colors, isDark) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
@@ -62,13 +62,13 @@ function makeStyles(colors) {
     rowSub: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: 1,
     },
     license: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.xs,
-      color: colors.sageDeep,
+      color: isDark ? colors.inkSoft : colors.sageDeep,
     },
   });
 }

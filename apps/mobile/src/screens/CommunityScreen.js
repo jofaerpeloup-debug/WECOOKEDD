@@ -11,6 +11,8 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { tabBarScrollClearance } from '../navigation/tabBarLayout';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -41,6 +43,11 @@ const MAX_COMMENT_LENGTH = 1000;
 const FEED_ALL = 'all';
 const FEED_FOLLOWING = 'following';
 const FEED_SAVED = 'saved';
+const FEED_TABS = [
+  { mode: FEED_ALL, label: 'All', icon: 'grid-outline' },
+  { mode: FEED_FOLLOWING, label: 'Following', icon: 'people-outline' },
+  { mode: FEED_SAVED, label: 'Saved', icon: 'bookmark-outline' },
+];
 
 function initialFor(name) {
   return (name || 'C').trim().charAt(0).toUpperCase() || 'C';
@@ -71,6 +78,7 @@ function readFeed(mode, params) {
 
 export default function CommunityScreen({ navigation }) {
   const { colors, shadow } = useTheme();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const styles = makeStyles(colors, shadow);
   const ownerId = user?.id || null;
@@ -718,14 +726,14 @@ export default function CommunityScreen({ navigation }) {
     <View style={styles.root}>
       <TopBar mode="title" title="Community" />
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarScrollClearance(insets.bottom) }]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshFeed} accessibilityLabel="Refresh Community" />}
       >
         <Text style={styles.subtitle}>See what other home cooks are making.</Text>
 
         <View style={styles.modeRow} accessibilityRole="tablist">
-          {[[FEED_ALL, 'All'], [FEED_FOLLOWING, 'Following'], [FEED_SAVED, 'Saved']].map(([mode, label]) => (
+          {FEED_TABS.map(({ mode, label, icon }) => (
             <Pressable
               key={mode}
               style={[styles.modeButton, feedMode === mode && styles.modeButtonActive]}
@@ -734,6 +742,7 @@ export default function CommunityScreen({ navigation }) {
               accessibilityState={{ selected: feedMode === mode }}
               accessibilityLabel={`${label} Community posts`}
             >
+              <Ionicons name={icon} size={14} color={feedMode === mode ? colors.onAccent : colors.inkSoft} />
               <Text style={[styles.modeText, feedMode === mode && styles.modeTextActive]}>{label}</Text>
             </Pressable>
           ))}
@@ -1038,10 +1047,10 @@ function makeStyles(colors, shadow) {
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
     subtitle: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.sm, color: colors.inkSoft, marginBottom: spacing.lg, lineHeight: 19 },
     modeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
-    modeButton: { flex: 1, alignItems: 'center', paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.paper },
-    modeButtonActive: { backgroundColor: colors.sagePale, borderColor: colors.sageDeep },
+    modeButton: { flex: 1, minHeight: 44, flexDirection: 'row', gap: 5, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.sm, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.paper },
+    modeButtonActive: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
     modeText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.sm, color: colors.inkSoft },
-    modeTextActive: { color: colors.sageDeep },
+    modeTextActive: { color: colors.onAccent },
     composeCard: { backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.hairline, padding: spacing.md, marginBottom: spacing.xl, ...shadow.soft },
     composeHeader: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
     avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },

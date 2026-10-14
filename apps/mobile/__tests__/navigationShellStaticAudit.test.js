@@ -32,6 +32,8 @@ const rootNavRaw = read('navigation/RootNavigator.js');
 const rootNav = stripComments(rootNavRaw);
 const tabBarRaw = read('components/TabBar.js');
 const tabBar = stripComments(tabBarRaw);
+const tabBarLayoutRaw = read('navigation/tabBarLayout.js');
+const { TAB_BAR_PILL_HEIGHT, tabBarBottomOffset, tabBarScrollClearance } = require('../src/navigation/tabBarLayout');
 const plusMenuRaw = read('components/PlusMenu.js');
 const plusMenu = stripComments(plusMenuRaw);
 const mealPlanRaw = read('screens/MealPlanScreen.js');
@@ -55,7 +57,7 @@ describe('MainTabs — the verified teammate 4-tab set, in order', () => {
     expect(mainTabs).toMatch(/name="Profile"\s+component=\{ProfileScreen\}/);
   });
 
-  it('does NOT register the centre "+" / Assistant / MealPlan / Discover / Saved as tabs', () => {
+  it('does NOT register the chef action / Assistant / MealPlan / Discover / Saved as tabs', () => {
     const names = tabScreenNames(mainTabs);
     for (const forbidden of ['Assistant', 'MealPlan', 'Plus', 'Add', 'Discover', 'Saved']) {
       expect(names).not.toContain(forbidden);
@@ -67,7 +69,7 @@ describe('MainTabs — the verified teammate 4-tab set, in order', () => {
   });
 });
 
-describe('TabBar — raised centre action, not a route', () => {
+describe('TabBar — centre action, not a route', () => {
   // The four TABS entries in order. `name` (not `key`) so it reads as, and is
   // asserted against, a REGISTERED route name.
   const tabNames = [...tabBar.matchAll(/name:\s*'([^']+)'/g)].map((m) => m[1]);
@@ -76,7 +78,7 @@ describe('TabBar — raised centre action, not a route', () => {
     expect(tabNames).toEqual(['Home', 'Community', 'Swaps', 'Profile']);
   });
 
-  it('renders the centre "+" as a Pressable that opens PlusMenu via local state', () => {
+  it('renders the centre chef icon as a Pressable that opens PlusMenu via local state', () => {
     expect(tabBar).toMatch(/import PlusMenu from '\.\/PlusMenu'/);
     expect(tabBar).toMatch(/const \[menuOpen, setMenuOpen\] = useState\(false\)/);
     expect(tabBar).toMatch(/onPress=\{\(\) => setMenuOpen\(true\)\}/);
@@ -105,6 +107,44 @@ describe('TabBar — raised centre action, not a route', () => {
 
   it('every TabBar tab name is a real <Tab.Screen> in MainTabs (and vice-versa)', () => {
     expect(tabNames.slice().sort()).toEqual(tabScreenNames(mainTabs).slice().sort());
+  });
+
+  it('uses the pinned transparent floating overlay and safe-area bottom placement', () => {
+    expect(tabBar).toMatch(/<Animated\.View style=\{\[styles\.pill, \{ transform: \[\{ scale: tabScale \}\] \}\]\}>/);
+    expect(tabBar).toMatch(/borderRadius: 34/);
+    expect(tabBar).toMatch(/shadowRadius: 20/);
+    expect(tabBar).toMatch(/paddingBottom: tabBarBottomOffset\(insets\.bottom\)/);
+    expect(tabBar).toMatch(/position:\s*'absolute'/);
+    expect(tabBar).toMatch(/left: 0,[\s\S]*?right: 0,[\s\S]*?bottom: 0/);
+    expect(tabBar).toMatch(/backgroundColor: 'transparent'/);
+    expect(tabBar).toMatch(/pointerEvents="box-none"/);
+    expect(mainTabs).toMatch(/tabBarHideOnKeyboard: true/);
+    expect(tabBar).toMatch(/Keyboard\.addListener\('keyboardDidShow'/);
+    expect(tabBar).toMatch(/Keyboard\.addListener\('keyboardDidHide'/);
+    expect(tabBar).toMatch(/if \(keyboardVisible\) return null/);
+    expect(tabBar).toMatch(/Animated\.timing\(tabScale, \{ toValue: 0\.98, duration: 90/);
+  });
+
+  it('exposes selected tabs and reachable controls to screen readers', () => {
+    expect(tabBar).toMatch(/accessibilityRole="tab"/);
+    expect(tabBar).toMatch(/accessibilityState=\{\{ selected: focused \}\}/);
+    expect(tabBar).toMatch(/accessibilityLabel=\{tab\.label\}/);
+    expect(tabBar).toMatch(/minWidth: 50/);
+    expect(tabBar).toMatch(/height: TAB_BAR_ITEM_HEIGHT/);
+    expect(tabBar).toMatch(/hitSlop=\{6\}/);
+    expect(tabBar).toMatch(/accessibilityLabel="Quick actions"/);
+  });
+
+  it('derives last-row clearance from the actual pill geometry for all four tabs', () => {
+    expect(TAB_BAR_PILL_HEIGHT).toBe(60);
+    expect(tabBarBottomOffset(0)).toBe(12);
+    expect(tabBarScrollClearance(0)).toBe(88);
+    expect(tabBarScrollClearance(24)).toBe(104);
+    expect(tabBarLayoutRaw).toMatch(/TAB_BAR_ITEM_HEIGHT \+ 2 \* TAB_BAR_PILL_VERTICAL_PADDING \+ 2 \* TAB_BAR_PILL_BORDER/);
+    for (const screen of ['DashboardScreen.js', 'CommunityScreen.js', 'IngredientStudioScreen.js', 'ProfileScreen.js']) {
+      expect(read(`screens/${screen}`)).toMatch(/paddingBottom: tabBarScrollClearance\(insets\.bottom\)/);
+    }
+    expect(read('screens/IngredientStudioScreen.js')).toMatch(/asTab && \{ paddingBottom: tabBarScrollClearance/);
   });
 });
 
@@ -164,10 +204,23 @@ describe('RootNavigator — non-tab destinations stay registered & reachable', (
       'Landing',
       'Login',
       'Register',
+      'Terms',
+      'Privacy',
       'ResetPassword',
       'VerifyEmail',
       'VerifyEmailChange',
     ]);
+  });
+
+  it('keeps legal documents in both stacks and drops a legal route on auth transition', () => {
+    for (const [route, component] of [['Terms', 'TermsScreen'], ['Privacy', 'PrivacyScreen']]) {
+      const entries = [...rootNav.matchAll(new RegExp(
+        `<Stack\\.Screen name="${route}" component=\\{${component}\\} navigationKey="([^"]+)"`, 'g'
+      ))].map((match) => match[1]);
+      expect(entries).toEqual([`${route.toLowerCase()}-authed`, `${route.toLowerCase()}-guest`]);
+    }
+    expect(rootNav).toMatch(/<Stack\.Screen name="Register" component=\{RegisterScreen\} \/>/);
+    expect(rootNav).not.toMatch(/name="(?:Guest|GuestBrowse|PublicRecipes)"/);
   });
 
   it.each(['MainTabs', 'Discover', 'Trending', 'Saved', 'Assistant', 'MealPlan', 'List', 'IngredientStudio', 'SwapDetail', 'RecipeDetail', 'RecipeReviews', 'CookingHistory', 'CookMode', 'AccountDetails', 'Settings'])(

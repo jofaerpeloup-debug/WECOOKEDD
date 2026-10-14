@@ -14,6 +14,7 @@ jest.mock('react-native', () => {
   });
 
   return {
+    ActivityIndicator: host('ActivityIndicator'),
     KeyboardAvoidingView: host('View'),
     Platform: { OS: 'ios', select: (spec) => spec?.ios ?? spec?.default },
     Pressable: host('View'),
@@ -338,14 +339,17 @@ it('routes a quick prompt through the normal service and single-flight path', as
   renderAssistant();
   const prompt = 'What can I cook fast?';
 
-  fireEvent.press(currentView.getByLabelText(`Ask: ${prompt}`));
-  fireEvent.press(currentView.getByLabelText(`Ask: ${prompt}`));
+  const promptButton = currentView.getByLabelText(`Ask: ${prompt}`);
+  act(() => {
+    promptButton.props.onPress();
+    promptButton.props.onPress();
+  });
 
   expect(api.post).toHaveBeenCalledTimes(1);
   expect(api.post).toHaveBeenCalledWith('/assistant/chat', {
     body: { messages: [{ role: 'user', content: prompt }] },
   });
-  expect(currentView.getAllByText(prompt)).toHaveLength(2);
+  expect(currentView.getAllByText(prompt)).toHaveLength(1);
 
   await settle(request, 'resolve', 'Make an omelette.');
   expect(currentView.getAllByText('Make an omelette.')).toHaveLength(1);

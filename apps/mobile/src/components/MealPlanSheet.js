@@ -120,7 +120,7 @@ export default function MealPlanSheet({ visible, onClose, day, recipeId, onAdded
       <Pressable style={styles.backdrop} onPress={onClose} />
       <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.xl) }]}>
         <View style={styles.grabber} />
-        <Text style={styles.title}>{pickRecipeMode ? `Add a recipe to ${day.label}` : 'Add to which day this week?'}</Text>
+        <Text style={styles.title} accessibilityRole="header">{pickRecipeMode ? `Add a recipe to ${day.label}` : 'Add to which day this week?'}</Text>
         {pickRecipeMode ? (
           <View style={styles.flexBody}>
             <View style={styles.search}>
@@ -177,13 +177,13 @@ function StateMessage({ message, onRetry, styles }) {
 function makeStyles(colors) {
   return StyleSheet.create({
     backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
-    sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '76%', backgroundColor: colors.paper, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
+    sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '82%', backgroundColor: colors.paper, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
     grabber: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.hairline, marginBottom: spacing.lg },
     title: { fontFamily: typography.display.fontFamily, fontSize: 18, color: colors.ink, marginBottom: spacing.md },
-    flexBody: { flex: 1 },
+    flexBody: { flexShrink: 1 },
     search: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.creamDeep, borderRadius: radius.md, paddingHorizontal: spacing.md, marginBottom: spacing.sm },
     searchInput: { flex: 1, height: 42, fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.ink },
-    list: { flex: 1 },
+    list: { flexGrow: 0, flexShrink: 1 },
     recipeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.hairline },
     thumb: { width: 46, height: 46, borderRadius: 9, backgroundColor: colors.creamDeep },
     recipeTitle: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
@@ -197,7 +197,7 @@ function makeStyles(colors) {
     retry: { fontFamily: typography.body.semibold, color: colors.sageDeep },
     softError: { fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.error, textAlign: 'center', paddingVertical: spacing.sm },
     more: { paddingVertical: spacing.md },
-    done: { marginTop: spacing.md, height: 46, borderRadius: radius.pill, backgroundColor: colors.sageDeep, alignItems: 'center', justifyContent: 'center' },
-    doneText: { fontFamily: typography.body.semibold, fontSize: 14, color: colors.onAccent },
+    done: { marginTop: spacing.md, height: 50, borderRadius: radius.pill, backgroundColor: colors.creamDeep, alignItems: 'center', justifyContent: 'center' },
+    doneText: { fontFamily: typography.body.semibold, fontSize: 14, color: colors.ink },
   });
 }

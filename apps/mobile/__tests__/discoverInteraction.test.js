@@ -176,12 +176,68 @@ it('renders the Search shell and eight visible sort controls in the one list hea
   const { view } = renderSearch();
   await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
   expect(view.UNSAFE_getByType('TopBar').props.title).toBe('Search');
+  expect(view.UNSAFE_getByType('TopBar').props.variant).toBe('discover');
+  expect(view.UNSAFE_getByType('TopBar').props.transparent).toBe(true);
   expect(view.getByLabelText('Search recipes').props.placeholder).toBe('Search recipes...');
   for (const label of [
     'Sort: Title: A-Z', 'Sort: Title: Z-A', 'Sort: Newest added',
     'Sort: Oldest added', 'Sort: Prep time: low to high', 'Sort: Prep time: high to low',
     'Sort: Relevance', 'Sort: Top Rated',
   ]) expect(view.getByLabelText(label)).toBeOnTheScreen();
+});
+
+it('starts with a collapsed accessible filter panel and available refresh/pagination', async () => {
+  listRecipes
+    .mockResolvedValueOnce(page([recipe('a', 'A')], 1, 2))
+    .mockResolvedValueOnce(page([recipe('b', 'B')], 2, 2))
+    .mockResolvedValueOnce(page([recipe('a', 'A')], 1, 1));
+  const { view } = renderSearch();
+  await view.findByText('A');
+  expect(view.getByLabelText('Filters, none active').props.accessibilityState.expanded).toBe(false);
+  expect(view.queryByText('Region')).toBeNull();
+  act(() => view.UNSAFE_getByType('FlatList').props.onEndReached());
+  await view.findByText('B');
+  expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'titleAsc', page: 2, limit: 20 });
+  await act(async () => { refreshCallback(); await Promise.resolve(); });
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'titleAsc', page: 1, limit: 20 }));
+  fireEvent.press(view.getByLabelText('Filters, none active'));
+  expect(view.getByLabelText('Filters, none active').props.accessibilityState.expanded).toBe(true);
+  for (const label of ['Region', 'Category', 'Dietary', 'Total time', 'Maximum prep minutes', 'Ingredient']) {
+    expect(view.getByText(label)).toBeOnTheScreen();
+  }
+  expect(view.queryByText(/Vibe|Craving/)).toBeNull();
+});
+
+it('keeps all 18 regions in a bounded chooser and stages selection until Apply', () => {
+  const { props, view } = renderSheet();
+  const trigger = view.getByLabelText('Region: Any');
+  expect(trigger.props.accessibilityState.expanded).toBe(false);
+  expect(view.queryByLabelText(`Region: ${REGION_OPTIONS[1].label}`)).toBeNull();
+  fireEvent.press(trigger);
+  expect(view.UNSAFE_getByType('ScrollView').props.nestedScrollEnabled).toBe(true);
+  for (const option of REGION_OPTIONS) {
+    expect(view.getAllByLabelText(`Region: ${option.label}`).length).toBeGreaterThan(0);
+  }
+  expect(REGION_OPTIONS).toHaveLength(19);
+  fireEvent.press(view.getByLabelText(`Region: ${REGION_OPTIONS[18].label}`));
+  expect(view.getByLabelText(`Region: ${REGION_OPTIONS[18].label}`).props.accessibilityState.expanded).toBe(false);
+  expect(props.onApply).not.toHaveBeenCalled();
+  fireEvent.press(view.getByLabelText('Apply recipe filters'));
+  expect(props.onApply).toHaveBeenCalledWith(expect.objectContaining({ region: REGION_OPTIONS[18].value }));
+});
+
+it('renders only real card metadata and preserves the separate favorite and API route', async () => {
+  const item = { ...recipe('photo', 'Long recipe title'), imageUrl: 'https://example.com/recipe.jpg', cookTimeMinutes: 20 };
+  listRecipes.mockResolvedValueOnce(page([item]));
+  const { view, navigation } = renderSearch();
+  await view.findByText(item.title);
+  expect(view.UNSAFE_getByType('RecipeImage').props.source).toBe(item.imageUrl);
+  expect(view.getByText(/30 min/)).toBeOnTheScreen();
+  expect(view.UNSAFE_getByType('FavoriteHeart').props.recipe).toBe(item);
+  fireEvent.press(view.getByLabelText(`Open ${item.title}`));
+  expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', {
+    recipeSource: 'api', recipeId: item.id, initialRecipe: item,
+  });
 });
 
 it('prevents blank-query Relevance without substituting a different server sort', async () => {
@@ -792,6 +848,7 @@ it('composes the complete Search request from query, narrowing draft, Ingredient
   fireEvent.changeText(view.getByLabelText('Search recipes'), ' adobo ');
   await advance();
   fireEvent.press(view.getByLabelText('Filters, none active'));
+  fireEvent.press(view.getByLabelText('Region: Any'));
   fireEvent.press(view.getByLabelText(`Region: ${REGION_OPTIONS[1].label}`));
   fireEvent.press(view.getByLabelText(`Category: ${CATEGORY_OPTIONS[1].label}`));
   fireEvent.press(view.getByLabelText('Difficulty: Hard'));

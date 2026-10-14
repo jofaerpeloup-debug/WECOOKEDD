@@ -120,8 +120,9 @@ describe('VerifyEmailScreen — wired to the real endpoints, both auth states', 
 
 describe('VerifyEmailChangeScreen consumes transient tokens and ends revoked local sessions', () => {
   it('verifies through the public ACCOUNT2 endpoint then clears local credentials through AuthContext', () => {
-    expect(raw.VerifyEmailChange).toMatch(/const \{ verifyEmailChange \} = useAuth\(\)/);
+    expect(raw.VerifyEmailChange).toMatch(/const \{ isLoggedIn, verifyEmailChange \} = useAuth\(\)/);
     expect(raw.VerifyEmailChange).toMatch(/await verifyEmailChange\(token\)/);
+    expect(raw.VerifyEmailChange).toMatch(/routes: \[\{ name: isLoggedIn \? 'MainTabs' : 'Login' \}\]/);
   });
 
   it('maps failures safely and never writes identity locally', () => {

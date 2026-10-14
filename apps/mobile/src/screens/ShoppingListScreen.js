@@ -271,7 +271,7 @@ export default function ShoppingListScreen({ navigation }) {
         >
           <Ionicons name="chevron-back" size={18} color={colors.ink} />
         </Pressable>
-        <Text style={styles.title} accessibilityRole="header">Shopping List</Text>
+        <Text style={styles.title} accessibilityRole="header">Grocery List</Text>
       </View>
       {items.length > 0 ? (
         <View style={styles.headerActions}>
@@ -284,7 +284,7 @@ export default function ShoppingListScreen({ navigation }) {
               accessibilityLabel="Clear shopping list"
               accessibilityState={{ disabled: isMutating }}
             >
-              <Text style={[styles.clear, isMutating && styles.actionDisabled]}>Clear</Text>
+              <Text style={[styles.clear, isMutating && styles.actionDisabled]}>Clear all</Text>
             </Pressable>
           ) : checkedCount > 0 ? (
             <Pressable

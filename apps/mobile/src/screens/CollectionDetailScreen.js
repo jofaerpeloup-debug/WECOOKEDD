@@ -41,10 +41,6 @@ import { categoryLabel, regionLabel, difficultyLabel } from '../api/recipeOption
 // Any other/unknown collectionType shows an honest "isn't available yet" —
 // nothing is ever fabricated for an unsupported case.
 
-// Fetches at most this many recipes for a user collection's detail view —
-// generous enough that no real collection is likely to exceed it, and
-// consistent with this screen's Favorites branch (via FavoritesContext),
-// which also has no infinite-scroll/load-more UI of its own.
 const USER_COLLECTION_RECIPE_LIMIT = 100;
 const SMART_COLLECTION_PAGE_LIMIT = 20;
 
@@ -134,22 +130,22 @@ function makeStyles(colors) {
   });
 }
 
-function Header({ styles, colors, insets, title, count, onBack, onDelete }) {
+function Header({ styles, colors, insets, title, count, countText, onBack, onDelete, deleteDisabled = false }) {
   return (
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-      <Pressable style={styles.iconBtn} hitSlop={8} onPress={onBack}>
+      <Pressable style={styles.iconBtn} hitSlop={8} onPress={onBack} accessibilityRole="button" accessibilityLabel="Go back">
         <Ionicons name="chevron-back" size={18} color={colors.ink} />
       </Pressable>
       <View style={{ flex: 1 }}>
-        <Text style={styles.title}>{title}</Text>
-        {count != null && (
+        <Text style={styles.title} accessibilityRole="header">{title}</Text>
+        {(count != null || countText) && (
           <Text style={styles.count}>
-            {count} {count === 1 ? 'recipe' : 'recipes'}
+            {countText || `${count} ${count === 1 ? 'recipe' : 'recipes'}`}
           </Text>
         )}
       </View>
       {onDelete && (
-        <Pressable hitSlop={8} onPress={onDelete}>
+        <Pressable hitSlop={8} onPress={onDelete} disabled={deleteDisabled} accessibilityRole="button" accessibilityLabel="Delete collection" accessibilityState={{ disabled: deleteDisabled }}>
           <Ionicons name="trash-outline" size={18} color={colors.error} />
         </Pressable>
       )}
@@ -310,19 +306,61 @@ function UserCollectionDetail({ navigation, collectionId }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
+  const { status: authStatus, user } = useAuth();
+  const ownerId = authStatus === 'authenticated' ? user?.id : null;
   const { deleteCollection, removeRecipeFromCollection } = useCollections();
 
   const [collection, setCollection] = useState(null);
   const [recipes, setRecipes] = useState([]);
+  const [pagination, setPagination] = useState(null);
+  const [acceptedKey, setAcceptedKey] = useState(null);
   const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
   const [error, setError] = useState(null);
+  const [failedKey, setFailedKey] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const genRef = useRef(0);
+  const [pendingRemoval, setPendingRemoval] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(null);
+  const sessionRef = useRef(0);
+  const focusEpochRef = useRef(0);
+  const activeRef = useRef(false);
+  const mountedRef = useRef(true);
+  const pageOnePendingRef = useRef(false);
+  const morePendingRef = useRef(false);
+  const moreErrorRef = useRef(null);
+  const removePendingRef = useRef(null);
+  const mutationGenerationRef = useRef(0);
+  const queuedRefreshKeyRef = useRef(null);
+  const recipesRef = useRef([]);
+  const paginationRef = useRef(null);
+  const acceptedKeyRef = useRef(null);
+  const currentKey = `${ownerId || ''}:${collectionId}`;
+  const currentKeyRef = useRef(currentKey);
+  currentKeyRef.current = currentKey;
 
-  const load = useCallback(async () => {
-    const gen = ++genRef.current;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const loadPageOne = useCallback(async ({ retainRows = false } = {}) => {
+    if (!activeRef.current || !ownerId || pageOnePendingRef.current) return;
+    if (removePendingRef.current?.key === currentKey) {
+      queuedRefreshKeyRef.current = currentKey;
+      return;
+    }
+    const session = ++sessionRef.current;
+    pageOnePendingRef.current = true;
+    morePendingRef.current = false;
+    setLoadingMore(false);
+    moreErrorRef.current = null;
+    setMoreError(null);
+    if (retainRows && acceptedKeyRef.current === currentKey) setRefreshing(true);
+    else setStatus('loading');
+    const stale = () => !activeRef.current || session !== sessionRef.current
+      || currentKeyRef.current !== currentKey;
     try {
-      const [collectionData, { recipes: fetchedRecipes }] = await Promise.all([
+      const [collectionData, result] = await Promise.all([
         collectionService.getCollection(collectionId),
         collectionService.listCollectionRecipes(collectionId, {
           page: 1,
@@ -330,32 +368,120 @@ function UserCollectionDetail({ navigation, collectionId }) {
           sort: 'newest',
         }),
       ]);
-      if (gen !== genRef.current) return;
+      if (stale()) return;
+      const seen = new Set();
+      const fetchedRecipes = result.recipes.filter((entry) => {
+        const id = entry.recipe?.id || entry.id;
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      recipesRef.current = fetchedRecipes;
+      paginationRef.current = result.pagination;
+      acceptedKeyRef.current = currentKey;
       setCollection(collectionData);
       setRecipes(fetchedRecipes);
+      setPagination(result.pagination);
+      setAcceptedKey(currentKey);
       setError(null);
+      setFailedKey(null);
       setStatus('ready');
     } catch (err) {
-      if (gen !== genRef.current) return;
+      if (stale()) return;
       setError(getCollectionErrorMessage(err));
-      setStatus('error');
+      setFailedKey(currentKey);
+      setStatus(acceptedKeyRef.current === currentKey ? 'ready' : 'error');
+    } finally {
+      if (!stale()) {
+        pageOnePendingRef.current = false;
+        setRefreshing(false);
+      }
     }
-  }, [collectionId]);
+  }, [collectionId, currentKey, ownerId]);
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      activeRef.current = true;
+      focusEpochRef.current += 1;
+      mutationGenerationRef.current += 1;
+      removePendingRef.current = null;
+      queuedRefreshKeyRef.current = null;
+      setPendingRemoval(null);
+      sessionRef.current += 1;
+      pageOnePendingRef.current = false;
+      morePendingRef.current = false;
+      recipesRef.current = [];
+      paginationRef.current = null;
+      acceptedKeyRef.current = null;
+      setCollection(null);
+      setRecipes([]);
+      setPagination(null);
+      setAcceptedKey(null);
+      setError(null);
+      setFailedKey(null);
+      moreErrorRef.current = null;
+      setMoreError(null);
+      setRefreshing(false);
+      setLoadingMore(false);
+      setStatus('loading');
+      loadPageOne();
+      return () => {
+        activeRef.current = false;
+        focusEpochRef.current += 1;
+        mutationGenerationRef.current += 1;
+        removePendingRef.current = null;
+        queuedRefreshKeyRef.current = null;
+        sessionRef.current += 1;
+        pageOnePendingRef.current = false;
+        morePendingRef.current = false;
+      };
+    }, [loadPageOne])
   );
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
+  const onRefresh = useCallback(() => loadPageOne({ retainRows: true }), [loadPageOne]);
+
+  const loadMore = useCallback(async () => {
+    const current = paginationRef.current;
+    if (!activeRef.current || !current || current.page >= current.totalPages
+      || morePendingRef.current || pageOnePendingRef.current || acceptedKeyRef.current !== currentKey
+      || removePendingRef.current?.key === currentKey) return;
+    const session = sessionRef.current;
+    const nextPage = current.page + 1;
+    morePendingRef.current = true;
+    setLoadingMore(true);
+    const stale = () => !activeRef.current || session !== sessionRef.current
+      || currentKeyRef.current !== currentKey;
     try {
-      await load();
+      const result = await collectionService.listCollectionRecipes(collectionId, {
+        page: nextPage, limit: USER_COLLECTION_RECIPE_LIMIT, sort: 'newest',
+      });
+      if (stale()) return;
+      const seen = new Set(recipesRef.current.map((entry) => entry.recipe?.id || entry.id));
+      const appended = result.recipes.filter((entry) => {
+        const id = entry.recipe?.id || entry.id;
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      const nextRecipes = [...recipesRef.current, ...appended];
+      recipesRef.current = nextRecipes;
+      paginationRef.current = result.pagination;
+      setRecipes(nextRecipes);
+      setPagination(result.pagination);
+      moreErrorRef.current = null;
+      setMoreError(null);
+    } catch (err) {
+      if (!stale()) {
+        moreErrorRef.current = getCollectionErrorMessage(err);
+        setMoreError(moreErrorRef.current);
+      }
     } finally {
-      setRefreshing(false);
+      if (!stale()) {
+        morePendingRef.current = false;
+        setLoadingMore(false);
+      }
     }
-  }, [load]);
+  }, [collectionId, currentKey]);
 
   const openRecipe = (recipe) => {
     navigation.navigate('RecipeDetail', {
@@ -366,11 +492,47 @@ function UserCollectionDetail({ navigation, collectionId }) {
   };
 
   const removeRecipe = async (recipeId) => {
-    const result = await removeRecipeFromCollection(collectionId, recipeId);
+    if (!activeRef.current || !ownerId || currentKeyRef.current !== currentKey
+      || acceptedKeyRef.current !== currentKey || removePendingRef.current) return;
+    const focusEpoch = focusEpochRef.current;
+    const mutation = { ownerId, collectionId, key: currentKey, focusEpoch,
+      generation: ++mutationGenerationRef.current, recipeId };
+    removePendingRef.current = mutation;
+    setPendingRemoval(mutation);
+    // A GET already in flight may have observed the pre-deletion membership.
+    if (pageOnePendingRef.current) queuedRefreshKeyRef.current = currentKey;
+    sessionRef.current += 1;
+    pageOnePendingRef.current = false;
+    morePendingRef.current = false;
+    setRefreshing(false);
+    setLoadingMore(false);
+    let result;
+    try {
+      result = await removeRecipeFromCollection(collectionId, recipeId);
+    } catch (err) {
+      result = { ok: false, error: getCollectionErrorMessage(err) };
+    }
+    const ownsMutation = mountedRef.current && activeRef.current
+      && currentKeyRef.current === mutation.key
+      && focusEpochRef.current === mutation.focusEpoch
+      && mutationGenerationRef.current === mutation.generation
+      && removePendingRef.current === mutation;
+    if (!ownsMutation) return;
     if (result.ok) {
-      setRecipes((list) => list.filter((entry) => entry.recipe.id !== recipeId));
+      const remaining = recipesRef.current.filter((entry) => entry.recipe.id !== recipeId);
+      recipesRef.current = remaining;
+      paginationRef.current = null;
+      setRecipes(remaining);
+      setPagination(null);
     } else if (result.error) {
       Alert.alert('Couldn’t remove recipe', result.error);
+    }
+    removePendingRef.current = null;
+    setPendingRemoval(null);
+    const refreshWasQueued = queuedRefreshKeyRef.current === currentKey;
+    if (refreshWasQueued) queuedRefreshKeyRef.current = null;
+    if (result.ok || refreshWasQueued) {
+      await loadPageOne({ retainRows: acceptedKeyRef.current === currentKey });
     }
   };
 
@@ -393,19 +555,36 @@ function UserCollectionDetail({ navigation, collectionId }) {
     ]);
   };
 
-  const header = (title, count, onDelete) => (
+  const header = (title, count, onDelete, countText, deleteDisabled) => (
     <Header
       styles={styles}
       colors={colors}
       insets={insets}
       title={title}
       count={count}
+      countText={countText}
       onBack={() => navigation.goBack()}
       onDelete={onDelete}
+      deleteDisabled={deleteDisabled}
     />
   );
 
-  if (status === 'loading' && !collection) {
+  const trusted = acceptedKey === currentKey;
+  const visibleCollection = trusted ? collection : null;
+  const visibleRecipes = trusted ? recipes : [];
+  const visiblePagination = trusted ? pagination : null;
+  const count = visiblePagination && Number.isFinite(visiblePagination.total)
+    ? visiblePagination.total : null;
+  const activeRemoval = activeRef.current && pendingRemoval?.key === currentKey
+    && pendingRemoval.focusEpoch === focusEpochRef.current
+    && pendingRemoval.generation === mutationGenerationRef.current
+    ? pendingRemoval : null;
+  const removalPending = activeRemoval !== null;
+  const countText = count == null
+    ? `${visibleRecipes.length} loaded ${visibleRecipes.length === 1 ? 'recipe' : 'recipes'}`
+    : `${count} collection ${count === 1 ? 'entry' : 'entries'}`;
+
+  if (!visibleCollection && (status !== 'error' || failedKey !== currentKey)) {
     return (
       <View style={styles.root}>
         {header('Collection', null)}
@@ -416,14 +595,14 @@ function UserCollectionDetail({ navigation, collectionId }) {
     );
   }
 
-  if (status === 'error' && !collection) {
+  if (status === 'error' && !visibleCollection) {
     return (
       <View style={styles.root}>
         {header('Collection', null)}
         <View style={styles.centerWrap}>
           <Ionicons name="cloud-offline-outline" size={28} color={colors.inkFaint} />
           <Text style={styles.errorText}>{error || 'Couldn’t load this collection.'}</Text>
-          <Pressable style={styles.retryBtn} onPress={() => load()} hitSlop={8}>
+          <Pressable style={styles.retryBtn} onPress={() => loadPageOne()} hitSlop={8} accessibilityRole="button" accessibilityLabel="Retry loading collection">
             <Ionicons name="refresh" size={14} color={colors.sageDeep} />
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
@@ -434,38 +613,53 @@ function UserCollectionDetail({ navigation, collectionId }) {
 
   return (
     <View style={styles.root}>
-      {header(collection.name, recipes.length, confirmDelete)}
-      {recipes.length === 0 ? (
+      {header(visibleCollection.name, null, confirmDelete, countText, removalPending)}
+      {removalPending ? <View style={styles.listFooter} accessibilityRole="progressbar" accessibilityLabel="Updating collection" accessibilityState={{ busy: true }}><ActivityIndicator color={colors.sageDeep} /><Text style={styles.count}>Updating collection…</Text></View> : null}
+      {visibleRecipes.length === 0 && (!visiblePagination || visiblePagination.total === 0) ? (
         <ScrollView
           contentContainerStyle={styles.emptyScroll}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
+              enabled={!removalPending}
               tintColor={colors.sageDeep}
               colors={[colors.sageDeep]}
             />
           }
         >
           <View style={styles.emptyWrap}>
+            {error ? <Pressable style={styles.retryBtn} onPress={onRefresh} disabled={removalPending} accessibilityRole="button" accessibilityLabel="Retry refreshing collection" accessibilityState={{ disabled: removalPending }}><Text style={styles.retryText}>{error} Retry</Text></Pressable> : null}
             <Text style={styles.empty}>Add recipes from any recipe page.</Text>
           </View>
         </ScrollView>
       ) : (
-        <ScrollView
+        <FlatList
+          data={visibleRecipes}
+          keyExtractor={(entry) => entry.id || entry.recipe.id}
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
+          onEndReached={() => { if (!moreErrorRef.current) loadMore(); }}
+          onEndReachedThreshold={0.4}
+          ListEmptyComponent={visiblePagination?.total > 0 && visiblePagination.page >= visiblePagination.totalPages
+            ? <Text style={styles.empty}>No available recipes in this collection.</Text> : null}
+          ListHeaderComponent={error ? <Pressable style={styles.retryBtn} onPress={onRefresh} disabled={removalPending} accessibilityRole="button" accessibilityLabel="Retry refreshing collection" accessibilityState={{ disabled: removalPending }}><Text style={styles.retryText}>{error} Retry</Text></Pressable> : null}
+          ListFooterComponent={loadingMore || moreError || (visiblePagination && visiblePagination.page < visiblePagination.totalPages) ? <View style={styles.listFooter}>
+            {loadingMore ? <ActivityIndicator color={colors.sageDeep} accessibilityRole="progressbar" accessibilityLabel="Loading more collection recipes" /> : null}
+            {moreError ? <Pressable style={styles.retryBtn} onPress={loadMore} disabled={removalPending} accessibilityRole="button" accessibilityLabel="Retry loading more collection recipes" accessibilityState={{ disabled: removalPending }}><Text style={styles.retryText}>{moreError} Retry</Text></Pressable> : null}
+            {!loadingMore && !moreError && visiblePagination?.page < visiblePagination?.totalPages ? <Pressable style={styles.retryBtn} onPress={loadMore} disabled={removalPending} accessibilityRole="button" accessibilityLabel="Load more collection recipes" accessibilityState={{ disabled: removalPending }}><Text style={styles.retryText}>Load more recipes</Text></Pressable> : null}
+          </View> : null}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
+              enabled={!removalPending}
               tintColor={colors.sageDeep}
               colors={[colors.sageDeep]}
             />
           }
-        >
-          {recipes.map((entry) => (
-            <View key={entry.recipe.id} style={styles.row}>
+          renderItem={({ item: entry }) => (
+            <View style={styles.row}>
               <Pressable style={styles.rowMain} onPress={() => openRecipe(entry.recipe)}>
                 <RecipeImage source={entry.recipe.imageUrl} style={styles.thumb} />
                 <View style={{ flex: 1 }}>
@@ -480,13 +674,17 @@ function UserCollectionDetail({ navigation, collectionId }) {
               <Pressable
                 hitSlop={8}
                 onPress={() => removeRecipe(entry.recipe.id)}
+                disabled={removalPending}
                 style={styles.rowRemove}
+                accessibilityRole="button"
+                accessibilityLabel={activeRemoval?.recipeId === entry.recipe.id ? `Removing ${entry.recipe.title} from collection` : `Remove ${entry.recipe.title} from collection`}
+                accessibilityState={{ disabled: removalPending, busy: activeRemoval?.recipeId === entry.recipe.id }}
               >
                 <Ionicons name="remove-circle-outline" size={20} color={colors.inkFaint} />
               </Pressable>
             </View>
-          ))}
-        </ScrollView>
+          )}
+        />
       )}
     </View>
   );

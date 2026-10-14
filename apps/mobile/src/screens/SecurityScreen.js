@@ -18,8 +18,8 @@ import {
 } from '../api/errorMessages';
 
 export default function SecurityScreen({ navigation }) {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const { colors, isDark } = useTheme();
+  const styles = makeStyles(colors, isDark);
   const { user, signOut, signOutEverywhere, linkGoogle, refreshUser, deactivate } = useAuth();
 
   const mountedRef = useRef(true);
@@ -254,7 +254,7 @@ export default function SecurityScreen({ navigation }) {
             {user?.pendingEmailChange ? (
               <View style={styles.pendingRow}>
                 <Text style={styles.rowSub}>Pending: {user.pendingEmailChange.email}</Text>
-                <Pressable onPress={handleCancelEmailChange} disabled={emailChangeBusy} accessibilityRole="button">
+                <Pressable onPress={handleCancelEmailChange} disabled={emailChangeBusy} accessibilityRole="button" accessibilityLabel="Cancel email change request">
                   <Text style={styles.linkAction}>Cancel request</Text>
                 </Pressable>
               </View>
@@ -266,7 +266,7 @@ export default function SecurityScreen({ navigation }) {
           </View>
         </View>
 
-        <Text style={styles.groupTitle}>CHANGE PASSWORD</Text>
+        <Text style={[styles.groupTitle, styles.sectionAfterCard]}>CHANGE PASSWORD</Text>
         <Input
           label="Current Password"
           required
@@ -350,7 +350,7 @@ export default function SecurityScreen({ navigation }) {
             ) : resendState === 'sending' ? (
               <ActivityIndicator size="small" color={colors.sageDeep} />
             ) : (
-              <Pressable onPress={handleResendVerification} hitSlop={8}>
+              <Pressable onPress={handleResendVerification} hitSlop={8} accessibilityRole="button" accessibilityLabel="Resend email verification">
                 <Text style={styles.linkAction}>
                   {resendState === 'sent' ? 'Link sent' : 'Resend'}
                 </Text>
@@ -383,7 +383,7 @@ export default function SecurityScreen({ navigation }) {
             ) : linking ? (
               <ActivityIndicator size="small" color={colors.sageDeep} />
             ) : (
-              <Pressable onPress={handleLinkGoogle} disabled={!googleAvailable} hitSlop={8}>
+              <Pressable onPress={handleLinkGoogle} disabled={!googleAvailable} hitSlop={8} accessibilityRole="button" accessibilityLabel="Link Google account">
                 <Text style={[styles.linkAction, !googleAvailable && styles.linkActionDisabled]}>Link</Text>
               </Pressable>
             )}
@@ -409,7 +409,7 @@ export default function SecurityScreen({ navigation }) {
 
         <Text style={[styles.groupTitle, { marginTop: spacing.xl }]}>SESSIONS</Text>
         <View style={styles.card}>
-          <Pressable style={styles.row} onPress={handleSignOutEverywhere}>
+          <Pressable style={styles.row} onPress={handleSignOutEverywhere} accessibilityRole="button" accessibilityLabel="Sign out of all devices">
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>Sign out of all devices</Text>
               <Text style={styles.rowSub}>
@@ -435,14 +435,15 @@ export default function SecurityScreen({ navigation }) {
   );
 }
 
-function makeStyles(colors) {
+function makeStyles(colors, isDark) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl },
+    sectionAfterCard: { marginTop: spacing.xl },
     groupTitle: {
       fontFamily: typography.body.semibold,
       fontSize: 10,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       letterSpacing: 1,
       marginBottom: spacing.sm,
     },
@@ -464,15 +465,15 @@ function makeStyles(colors) {
     rowSub: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: 1,
     },
     linkAction: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
-      color: colors.sageDeep,
+      color: isDark ? colors.inkSoft : colors.sageDeep,
     },
-    linkActionDisabled: { opacity: 0.4 },
+    linkActionDisabled: { color: colors.inkSoft },
     fieldError: {
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.sm,
@@ -483,7 +484,7 @@ function makeStyles(colors) {
     caption: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: spacing.xs,
     },
   });

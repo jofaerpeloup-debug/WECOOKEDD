@@ -15,6 +15,7 @@ module.exports = {
   testEnvironment: 'node',
   clearMocks: true,
   testMatch: ['<rootDir>/__tests__/**/*.test.js'],
+  transformIgnorePatterns: ['node_modules/(?!(@react-navigation|react-native-screens)/)'],
   moduleNameMapper: {
     '^react-native$': '<rootDir>/test/mocks/react-native.js',
     '^expo-secure-store$': '<rootDir>/test/mocks/expo-secure-store.js',

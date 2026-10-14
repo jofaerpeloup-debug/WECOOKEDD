@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   BackHandler,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -85,6 +86,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const [draft, setDraft] = useState(() => draftFromFilters(appliedFilters));
+  const [regionOpen, setRegionOpen] = useState(false);
   const [prepError, setPrepError] = useState(null);
   const [ingredientQuery, setIngredientQuery] = useState('');
   const [ingredientResults, setIngredientResults] = useState([]);
@@ -110,6 +112,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
     if (wasVisible === visible) return;
 
     ingredientSearchGenRef.current += 1;
+    setRegionOpen(false);
     setIngredientQuery('');
     setIngredientResults([]);
     setIngredientTruncated(false);
@@ -260,13 +263,50 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
             </View>
 
             <View style={styles.content}>
-              <ChoiceGroup
-                label="Region"
-                options={REGION_OPTIONS}
-                value={draft.region}
-                onChange={(region) => setDraft((current) => ({ ...current, region }))}
-                styles={styles}
-              />
+              <View style={styles.group}>
+                <Text style={styles.groupLabel}>Region</Text>
+                <Pressable
+                  style={styles.regionTrigger}
+                  onPress={() => setRegionOpen((open) => !open)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Region: ${REGION_OPTIONS.find((option) => option.value === draft.region)?.label || 'Any'}`}
+                  accessibilityHint="Show or hide Philippine regions"
+                  accessibilityState={{ expanded: regionOpen }}
+                >
+                  <Text style={styles.regionSelection} numberOfLines={1}>
+                    {REGION_OPTIONS.find((option) => option.value === draft.region)?.label || 'Any'}
+                  </Text>
+                  <Ionicons name={regionOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkSoft} />
+                </Pressable>
+                {regionOpen ? (
+                  <ScrollView
+                    style={styles.regionList}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                    accessibilityLabel="Philippine regions"
+                  >
+                    {REGION_OPTIONS.map((option) => {
+                      const selected = option.value === draft.region;
+                      return (
+                        <Pressable
+                          key={option.value || 'any'}
+                          style={[styles.regionOption, selected && styles.regionOptionSelected]}
+                          onPress={() => {
+                            setDraft((current) => ({ ...current, region: option.value }));
+                            setRegionOpen(false);
+                          }}
+                          accessibilityRole="radio"
+                          accessibilityLabel={`Region: ${option.label}`}
+                          accessibilityState={{ selected }}
+                        >
+                          <Text style={styles.regionOptionText}>{option.label}</Text>
+                          {selected ? <Ionicons name="checkmark" size={16} color={colors.sageDeep} /> : null}
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                ) : null}
+              </View>
               <ChoiceGroup
                 label="Category"
                 options={CATEGORY_OPTIONS}
@@ -450,12 +490,7 @@ export default function DiscoverFiltersSheet({ visible, appliedFilters, onCancel
 function makeStyles(colors) {
   return StyleSheet.create({
     panel: {
-      marginTop: spacing.md,
-      padding: spacing.lg,
-      backgroundColor: colors.paper,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: radius.lg,
+      paddingTop: spacing.lg,
     },
     header: {
       flexDirection: 'row',
@@ -463,10 +498,8 @@ function makeStyles(colors) {
       alignItems: 'flex-start',
       gap: spacing.md,
       paddingBottom: spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairline,
     },
-    title: { fontFamily: typography.body.bold, fontSize: typography.sizes.lg, color: colors.ink },
+    title: { fontFamily: typography.display.fontFamily, fontSize: 17, color: colors.ink },
     subtitle: {
       marginTop: spacing.xs,
       fontFamily: typography.body.fontFamily,
@@ -476,6 +509,19 @@ function makeStyles(colors) {
     closeButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
     content: { paddingVertical: spacing.lg, gap: spacing.xl },
     group: { gap: spacing.sm },
+    regionTrigger: {
+      minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      gap: spacing.sm, paddingHorizontal: spacing.md, borderWidth: 1,
+      borderColor: colors.hairline, borderRadius: radius.md, backgroundColor: colors.paper,
+    },
+    regionSelection: { flex: 1, fontFamily: typography.body.medium, fontSize: typography.sizes.base, color: colors.ink },
+    regionList: { maxHeight: 224, borderWidth: 1, borderColor: colors.hairline, borderRadius: radius.md, backgroundColor: colors.paper },
+    regionOption: {
+      minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      gap: spacing.sm, paddingHorizontal: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.hairline,
+    },
+    regionOptionSelected: { backgroundColor: colors.sagePale },
+    regionOptionText: { flex: 1, fontFamily: typography.body.medium, fontSize: typography.sizes.sm, color: colors.ink },
     groupLabel: {
       fontFamily: typography.body.semibold,
       fontSize: 11.5,

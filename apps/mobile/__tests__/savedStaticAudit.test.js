@@ -48,6 +48,14 @@ if (createControlStyle === -1 || createControlStart === -1 || createControlEnd =
 const createControlCode = savedCode.slice(createControlStart, createControlEnd);
 
 describe('Saved keeps Favorites, smart collections, and user Collections server-authoritative', () => {
+  it('keeps the pinned collection grid and creation header over server cards', () => {
+    expect(savedCode).toMatch(/numColumns=\{2\}/);
+    expect(savedCode).toMatch(/My Collections/);
+    expect(savedCode).toMatch(/accessibilityLabel="Grocery list"/);
+    expect(raw).toMatch(/cardImg: \{[\s\S]*?height: 96,[\s\S]*?borderRadius: 14/);
+    expect(raw).toMatch(/gridRow: \{ justifyContent: 'space-between', marginBottom: 14 \}/);
+    expect(savedCode).toMatch(/item\.type === 'smart' && \(!smartTrusted \|\| smartStatus !== 'ready'\)/);
+  });
   it('imports no mock-data layer or teammate mock/local providers', () => {
     expect(code).not.toMatch(/data\/mockData/);
     expect(code).not.toMatch(/\bmockData\b/);

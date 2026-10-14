@@ -18,7 +18,6 @@ import Badge from '../components/Badge';
 import Button from '../components/Button';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
-import SubstitutionsSheet from '../components/SubstitutionsSheet';
 import CollectionPickerSheet from '../components/CollectionPickerSheet';
 import MealPlanSheet from '../components/MealPlanSheet';
 import { useShoppingList } from '../context/ShoppingListContext';
@@ -35,7 +34,6 @@ import {
   formatQuantity,
   hasRecipeDetailData,
   ingredientDisplayText,
-  cookModeSteps,
   recipeBadges,
   scaleQuantity,
   totalTimeMinutes,
@@ -189,6 +187,7 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
     <ApiRecipeDetail
       navigation={navigation}
       recipe={recipe}
+      canPassRecipeContext={Boolean(fetched)}
       // A transient refresh failure never discards the last valid detail. Keep
       // it visible and report the refresh problem inline until a later success.
       refreshError={fetchError}
@@ -204,7 +203,7 @@ function ApiRecipeDetailContainer({ navigation, recipeId, initialRecipe }) {
 // Kept local to this screen so CookMode's existing contract is untouched.
 function ingredientDisplayRow(entry, opts) {
   if (!entry || !entry.ingredient || !entry.ingredient.name) return null;
-  const id = entry.ingredient.id ? String(entry.ingredient.id) : null;
+  const id = entry.ingredient.id && String(entry.ingredient.id).trim() || null;
   const name = entry.ingredient.name;
 
   let qtyText = null;
@@ -220,18 +219,18 @@ function ingredientDisplayRow(entry, opts) {
   return { id, name, note: entry.note || null, optional: !!entry.optional, qtyText };
 }
 
-function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
+function ApiRecipeDetail({ navigation, recipe, canPassRecipeContext, refreshError, onRetryRefresh }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
   const insets = useSafeAreaInsets();
   const { addRecipe, isMutating, pendingAction } = useShoppingList();
 
-  const baseServings = recipe.servings > 0 ? recipe.servings : 1;
-  const maxServings = Math.max(MAX_SERVINGS, baseServings);
+  const hasBaseServings = Number.isSafeInteger(recipe.servings) && recipe.servings > 0 && recipe.servings <= 100;
+  const baseServings = hasBaseServings ? recipe.servings : null;
+  const maxServings = Math.max(MAX_SERVINGS, baseServings || 0);
   const [servings, setServings] = useState(baseServings);
+  useEffect(() => setServings(baseServings), [baseServings]);
   const [nutritionOpen, setNutritionOpen] = useState(false);
-  const substitutesCacheRef = useRef(new Map());
-  const [swapIngredient, setSwapIngredient] = useState(null);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
   const [mealPlanOpen, setMealPlanOpen] = useState(false);
 
@@ -428,13 +427,34 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
         .filter(Boolean),
     [recipe.ingredients, servings, baseServings]
   );
-  const instructionSteps = useMemo(() => cookModeSteps(recipe), [recipe]);
+  const recipeContext = useMemo(() => {
+    const seen = new Set();
+    return {
+      recipeId: recipe.id,
+      ingredients: (recipe.ingredients || []).reduce((rows, entry) => {
+        const name = typeof entry?.ingredient?.name === 'string' ? entry.ingredient.name.trim() : '';
+        if (!name) return rows;
+        const candidateId = typeof entry?.ingredient?.id === 'string' ? entry.ingredient.id.trim() : '';
+        const id = /^[a-f\d]{24}$/i.test(candidateId) ? candidateId : null;
+        if (id && seen.has(id)) return rows;
+        if (id) seen.add(id);
+        rows.push({ id: id || null, name });
+        return rows;
+      }, []),
+    };
+  }, [recipe]);
 
+  const hasPrep = recipe.prepTimeMinutes != null;
+  const hasCook = recipe.cookTimeMinutes != null;
   const meta = [
-    { value: formatMinutes(totalMins), label: 'Time' },
-    { value: difficultyLabel(recipe.difficulty), label: 'Difficulty' },
-    { value: String(servings), label: 'Servings' },
+    { value: hasPrep || hasCook ? formatMinutes(totalMins) : '—', label: 'Time' },
+    { value: recipe.difficulty ? difficultyLabel(recipe.difficulty) : '—', label: 'Difficulty' },
+    { value: hasBaseServings ? String(servings) : '—', label: 'Servings' },
   ];
+  const timeParts = [
+    hasPrep ? `Prep ${formatMinutes(recipe.prepTimeMinutes)}` : null,
+    hasCook ? `Cook ${formatMinutes(recipe.cookTimeMinutes)}` : null,
+  ].filter(Boolean);
 
   const share = () => {
     Share.share({
@@ -472,18 +492,16 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
   // Collections is real as of M5A (real CollectionPickerSheet, real API).
   // Ratings is real as of M5B (see submitRating above).
   const openCollections = () => setCollectionsOpen(true);
-  const openSubstitutes = (row) => {
-    if (!row?.id || !row?.name) return;
-    setSwapIngredient({ id: row.id, name: row.name });
+  const decrementServings = () => {
+    if (hasBaseServings) setServings((s) => Math.max(MIN_SERVINGS, s - 1));
   };
-  const closeSubstitutes = () => setSwapIngredient(null);
-
-  const decrementServings = () => setServings((s) => Math.max(MIN_SERVINGS, s - 1));
-  const incrementServings = () => setServings((s) => Math.min(maxServings, s + 1));
+  const incrementServings = () => {
+    if (hasBaseServings) setServings((s) => Math.min(maxServings, s + 1));
+  };
 
   return (
     <View style={styles.root}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}>
         <View style={styles.ddHero}>
           <RecipeImage source={recipe.imageUrl} style={styles.ddHeroImage} />
           <View style={[styles.ddTopRow, { top: insets.top + spacing.sm }]}>
@@ -497,7 +515,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             </Pressable>
             <View style={styles.ddRightIcons}>
               {/* Real Favorites API control via the shared FavoritesProvider. */}
-              <FavoriteHeart recipe={recipe} size={16} variant="overlay" style={styles.ddCircleBtn} />
+              <FavoriteHeart recipe={recipe} size={16} variant="overlay" style={styles.ddCircleBtn} hitSlop={0} />
               <Pressable
                 style={styles.ddCircleBtn}
                 onPress={openCollections}
@@ -574,7 +592,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             accessibilityLabel={`Read and write reviews for ${recipe.title}`}
           >
             <Text style={styles.ddReviewsLinkText}>Read &amp; write reviews</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.sageDeep} />
+            <Ionicons name="chevron-forward" size={16} color={colors.inkSoft} />
           </Pressable>
 
           <View style={styles.ddRateRow}>
@@ -583,7 +601,7 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
               {[1, 2, 3, 4, 5].map((n) => (
                 <Pressable
                   key={n}
-                  hitSlop={4}
+                  style={styles.ddStarBtn}
                   onPress={() => submitRating(n)}
                   disabled={ratingMutationDisabled}
                   accessibilityRole="button"
@@ -607,15 +625,13 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
 
           <View style={styles.ddMetaRow}>
             {meta.map((m) => (
-              <View key={m.label}>
+              <View key={m.label} style={styles.ddMetaItem}>
                 <Text style={styles.ddMetaValue}>{m.value}</Text>
                 <Text style={styles.ddMetaLabel}>{m.label}</Text>
               </View>
             ))}
           </View>
-          <Text style={styles.ddSubStat}>
-            Prep {formatMinutes(recipe.prepTimeMinutes)} · Cook {formatMinutes(recipe.cookTimeMinutes)}
-          </Text>
+          {timeParts.length > 0 ? <Text style={styles.ddSubStat}>{timeParts.join(' · ')}</Text> : null}
 
           {/* APPROVED WeCooked extension (not in teammate source): real M3
               category/region + dietary badges. Kept — see final report. */}
@@ -627,38 +643,38 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
             </View>
           )}
 
-          <Text style={styles.ddDescription}>{recipe.description}</Text>
+          {recipe.description ? <Text style={styles.ddDescription}>{recipe.description}</Text> : null}
 
           <View style={styles.ddSectionHeader}>
             <Text style={styles.ddEyebrow}>Ingredients</Text>
             <View style={styles.ddStepper}>
               <Pressable
                 onPress={decrementServings}
-                hitSlop={8}
                 style={styles.ddStepperBtn}
-                disabled={servings <= MIN_SERVINGS}
+                disabled={!hasBaseServings || servings <= MIN_SERVINGS}
                 accessibilityRole="button"
                 accessibilityLabel="Decrease servings"
+                accessibilityState={{ disabled: !hasBaseServings || servings <= MIN_SERVINGS }}
               >
                 <Ionicons
                   name="remove"
                   size={15}
-                  color={servings <= MIN_SERVINGS ? colors.inkFaint : colors.sageDeep}
+                  color={!hasBaseServings || servings <= MIN_SERVINGS ? colors.inkFaint : colors.inkSoft}
                 />
               </Pressable>
-              <Text style={styles.ddStepperValue}>{servings}</Text>
+              <Text style={styles.ddStepperValue}>{hasBaseServings ? servings : '—'}</Text>
               <Pressable
                 onPress={incrementServings}
-                hitSlop={8}
                 style={styles.ddStepperBtn}
-                disabled={servings >= maxServings}
+                disabled={!hasBaseServings || servings >= maxServings}
                 accessibilityRole="button"
                 accessibilityLabel="Increase servings"
+                accessibilityState={{ disabled: !hasBaseServings || servings >= maxServings }}
               >
                 <Ionicons
                   name="add"
                   size={15}
-                  color={servings >= maxServings ? colors.inkFaint : colors.sageDeep}
+                  color={!hasBaseServings || servings >= maxServings ? colors.inkFaint : colors.inkSoft}
                 />
               </Pressable>
             </View>
@@ -669,25 +685,15 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           ) : (
             <View>
               {ingredientRows.map((row, i) => (
-                <View key={row.id || i} style={styles.ddIngredientRow}>
+                <View key={`${row.id || 'unlinked'}-${i}`} style={styles.ddIngredientRow}>
                   <View style={styles.ddIngredientLeft}>
-                    <Text style={styles.ddPlus}>+</Text>
-                    <View style={{ flex: 1 }}>
+                    <Text style={styles.ddPlus}>−</Text>
+                    <View style={styles.ddIngredientContent}>
                       <Text style={styles.ddIngredientName}>{row.name}</Text>
                       {row.note || row.optional ? (
                         <Text style={styles.ddIngredientNote}>
                           {[row.note, row.optional ? 'optional' : null].filter(Boolean).join(' · ')}
                         </Text>
-                      ) : null}
-                      {row.id ? (
-                        <Pressable
-                          style={styles.ddSubstituteBtn}
-                          onPress={() => openSubstitutes(row)}
-                          hitSlop={6}
-                        >
-                          <Ionicons name="swap-horizontal" size={12} color={colors.sageDeep} />
-                          <Text style={styles.ddSubstituteText}>Substitutes</Text>
-                        </Pressable>
                       ) : null}
                     </View>
                   </View>
@@ -696,22 +702,6 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
               ))}
             </View>
           )}
-
-          <View style={styles.ddInstructionsSection}>
-            <Text style={styles.ddEyebrow}>Instructions</Text>
-            {instructionSteps.length === 0 ? (
-              <Text style={styles.mutedText}>No instructions listed.</Text>
-            ) : (
-              instructionSteps.map((step) => (
-                <View key={step.order} style={styles.ddInstructionRow}>
-                  <View style={styles.ddInstructionIndex}>
-                    <Text style={styles.ddInstructionIndexText}>{step.order}</Text>
-                  </View>
-                  <Text style={styles.ddInstructionText}>{step.text}</Text>
-                </View>
-              ))
-            )}
-          </View>
 
           <Pressable
             style={styles.ddNutritionCard}
@@ -752,28 +742,27 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           <Pressable
             style={styles.ddActionRow}
             onPress={() => setMealPlanOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Add to meal plan"
           >
             <View style={styles.ddActionIcon}>
               <Ionicons name="calendar-outline" size={16} color={colors.stone} />
             </View>
             <Text style={styles.ddActionText}>Add to meal plan</Text>
-            <Ionicons name="chevron-forward" size={15} color={colors.inkFaint} />
+            <Ionicons name="chevron-forward" size={15} color={colors.inkSoft} />
           </Pressable>
 
           <Pressable
             style={styles.ddActionRow}
-            onPress={() =>
-              Alert.alert(
-                'Choose an ingredient',
-                'Tap Substitutes beside an ingredient above to view live catalog suggestions.'
-              )
-            }
+            onPress={() => navigation.navigate('IngredientStudio', { recipeContext: canPassRecipeContext ? recipeContext : null })}
+            accessibilityRole="button"
+            accessibilityLabel="Find swaps in Ingredient Studio"
           >
             <View style={styles.ddActionIcon}>
               <Ionicons name="swap-horizontal" size={16} color={colors.stone} />
             </View>
             <Text style={styles.ddActionText}>Need a substitute? Find swaps</Text>
-            <Ionicons name="chevron-forward" size={15} color={colors.inkFaint} />
+            <Ionicons name="chevron-forward" size={15} color={colors.inkSoft} />
           </Pressable>
         </View>
       </ScrollView>
@@ -786,13 +775,6 @@ function ApiRecipeDetail({ navigation, recipe, refreshError, onRetryRefresh }) {
           icon={<Ionicons name="play" size={15} color={colors.onAccent} />}
         />
       </View>
-
-      <SubstitutionsSheet
-        visible={!!swapIngredient}
-        ingredient={swapIngredient}
-        cacheRef={substitutesCacheRef}
-        onClose={closeSubstitutes}
-      />
 
       <CollectionPickerSheet
         visible={collectionsOpen}
@@ -867,7 +849,7 @@ function makeStyles(colors) {
       fontSize: typography.sizes.xs,
       color: colors.error,
     },
-    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
     mutedText: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.sm,
@@ -884,39 +866,40 @@ function makeStyles(colors) {
       justifyContent: 'space-between',
     },
     ddCircleBtn: {
-      width: 38,
-      height: 38,
-      borderRadius: 19,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
       backgroundColor: 'rgba(18,22,14,0.55)',
       alignItems: 'center',
       justifyContent: 'center',
     },
     ddRightIcons: { flexDirection: 'row', gap: spacing.sm },
-    ddBody: { padding: spacing.xl },
+    ddBody: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xl },
     ddTitle: {
       fontFamily: typography.display.fontFamily,
       fontSize: 24,
       lineHeight: 29,
       color: colors.ink,
     },
-    ddRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10 },
+    ddRatingRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginTop: spacing.sm },
     ddRatingText: {
       fontFamily: typography.body.fontFamily,
       fontSize: 12.5,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
     },
     ddReviewsLink: {
       flexDirection: 'row',
       alignItems: 'center',
       alignSelf: 'flex-start',
       gap: spacing.xs,
-      marginTop: spacing.sm,
+      minHeight: 44,
+      marginTop: spacing.xs,
       paddingVertical: spacing.xs,
     },
     ddReviewsLinkText: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.sm,
-      color: colors.sageDeep,
+      color: colors.inkSoft,
     },
     ddReviewEligibilityText: {
       marginTop: spacing.xs,
@@ -938,32 +921,23 @@ function makeStyles(colors) {
       backgroundColor: colors.successBg,
     },
     ddCookedPillText: { fontFamily: typography.body.bold, fontSize: 10.5, color: colors.success },
-    ddSubstituteBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      alignSelf: 'flex-start',
-      gap: 4,
-      marginTop: 5,
-      paddingVertical: 3,
-    },
-    ddSubstituteText: {
-      fontFamily: typography.body.semibold,
-      fontSize: 11.5,
-      color: colors.sageDeep,
-    },
     ddRateRow: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       justifyContent: 'space-between',
-      marginTop: spacing.md,
-      paddingVertical: spacing.sm,
+      gap: spacing.xs,
+      marginTop: spacing.xs,
+      paddingVertical: spacing.xs,
       paddingHorizontal: spacing.md,
       borderRadius: radius.md,
       backgroundColor: colors.sageLight,
     },
-    ddRateLabel: { fontFamily: typography.body.semibold, fontSize: 12.5, color: colors.inkSoft },
-    ddStarRow: { flexDirection: 'row', gap: 4 },
-    ddMetaRow: { flexDirection: 'row', gap: 20, marginTop: 16 },
+    ddRateLabel: { fontFamily: typography.body.semibold, fontSize: 12.5, color: colors.inkSoft, flexShrink: 1 },
+    ddStarRow: { flexDirection: 'row', flexWrap: 'wrap' },
+    ddStarBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    ddMetaRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+    ddMetaItem: { flex: 1, minWidth: 0 },
     ddMetaValue: {
       fontFamily: typography.body.semibold,
       fontSize: 13.5,
@@ -972,13 +946,13 @@ function makeStyles(colors) {
     ddMetaLabel: {
       fontFamily: typography.body.fontFamily,
       fontSize: 11,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: 1,
     },
     ddSubStat: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: spacing.xs,
     },
     ddDescription: {
@@ -986,35 +960,37 @@ function makeStyles(colors) {
       fontSize: 13.5,
       lineHeight: 21,
       color: colors.inkSoft,
-      marginTop: 16,
+      marginTop: spacing.sm,
     },
     ddSectionHeader: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       justifyContent: 'space-between',
-      marginTop: 24,
-      marginBottom: spacing.md,
+      gap: spacing.sm,
+      marginTop: spacing.lg,
+      marginBottom: spacing.xs,
     },
     ddEyebrow: {
       fontFamily: typography.body.bold,
       fontSize: 11.5,
       letterSpacing: 1.1,
       textTransform: 'uppercase',
-      color: colors.inkFaint,
+      color: colors.inkSoft,
     },
     ddStepper: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: spacing.md,
+      gap: spacing.xs,
       backgroundColor: colors.creamDeep,
       borderRadius: radius.pill,
       paddingHorizontal: 6,
       paddingVertical: 5,
     },
     ddStepperBtn: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
       backgroundColor: colors.sagePale,
       alignItems: 'center',
       justifyContent: 'center',
@@ -1028,52 +1004,35 @@ function makeStyles(colors) {
     },
     ddIngredientRow: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       justifyContent: 'space-between',
       gap: spacing.sm,
-      paddingVertical: 11,
+      paddingVertical: spacing.sm,
       borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
     },
-    ddIngredientLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-    ddPlus: { fontFamily: typography.body.semibold, fontSize: 15, color: colors.sageDeep },
+    ddIngredientLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, flex: 1, minWidth: 0 },
+    ddIngredientContent: { flex: 1, minWidth: 0 },
+    ddPlus: { fontFamily: typography.body.semibold, fontSize: 15, color: colors.inkSoft },
     ddIngredientName: {
       fontFamily: typography.body.fontFamily,
       fontSize: 14,
       color: colors.ink,
+      flexShrink: 1,
     },
     ddIngredientNote: {
       fontFamily: typography.body.fontFamily,
       fontSize: 11.5,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: 1,
     },
     ddIngredientQty: {
       fontFamily: typography.body.fontFamily,
       fontSize: 13,
-      color: colors.inkFaint,
-    },
-    ddInstructionsSection: { marginTop: spacing.xl, gap: spacing.md },
-    ddInstructionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
-    ddInstructionIndex: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      backgroundColor: colors.sageDeep,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    ddInstructionIndexText: {
-      fontFamily: typography.body.bold,
-      fontSize: typography.sizes.xs,
-      color: colors.onAccent,
-    },
-    ddInstructionText: {
-      flex: 1,
-      fontFamily: typography.body.fontFamily,
-      fontSize: 13.5,
-      lineHeight: 21,
-      color: colors.ink,
+      color: colors.inkSoft,
+      maxWidth: '35%',
+      flexShrink: 1,
+      textAlign: 'right',
     },
     ddNutritionCard: {
       marginTop: spacing.xl,
@@ -1111,6 +1070,7 @@ function makeStyles(colors) {
     ddActionRow: {
       flexDirection: 'row',
       alignItems: 'center',
+      minHeight: 44,
       gap: 12,
       marginTop: spacing.lg,
       padding: spacing.md,

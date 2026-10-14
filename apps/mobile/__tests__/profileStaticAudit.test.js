@@ -144,8 +144,8 @@ describe('Profile uses authoritative account and domain sources', () => {
 describe('Profile actions are real and accessible', () => {
   it('routes only to existing supported destinations registered by RootNavigator', () => {
     const targets = [...code.matchAll(/navigation\.navigate\('([^']+)'\)/g)].map((match) => match[1]);
-    expect(new Set(targets)).toEqual(new Set(['Settings', 'AccountDetails', 'MealPlan', 'CookingHistory']));
-    for (const route of ['Settings', 'AccountDetails', 'MealPlan', 'CookingHistory']) {
+    expect(new Set(targets)).toEqual(new Set(['Settings', 'AccountDetails', 'MealPlan', 'CookingHistory', 'Saved']));
+    for (const route of ['Settings', 'AccountDetails', 'MealPlan', 'CookingHistory', 'Saved']) {
       expect(code).toMatch(new RegExp(`navigation\\.navigate\\('${route}'\\)`));
       expect(navigator).toMatch(new RegExp(`<Stack\\.Screen name="${route}" component=\\{[A-Za-z]+Screen\\} \\/>`));
     }
@@ -173,6 +173,8 @@ describe('Profile actions are real and accessible', () => {
       'Edit dietary preferences',
       'Edit allergies and ingredients to avoid',
       'Open meal plan',
+      'Open saved recipes and collections',
+      'Open cooking history',
       'Open settings',
       'Log out',
     ]) {

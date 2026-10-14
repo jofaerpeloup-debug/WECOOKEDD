@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { tabBarScrollClearance } from '../navigation/tabBarLayout';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -64,7 +65,13 @@ export default function ProfileScreen({ navigation }) {
     <View style={styles.root}>
       <ScrollView
         style={styles.flex}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.xl }]}
+        contentContainerStyle={[
+          styles.scroll,
+          {
+            paddingTop: insets.top + spacing.xl,
+            paddingBottom: tabBarScrollClearance(insets.bottom),
+          },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
@@ -123,6 +130,25 @@ export default function ProfileScreen({ navigation }) {
             onPress={() => navigation.navigate('CookingHistory')}
             accessibilityLabel={`Cooked: ${cookedCount}. Open cooking history`}
           />
+        </View>
+
+        <View style={styles.shortcuts}>
+          <Pressable style={styles.shortcut} onPress={() => navigation.navigate('Saved')} accessibilityRole="button" accessibilityLabel="Open saved recipes and collections">
+            <View style={styles.shortcutIcon}><Ionicons name="bookmark-outline" size={18} color={colors.sageDeep} /></View>
+            <View style={styles.shortcutCopy}>
+              <Text style={styles.shortcutTitle}>Saved recipes</Text>
+              <Text style={styles.shortcutDetail}>Recipes and collections you saved</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
+          </Pressable>
+          <Pressable style={styles.shortcut} onPress={() => navigation.navigate('CookingHistory')} accessibilityRole="button" accessibilityLabel="Open cooking history">
+            <View style={styles.shortcutIcon}><Ionicons name="restaurant-outline" size={18} color={colors.sageDeep} /></View>
+            <View style={styles.shortcutCopy}>
+              <Text style={styles.shortcutTitle}>Cooking history</Text>
+              <Text style={styles.shortcutDetail}>Dishes you have cooked</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
+          </Pressable>
         </View>
 
         <Text style={styles.eyebrow}>Preferences</Text>
@@ -240,11 +266,22 @@ function makeStyles(colors) {
     editText: { fontFamily: typography.body.semibold, fontSize: 12, color: colors.sageDeep },
     statsRow: {
       flexDirection: 'row', justifyContent: 'space-around',
-      marginTop: spacing.xl, marginBottom: spacing.xxl,
+      marginTop: spacing.xl, marginBottom: spacing.xl,
     },
     stat: { flex: 1, alignItems: 'center' },
     statN: { fontFamily: typography.display.fontFamily, fontSize: 19, color: colors.ink },
     statLabel: { fontFamily: typography.body.fontFamily, fontSize: 11.5, color: colors.inkFaint, marginTop: 2 },
+    shortcuts: { gap: spacing.sm, marginBottom: spacing.xxl },
+    shortcut: {
+      minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+      paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+      borderRadius: radius.lg, borderWidth: 1, borderColor: colors.hairline,
+      backgroundColor: colors.paper,
+    },
+    shortcutIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
+    shortcutCopy: { flex: 1 },
+    shortcutTitle: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
+    shortcutDetail: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 2 },
     eyebrow: {
       fontFamily: typography.body.bold, fontSize: 11.5, letterSpacing: 1.1,
       textTransform: 'uppercase', color: colors.inkFaint, marginBottom: spacing.xs,

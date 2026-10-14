@@ -7,6 +7,7 @@ import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
 import Input from '../components/Input';
 import Button from '../components/Button';
+import Badge from '../components/Badge';
 import { useAuth } from '../context/AuthContext';
 import { resetAvatar, updateProfile, uploadAvatar } from '../api/profileService';
 import { getAuthErrorMessage } from '../api/errorMessages';
@@ -115,6 +116,7 @@ export default function AccountDetailsScreen({ navigation }) {
   const trimmedName = name.trim();
   const nameInvalid = trimmedName.length === 0;
   const initial = (trimmedName || user?.name || 'A').charAt(0).toUpperCase();
+  const cookingLevelLabel = COOKING_LEVELS.find(([value]) => value === user?.cookingLevel)?.[1];
   const busy = pendingKind !== null;
 
   const makeAdd = (list, setList, setError) => (raw) => {
@@ -194,8 +196,12 @@ export default function AccountDetailsScreen({ navigation }) {
     <TopBar mode="back" title="Account Details" onBack={() => navigation.goBack()} />
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       <View style={styles.avatarSection}>
-        {user?.avatarUrl ? <Image source={{ uri: user.avatarUrl }} style={styles.avatar} accessible accessibilityLabel={`${user?.name || 'Account'} avatar`} /> : <View style={styles.avatar} accessible accessibilityLabel={`${user?.name || 'Account'} initial`}><Text style={styles.avatarInitial}>{initial}</Text></View>}
+        <View style={styles.avatarWrap}>
+          {user?.avatarUrl ? <Image source={{ uri: user.avatarUrl }} style={styles.avatar} accessible accessibilityLabel={`${user?.name || 'Account'} avatar`} /> : <View style={styles.avatar} accessible accessibilityLabel={`${user?.name || 'Account'} initial`}><Text style={styles.avatarInitial}>{initial}</Text></View>}
+          <Pressable style={styles.avatarEditTarget} onPress={handleAvatarPick} disabled={busy} accessibilityRole="button" accessibilityLabel="Choose profile photo" accessibilityState={{ disabled: busy }}><View style={styles.avatarEditBadge}><Ionicons name="camera" size={13} color={colors.onAccent} /></View></Pressable>
+        </View>
         <Text style={styles.chefName}>{trimmedName || user?.name}</Text>
+        {cookingLevelLabel ? <Badge label={cookingLevelLabel.toUpperCase()} tone="sage" /> : null}
         <View style={styles.avatarActions}>
           <Pressable style={styles.avatarButton} onPress={handleAvatarPick} disabled={busy} accessibilityRole="button" accessibilityLabel={user?.avatarUrl ? 'Replace profile photo' : 'Upload profile photo'}>{pendingKind === 'upload' ? <ActivityIndicator size="small" color={colors.sageDeep} /> : <Text style={styles.avatarButtonText}>{user?.avatarUrl ? 'Replace photo' : 'Upload photo'}</Text>}</Pressable>
           {user?.avatarUrl ? <Pressable style={styles.avatarButton} onPress={confirmAvatarReset} disabled={busy} accessibilityRole="button" accessibilityLabel="Reset profile photo">{pendingKind === 'reset' ? <ActivityIndicator size="small" color={colors.error} /> : <Text style={styles.resetText}>Reset</Text>}</Pressable> : null}
@@ -218,7 +224,7 @@ export default function AccountDetailsScreen({ navigation }) {
 
 function makeStyles(colors) { return StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.cream }, scroll: { padding: spacing.lg, paddingBottom: spacing.xxxl }, avatarSection: { alignItems: 'center', marginBottom: spacing.xxl, gap: spacing.sm },
-  avatar: { width: 84, height: 84, borderRadius: 42, backgroundColor: colors.sageDeep, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.paper }, avatarInitial: { fontFamily: typography.display.fontFamily, fontSize: 30, color: colors.onAccent }, chefName: { fontFamily: typography.display.fontFamily, fontSize: 19, color: colors.ink, marginTop: spacing.xs },
+  avatarWrap: { width: 100, height: 100 }, avatar: { position: 'absolute', top: 0, left: 8, width: 84, height: 84, borderRadius: 42, backgroundColor: colors.sageDeep, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.paper }, avatarInitial: { fontFamily: typography.display.fontFamily, fontSize: 30, color: colors.onAccent }, avatarEditTarget: { position: 'absolute', right: 0, bottom: 0, width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }, avatarEditBadge: { width: 26, height: 26, borderRadius: 13, backgroundColor: colors.sageDeep, borderWidth: 2, borderColor: colors.cream, alignItems: 'center', justifyContent: 'center' }, chefName: { fontFamily: typography.display.fontFamily, fontSize: 19, color: colors.ink, marginTop: spacing.xs },
   avatarActions: { flexDirection: 'row', gap: spacing.sm }, avatarButton: { minHeight: 40, minWidth: 96, paddingHorizontal: spacing.md, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, alignItems: 'center', justifyContent: 'center' }, avatarButtonText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.xs, color: colors.sageDeep }, resetText: { fontFamily: typography.body.semibold, fontSize: typography.sizes.xs, color: colors.error },
   label: { fontFamily: typography.body.medium, fontSize: typography.sizes.sm, color: colors.inkSoft, marginBottom: spacing.sm }, readonlyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.creamDeep, borderRadius: radius.md, borderWidth: 1, borderColor: colors.hairline, paddingHorizontal: spacing.md, height: 48 }, readonlyValue: { flex: 1, fontFamily: typography.body.fontFamily, fontSize: typography.sizes.base, color: colors.inkSoft }, caption: { fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, color: colors.inkFaint, marginTop: spacing.xs, marginBottom: spacing.lg },
   bioInput: { minHeight: 104, textAlignVertical: 'top', fontFamily: typography.body.fontFamily, fontSize: typography.sizes.base, color: colors.ink, backgroundColor: colors.paper, borderRadius: radius.md, borderWidth: 1, borderColor: colors.hairline, padding: spacing.md }, count: { textAlign: 'right', fontFamily: typography.body.fontFamily, fontSize: typography.sizes.xs, color: colors.inkFaint, marginTop: spacing.xs, marginBottom: spacing.lg }, levelRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg }, levelButton: { flex: 1, minHeight: 42, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, alignItems: 'center', justifyContent: 'center' }, levelButtonSelected: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep }, levelText: { fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.inkSoft }, levelTextSelected: { color: colors.onAccent },

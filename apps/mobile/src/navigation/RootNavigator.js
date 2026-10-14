@@ -162,8 +162,8 @@ export default function RootNavigator() {
             <Stack.Screen name="Notifications" component={NotificationsScreen} />
             <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
             <Stack.Screen name="About" component={AboutScreen} />
-            <Stack.Screen name="Terms" component={TermsScreen} />
-            <Stack.Screen name="Privacy" component={PrivacyScreen} />
+            <Stack.Screen name="Terms" component={TermsScreen} navigationKey="terms-authed" />
+            <Stack.Screen name="Privacy" component={PrivacyScreen} navigationKey="privacy-authed" />
             <Stack.Screen name="Licenses" component={LicensesScreen} />
             {/*
               Deep-link-only routes, reachable while authenticated too (an
@@ -206,6 +206,10 @@ export default function RootNavigator() {
             <Stack.Screen name="Landing" component={LandingScreen} />
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
+            {/* Keep Register mounted while either legal document is pushed.
+                Distinct keys discard the legal route when auth state changes. */}
+            <Stack.Screen name="Terms" component={TermsScreen} navigationKey="terms-guest" />
+            <Stack.Screen name="Privacy" component={PrivacyScreen} navigationKey="privacy-guest" />
             {/* See the authenticated stack's own comment above. */}
             <Stack.Screen
               name="ResetPassword"

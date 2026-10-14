@@ -50,7 +50,7 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
     expect(bookmarkBlock[0]).not.toMatch(/navigation\.navigate/);
   });
 
-  it('removes the persistent Substitute Finder from brand mode and keeps notification state explicitly unavailable', () => {
+  it('removes the persistent Substitute Finder from brand mode and shows authoritative unread state', () => {
     expect(brandBranch).not.toBeNull();
     const brandRegion = brandBranch?.[1] || '';
 
@@ -65,9 +65,9 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
     expect(brandRegion).not.toMatch(swapHorizontalIcon);
     expect(brandRegion).toMatch(/\{onSavedPress && \(/);
     expect(brandRegion).toMatch(/name="bookmark-outline"/);
-    expect(code).toMatch(/showBellDot && <View style=\{styles\.bellDot\} \/>/);
-    expect(code).toMatch(/showBellDot = false/);
-    expect(raw).toMatch(/notifications feed isn&apos;t available yet/i);
+    expect(code).toMatch(/const \{ unreadCount \} = useNotifications\(\)/);
+    expect(brandRegion).toMatch(/\{unreadCount > 0 && <View style=\{styles\.bellDot\} \/>/);
+    expect(brandRegion).toMatch(/<NotificationsDropdown\s+visible=\{notifVisible\}/);
   });
 
   it('keeps the Notifications control accessible as a labelled button', () => {
@@ -76,7 +76,7 @@ describe('TopBar Saved/bookmark affordance is opt-in, not global', () => {
     );
     expect(notificationControl).not.toBeNull();
     expect(notificationControl[0]).toMatch(/accessibilityRole\s*=\s*"button"/);
-    expect(notificationControl[0]).toMatch(/accessibilityLabel\s*=\s*"Notifications"/);
+    expect(notificationControl[0]).toMatch(/accessibilityLabel=\{`Notifications, \$\{unreadCount\} unread`\}/);
   });
 
   it('holds no auth/session state or navigation reset of its own', () => {

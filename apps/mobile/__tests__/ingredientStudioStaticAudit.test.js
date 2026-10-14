@@ -119,7 +119,7 @@ const extractSearchEffect = () => extractUniqueBalanced(code, {
   anchor: 'useEffect(function loadIngredientCatalog()',
   opening: '(',
   label: 'ingredient search effect',
-  expectedEnd: /,\s*\[accountStateIsCurrent, authUserId, query, searchNonce\]\)$/,
+  expectedEnd: /,\s*\[accountStateIsCurrent, authUserId, recipeMode, query, searchNonce, routeContext\]\)$/,
   after: /^\s*;/,
 });
 
@@ -241,6 +241,28 @@ describe('balanced source extraction fails closed', () => {
 });
 
 describe('Ingredient Studio real catalog integration', () => {
+  it('keeps route ingredient IDs canonical and recipe selection explicit', () => {
+    expect(code).toMatch(/function recipeIngredientsFromRoute\(context\)/);
+    expect(code).toMatch(/seen\.has\(id\)/);
+    expect(code).toMatch(/setRecipeMode\(!asTab\)/);
+    expect(code).toMatch(/No ingredients listed for this recipe/);
+    expect(code).toMatch(/disabled=\{!ingredient\.id\}/);
+    expect(code).toMatch(/accessibilityLabel="Browse all ingredients"/);
+    expect(code).toMatch(/pagination\.page < pagination\.totalPages/);
+    expect(code).toMatch(/pageBusyRef\.current/);
+  });
+  it('places the compact pinned Browse all banner directly below the header', () => {
+    const header = code.indexOf('<TopBar', code.indexOf('export default function IngredientStudioScreen'));
+    const banner = code.indexOf('style={styles.recipeBanner}', header);
+    const picker = code.indexOf('style={styles.searchWrap}', banner);
+    expect(header).toBeGreaterThan(-1);
+    expect(banner).toBeGreaterThan(header);
+    expect(picker).toBeGreaterThan(banner);
+    expect(code).toMatch(/recipeBanner: \{[\s\S]*?minHeight: 44,[\s\S]*?paddingHorizontal: spacing\.lg,[\s\S]*?paddingVertical: spacing\.sm,[\s\S]*?backgroundColor: colors\.sagePale/);
+    expect(code).toMatch(/recipeBannerText: \{[\s\S]*?fontSize: typography\.sizes\.xs/);
+    expect(code).toMatch(/recipeBannerLink: \{[\s\S]*?fontSize: typography\.sizes\.xs,[\s\S]*?textDecorationLine: 'underline'/);
+    expect(code).not.toMatch(/accessibilityLabel="Browse all ingredients" style=\{styles\.assistantAction\}/);
+  });
   it('keeps one freshness-guarded canonical ingredient search effect', () => {
     const effect = extractSearchEffect();
 
@@ -248,8 +270,9 @@ describe('Ingredient Studio real catalog integration', () => {
     expect(effect).toMatch(/searchIngredientsStrict\(\{\s*search: trimmed \|\| undefined,\s*limit: SEARCH_LIMIT/);
     expect(effect).toMatch(/generation !== searchGeneration\.current/);
     expect(effect).toMatch(/ownerId !== authOwnerRef\.current/);
-    expect(effect).toMatch(/setIngredients\(result\.ingredients\)/);
-    expect(effect).toMatch(/setSelected\(result\.ingredients\[0\] \|\| null\)/);
+    expect(effect).toMatch(/setIngredients\(result\.ingredients\.filter/);
+    expect(effect).toMatch(/setPagination\(result\.pagination\)/);
+    expect(effect).not.toMatch(/setSelected\(result\.ingredients\[0\]/);
     expect(effect).toMatch(/setConfirmedEmptyQuery\(trimmed && result\.ingredients\.length === 0 \? trimmed : null\)/);
     expect(effect).toMatch(/setSearchError\(getIngredientErrorMessage\(err\)\)/);
     expect(effect).toMatch(/clearTimeout\(timer\)/);
@@ -329,7 +352,7 @@ describe('Ingredient Studio real catalog integration', () => {
     expect(component).toMatch(/searchLoading && ingredients\.length === 0/);
     expect(component).toMatch(/setSearchNonce\(\(n\) => n \+ 1\)/);
     expect(component).toMatch(/No ingredients match/);
-    expect(component).toMatch(/onPress=\{\(\) => setSelected\(ingredient\)\}/);
+    expect(component).toMatch(/onPress=\{\(\) => \{ clearSubstitutionState\(\); setSelected\(ingredient\); \}\}/);
     expect(renderer).toMatch(/substitutionState\.loading/);
     expect(renderer).toMatch(/setSubstitutesNonce\(\(n\) => n \+ 1\)/);
     expect(renderer).toMatch(/substitutionState\.substitutes\.length === 0/);
@@ -343,7 +366,7 @@ describe('Ingredient Studio real catalog integration', () => {
       opening: '{',
       label: 'compact context label',
       expectedEnd: /\}$/,
-      after: /^\s*export default function IngredientStudioScreen/,
+      after: /^\s*function recipeIngredientsFromRoute/,
     });
 
     expect(renderer).toMatch(/const primaryContext = substitution\.contexts\[0\] \|\| 'Catalog'/);
@@ -352,6 +375,14 @@ describe('Ingredient Studio real catalog integration', () => {
     expect(renderer).toMatch(/sourceIngredient: selected,\s*substitution,/);
     expect(compactLabel).toMatch(/context\.slice\(0, COMPACT_CONTEXT_MAX_LENGTH - 1\)/);
     expect(code).toMatch(/contextBadgeWrap: \{\s*flexShrink: 1,\s*maxWidth: '42%',\s*overflow: 'hidden'/);
+  });
+
+  it('shows catalog-derived option wording only for the current successful lookup', () => {
+    expect(code).toMatch(/substitutionStateIsCurrent && !substitutionState\.loading && !substitutionState\.error/);
+    expect(code).toMatch(/substitutionState\.substitutes\.length} catalog/);
+    expect(code).toMatch(/: 'Live catalog ingredient'/);
+    expect(code).toMatch(/heroCircle: \{\s*width: 54,\s*height: 54/);
+    expect(code).toMatch(/swapIconWrap: \{\s*width: 46,\s*height: 46/);
   });
 
   it('distinguishes affirmative unsupported claims from truthful limitations', () => {

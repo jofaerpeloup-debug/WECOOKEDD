@@ -649,7 +649,7 @@ export default function MealPlanScreen({ navigation, route }) {
   return (
     <View ref={rootRef} style={styles.root} onLayout={captureRootFrame}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()}><Ionicons name="chevron-back" size={18} color={colors.ink} /></Pressable>
+        <Pressable style={styles.backBtn} hitSlop={8} onPress={() => navigation.goBack()} accessibilityRole="button" accessibilityLabel="Go back"><Ionicons name="chevron-back" size={18} color={colors.ink} /></Pressable>
         <View style={{ flex: 1 }}><Text style={styles.title}>Meal Plan</Text><Text style={styles.subtitle}>{plannedCount} {plannedCount === 1 ? 'meal' : 'meals'} this week</Text></View>
         {plannedCount > 0 ? (
           <Pressable hitSlop={8} disabled={mealPlanControlsDisabled} onPress={() => confirm('Clear meal plan', 'Remove every planned meal in this week?', clearWeek, { confirmLabel: 'Clear', destructive: true })}>
@@ -663,6 +663,8 @@ export default function MealPlanScreen({ navigation, route }) {
         <Text style={styles.weekLabel}>{formatWeekRange(days)}</Text>
         <Pressable style={styles.weekButton} disabled={dragActive} onPress={() => setWeekAnchor((date) => shiftWeek(date, 1))} accessibilityLabel="Next week" accessibilityState={{ disabled: dragActive }}><Ionicons name="chevron-forward" size={18} color={colors.sageDeep} /></Pressable>
       </View>
+
+      {plannedCount > 1 ? <Text style={styles.dragHint}>Drag a meal's handle onto another day to move it.</Text> : null}
 
       {status === 'loading' && entries.length === 0 ? <ActivityIndicator style={styles.loading} color={colors.sageDeep} /> : null}
       {status === 'error' ? <Pressable style={styles.errorCard} onPress={load}><Text style={styles.errorText}>{data.error} Tap to retry.</Text></Pressable> : null}
@@ -717,11 +719,6 @@ export default function MealPlanScreen({ navigation, route }) {
                     onDragTerminate={cancelDrag}
                     styles={styles}
                   />
-                  <Pressable hitSlop={8} onPress={() => { setReminderError(null); setReminderEntry(entry); }}
-                    disabled={mealPlanControlsDisabled} accessibilityRole="button" accessibilityLabel={`Reminder for ${entry.isAvailable ? entry.recipe.title : 'unavailable recipe'}`}>
-                    <Ionicons name={entry.reminder ? 'notifications' : 'notifications-outline'} size={18} color={colors.sageDeep} />
-                    <Text style={styles.moveText}>{entry.reminder ? 'Reminder' : 'Remind'}</Text>
-                  </Pressable>
                   <Pressable
                     hitSlop={8}
                     onPress={() => openMove(entry)}
@@ -746,6 +743,19 @@ export default function MealPlanScreen({ navigation, route }) {
                     {pendingEntryId === entry.id ? <ActivityIndicator size="small" color={colors.inkFaint} /> : <Ionicons name="remove-circle-outline" size={20} color={colors.inkFaint} />}
                   </Pressable>
                 </View>
+                <Pressable
+                  style={[styles.reminderChip, entry.reminder && styles.reminderChipOn]}
+                  onPress={() => { setReminderError(null); setReminderEntry(entry); }}
+                  disabled={mealPlanControlsDisabled}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Reminder for ${entry.isAvailable ? entry.recipe.title : 'unavailable recipe'}`}
+                  accessibilityState={{ disabled: mealPlanControlsDisabled }}
+                >
+                  <Ionicons name={entry.reminder ? 'notifications' : 'notifications-outline'} size={12} color={entry.reminder ? colors.onAccent : colors.inkFaint} />
+                  <Text style={[styles.reminderText, entry.reminder && styles.reminderTextOn]}>
+                    {entry.reminder?.localTime ? `Cook at ${entry.reminder.localTime}` : 'Set a cook reminder'}
+                  </Text>
+                </Pressable>
               </View>
             ))}
           </View>
@@ -804,18 +814,19 @@ function makeStyles(colors) {
     subtitle: { fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.inkFaint, marginTop: 1 },
     clear: { fontFamily: typography.body.semibold, fontSize: 13, color: colors.error },
     weekNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.md, paddingHorizontal: spacing.xl, paddingBottom: spacing.md },
-    weekButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
-    weekLabel: { minWidth: 170, textAlign: 'center', fontFamily: typography.body.semibold, fontSize: 13, color: colors.inkSoft },
+    weekButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.creamDeep, alignItems: 'center', justifyContent: 'center' },
+    weekLabel: { minWidth: 170, textAlign: 'center', fontFamily: typography.body.semibold, fontSize: 14, color: colors.ink },
     loading: { marginTop: spacing.xxl },
     errorCard: { marginHorizontal: spacing.xl, marginBottom: spacing.md, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.errorBg },
     errorText: { fontFamily: typography.body.fontFamily, fontSize: 12, color: colors.error, textAlign: 'center' },
     scroll: { paddingHorizontal: spacing.xl, paddingBottom: 110 },
-    daySection: { marginBottom: spacing.xl },
+    dragHint: { fontFamily: typography.body.fontFamily, fontSize: 11.5, color: colors.inkFaint, paddingHorizontal: spacing.xl, marginBottom: spacing.sm },
+    daySection: { marginBottom: spacing.xl, borderRadius: radius.md },
     dayDropZone: { borderWidth: 1, borderColor: colors.hairline, borderStyle: 'dashed', borderRadius: radius.md, padding: spacing.sm },
     dayDropTarget: { borderWidth: 2, borderColor: colors.sageDeep, borderStyle: 'solid', backgroundColor: colors.sagePale },
     dayHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
     dayName: { fontFamily: typography.body.bold, fontSize: 11.5, letterSpacing: 1.1, textTransform: 'uppercase', color: colors.inkFaint },
-    dayDate: { fontFamily: typography.body.fontFamily, fontSize: 11, color: colors.inkFaint, marginTop: 1 },
+    dayDate: { fontFamily: typography.body.medium, fontSize: 13, color: colors.inkSoft, marginTop: 1 },
     addBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.sagePale, alignItems: 'center', justifyContent: 'center' },
     emptyDay: { borderWidth: 1, borderColor: colors.hairline, borderStyle: 'dashed', borderRadius: radius.md, paddingVertical: 14, alignItems: 'center' },
     emptyText: { fontFamily: typography.body.fontFamily, fontSize: 12.5, color: colors.inkFaint },
@@ -832,6 +843,10 @@ function makeStyles(colors) {
     dragText: { fontFamily: typography.body.semibold, fontSize: 10, color: colors.sageDeep },
     dragPreview: { position: 'absolute', top: 0, left: 0, zIndex: 20, elevation: 8, width: DRAG_PREVIEW_WIDTH, minHeight: 60, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.sageDeep, borderRadius: radius.md, backgroundColor: colors.paper, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     dragPreviewText: { flex: 1, fontFamily: typography.body.semibold, fontSize: 13, color: colors.ink },
+    reminderChip: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8, alignSelf: 'flex-start', minHeight: 44, paddingHorizontal: 10, borderRadius: radius.pill, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.hairline },
+    reminderChipOn: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
+    reminderText: { fontFamily: typography.body.medium, fontSize: 11, color: colors.inkFaint },
+    reminderTextOn: { color: colors.onAccent, fontFamily: typography.body.semibold },
     move: { paddingHorizontal: 7, paddingVertical: 6, alignItems: 'center', gap: 1 },
     moveText: { fontFamily: typography.body.semibold, fontSize: 10, color: colors.sageDeep },
     remove: { padding: 6 },

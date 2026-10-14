@@ -37,6 +37,17 @@ jest.mock('react-native', () => {
 const { View } = require('react-native');
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('react-native-svg', () => ({
+  __esModule: true,
+  default: 'Svg',
+  Defs: 'Defs',
+  LinearGradient: 'SvgLinearGradient',
+  Rect: 'Rect',
+  Stop: 'Stop',
+}));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
+}));
 jest.mock('../src/theme/ThemeContext', () => ({
   useTheme: () => ({
     colors: {

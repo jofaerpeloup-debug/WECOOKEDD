@@ -40,6 +40,7 @@ export default function TopBar({
   rightIcon,
   onRightPress,
   transparent = false,
+  variant = 'default',
 }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
@@ -47,6 +48,8 @@ export default function TopBar({
   const navigation = useNavigation();
   const { unreadCount } = useNotifications();
   const [notifVisible, setNotifVisible] = useState(false);
+  const homeBrand = mode === 'brand' && variant === 'home';
+  const discoverTitle = mode === 'back' && variant === 'discover';
 
   const pressBell = () => {
     if (onBellPress) onBellPress();
@@ -64,13 +67,14 @@ export default function TopBar({
         styles.wrap,
         { paddingTop: insets.top + spacing.sm },
         transparent && { backgroundColor: 'transparent', borderBottomWidth: 0 },
+        (homeBrand || discoverTitle) && styles.finalHeader,
       ]}
     >
       {mode === 'brand' ? (
         <>
-          <View style={styles.edgeSpacer} />
-          <View style={styles.brandRow}>
-            <Wordmark style={styles.brand} />
+          {!homeBrand && <View style={styles.edgeSpacer} />}
+          <View style={[styles.brandRow, homeBrand && styles.brandRowLeft]}>
+            <Wordmark style={[styles.brand, homeBrand && styles.brandHome]} />
           </View>
           <View style={styles.bellCluster}>
             {onSavedPress && (
@@ -140,7 +144,11 @@ export default function TopBar({
           >
             {mode === 'back' && <Ionicons name="arrow-back" size={22} color={colors.ink} />}
           </Pressable>
-          <Text style={styles.title} numberOfLines={1}>
+          <Text
+            style={[styles.title, discoverTitle && styles.titleDiscover]}
+            numberOfLines={1}
+            accessibilityRole={discoverTitle ? 'header' : undefined}
+          >
             {title}
           </Text>
           <Pressable
@@ -169,6 +177,7 @@ function makeStyles(colors) {
       borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
     },
+    finalHeader: { paddingHorizontal: spacing.xl },
     side: { width: 34, alignItems: 'center' },
     edgeSpacer: { width: 60 },
     bellCluster: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -209,11 +218,13 @@ function makeStyles(colors) {
       color: colors.onAccent,
     },
     brandRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    brandRowLeft: { justifyContent: 'flex-start' },
     brand: {
       fontFamily: typography.display.fontFamily,
       fontSize: 19,
       color: colors.ink,
     },
+    brandHome: { fontFamily: typography.display.fontFamilyItalic, fontSize: 22 },
     bellDot: {
       position: 'absolute',
       top: -1,
@@ -231,6 +242,12 @@ function makeStyles(colors) {
       color: colors.ink,
       flex: 1,
       textAlign: 'center',
+    },
+    titleDiscover: {
+      fontFamily: typography.display.fontFamily,
+      fontSize: 20,
+      textAlign: 'left',
+      marginLeft: spacing.md,
     },
   });
 }

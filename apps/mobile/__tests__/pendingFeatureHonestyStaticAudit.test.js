@@ -92,5 +92,8 @@ describe('production-reachable deferred features remain honest', () => {
     const help = read('screens/HelpCenterScreen.js');
     expect(help).not.toMatch(/data\/mockData|Chef AI|subscription|support@wecooked\.app/);
     expect(help).toMatch(/Support unavailable/);
+    expect(help).toMatch(/Need a substitute\? Find swaps below Nutrition/);
+    expect(help).toMatch(/search the catalog and select an ingredient/);
+    expect(help).not.toMatch(/Substitutes beside an ingredient/);
   });
 });

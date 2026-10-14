@@ -9,6 +9,24 @@ const executableScreen = screen
   .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 describe('MOBILE-DISC5 Search shell static contract', () => {
+  it('retains the pinned compact cards and omits removed Vibe and Craving controls', () => {
+    expect(screen).toMatch(/row: \{[\s\S]*?backgroundColor: colors\.creamDeep,[\s\S]*?borderRadius: 14,[\s\S]*?padding: 10/);
+    expect(executableScreen).not.toMatch(/\b[Vv]ibe\b|\b[Cc]raving\b/);
+  });
+  it('opens with a left display title and accessible inline filters on demand', () => {
+    const topBar = fs.readFileSync(path.join(__dirname, '../src/components/TopBar.js'), 'utf8');
+    const panelStyle = panel.match(/panel: \{([\s\S]*?)\r?\n    \},\r?\n    header:/)?.[1];
+    expect(screen).toMatch(/<TopBar mode="back" title="Search" variant="discover" transparent/);
+    expect(topBar).toMatch(/titleDiscover: \{[\s\S]*?fontFamily: typography\.display\.fontFamily,[\s\S]*?fontSize: 20,[\s\S]*?textAlign: 'left'/);
+    expect(screen).toMatch(/\[filtersOpen, setFiltersOpen\] = useState\(false\)/);
+    expect(screen).toMatch(/accessibilityState=\{\{ expanded: filtersOpen \}\}/);
+    expect(panelStyle).toBeDefined();
+    expect(panelStyle).not.toMatch(/borderWidth|backgroundColor|borderRadius/);
+    for (const label of ['Region', 'Category', 'Dietary', 'Total time', 'Maximum prep minutes', 'Ingredient']) {
+      expect(panel).toContain(label);
+    }
+    expect(panel).not.toMatch(/\bVibe\b|\bCraving\b/);
+  });
   it('is a pushed Search screen with one vertical FlatList hierarchy', () => {
     expect(screen).toMatch(/<TopBar mode="back" title="Search"/);
     expect(screen).toMatch(/<FlatList[\s\S]*ListHeaderComponent=/);
@@ -28,6 +46,17 @@ describe('MOBILE-DISC5 Search shell static contract', () => {
     expect(panel).toMatch(/onApply\(\{ \.\.\.result\.filters, sort: appliedFilters\.sort \}\)/);
     expect(panel).toMatch(/validateDiscoverFilterDraft\(draft\)/);
     expect(panel).toMatch(/Show recipes/);
+  });
+
+  it('bounds all canonical regions behind an accessible selector', () => {
+    expect(panel).toMatch(/REGION_OPTIONS\.map\(\(option\) =>/);
+    expect(panel).toMatch(/maxHeight: 224/);
+    expect(panel).toMatch(/nestedScrollEnabled/);
+    expect(panel).toMatch(/accessibilityState=\{\{ expanded: regionOpen \}\}/);
+    expect(panel).toMatch(/region: option\.value/);
+    expect(panel).toMatch(/setRegionOpen\(false\)/);
+    expect(screen).toMatch(/<RecipeImage source=\{item\.imageUrl\}/);
+    expect(screen).toMatch(/<FavoriteHeart recipe=\{item\}/);
   });
 
   it('keeps DISC6 dietary and total-time controls staged and wire projection bounded', () => {

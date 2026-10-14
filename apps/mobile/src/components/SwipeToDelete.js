@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../theme/ThemeContext';
 
-const DELETE_WIDTH = 88;
+const DELETE_WIDTH = 76;
 const HORIZONTAL_ACTIVATION = 12;
 
 export default function SwipeToDelete({ children, itemName, disabled, onDelete, testID }) {
+  const { colors } = useTheme();
   const [translateX, setTranslateX] = useState(0);
   const [actionVisible, setActionVisible] = useState(false);
   const translateRef = useRef(0);
@@ -59,7 +62,7 @@ export default function SwipeToDelete({ children, itemName, disabled, onDelete, 
   return (
     <View style={styles.clip}>
       {actionVisible ? (
-        <View style={styles.actionWrap}>
+        <View style={[styles.actionWrap, { backgroundColor: colors.error }]}>
           <Pressable
             style={styles.action}
             onPress={activateDelete}
@@ -68,7 +71,7 @@ export default function SwipeToDelete({ children, itemName, disabled, onDelete, 
             accessibilityLabel={`Delete ${itemName}`}
             accessibilityState={{ disabled }}
           >
-            <Text style={styles.actionText}>Delete</Text>
+            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
           </Pressable>
         </View>
       ) : null}
@@ -89,7 +92,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'flex-end',
     justifyContent: 'center',
-    backgroundColor: '#8E3028',
   },
   action: {
     width: DELETE_WIDTH,
@@ -97,6 +99,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionText: { color: '#FFFFFF', fontWeight: '700' },
   foreground: { backgroundColor: 'transparent' },
 });

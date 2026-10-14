@@ -95,6 +95,14 @@ function git(...args) {
 }
 
 describe('Shopping List authoritative bindings', () => {
+  it('uses the pinned grocery labels while retaining SHOP5 actions and canonical grouping', () => {
+    expect(code).toMatch(/accessibilityRole="header">Grocery List<\/Text>/);
+    expect(code).toMatch(/>Clear all<\/Text>/);
+    expect(code).toMatch(/groupShoppingListItems\(items\)/);
+    expect(code).toMatch(/<IngredientPickerModal/);
+    expect(code).toMatch(/addCustomItem/);
+    expect(code).toMatch(/clearChecked/);
+  });
   it('uses the real context and wires every supported screen mutation', () => {
     expect(raw).toMatch(/useShoppingList.*ShoppingListContext/);
     const bindings = region('    items,', '} = useShoppingList();');
@@ -404,6 +412,9 @@ describe('SHOP4 strict authority, concurrency, and gesture boundaries', () => {
     expect(swipeCode).toMatch(/onStartShouldSetPanResponder: \(\) => false/);
     expect(swipeCode).toMatch(/accessibilityLabel=\{`Delete \$\{itemName\}`\}/);
     expect(swipeCode).toMatch(/onPress=\{activateDelete\}/);
+    expect(swipeCode).toMatch(/const DELETE_WIDTH = 76/);
+    expect(swipeCode).toMatch(/<Ionicons name="trash-outline" size=\{18\}/);
+    expect(swipeCode).toMatch(/backgroundColor: colors\.error/);
     expect(code).toMatch(/accessibilityRole=\{editing \? 'button' : 'checkbox'\}/);
     expect(code).toMatch(/`Remove \$\{primary\}`/);
   });

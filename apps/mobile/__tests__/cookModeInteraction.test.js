@@ -82,7 +82,7 @@ function recipe() {
   };
 }
 
-function renderCookMode() {
+function renderCookMode(routeParams = null) {
   const navigation = {
     dispatch: jest.fn(),
     goBack: jest.fn(),
@@ -91,7 +91,7 @@ function renderCookMode() {
   const view = render(
     <CookModeScreen
       navigation={navigation}
-      route={{ params: { recipeSource: 'api', recipe: recipe(), servings: 2, ingredients: [] } }}
+      route={{ params: routeParams || { recipeSource: 'api', recipe: recipe(), servings: 2, ingredients: [] } }}
     />
   );
   const attemptRemoval = (action) => {
@@ -563,6 +563,50 @@ it('keeps explicit Finish as the only Cook History path and retains its rapid-ta
   expect(mockRecordCompletion).toHaveBeenCalledWith({ recipeId: 'recipe-1', servings: 2 });
   await act(async () => resolveCompletion());
   expect(notify).toHaveBeenCalledTimes(1);
+});
+
+it.each([undefined, null, 0, -1, NaN, Infinity, '2', 1.5, 101])(
+  'shows original quantities and omits history servings for invalid recipe base %#',
+  async (base) => {
+    const apiRecipe = {
+      ...recipe(), servings: base,
+      ingredients: [{ ingredient: { id: 'ingredient-1', name: 'Chicken' }, quantity: 1, unit: 'kg' }],
+    };
+    const view = renderCookMode({ recipeSource: 'api', recipe: apiRecipe, servings: 3, ingredients: ['1 kg Chicken'] });
+    expect(view.getByText(/Servings unknown/)).toBeOnTheScreen();
+    expect(view.getByText('1 kg')).toBeOnTheScreen();
+    expect(view.queryByText('1 serving')).toBeNull();
+    enterFinalStep(view);
+    expect(view.getByText('Simmer until tender.')).toBeOnTheScreen();
+    await act(async () => fireEvent.press(view.getByText('Finish Cooking')));
+    expect(mockRecordCompletion).toHaveBeenCalledTimes(1);
+    expect(mockRecordCompletion).toHaveBeenCalledWith({ recipeId: 'recipe-1' });
+    expect(Object.keys(mockRecordCompletion.mock.calls[0][0])).toEqual(['recipeId']);
+  }
+);
+
+it('keeps selected valid servings for checklist scaling and completion', async () => {
+  const apiRecipe = {
+    ...recipe(),
+    ingredients: [{ ingredient: { id: 'ingredient-1', name: 'Chicken' }, quantity: 1, unit: 'kg' }],
+  };
+  const view = renderCookMode({ recipeSource: 'api', recipe: apiRecipe, servings: 3, ingredients: [] });
+  expect(view.getByText('1.5 kg')).toBeOnTheScreen();
+  enterFinalStep(view);
+  await act(async () => fireEvent.press(view.getByText('Finish Cooking')));
+  expect(mockRecordCompletion).toHaveBeenCalledWith({ recipeId: 'recipe-1', servings: 3 });
+});
+
+it('uses the real recipe base when a route supplies an invalid selection', async () => {
+  const apiRecipe = {
+    ...recipe(),
+    ingredients: [{ ingredient: { id: 'ingredient-1', name: 'Chicken' }, quantity: 1, unit: 'kg' }],
+  };
+  const view = renderCookMode({ recipeSource: 'api', recipe: apiRecipe, servings: 101, ingredients: [] });
+  expect(view.getByText('1 kg')).toBeOnTheScreen();
+  enterFinalStep(view);
+  await act(async () => fireEvent.press(view.getByText('Finish Cooking')));
+  expect(mockRecordCompletion).toHaveBeenCalledWith({ recipeId: 'recipe-1', servings: 2 });
 });
 
 it.each([

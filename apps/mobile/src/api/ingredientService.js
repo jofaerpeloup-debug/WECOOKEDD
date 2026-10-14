@@ -35,7 +35,7 @@ function normalizeIngredient(raw) {
   };
 }
 
-function ingredientSearchQuery({ search, limit = DEFAULT_SEARCH_LIMIT } = {}) {
+function ingredientSearchQuery({ search, limit = DEFAULT_SEARCH_LIMIT, page } = {}) {
   const query = {};
 
   const trimmed = typeof search === 'string' ? search.trim() : '';
@@ -45,6 +45,10 @@ function ingredientSearchQuery({ search, limit = DEFAULT_SEARCH_LIMIT } = {}) {
     ? Math.min(Math.max(1, Math.trunc(limit)), MAX_SEARCH_LIMIT)
     : DEFAULT_SEARCH_LIMIT;
   query.limit = safeLimit;
+  if (page !== undefined) {
+    if (!Number.isSafeInteger(page) || page < 1) throw new Error('Invalid ingredient page.');
+    query.page = page;
+  }
 
   return query;
 }
@@ -105,17 +109,30 @@ export function searchIngredients({ search, limit = DEFAULT_SEARCH_LIMIT } = {})
  * name. Rejecting the whole payload prevents malformed records from being
  * misrepresented as a legitimate empty search result.
  */
-export function searchIngredientsStrict({ search, limit = DEFAULT_SEARCH_LIMIT } = {}) {
-  const query = ingredientSearchQuery({ search, limit });
+export function searchIngredientsStrict({ search, limit = DEFAULT_SEARCH_LIMIT, page } = {}) {
+  const query = ingredientSearchQuery({ search, limit, page });
 
   return api.get('/ingredients', { query }).then((data) => {
     if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.ingredients)) {
       throw malformedIngredientSearchResponse();
     }
 
+    const pagination = data.pagination;
+    if (page !== undefined && (!pagination ||
+      !Number.isSafeInteger(pagination.page) || pagination.page !== page ||
+      !Number.isSafeInteger(pagination.limit) || pagination.limit !== query.limit ||
+      !Number.isSafeInteger(pagination.total) || pagination.total < 0 ||
+      !Number.isSafeInteger(pagination.totalPages) || pagination.totalPages < 0 ||
+      pagination.totalPages !== Math.ceil(pagination.total / pagination.limit) ||
+      data.ingredients.length > pagination.limit ||
+      data.ingredients.length > pagination.total ||
+      data.ingredients.length > Math.max(0, pagination.total - (pagination.page - 1) * pagination.limit) ||
+      (pagination.totalPages > 0 && pagination.page > pagination.totalPages))) {
+      throw malformedIngredientSearchResponse();
+    }
     return {
       ingredients: data.ingredients.map(normalizeStrictIngredient),
-      pagination: data.pagination || null,
+      pagination: pagination || null,
     };
   });
 }

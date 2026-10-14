@@ -9,6 +9,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -23,6 +25,7 @@ import { difficultyLabel } from '../api/recipeOptions';
 import { recipeTimeLabel } from '../utils/recipe';
 import { shouldBlockRecipeFailure } from '../utils/recipeFreshnessState';
 import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
+import { tabBarScrollClearance } from '../navigation/tabBarLayout';
 
 // M2.1 — teammate Dashboard/Home visual port on top of our real data + routes.
 //
@@ -51,12 +54,9 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 //
 // Teammate parts that need a backend we don't have yet are represented
 // honestly, never faked:
-//   - "Browse by craving" is category-driven in the teammate app. `category`
-//     (+ Philippine `region`) exist on the Recipe domain as of M3 but have no
-//     controlled vocabulary or classified content yet, and per the M2 locked
-//     decisions we add no new cuisine-based UX here. So this row links to the
-//     backend-supported Discover filters (difficulty / dietary) instead of
-//     inventing category tiles or imagery.
+//   - The browse row links to supported Discover filters (difficulty / dietary)
+//     rather than inventing category tiles or imagery. Category and region
+//     remain available through the real Discover filters.
 //   - "Today's Pick" is a deterministic daily rotation FROM the real latest
 //     recipes — not a curated/editorial "featured" flag (the backend has none).
 //   - the notifications bell stays the shared TopBar affordance (a real
@@ -110,6 +110,7 @@ function metaLine(recipe) {
 
 export default function DashboardScreen({ navigation }) {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
   const { user } = useAuth();
   const { recentSearches: recent, recordSearch, clearSearchHistory } = useSearchHistory();
@@ -285,7 +286,7 @@ export default function DashboardScreen({ navigation }) {
         <Ionicons name="alert-circle-outline" size={21} color={colors.sageDeep} />
       </View>
       <Text style={styles.errorText}>{message}</Text>
-      <Pressable style={styles.retryBtn} onPress={onRetry} hitSlop={8}>
+      <Pressable style={styles.retryBtn} onPress={onRetry} hitSlop={8} accessibilityRole="button" accessibilityLabel="Retry loading recipes">
         <Ionicons name="refresh" size={14} color={colors.sageDeep} />
         <Text style={styles.retryText}>Retry</Text>
       </Pressable>
@@ -294,7 +295,7 @@ export default function DashboardScreen({ navigation }) {
 
   const renderLoadingBlock = (message = 'Loading recipes…') => (
     <View style={styles.stateBlock}>
-      <ActivityIndicator color={colors.sageDeep} />
+      <ActivityIndicator color={colors.sageDeep} accessible accessibilityLabel={message} accessibilityState={{ busy: true }} />
       <Text style={styles.stateMessage}>{message}</Text>
     </View>
   );
@@ -374,12 +375,14 @@ export default function DashboardScreen({ navigation }) {
     <View style={styles.root}>
       <TopBar
         mode="brand"
+        variant="home"
+        transparent
         onSavedPress={() => navigation.navigate('Saved')}
         onShoppingPress={() => navigation.navigate('List')}
         shoppingCount={uncheckedShoppingCount}
       />
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarScrollClearance(insets.bottom) }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -512,12 +515,17 @@ export default function DashboardScreen({ navigation }) {
               renderErrorBlock(latestError, loadLatest)
             ) : feature ? (
               <>
-                <Pressable style={styles.hero} onPress={() => openRecipe(feature)}>
+                <Pressable style={styles.hero} onPress={() => openRecipe(feature)} accessibilityRole="button" accessibilityLabel={`Open ${feature.title}`}>
                   <RecipeImage source={feature.imageUrl} style={styles.heroImage} />
-                  {/* Plain stacked overlay for text legibility — NOT
-                      expo-linear-gradient (proven not to paint on the
-                      Samsung/Fabric runtime this app was tested on). */}
-                  <View style={styles.heroScrim} pointerEvents="none" />
+                  <Svg style={styles.heroScrim} width="100%" height="100%" pointerEvents="none" accessible={false}>
+                    <Defs>
+                      <SvgLinearGradient id="dashboardHeroScrim" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <Stop offset="0%" stopColor="#12160e" stopOpacity={0} />
+                        <Stop offset="100%" stopColor="#12160e" stopOpacity={0.92} />
+                      </SvgLinearGradient>
+                    </Defs>
+                    <Rect width="100%" height="100%" fill="url(#dashboardHeroScrim)" />
+                  </Svg>
                   <Text style={styles.heroEyebrow}>TODAY'S PICK</Text>
                   <View style={styles.heroTextWrap}>
                     <Text style={styles.heroTitle} numberOfLines={2}>
@@ -546,6 +554,8 @@ export default function DashboardScreen({ navigation }) {
                       key={shortcut.key}
                       style={styles.browseChip}
                       onPress={() => openDiscover(shortcut.key)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Browse ${shortcut.label} recipes`}
                     >
                       <View style={styles.browseIcon}>
                         <Ionicons name={shortcut.icon} size={21} color={colors.sageDeep} />
@@ -603,10 +613,10 @@ function makeStyles(colors) {
       fontSize: 22,
       color: colors.ink,
       marginTop: 2,
-      marginBottom: spacing.xl,
+      marginBottom: 0,
     },
 
-    searchRow: { flexDirection: 'row', gap: 10, marginBottom: spacing.xl },
+    searchRow: { flexDirection: 'row', gap: 10, marginTop: spacing.lg, marginBottom: spacing.xl },
     searchBar: {
       flex: 1,
       flexDirection: 'row',
@@ -690,7 +700,7 @@ function makeStyles(colors) {
     },
 
     hero: {
-      borderRadius: radius.xl,
+      borderRadius: 20,
       overflow: 'hidden',
       height: 190,
       backgroundColor: colors.creamDeep,
@@ -699,7 +709,6 @@ function makeStyles(colors) {
     heroImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
     heroScrim: {
       ...StyleSheet.absoluteFillObject,
-      backgroundColor: 'rgba(18,22,14,0.42)',
     },
     heroEyebrow: {
       position: 'absolute',

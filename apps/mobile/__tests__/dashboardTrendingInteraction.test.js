@@ -9,6 +9,17 @@ jest.mock('react-native', () => {
   };
 });
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('react-native-svg', () => ({
+  __esModule: true,
+  default: 'Svg',
+  Defs: 'Defs',
+  LinearGradient: 'SvgLinearGradient',
+  Rect: 'Rect',
+  Stop: 'Stop',
+}));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
+}));
 jest.mock('../src/theme/ThemeContext', () => ({
   useTheme: () => ({ colors: { cream: '#fff', creamDeep: '#eee', paper: '#fff', ink: '#111', inkSoft: '#333', inkFaint: '#666', hairline: '#ccc', onAccent: '#fff', sagePale: '#efe', sageDeep: '#353' } }),
 }));

@@ -88,7 +88,8 @@ const M2_FILTERS = M2_FILTER_KEYS
 const FILTER_BY_KEY = Object.fromEntries(M2_FILTERS.map((f) => [f.key, f]));
 
 function metaLine(recipe) {
-  return [categoryLabel(recipe.category), regionLabel(recipe.region), recipeTimeLabel(recipe), difficultyLabel(recipe.difficulty)]
+  const hasTime = recipe.prepTimeMinutes != null || recipe.cookTimeMinutes != null;
+  return [categoryLabel(recipe.category), regionLabel(recipe.region), hasTime ? recipeTimeLabel(recipe) : null, difficultyLabel(recipe.difficulty)]
     .filter(Boolean)
     .join(' · ');
 }
@@ -430,9 +431,7 @@ export default function DiscoverScreen({ navigation, route }) {
           <Text style={styles.rowTitle} numberOfLines={2}>
             {item.title}
           </Text>
-          <Text style={styles.rowMeta} numberOfLines={1}>
-            {metaLine(item)}
-          </Text>
+          {metaLine(item) ? <Text style={styles.rowMeta} numberOfLines={2}>{metaLine(item)}</Text> : null}
         </View>
       </Pressable>
       <FavoriteHeart recipe={item} size={16} variant="plain" style={styles.rowHeart} />
@@ -521,7 +520,7 @@ export default function DiscoverScreen({ navigation, route }) {
 
   return (
     <View style={styles.root}>
-      <TopBar mode="back" title="Search" onBack={() => navigation.goBack()} />
+      <TopBar mode="back" title="Search" variant="discover" transparent onBack={() => navigation.goBack()} />
 
       <FlatList
         data={recipes}
@@ -532,8 +531,6 @@ export default function DiscoverScreen({ navigation, route }) {
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={(
       <View style={styles.header}>
-        <Text style={styles.pageSub}>Search our kitchen, then narrow it down.</Text>
-
         <View style={styles.searchRow}>
           <View style={styles.searchField}>
             <Ionicons name="search" size={15} color={colors.inkSoft} />
@@ -605,6 +602,7 @@ export default function DiscoverScreen({ navigation, route }) {
               filterCount > 0 ? `Filters, ${filterCount} active` : 'Filters, none active'
             }
             accessibilityHint="Expands inline recipe filters"
+            accessibilityState={{ expanded: filtersOpen }}
           >
             <Ionicons
               name="options-outline"
@@ -746,15 +744,6 @@ function makeStyles(colors) {
       paddingHorizontal: spacing.xl,
       paddingTop: spacing.lg,
       paddingBottom: spacing.md,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairline,
-    },
-    pageSub: {
-      fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.sm,
-      color: colors.inkFaint,
-      marginTop: 2,
-      marginBottom: spacing.md,
     },
     searchRow: {
       flexDirection: 'row',
@@ -961,7 +950,7 @@ function makeStyles(colors) {
       alignItems: 'center',
       gap: spacing.sm,
       backgroundColor: colors.creamDeep,
-      borderRadius: radius.lg,
+      borderRadius: 14,
       padding: 10,
       marginHorizontal: spacing.xl,
       marginBottom: spacing.md,
@@ -977,18 +966,18 @@ function makeStyles(colors) {
       width: 60,
       height: 60,
       borderRadius: 10,
-      backgroundColor: colors.creamDeep,
+      backgroundColor: colors.paper,
     },
     rowText: { flex: 1 },
     rowTitle: {
       fontFamily: typography.body.semibold,
-      fontSize: typography.sizes.base,
+      fontSize: 13.5,
       lineHeight: 19,
       color: colors.ink,
     },
     rowMeta: {
       fontFamily: typography.body.fontFamily,
-      fontSize: typography.sizes.xs,
+      fontSize: 11.5,
       color: colors.inkFaint,
       marginTop: 3,
     },

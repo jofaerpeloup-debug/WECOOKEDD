@@ -36,6 +36,7 @@ jest.mock('react-native', () => {
 });
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
 jest.mock('../src/theme/ThemeContext', () => ({
   useTheme: () => ({
     colors: {
@@ -1074,6 +1075,17 @@ it('installs no bookmark failure continuation after unmount', async () => {
     mockStateUpdateObserver = null;
     mapDeleteSpy.mockRestore();
   }
+});
+
+it('shows only supported API feed tabs and never offers a local Trending rank', async () => {
+  communityService.listCommunityPosts.mockResolvedValue(feed([], 1, 1));
+  const view = render(<CommunityScreen />);
+  await waitFor(() => expect(view.getByLabelText('All Community posts')).toBeOnTheScreen());
+  expect(view.getByLabelText('Following Community posts')).toBeOnTheScreen();
+  expect(view.getByLabelText('Saved Community posts')).toBeOnTheScreen();
+  expect(view.queryByText('Trending')).toBeNull();
+  expect(view.queryByText('For You')).toBeNull();
+  expect(communityService.listCommunityPosts).toHaveBeenCalledWith({ page: 1, limit: 20 });
 });
 
 it('does not let an old-account same-author follow continuation update or clear the new token', async () => {

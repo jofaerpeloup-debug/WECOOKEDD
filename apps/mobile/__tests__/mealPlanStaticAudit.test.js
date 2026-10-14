@@ -12,6 +12,21 @@ const detail = read('screens/RecipeDetailScreen.js');
 const shopping = read('utils/mealPlanShopping.js');
 
 describe('MealPlan real backend integration', () => {
+  it('keeps the pinned calendar and picker presentation around the real entry model', () => {
+    expect(screen).toMatch(/Drag a meal's handle onto another day to move it\./);
+    expect(screen).toMatch(/daySection: \{ marginBottom: spacing\.xl, borderRadius: radius\.md \}/);
+    expect(screen).toMatch(/dayDate: \{ fontFamily: typography\.body\.medium, fontSize: 13/);
+    expect(screen).toMatch(/<Text style=\{styles\.title\}>Meal Plan<\/Text>/);
+    expect(screen).toMatch(/style=\{\[styles\.reminderChip, entry\.reminder && styles\.reminderChipOn\]\}/);
+    expect(screen).toMatch(/entry\.reminder\?\.localTime \? `Cook at \$\{entry\.reminder\.localTime\}` : 'Set a cook reminder'/);
+    expect(screen).toMatch(/onPress=\{\(\) => \{ setReminderError\(null\); setReminderEntry\(entry\); \}\}/);
+    expect(sheet).toMatch(/maxHeight: '82%'/);
+    expect(sheet).not.toMatch(/[^x]height: '82%'/);
+    expect(screen).toMatch(/weekButton: \{[^\n]*backgroundColor: colors\.creamDeep/);
+    expect(screen).toMatch(/weekLabel: \{[^\n]*fontSize: 14, color: colors\.ink \}/);
+    expect(sheet).toMatch(/done: \{[^\n]*height: 50,[^\n]*backgroundColor: colors\.creamDeep/);
+    expect(sheet).toMatch(/await createMealPlanEntry/);
+  });
   it('fetches the selected Monday-Sunday range on focus and supports previous/next week', () => {
     expect(screen).toMatch(/useFocusEffect/);
     expect(screen).toMatch(/getMealPlan\(startDate, endDate\)/);

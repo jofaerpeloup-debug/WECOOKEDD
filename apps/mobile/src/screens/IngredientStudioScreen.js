@@ -9,6 +9,8 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { tabBarScrollClearance } from '../navigation/tabBarLayout';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import TopBar from '../components/TopBar';
@@ -37,23 +39,46 @@ function compactContextLabel(value) {
     : context;
 }
 
+function recipeIngredientsFromRoute(context) {
+  if (!context || typeof context.recipeId !== 'string' || !/^[a-f\d]{24}$/i.test(context.recipeId.trim()) ||
+      !Array.isArray(context.ingredients)) return [];
+  const seen = new Set();
+  return context.ingredients.reduce((rows, entry) => {
+    if (!entry || typeof entry.name !== 'string' || !entry.name.trim()) return rows;
+    const candidateId = typeof entry.id === 'string' ? entry.id.trim() : '';
+    const id = /^[a-f\d]{24}$/i.test(candidateId) ? candidateId : '';
+    if (id && seen.has(id)) return rows;
+    if (id) seen.add(id);
+    rows.push({ id: id || null, name: entry.name.trim() });
+    return rows;
+  }, []);
+}
+
 // The teammate-inspired Ingredient Swaps shell reads only canonical catalog
 // ingredients and real directed substitutions. The API does not define images,
 // confidence, or scientific metrics, and its ratio lacks unit semantics, so none
 // of those values are presented here.
 export default function IngredientStudioScreen({ navigation, route }) {
   const { colors, shadow } = useTheme();
+  const insets = useSafeAreaInsets();
   const { status: authStatus, user } = useAuth();
   const styles = makeStyles(colors, shadow);
   const asTab = route?.name === 'Swaps';
+  const routeContext = asTab ? null : route?.params?.recipeContext;
   const authUserId = authStatus === 'authenticated' && typeof user?.id === 'string'
     ? user.id.trim()
     : '';
 
   const [query, setQuery] = useState('');
+  const [recipeMode, setRecipeMode] = useState(!asTab);
+  const [recipeIngredients, setRecipeIngredients] = useState(() => recipeIngredientsFromRoute(routeContext));
   const [ingredients, setIngredients] = useState([]);
   const [selected, setSelected] = useState(null);
-  const [searchLoading, setSearchLoading] = useState(true);
+  const [searchLoading, setSearchLoading] = useState(asTab);
+  const [pagination, setPagination] = useState(null);
+  const [pageLoading, setPageLoading] = useState(false);
+  const [pageError, setPageError] = useState(null);
+  const pageBusyRef = useRef(false);
   const [searchError, setSearchError] = useState(null);
   const [searchNonce, setSearchNonce] = useState(0);
   const [confirmedEmptyQuery, setConfirmedEmptyQuery] = useState(null);
@@ -74,6 +99,21 @@ export default function IngredientStudioScreen({ navigation, route }) {
   const accountStateIsCurrent = previousAuthOwnerRef.current === authUserId;
   authOwnerRef.current = authUserId;
 
+  useEffect(() => {
+    searchGeneration.current += 1;
+    substitutesGeneration.current += 1;
+    pageBusyRef.current = false;
+    setRecipeMode(!asTab);
+    setRecipeIngredients(recipeIngredientsFromRoute(routeContext));
+    setQuery('');
+    setIngredients([]);
+    setSelected(null);
+    setPagination(null);
+    setSearchError(null);
+    setPageError(null);
+    setPageLoading(false);
+  }, [asTab, routeContext]);
+
   const clearSubstitutionState = () => {
     substitutesGeneration.current += 1;
     setSubstitutionState({
@@ -89,6 +129,10 @@ export default function IngredientStudioScreen({ navigation, route }) {
     assistantHandoffRef.current = false;
     setQuery(value);
     setIngredients([]);
+    setPagination(null);
+    setPageError(null);
+    setPageLoading(false);
+    pageBusyRef.current = false;
     setSelected(null);
     setSearchError(null);
     setConfirmedEmptyQuery(null);
@@ -103,6 +147,11 @@ export default function IngredientStudioScreen({ navigation, route }) {
     assistantHandoffRef.current = false;
     setQuery('');
     setIngredients([]);
+    setRecipeIngredients([]);
+    setPagination(null);
+    setPageError(null);
+    setPageLoading(false);
+    pageBusyRef.current = false;
     setSelected(null);
     setSearchLoading(false);
     setSearchError(null);
@@ -116,7 +165,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
   }, [authUserId]);
 
   useEffect(function loadIngredientCatalog() {
-    if (!accountStateIsCurrent) return undefined;
+    if (!accountStateIsCurrent || recipeMode) return undefined;
     const generation = ++searchGeneration.current;
     const ownerId = authUserId;
     const trimmed = query.trim();
@@ -124,6 +173,10 @@ export default function IngredientStudioScreen({ navigation, route }) {
     setSearchError(null);
     setIngredients([]);
     setSelected(null);
+    setPagination(null);
+    setPageError(null);
+    setPageLoading(false);
+    pageBusyRef.current = false;
     setConfirmedEmptyQuery(null);
 
     const timer = setTimeout(async () => {
@@ -131,10 +184,16 @@ export default function IngredientStudioScreen({ navigation, route }) {
         const result = await searchIngredientsStrict({
           search: trimmed || undefined,
           limit: SEARCH_LIMIT,
+          page: 1,
         });
         if (generation !== searchGeneration.current || ownerId !== authOwnerRef.current) return;
-        setIngredients(result.ingredients);
-        setSelected(result.ingredients[0] || null);
+        const ids = new Set();
+        setIngredients(result.ingredients.filter((item) => {
+          if (ids.has(item.id)) return false;
+          ids.add(item.id);
+          return true;
+        }));
+        setPagination(result.pagination);
         setConfirmedEmptyQuery(trimmed && result.ingredients.length === 0 ? trimmed : null);
       } catch (err) {
         if (generation !== searchGeneration.current || ownerId !== authOwnerRef.current) return;
@@ -153,7 +212,52 @@ export default function IngredientStudioScreen({ navigation, route }) {
       clearTimeout(timer);
       if (generation === searchGeneration.current) searchGeneration.current += 1;
     };
-  }, [accountStateIsCurrent, authUserId, query, searchNonce]);
+  }, [accountStateIsCurrent, authUserId, recipeMode, query, searchNonce, routeContext]);
+
+  const browseAll = () => {
+    searchGeneration.current += 1;
+    substitutesGeneration.current += 1;
+    setSelected(null);
+    setRecipeMode(false);
+    setQuery('');
+    setIngredients([]);
+    setPagination(null);
+    setPageError(null);
+    clearSubstitutionState();
+  };
+
+  const loadNextPage = async () => {
+    if (recipeMode || searchLoading || pageBusyRef.current || !pagination ||
+        pagination.page >= pagination.totalPages) return;
+    pageBusyRef.current = true;
+    const generation = searchGeneration.current;
+    const ownerId = authUserId;
+    const nextPage = pagination.page + 1;
+    setPageLoading(true);
+    setPageError(null);
+    try {
+      const result = await searchIngredientsStrict({ search: query.trim() || undefined, limit: SEARCH_LIMIT, page: nextPage });
+      if (generation !== searchGeneration.current || ownerId !== authOwnerRef.current) return;
+      setIngredients((current) => {
+        const ids = new Set(current.map((item) => item.id));
+        return [...current, ...result.ingredients.filter((item) => {
+          if (ids.has(item.id)) return false;
+          ids.add(item.id);
+          return true;
+        })];
+      });
+      setPagination(result.pagination);
+    } catch (err) {
+      if (generation === searchGeneration.current && ownerId === authOwnerRef.current) {
+        setPageError(getIngredientErrorMessage(err));
+      }
+    } finally {
+      if (generation === searchGeneration.current && ownerId === authOwnerRef.current) {
+        pageBusyRef.current = false;
+        setPageLoading(false);
+      }
+    }
+  };
 
   const askAssistant = () => {
     const currentQuery = query.trim();
@@ -331,7 +435,22 @@ export default function IngredientStudioScreen({ navigation, route }) {
         onBack={asTab ? undefined : () => navigation.goBack()}
       />
 
+      {recipeMode ? (
+        <Pressable
+          style={styles.recipeBanner}
+          onPress={browseAll}
+          accessibilityRole="button"
+          accessibilityLabel="Browse all ingredients"
+        >
+          <Ionicons name="restaurant-outline" size={13} color={colors.sageDeep} />
+          <Text style={styles.recipeBannerText} numberOfLines={1}>In this recipe</Text>
+          <Text style={styles.recipeBannerLink}>Browse all</Text>
+        </Pressable>
+      ) : null}
+
       <View style={styles.searchWrap}>
+        {!recipeMode ? (
+        <>
         <View style={styles.searchBar}>
           <Ionicons name="search" size={17} color={colors.inkFaint} />
           <TextInput
@@ -386,7 +505,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
                 return (
                   <Pressable
                     key={ingredient.id}
-                    onPress={() => setSelected(ingredient)}
+                    onPress={() => { clearSubstitutionState(); setSelected(ingredient); }}
                     style={[styles.chip, active && styles.chipActive]}
                     accessibilityRole="button"
                     accessibilityState={{ selected: active }}
@@ -419,10 +538,33 @@ export default function IngredientStudioScreen({ navigation, route }) {
             </ScrollView>
           </>
         )}
+        {pageError ? <Pressable onPress={loadNextPage} accessibilityRole="button" accessibilityLabel="Retry ingredient page"><Text style={styles.searchErrorText}>{pageError} Tap to retry.</Text></Pressable> : null}
+        {pageLoading ? <ActivityIndicator accessibilityLabel="Loading more ingredients" color={colors.sageDeep} /> : null}
+        {pagination ? <Text style={styles.searchStatusText}>Page {pagination.page} of {pagination.totalPages} · {pagination.total} catalog ingredients</Text> : null}
+        {pagination && pagination.page < pagination.totalPages && !pageError ? <Pressable onPress={loadNextPage} disabled={pageLoading} accessibilityRole="button" accessibilityLabel="Load more ingredients"><Text style={styles.searchStatusText}>Load more ingredients</Text></Pressable> : null}
+        </>
+        ) : null}
+        {recipeMode ? (
+          <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chipRow}>
+            {recipeIngredients.map((ingredient, index) => (
+              <Pressable key={`${ingredient.id || 'missing'}-${index}`} disabled={!ingredient.id}
+                onPress={() => { clearSubstitutionState(); setSelected(ingredient); }}
+                accessibilityRole="button" accessibilityLabel={ingredient.id ? ingredient.name : `${ingredient.name}, catalog ID unavailable`}
+                accessibilityState={{ disabled: !ingredient.id, selected: ingredient.id && ingredient.id === selected?.id }}
+                style={[styles.chip, ingredient.id === selected?.id && ingredient.id && styles.chipActive]}>
+                <Text style={[styles.chipText, ingredient.id === selected?.id && ingredient.id && styles.chipTextActive]}>{ingredient.name}{ingredient.id ? '' : ' · unavailable'}</Text>
+              </Pressable>
+            ))}
+            {recipeIngredients.length === 0 ? <Text style={styles.noMatches}>No ingredients listed for this recipe.</Text> : null}
+          </ScrollView>
+        ) : null}
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[
+          styles.scroll,
+          asTab && { paddingBottom: tabBarScrollClearance(insets.bottom) },
+        ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -438,9 +580,9 @@ export default function IngredientStudioScreen({ navigation, route }) {
                 <Text style={styles.eyebrow}>SELECTED INGREDIENT</Text>
                 <Text style={styles.title}>Swaps for {selected.name}</Text>
                 <Text style={styles.subtitle}>
-                  {selected.category
-                    ? `Catalog category: ${selected.category}`
-                    : 'Canonical WeCooked ingredient'}
+                  {substitutionStateIsCurrent && !substitutionState.loading && !substitutionState.error
+                    ? `${substitutionState.substitutes.length} catalog ${substitutionState.substitutes.length === 1 ? 'option' : 'options'} · tap one for guidance`
+                    : 'Live catalog ingredient'}
                 </Text>
               </View>
             </View>
@@ -453,7 +595,7 @@ export default function IngredientStudioScreen({ navigation, route }) {
             <Ionicons name="search-outline" size={28} color={colors.sageDeep} />
             <Text style={styles.statusTitle}>Choose an ingredient</Text>
             <Text style={styles.statusText}>
-              Search the live WeCooked catalog to view available substitutions.
+              {recipeMode ? 'Select a linked recipe ingredient, or Browse All.' : 'Search the live WeCooked catalog to view available substitutions.'}
             </Text>
           </View>
         )}
@@ -465,6 +607,27 @@ export default function IngredientStudioScreen({ navigation, route }) {
 function makeStyles(colors, shadow) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
+    recipeBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      minHeight: 44,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      backgroundColor: colors.sagePale,
+    },
+    recipeBannerText: {
+      flex: 1,
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+    },
+    recipeBannerLink: {
+      fontFamily: typography.body.bold,
+      fontSize: typography.sizes.xs,
+      color: colors.sageDeep,
+      textDecorationLine: 'underline',
+    },
     searchWrap: {
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.md,
@@ -564,18 +727,15 @@ function makeStyles(colors, shadow) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.md,
-      paddingBottom: spacing.lg,
       marginBottom: spacing.lg,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairline,
     },
     heroCircleWrap: {
       ...shadow.card,
       borderRadius: radius.md,
     },
     heroCircle: {
-      width: 56,
-      height: 56,
+      width: 54,
+      height: 54,
       borderRadius: radius.md,
       borderWidth: 2,
       borderColor: colors.paper,
@@ -593,7 +753,7 @@ function makeStyles(colors, shadow) {
     },
     title: {
       fontFamily: typography.display.fontFamily,
-      fontSize: 22,
+      fontSize: 20,
       color: colors.ink,
       marginBottom: 3,
     },
@@ -620,11 +780,11 @@ function makeStyles(colors, shadow) {
       borderColor: colors.hairline,
       padding: spacing.md,
       gap: spacing.md,
-      marginBottom: spacing.md,
+      marginBottom: spacing.sm,
     },
     swapIconWrap: {
-      width: 52,
-      height: 52,
+      width: 46,
+      height: 46,
       borderRadius: radius.md,
       backgroundColor: colors.creamDeep,
       alignItems: 'center',

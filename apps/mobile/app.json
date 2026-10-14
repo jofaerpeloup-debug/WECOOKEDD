@@ -6,7 +6,7 @@
     "scheme": "wecooked",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -32,6 +32,7 @@
     "plugins": [
       "expo-web-browser",
       "expo-secure-store",
+      "expo-system-ui",
       [
         "expo-splash-screen",
         {

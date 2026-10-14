@@ -1,7 +1,7 @@
 // RecipeDetail final-frontend port — static source validation.
 //
 // This slice ports the teammate RecipeDetail *visual shell* (hero, rating/
-// review summary, rate-this-recipe, metadata, ingredients, instructions, nutrition,
+// review summary, rate-this-recipe, metadata, ingredients, nutrition,
 // actions, CTA) onto our real Recipe API + Favorites + Shopping List +
 // CookMode + IngredientStudio wiring, with ONE approved product extension
 // (the M3 category/region + dietary badge row). The mobile workspace has no
@@ -84,6 +84,11 @@ describe('RecipeDetail (API mode) keeps our real recipe data architecture', () =
 });
 
 describe('RecipeDetail (API mode) final visible structure matches teammate order', () => {
+  it('keeps the pinned hero and accessible hero controls', () => {
+    expect(raw).toMatch(/ddHero: \{ position: 'relative', height: 280/);
+    expect(raw).toMatch(/ddCircleBtn: \{[\s\S]*?width: 44,[\s\S]*?height: 44/);
+    expect(apiCode).toMatch(/accessibilityLabel="Share recipe"/);
+  });
   it('renders the sections in teammate order, with the approved badge extension after meta', () => {
     const order = [
       'ddHero',
@@ -95,7 +100,6 @@ describe('RecipeDetail (API mode) final visible structure matches teammate order
       'ddDescription',
       'ddSectionHeader', // Ingredients eyebrow + stepper
       'ddIngredientRow',
-      'ddInstructionsSection',
       'ddNutritionCard',
       'ddActionRow', // meal plan
       'ddCtaWrap',
@@ -105,6 +109,24 @@ describe('RecipeDetail (API mode) final visible structure matches teammate order
       expect(pos).toBeGreaterThan(-1);
       if (i > 0) expect(pos).toBeGreaterThan(positions[i - 1]);
     }
+  });
+
+  it('keeps compact, wrapping stats and divider rows without shrinking active targets', () => {
+    expect(apiCode).toMatch(/<View key=\{m\.label\} style=\{styles\.ddMetaItem\}>/);
+    expect(raw).toMatch(/ddMetaRow: \{ flexDirection: 'row', gap: spacing\.sm, marginTop: spacing\.sm \}/);
+    expect(raw).toMatch(/ddMetaItem: \{ flex: 1, minWidth: 0 \}/);
+    expect(raw).toMatch(/ddRatingRow: \{ flexDirection: 'row', flexWrap: 'wrap'/);
+    expect(raw).toMatch(/ddRateRow: \{[\s\S]*?flexWrap: 'wrap'/);
+    expect(raw).toMatch(/ddDescription: \{[\s\S]*?marginTop: spacing\.sm/);
+    expect(raw).toMatch(/ddIngredientRow: \{[\s\S]*?borderBottomWidth: 1/);
+    expect(raw).toMatch(/ddIngredientContent: \{ flex: 1, minWidth: 0 \}/);
+    expect(raw).toMatch(/ddIngredientQty: \{[\s\S]*?maxWidth: '35%'[\s\S]*?textAlign: 'right'/);
+    expect(raw).toMatch(/ddStarBtn: \{ width: 44, height: 44/);
+    expect(raw).toMatch(/ddStepperBtn: \{\s*width: 44,\s*height: 44/);
+    expect(raw).toMatch(/ddActionRow: \{[\s\S]*?minHeight: 44/);
+    expect(apiCode).toMatch(/<FavoriteHeart[^>]*style=\{styles\.ddCircleBtn\} hitSlop=\{0\}/);
+    expect(apiCode).toMatch(/<Text style=\{styles\.ddEyebrow\}>Ingredients<\/Text>/);
+    expect(apiCode).not.toMatch(/<SubstitutionsSheet/);
   });
 
   it('hero controls are back, favorite, Collections, cart, share — in that order', () => {
@@ -353,24 +375,24 @@ describe('RecipeDetail (API mode) never fabricates backend-pending data', () => 
   });
 });
 
-describe('RecipeDetail (API mode) keeps real ingredients and instructions visible', () => {
-  it('renders authoritative ordered instruction steps with an honest empty state', () => {
-    expect(raw).toMatch(/import \{[\s\S]*?cookModeSteps[\s\S]*?\} from '\.\.\/utils\/recipe'/);
-    expect(apiCode).toMatch(/const instructionSteps = useMemo\(\(\) => cookModeSteps\(recipe\), \[recipe\]\)/);
-    expect(apiCode).toMatch(/<Text style=\{styles\.ddEyebrow\}>Instructions<\/Text>/);
-    expect(apiCode).toMatch(/instructionSteps\.map\(\(step\) =>/);
-    expect(apiCode).toMatch(/\{step\.order\}/);
-    expect(apiCode).toMatch(/\{step\.text\}/);
-    expect(apiCode).toMatch(/No instructions listed\./);
+describe('RecipeDetail (API mode) keeps cooking instructions in Cook Mode', () => {
+  it('omits the Detail instruction section while retaining the full Cook Mode handoff', () => {
+    expect(apiCode).not.toMatch(/ddInstructionsSection|instructionSteps|No instructions listed\./);
+    expect(apiCode).not.toMatch(/<Text style=\{styles\.ddEyebrow\}>Instructions<\/Text>/);
+    expect(apiCode).toMatch(/navigation\.navigate\('CookMode',\s*\{[\s\S]*?recipe,/);
   });
 
-  it('restores the real per-ingredient substitution sheet without a mock data path', () => {
-    expect(raw).toMatch(/import SubstitutionsSheet from '\.\.\/components\/SubstitutionsSheet'/);
-    expect(apiCode).toMatch(/substitutesCacheRef = useRef\(new Map\(\)\)/);
-    expect(apiCode).toMatch(/openSubstitutes/);
-    expect(apiCode).toMatch(/<SubstitutionsSheet/);
-    expect(apiCode).toMatch(/<Text style=\{styles\.ddSubstituteText\}>Substitutes<\/Text>/);
-    expect(apiCode).not.toMatch(/ingredientSwaps|molecularSwap/);
+  it('places the catalog card immediately after Nutrition without row controls or local swaps', () => {
+    const nutrition = apiCode.indexOf('style={styles.ddNutritionCard}');
+    const swaps = apiCode.indexOf('accessibilityLabel="Find swaps in Ingredient Studio"');
+    const mealPlan = apiCode.indexOf('accessibilityLabel="Add to meal plan"');
+    expect(nutrition).toBeGreaterThan(-1);
+    expect(swaps).toBeGreaterThan(nutrition);
+    expect(mealPlan).toBeLessThan(swaps);
+    expect(apiCode.indexOf('style={styles.ddActionRow}', nutrition)).toBeLessThan(swaps);
+    expect(apiCode.slice(nutrition, swaps).match(/style=\{styles\.ddActionRow\}/g)).toHaveLength(2);
+    expect(apiCode).toMatch(/Need a substitute\? Find swaps/);
+    expect(apiCode).not.toMatch(/Find substitutes for|ddSubstituteBtn|SubstitutionsSheet|swapIngredient|substitutesCacheRef|ingredientSwaps|molecularSwap/);
   });
 
   it('ingredient rows use separate left (identity) / right (scaled qty+unit) presentation', () => {
@@ -380,6 +402,22 @@ describe('RecipeDetail (API mode) keeps real ingredients and instructions visibl
     expect(apiCode).toMatch(/row\.name/);
     // still merged for CookMode, via the untouched shared formatter:
     expect(apiCode).toMatch(/ingredientDisplayText\(entry, \{ selectedServings: servings, baseServings \}\)/);
+  });
+
+  it('never invents base servings, disables adjustment, and preserves Cook Mode handoff', () => {
+    expect(apiCode).toMatch(/Number\.isSafeInteger\(recipe\.servings\) && recipe\.servings > 0/);
+    expect(apiCode).toMatch(/hasBaseServings \? recipe\.servings : null/);
+    expect(apiCode).toMatch(/useEffect\(\(\) => setServings\(baseServings\), \[baseServings\]\)/);
+    expect(apiCode).toMatch(/disabled=\{!hasBaseServings \|\| servings >= maxServings\}/);
+    expect(apiCode).toMatch(/const startCooking = \(\) => \{\s*navigation\.navigate\('CookMode'/);
+  });
+
+  it('uses only present timing fields and preserves fetched ingredient rows', () => {
+    expect(apiCode).toMatch(/const hasPrep = recipe\.prepTimeMinutes != null/);
+    expect(apiCode).toMatch(/const hasCook = recipe\.cookTimeMinutes != null/);
+    expect(apiCode).toMatch(/timeParts\.join\(' · '\)/);
+    expect(code).toMatch(/String\(entry\.ingredient\.id\)\.trim\(\) \|\| null/);
+    expect(apiCode).toMatch(/ingredientRows\.map\(\(row, i\) =>/);
   });
 });
 
@@ -423,11 +461,13 @@ describe('RecipeDetail (API mode) keeps real Favorites / Shopping List / CookMod
     expect(cookModeSrc).toMatch(/cookModeSteps\(recipe\)/);
   });
 
-  it('MealPlan opens the real current-week day picker while general swaps use the live per-ingredient control', () => {
+  it('MealPlan keeps its picker while the swap card opens the existing catalog route without params', () => {
     expect(apiCode).toMatch(/setMealPlanOpen\(true\)/);
     expect(apiCode).toMatch(/<MealPlanSheet[\s\S]*?recipeId=\{recipe\.id\}/);
-    expect(apiCode).toMatch(/Tap Substitutes beside an ingredient above/);
-    expect(apiCode).not.toMatch(/navigation\.navigate\('IngredientStudio'/);
+    expect(apiCode).toMatch(/navigation\.navigate\('IngredientStudio', \{ recipeContext: canPassRecipeContext \? recipeContext : null \}\)/);
+    expect(apiCode).toMatch(/const candidateId = typeof entry\?\.ingredient\?\.id/);
+    expect(apiCode).toMatch(/seen\.has\(id\)/);
+    expect(apiCode).not.toMatch(/Choose an ingredient|Tap Substitutes beside/);
   });
 });
 

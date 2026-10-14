@@ -17,7 +17,7 @@ const SETTINGS_GROUPS = [
   {
     title: 'Preferences',
     items: [
-      { id: 'notifications', icon: 'notifications-outline', label: 'Notifications', sub: 'Account-wide on or off' },
+      { id: 'notifications', icon: 'notifications-outline', label: 'Notifications', sub: 'Notification types and delivery' },
     ],
   },
   {
@@ -132,7 +132,7 @@ export default function SettingsScreen({ navigation }) {
                     <Text style={styles.rowLabel}>{item.label}</Text>
                     {item.sub && <Text style={styles.rowSub}>{item.sub}</Text>}
                   </View>
-                  <Ionicons name="chevron-forward" size={17} color={colors.inkFaint} />
+                  <Ionicons name="chevron-forward" size={17} color={colors.inkSoft} />
                 </Pressable>
               ))}
             </View>
@@ -173,7 +173,7 @@ function makeStyles(colors) {
     groupTitle: {
       fontFamily: typography.body.semibold,
       fontSize: 10,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       letterSpacing: 1,
       marginBottom: spacing.sm,
     },
@@ -195,6 +195,8 @@ function makeStyles(colors) {
     },
     segment: {
       flex: 1,
+      minWidth: 48,
+      minHeight: 48,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
@@ -232,7 +234,7 @@ function makeStyles(colors) {
     rowSub: {
       fontFamily: typography.body.fontFamily,
       fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginTop: 1,
     },
     logoutBtn: { minHeight: 52, alignItems: 'center', justifyContent: 'center' },

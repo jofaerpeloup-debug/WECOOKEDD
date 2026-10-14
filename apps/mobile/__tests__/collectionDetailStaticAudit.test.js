@@ -31,6 +31,14 @@ const raw = read('screens/CollectionDetailScreen.js');
 const code = stripComments(raw);
 
 describe('CollectionDetail dispatches on collectionType with no fabricated fallback', () => {
+  it('keeps pinned rows and a labelled header across real collection branches', () => {
+    expect(raw).toMatch(/accessibilityLabel="Go back"/);
+    expect(raw).toMatch(/style=\{styles\.title\} accessibilityRole="header"/);
+    expect(raw).toMatch(/accessibilityLabel="Delete collection"/);
+    expect(raw).toMatch(/row: \{[\s\S]*?backgroundColor: colors\.creamDeep,[\s\S]*?borderRadius: 14/);
+    expect(raw).toMatch(/thumb: \{ width: 60, height: 60, borderRadius: 10/);
+    expect(code).toMatch(/collectionService\.getCollection\(collectionId\)/);
+  });
   it('imports no mock-data layer or teammate mock/local providers', () => {
     expect(code).not.toMatch(/data\/mockData/);
     expect(code).not.toMatch(/\bmockData\b/);

@@ -30,7 +30,7 @@ jest.mock('../src/theme/ThemeContext', () => ({
   useTheme: () => ({
     colors: {
       cream: '#fff', creamDeep: '#eee', paper: '#fff', ink: '#111', inkSoft: '#333',
-      inkFaint: '#666', hairline: '#ccc', onAccent: '#fff', sageDeep: '#353', error: '#900', overlay: '#0005',
+      inkFaint: '#666', hairline: '#ccc', onAccent: '#fff', sageDeep: '#353', stone: '#a70', error: '#900', overlay: '#0005',
     },
     shadow: { card: {} },
   }),
@@ -75,6 +75,12 @@ function context(overrides = {}) {
     preferencePending: {}, preferenceError: null, setPreference: jest.fn(),
     ...overrides,
   };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -139,30 +145,24 @@ it('dropdown distinguishes loading, unavailable/retry, empty, and pagination sta
   expect(mockNotifications.loadMore).toHaveBeenCalledTimes(1);
 });
 
-it('account change cancels a delayed open read even when row IDs match', () => {
-  const markA = jest.fn();
-  mockNotifications = context({ ownerId: '507f1f77bcf86cd799439001', generation: 1, notifications: [row()], markAllRead: markA });
-  const view = render(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
-  mockNotifications = context({ ownerId: '507f1f77bcf86cd799439002', generation: 2, status: 'loading', notifications: [] });
-  view.rerender(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
-  act(() => jest.runOnlyPendingTimers());
-  expect(markA).not.toHaveBeenCalled();
-});
-
-it('opening marks only through the newest observed row and close cancels the delayed operation', () => {
-  mockNotifications = context({ notifications: [row(N2), row(N1)] });
+it('opening, refreshing, changing callbacks and repeated renders never bulk-read', () => {
+  const bulkCalls = [];
+  mockNotifications = context({ notifications: [row(N2), row(N1)], markAllRead: jest.fn((id) => { bulkCalls.push(id); }) });
   const onClose = jest.fn();
   const view = render(<Dropdown visible onClose={onClose} topOffset={20} navigation={mockNavigation} />);
-  act(() => jest.advanceTimersByTime(249));
-  expect(mockNotifications.markAllRead).not.toHaveBeenCalled();
-  act(() => jest.advanceTimersByTime(1));
-  expect(mockNotifications.markAllRead).toHaveBeenCalledWith(N2);
-
-  mockNotifications.markAllRead.mockClear();
-  view.rerender(<Dropdown visible onClose={onClose} topOffset={20} navigation={mockNavigation} />);
+  for (let index = 0; index < 4; index += 1) {
+    mockNotifications = context({
+      notifications: [row(N2), row(N1)],
+      markAllRead: jest.fn((id) => { bulkCalls.push(id); }),
+    });
+    view.rerender(<Dropdown visible onClose={onClose} topOffset={20} navigation={mockNavigation} />);
+  }
+  act(() => jest.runOnlyPendingTimers());
+  expect(bulkCalls).toEqual([]);
+  expect(view.getAllByLabelText('Unread')).toHaveLength(2);
   view.rerender(<Dropdown visible={false} onClose={onClose} topOffset={20} navigation={mockNavigation} />);
   act(() => jest.runOnlyPendingTimers());
-  expect(mockNotifications.markAllRead).not.toHaveBeenCalled();
+  expect(bulkCalls).toEqual([]);
 });
 
 it('Clear archives only through the newest currently observed row', async () => {
@@ -184,4 +184,83 @@ it('Settings closes then navigates; supported actions use only the fixed local m
   fireEvent.press(view.getByLabelText(`Title ${N1}. Body`));
   expect(mockNavigation.navigate).toHaveBeenCalledWith('RecipeDetail', { recipeSource: 'api', recipeId: TARGET });
   expect(actionDestination({ kind: 'arbitrary', route: 'Admin', url: 'https://evil.test' })).toBeNull();
+});
+
+it('marks an unread notification without a route using its exact server ID', () => {
+  mockNotifications = context({ notifications: [row(N1)] });
+  const view = render(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  fireEvent.press(view.getByLabelText(`Mark notification as read: Title ${N1}`));
+  expect(mockNotifications.markRead).toHaveBeenCalledWith(N1);
+  expect(mockNavigation.navigate).not.toHaveBeenCalled();
+
+  mockNotifications = context({ notifications: [row(N1, { readAt: ISO })] });
+  view.rerender(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  expect(view.queryByLabelText(`Mark notification as read: Title ${N1}`)).toBeNull();
+  expect(view.getByLabelText('Read')).toBeOnTheScreen();
+});
+
+it('a failed exact-ID read stays unread with visible error and never triggers bulk read', async () => {
+  const request = deferred();
+  const markRead = jest.fn(() => request.promise);
+  const bulkCalls = [];
+  mockNotifications = context({ notifications: [row(N1)], markRead, markAllRead: jest.fn((id) => { bulkCalls.push(id); }) });
+  const view = render(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  fireEvent.press(view.getByLabelText(`Mark notification as read: Title ${N1}`));
+  expect(markRead).toHaveBeenCalledWith(N1);
+  mockNotifications = context({
+    notifications: [row(N1)], pendingReads: { [N1]: true }, markRead,
+    markAllRead: jest.fn((id) => { bulkCalls.push(id); }),
+  });
+  view.rerender(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  expect(view.getByLabelText(`Mark notification as read: Title ${N1}`).props.accessibilityState.busy).toBe(true);
+  expect(view.getByLabelText(`Mark notification as read: Title ${N1}`).props.disabled).toBe(true);
+  await act(async () => request.resolve(false));
+  mockNotifications = context({
+    notifications: [row(N1)], error: 'Notifications are unavailable. Please retry.', markRead,
+    markAllRead: jest.fn((id) => { bulkCalls.push(id); }),
+  });
+  view.rerender(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  act(() => jest.runOnlyPendingTimers());
+  expect(view.getByLabelText('Unread')).toBeOnTheScreen();
+  expect(view.getByText('Notifications are unavailable. Please retry.')).toBeOnTheScreen();
+  expect(bulkCalls).toEqual([]);
+});
+
+it('a successful exact-ID read is shown only after server state refreshes', async () => {
+  const request = deferred();
+  const markRead = jest.fn(() => request.promise);
+  const bulkCalls = [];
+  mockNotifications = context({ notifications: [row(N1)], markRead, markAllRead: jest.fn((id) => { bulkCalls.push(id); }) });
+  const view = render(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  fireEvent.press(view.getByLabelText(`Mark notification as read: Title ${N1}`));
+  expect(view.getByLabelText('Unread')).toBeOnTheScreen();
+  await act(async () => request.resolve(true));
+  expect(view.getByLabelText('Unread')).toBeOnTheScreen();
+  for (let index = 0; index < 3; index += 1) {
+    mockNotifications = context({
+      notifications: [row(N1, { readAt: ISO })], markRead: jest.fn(),
+      markAllRead: jest.fn((id) => { bulkCalls.push(id); }),
+    });
+    view.rerender(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  }
+  act(() => jest.runOnlyPendingTimers());
+  expect(view.getByLabelText('Read')).toBeOnTheScreen();
+  expect(view.queryByLabelText(`Mark notification as read: Title ${N1}`)).toBeNull();
+  expect(markRead).toHaveBeenCalledTimes(1);
+  expect(bulkCalls).toEqual([]);
+});
+
+it('an old account read completion cannot change the displayed account', async () => {
+  const oldRequest = deferred();
+  const oldRead = jest.fn(() => oldRequest.promise);
+  mockNotifications = context({ notifications: [row(N1)], markRead: oldRead });
+  const view = render(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  fireEvent.press(view.getByLabelText(`Mark notification as read: Title ${N1}`));
+  mockNotifications = context({ ownerId: '507f1f77bcf86cd799439002', generation: 2, notifications: [row(N2)] });
+  view.rerender(<Dropdown visible onClose={jest.fn()} topOffset={20} navigation={mockNavigation} />);
+  await act(async () => oldRequest.resolve(true));
+  expect(view.getByLabelText(`Mark notification as read: Title ${N2}`)).toBeOnTheScreen();
+  expect(view.queryByText(`Title ${N1}`)).toBeNull();
+  expect(view.getByLabelText('Unread')).toBeOnTheScreen();
+  expect(mockNotifications.markAllRead).not.toHaveBeenCalled();
 });

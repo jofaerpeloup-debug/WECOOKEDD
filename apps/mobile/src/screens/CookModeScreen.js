@@ -260,12 +260,14 @@ export default function CookModeScreen({ navigation, route }) {
   };
 
   const steps = useMemo(() => cookModeSteps(recipe), [recipe]);
-  const cookServings =
-    Number.isFinite(params.servings) && params.servings > 0
+  const baseServings = Number.isSafeInteger(recipe.servings) && recipe.servings > 0 && recipe.servings <= 100
+    ? recipe.servings
+    : undefined;
+  const cookServings = baseServings === undefined
+    ? undefined
+    : Number.isSafeInteger(params.servings) && params.servings > 0 && params.servings <= 100
       ? params.servings
-      : Number.isFinite(recipe.servings) && recipe.servings > 0
-        ? recipe.servings
-        : 1;
+      : baseServings;
   const checklist = useMemo(
     () => cookModeIngredientChecklist(recipe, cookServings, params.ingredients),
     [recipe, cookServings, params.ingredients]
@@ -315,7 +317,11 @@ export default function CookModeScreen({ navigation, route }) {
     isFinishingRef.current = true;
     setIsFinishing(true);
     try {
-      await recordCompletion({ recipeId: recipe.id, servings: cookServings });
+      if (cookServings === undefined) {
+        await recordCompletion({ recipeId: recipe.id });
+      } else {
+        await recordCompletion({ recipeId: recipe.id, servings: cookServings });
+      }
       notify('Nicely done! 👏', `${recipe.title} is cooked. Enjoy your meal.`, () => navigation.goBack());
     } catch (err) {
       // Never pretend it saved: no navigation, no local "cooked" state — the
@@ -373,7 +379,7 @@ export default function CookModeScreen({ navigation, route }) {
           <Text style={styles.prepEyebrow}>Before you start</Text>
           <Text style={styles.prepTitle}>Gather your ingredients</Text>
           <Text style={styles.prepSub}>
-            {cookServings} {cookServings === 1 ? 'serving' : 'servings'} · {gathered} of{' '}
+            {cookServings === undefined ? 'Servings unknown' : `${cookServings} ${cookServings === 1 ? 'serving' : 'servings'}`} · {gathered} of{' '}
             {checklist.length} ready
           </Text>
 

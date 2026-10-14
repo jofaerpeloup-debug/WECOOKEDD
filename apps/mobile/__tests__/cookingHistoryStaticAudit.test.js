@@ -1,8 +1,22 @@
 const fs = require('fs');
 const path = require('path');
+const { lightColors, darkColors } = require('../src/theme/theme');
 
 const sourcePath = path.join(__dirname, '../src/screens/CookingHistoryScreen.js');
 const raw = fs.readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
+
+function contrastRatio(foreground, background) {
+  const luminance = (hex) => {
+    const channels = hex.slice(1).match(/../g).map((value) => parseInt(value, 16) / 255);
+    const linear = channels.map((value) =>
+      value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    );
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  };
+  const light = Math.max(luminance(foreground), luminance(background));
+  const dark = Math.min(luminance(foreground), luminance(background));
+  return (light + 0.05) / (dark + 0.05);
+}
 
 function stripComments(source) {
   return source
@@ -217,13 +231,27 @@ function auditHistorySource(input) {
   expect(source).toMatch(/Retry loading cooking history/);
   expect(source).toMatch(/Retry loading more cooking history/);
   expect(source).toMatch(/RefreshControl/);
-  expect(source).toMatch(/accessibilityRole="header">Cooking history/);
+  expect(source).toMatch(/title="Cooking History"/);
+  expect(source).toMatch(/history\.length > 0/);
+  expect(source).toMatch(/accessibilityRole="header">\s*\{history\.length\}.*loaded/s);
+  expect(source).not.toMatch(/\{paginationRef\.current\?\.total\}.*dishes/s);
+  expect(source).toMatch(/weekday: 'short'/);
+  expect(source).toMatch(/hour: 'numeric'/);
+  expect(source).toMatch(/image: \{ width: 52, height: 52/);
   expect(source).toMatch(/accessibilityLabel=\{`\$\{item\.recipe\.title\}, cooked \$\{completedDate\}`\}/);
 
   expect(source).not.toMatch(/AsyncStorage|SecureStore|Date\.now|generated.*id|seed|fixture|mockData/i);
 }
 
 describe('CookingHistoryScreen binds the server-authoritative history contract', () => {
+  it('keeps normal-sized metadata and completion dates at AA contrast on both paper palettes', () => {
+    expect(raw).toMatch(/meta: \{[^}]*color: colors\.inkSoft[^}]*\}/);
+    expect(raw).toMatch(/date: \{[^}]*color: colors\.inkSoft[^}]*\}/);
+    for (const palette of [lightColors, darkColors]) {
+      expect(contrastRatio(palette.inkSoft, palette.paper)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it('passes the complete production structural audit', () => {
     auditHistorySource(raw);
   });

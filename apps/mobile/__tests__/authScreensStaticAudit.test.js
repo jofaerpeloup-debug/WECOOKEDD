@@ -82,13 +82,12 @@ describe('no navigation around the auth boundary', () => {
   });
 
   it.each(NAMES)('%s does not navigate on its own after a sign-in call', (name) => {
-    // The only navigation these screens may do is between the three
-    // unauthenticated routes.
+    // Register may also open the two existing guest legal routes.
     const targets = [...code[name].matchAll(/navigation\.navigate\(\s*['"`]([^'"`]+)/g)].map(
       (m) => m[1]
     );
     for (const t of targets) {
-      expect(['Login', 'Register', 'Landing']).toContain(t);
+      expect(['Login', 'Register', 'Landing', 'Terms', 'Privacy']).toContain(t);
     }
   });
 });
@@ -323,7 +322,11 @@ describe('MOBILE-M27 Register auth visual consistency', () => {
     const actions = [...code.Register.matchAll(/\bonPress=\{([^}]+)\}/g)]
       .map((match) => match[1].trim())
       .sort();
-    expect(actions).toEqual(['goLogin', 'register', 'signInWithGoogle'].sort());
+    expect(actions).toEqual([
+      'goLogin', 'register', 'signInWithGoogle',
+      "() => openLegal('Terms')", "() => openLegal('Privacy')",
+      'toggleLegalAcknowledgement',
+    ].sort());
   });
 
   it('adds no actionable guest or demo registration path', () => {
@@ -360,66 +363,25 @@ describe('MOBILE-M27 Register auth visual consistency', () => {
     }
   });
 
-  it('adds no agreement or acceptance state and no setter/callback for it', () => {
-    const agreementMechanic =
-      /(?:agreed|agreeTo(?:Terms|Privacy|Consent|Agreement)|accept(?:ed|ance)?(?:Terms|Privacy|Consent|Agreement)|(?:terms|privacy)(?:Accepted|Acceptance|Agreed|Consent|Required|Checked)|consent(?:Given|Granted|Accepted|Acceptance|Required|Checked)|agreement(?:Accepted|Required|Checked))/i;
-    const stateDeclarations = [
-      ...code.Register.matchAll(
-        /const\s*\[\s*([A-Za-z_$][\w$]*)\s*,\s*([A-Za-z_$][\w$]*)\s*\]\s*=\s*useState\s*\(\s*([^)]*)\)/g
-      ),
-    ].map((match) => ({ value: match[1], setter: match[2], initial: match[3].trim() }));
-
-    const agreementStates = stateDeclarations.filter(({ value, setter, initial }) => {
-      const names = `${value} ${setter}`;
-      const booleanAgreementState =
-        /^(?:true|false)$/.test(initial) &&
-        /(?:agree|accept|agreement|consent|terms|privacy)/i.test(names);
-      return agreementMechanic.test(names) || booleanAgreementState;
-    });
-    expect(agreementStates).toEqual([]);
-
-    const callbackNames = [
-      ...[...code.Register.matchAll(
-        /const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/g
-      )].map((match) => match[1]),
-      ...[...code.Register.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map(
-        (match) => match[1]
-      ),
-    ];
-    expect(callbackNames.filter((name) => agreementMechanic.test(name))).toEqual([]);
+  it('starts acknowledgement unchecked and keeps it out of the auth payload', () => {
+    expect(code.Register).toMatch(/\[legalAcknowledged, setLegalAcknowledged\] = useState\(false\)/);
+    expect(code.Register).toMatch(/accessibilityRole="checkbox"/);
+    expect(code.Register).toMatch(/accessibilityState=\{\{ checked: legalAcknowledged, disabled: busy \}\}/);
+    expect(code.Register).toMatch(/\{ name: trimmedName, email: trimmedEmail, password \}/);
+    expect(code.Register).not.toMatch(/await signUp\(\{[^}]*legalAcknowledged/);
   });
 
-  it('adds no terms/privacy/consent acceptance checkbox or Switch', () => {
-    const acceptanceControls = [
-      ...[...code.Register.matchAll(/<(?:Checkbox|Switch)\b[\s\S]*?\/>/g)].map(
-        (match) => match[0]
-      ),
-      ...[...code.Register.matchAll(/<Pressable\b[\s\S]*?<\/Pressable>/g)]
-        .map((match) => match[0])
-        .filter((block) => /accessibilityRole\s*=\s*["'](?:checkbox|switch)["']/i.test(block)),
-    ].filter((block) =>
-      /(?:agreed|accept(?:ed|ance)?|consent|terms|privacy|agreement)/i.test(block)
-    );
-
-    expect(acceptanceControls).toEqual([]);
+  it('has two separate accessible legal links on the guest stack', () => {
+    const links = pressablesContaining(code.Register, 'accessibilityRole="link"');
+    expect(links).toHaveLength(2);
+    expect(links[0]).toMatch(/openLegal\('Terms'\)/);
+    expect(links[0]).toMatch(/accessibilityLabel="Terms & Conditions"/);
+    expect(links[1]).toMatch(/openLegal\('Privacy'\)/);
+    expect(links[1]).toMatch(/accessibilityLabel="Privacy Policy"/);
+    expect(code.Register).toMatch(/navigation\.navigate\(route\)/);
   });
 
-  it('does not gate the registration CTA or submission on legal agreement', () => {
-    const agreementGate =
-      /(?:agreed|accept(?:ed|ance)?|consent|terms|privacy|agreement)/i;
-    const registerButtons = [
-      ...code.Register.matchAll(/<Button\b[\s\S]*?\/>/g),
-    ]
-      .map((match) => match[0])
-      .filter((block) => /\btitle\s*=\s*["']Create account["']/.test(block));
-    expect(registerButtons).toHaveLength(1);
-
-    const disabledExpression = registerButtons[0].match(
-      /\bdisabled\s*=\s*\{([\s\S]*?)\}/
-    );
-    expect(disabledExpression).not.toBeNull();
-    expect(disabledExpression[1]).not.toMatch(agreementGate);
-
+  it('blocks password submission without acknowledgement and shows an inline error', () => {
     const registerFunction = code.Register.match(
       /const\s+register\s*=\s*async\s*\(\s*\)\s*=>\s*\{([\s\S]*?)\n\s*\};/
     );
@@ -427,12 +389,9 @@ describe('MOBILE-M27 Register auth visual consistency', () => {
     const signUpIndex = registerFunction[0].indexOf('await signUp(submission.payload)');
     expect(signUpIndex).toBeGreaterThan(-1);
     const preSubmission = registerFunction[0].slice(0, signUpIndex);
-    const conditions = [...preSubmission.matchAll(/\bif\s*\(([^)]*)\)/g)].map(
-      (match) => match[1]
-    );
-    for (const condition of conditions) {
-      expect(condition).not.toMatch(agreementGate);
-    }
+    expect(preSubmission).toMatch(/if \(!submission\.payload \|\| !legalAcknowledged\)\s*\{\s*return;/);
+    expect(preSubmission).toMatch(/setLegalError\('Acknowledge the Terms & Conditions and Privacy Policy to create an account\.'\)/);
+    expect(code.Register).toMatch(/<Text style=\{styles\.legalError\} accessibilityLiveRegion="polite">/);
   });
 });
 
@@ -488,7 +447,7 @@ describe('Landing is a clean port of the teammate onboarding screen', () => {
     expect(code.Landing).toMatch(/const TOTAL = SLIDES\.length;/);
   });
 
-  it('carries the five teammate slide tags and headlines, in order', () => {
+  it('carries the five slide tags and supported headlines, in order', () => {
     const tags = [...slidesBlock[0].matchAll(/tag: '([^']+)'/g)].map((m) => m[1]);
     expect(tags).toEqual([
       'Discover',
@@ -502,10 +461,10 @@ describe('Landing is a clean port of the teammate onboarding screen', () => {
       m[1].replace(/\\n/g, ' ')
     );
     expect(titles).toEqual([
-      'One search, every recipe',
-      'Cook it hands-free',
+      'Find recipes for tonight',
+      'Cook step by step',
       'Out of something? Swap it',
-      'Plan the week, shop once',
+      'Plan your week, make a list',
       'Cook with everyone',
     ]);
   });
@@ -708,6 +667,16 @@ describe('theme and asset hygiene', () => {
   // above). Landing's own previews are covered instead by "draws its preview
   // panels offline..." above, which already asserts previewMocks.js uses no
   // require()/<Image> at all.
+});
+
+describe('email-change link continuation', () => {
+  it('resets to a route owned by the current auth stack', () => {
+    const screen = stripComments(read('screens/VerifyEmailChangeScreen.js'));
+    expect(screen).toMatch(/const \{ isLoggedIn, verifyEmailChange \} = useAuth\(\)/);
+    expect(screen).toMatch(/navigation\.reset\(\{[\s\S]*?index: 0,[\s\S]*?name: isLoggedIn \? 'MainTabs' : 'Login'/);
+    expect(screen).toMatch(/title=\{isLoggedIn \? 'Back to app' : 'Go to Login'\}/);
+    expect(screen).toMatch(/await verifyEmailChange\(token\)/);
+  });
 });
 
 describe('forgot-password request step', () => {

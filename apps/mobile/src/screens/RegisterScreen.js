@@ -8,6 +8,7 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  AccessibilityInfo,
   BackHandler,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -64,6 +65,8 @@ export default function RegisterScreen({ navigation }) {
   const [activeAction, setActiveAction] = useState(null);
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [legalAcknowledged, setLegalAcknowledged] = useState(false);
+  const [legalError, setLegalError] = useState(null);
   const inFlightRef = useRef(false);
 
   // The SAME hook, and therefore the same real flow, that Login uses: there is
@@ -95,6 +98,17 @@ export default function RegisterScreen({ navigation }) {
     navigation.navigate('Login');
   };
 
+  const openLegal = (route) => {
+    if (inFlightRef.current) return;
+    // A stack push keeps this Register instance and its in-progress form.
+    navigation.navigate(route);
+  };
+
+  const toggleLegalAcknowledgement = () => {
+    setLegalAcknowledged((current) => !current);
+    setLegalError(null);
+  };
+
   const register = async () => {
     if (inFlightRef.current) return; // guard against rapid duplicate submissions
     google.cancel();
@@ -102,11 +116,21 @@ export default function RegisterScreen({ navigation }) {
     // Validate and submit one immutable snapshot so no fallback/default value
     // can differ from the password state represented by the checklist.
     const submission = prepareRegistrationSubmission({ name, email, password });
-    if (!submission.payload) {
-      setFieldErrors(submission.fieldErrors);
+    setFieldErrors(submission.fieldErrors);
+    if (!legalAcknowledged) {
+      setLegalError('Acknowledge the Terms & Conditions and Privacy Policy to create an account.');
+      // Android announces the new inline text through accessibilityLiveRegion.
+      // iOS needs an explicit announcement for this submit attempt.
+      if (Platform.OS === 'ios') {
+        AccessibilityInfo.announceForAccessibility(
+          'Acknowledge the Terms & Conditions and Privacy Policy to create an account.'
+        );
+      }
+    }
+    if (!submission.payload || !legalAcknowledged) {
       return;
     }
-    setFieldErrors({});
+    setLegalError(null);
     inFlightRef.current = true;
     setActiveAction('register');
     try {
@@ -221,6 +245,52 @@ export default function RegisterScreen({ navigation }) {
           />
           <PasswordRequirements value={password} />
 
+          <View style={styles.legalSection}>
+            <Pressable
+              onPress={toggleLegalAcknowledgement}
+              disabled={busy}
+              style={styles.legalCheckboxRow}
+              accessibilityRole="checkbox"
+              accessibilityLabel="I acknowledge the Terms & Conditions and Privacy Policy"
+              accessibilityState={{ checked: legalAcknowledged, disabled: busy }}
+              accessibilityHint={legalError || undefined}
+            >
+              <View style={[styles.legalCheckbox, legalAcknowledged && styles.legalCheckboxChecked]}>
+                {legalAcknowledged && <Text style={styles.legalCheckmark}>✓</Text>}
+              </View>
+              <Text style={styles.legalAcknowledgement}>
+                I acknowledge the Terms & Conditions and Privacy Policy.
+              </Text>
+            </Pressable>
+            <View style={styles.legalLinks}>
+              <Pressable
+                onPress={() => openLegal('Terms')}
+                disabled={busy}
+                style={styles.legalLinkTarget}
+                accessibilityRole="link"
+                accessibilityLabel="Terms & Conditions"
+                accessibilityState={{ disabled: busy }}
+              >
+                <Text style={styles.legalLink}>Terms & Conditions</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => openLegal('Privacy')}
+                disabled={busy}
+                style={styles.legalLinkTarget}
+                accessibilityRole="link"
+                accessibilityLabel="Privacy Policy"
+                accessibilityState={{ disabled: busy }}
+              >
+                <Text style={styles.legalLink}>Privacy Policy</Text>
+              </Pressable>
+            </View>
+            {legalError && (
+              <Text style={styles.legalError} accessibilityLiveRegion="polite">
+                {legalError}
+              </Text>
+            )}
+          </View>
+
           {status && (
             <Text style={[styles.status, status.tone]} accessibilityLiveRegion="polite">
               {status.text}
@@ -331,6 +401,45 @@ function makeStyles(colors, isDark) {
     },
     statusError: { color: colors.error },
     statusMuted: { color: colors.inkFaint },
+
+    legalSection: { marginTop: spacing.lg },
+    legalCheckboxRow: {
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
+    legalCheckbox: {
+      width: 24,
+      height: 24,
+      borderWidth: 2,
+      borderRadius: radius.sm,
+      borderColor: colors.sageDeep,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    legalCheckboxChecked: { backgroundColor: colors.sageDeep },
+    legalCheckmark: { color: colors.onAccent, fontFamily: typography.body.bold, fontSize: 16 },
+    legalAcknowledgement: {
+      flex: 1,
+      fontFamily: typography.body.fontFamily,
+      fontSize: typography.sizes.base,
+      color: colors.ink,
+    },
+    legalLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+    legalLinkTarget: { minHeight: 48, justifyContent: 'center' },
+    legalLink: {
+      fontFamily: typography.body.semibold,
+      fontSize: typography.sizes.base,
+      color: isDark ? colors.sage : colors.sageDeep,
+      textDecorationLine: 'underline',
+    },
+    legalError: {
+      fontFamily: typography.body.medium,
+      fontSize: typography.sizes.sm,
+      color: colors.ink,
+      marginTop: spacing.xs,
+    },
 
     dividerRow: {
       flexDirection: 'row',

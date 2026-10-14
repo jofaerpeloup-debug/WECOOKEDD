@@ -46,8 +46,7 @@ describe('MOBILE-NOTIF1 static contract', () => {
     const dropdown = read('components/NotificationsDropdown.js');
     const action = read('navigation/notificationAction.js');
     expect(dropdown).toContain("You're all caught up. Real activity — saves, cooked dishes, cook reminders — will show up here.");
-    expect(dropdown).toMatch(/const anchorId = notifications\[0\]\.id/);
-    expect(dropdown).toMatch(/markAllRead\(anchorId\)/);
+    expect(dropdown).not.toMatch(/markAllRead\(|MARK_READ_DELAY_MS/);
     expect(dropdown).toMatch(/archiveAll\(anchorId\)/);
     expect(action).toMatch(/action\?\.kind === 'recipe'/);
     expect(action).toMatch(/action\?\.kind === 'communityPost'/);

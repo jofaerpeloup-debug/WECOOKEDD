@@ -21,6 +21,14 @@ jest.mock('react-native', () => {
 });
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
+jest.mock('react-native-svg', () => ({
+  __esModule: true,
+  default: 'Svg',
+  Defs: 'Defs',
+  LinearGradient: 'SvgLinearGradient',
+  Rect: 'Rect',
+  Stop: 'Stop',
+}));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0 }),
 }));
@@ -110,6 +118,34 @@ it('keeps Shopping opt-in and preserves default and Saved TopBar controls', () =
   view.rerender(<TopBar mode="brand" onShoppingPress={jest.fn()} shoppingCount={null} />);
   expect(view.getByLabelText('Shopping list')).toBeOnTheScreen();
   expect(queryShoppingBadge(view)).toBeNull();
+});
+
+it('opts only Home into the left, divider-free brand header', () => {
+  const view = render(<DashboardScreen navigation={mockNativeNavigation} />);
+  const header = view.UNSAFE_getByType(TopBar);
+  expect(header.props.variant).toBe('home');
+  expect(header.props.transparent).toBe(true);
+  expect(header.props.onSavedPress).toEqual(expect.any(Function));
+  view.unmount();
+});
+
+it('gives only Discover a header role while preserving default titles and back actions', () => {
+  const discoverBack = jest.fn();
+  const view = render(<TopBar mode="back" title="Search" variant="discover" onBack={discoverBack} />);
+  expect(view.getByText('Search').props.accessibilityRole).toBe('header');
+  fireEvent.press(view.getByLabelText('Back'));
+  expect(discoverBack).toHaveBeenCalledTimes(1);
+
+  view.rerender(<TopBar mode="title" title="Community" />);
+  expect(view.getByText('Community').props.accessibilityRole).toBeUndefined();
+
+  const settingsBack = jest.fn();
+  view.rerender(<TopBar mode="back" title="" onBack={settingsBack} />);
+  const emptyTitle = view.UNSAFE_getAllByType('Text').find((node) => node.props.numberOfLines === 1);
+  expect(emptyTitle.props.children).toBe('');
+  expect(emptyTitle.props.accessibilityRole).toBeUndefined();
+  fireEvent.press(view.getByLabelText('Back'));
+  expect(settingsBack).toHaveBeenCalledTimes(1);
 });
 
 it.each([

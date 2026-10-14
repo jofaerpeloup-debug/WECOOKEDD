@@ -37,6 +37,7 @@ jest.mock('react-native', () => {
       flatten: (style) => Array.isArray(style) ? Object.assign({}, ...style.filter(Boolean)) : style || {},
     },
     Text: host('Text'),
+    TextInput: host('TextInput'),
     View: host('View'),
   };
 });
@@ -147,6 +148,13 @@ function entry(overrides = {}) {
     ...overrides,
   };
 }
+
+it('shows the server reminder time in the pinned chip and opens its existing sheet', async () => {
+  const { view } = await renderLoaded([entry({ reminder: { localTime: '18:30', timeZone: 'Asia/Manila' } })]);
+  expect(view.getByText('Cook at 18:30')).toBeOnTheScreen();
+  fireEvent.press(view.getByLabelText('Reminder for Chicken Adobo'));
+  expect(view.getByText('Meal reminder')).toBeOnTheScreen();
+});
 
 async function renderLoaded(entries = [entry()]) {
   getMealPlan.mockResolvedValue(entries);

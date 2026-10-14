@@ -57,7 +57,7 @@ export default function PrivacyScreen({ navigation }) {
 
         {SECTIONS.map((s) => (
           <View key={s.heading} style={styles.section}>
-            <Text style={styles.heading}>{s.heading}</Text>
+            <Text style={styles.heading} accessibilityRole="header">{s.heading}</Text>
             <Text style={styles.body}>{s.body}</Text>
           </View>
         ))}
@@ -73,7 +73,7 @@ function makeStyles(colors) {
     updated: {
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.xs,
-      color: colors.inkFaint,
+      color: colors.inkSoft,
       marginBottom: spacing.sm,
     },
     intro: {
