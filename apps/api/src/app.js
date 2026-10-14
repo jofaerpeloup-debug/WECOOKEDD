@@ -37,6 +37,13 @@ function createApp() {
   // Security headers first.
   app.use(helmet());
 
+  // History failures from CORS, the global limiter, and parsing are private too.
+  // Express mount matching keeps this scoped to the history path and children.
+  app.use('/api/v1/assistant/conversations', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
+
   // Allowlist-based CORS. Requests with no Origin header (native apps,
   // server-to-server calls, curl, tests) are always allowed through;
   // browser requests from unlisted origins are rejected.

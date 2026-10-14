@@ -17,6 +17,7 @@ const staffRoutes = require('../modules/moderator-applications/moderator-applica
 const auditRoutes = require('../modules/audit/audit.routes');
 const analyticsRoutes = require('../modules/analytics/analytics.routes');
 const assistantRoutes = require('../modules/assistant/assistant.routes');
+const assistantHistoryRoutes = require('../modules/assistant/assistant-history.routes');
 const notificationRoutes = require('../modules/notifications/notification.routes');
 
 const router = Router();
@@ -41,6 +42,7 @@ router.use('/staff', staffRoutes);
 router.use('/admin/audit-logs', auditRoutes);
 router.use('/admin/analytics', analyticsRoutes);
 router.use('/assistant', assistantRoutes);
+router.use('/assistant/conversations', assistantHistoryRoutes);
 router.use('/notifications', notificationRoutes);
 
 module.exports = router;
