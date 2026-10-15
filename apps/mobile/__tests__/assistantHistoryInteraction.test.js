@@ -538,4 +538,3 @@ it('checks a known expired deadline on resume even if background timers did not 
   expect(view.queryByText('Saved answer')).toBeNull(); expect(api.post).not.toHaveBeenCalled();
   expect(api.get.mock.calls.filter(([path]) => path === `${ROOT}/${A.id}`)).toHaveLength(1);
 });
-
