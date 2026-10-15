@@ -382,3 +382,11 @@ Actual validation on Windows PowerShell, Node `v24.12.0`, using the same install
 - SHA-256 comparison confirms the other six slice files are unchanged from the start of this repair. All **786 protected tracked files** still match the committed base Git blob hashes. The overall slice remains exactly nine allowed modified/new paths; index empty. Tracked and new-file whitespace checks pass.
 
 Independent findings-only re-review: **PASS** (2026-10-15; Delete/reopen race, unrelated conversation preservation, exact nine-path scope and 126 tests verified). Integrated API/device/runtime and release gates remain **NOT RUN / NOT CLAIMED AS PASS**. No backend edit, provider call, dependency change or publication occurred.
+
+## WECOOKED-V1 local integration checkpoint
+
+Date: 2026-10-15. Integrated in the existing `wecooked-v1` worktree from base `8281895fc96125e92c299d2c5925159cf12ed983`; current checkpoint: `b9d7bf3` before this documentation entry. The sequence applied AI2-1 API foundation `a9711f48`, AI2-2 API generation `b4ab3a85`, AI2-3 Mobile history `3720ed33`, and its reviewed checkpoint `334a66a8`. The shared document retains this frozen contract, the API implementation handoff, and the Mobile implementation/re-review evidence.
+
+Focused validation at integration: API, 13 suites / 133 tests, **131 passed, 0 failed, 2 skipped**; Mobile, 7 suites / 126 tests, **126 passed, 0 failed, 0 skipped**. The skipped API checks require isolated Mongo replica-set evidence. API tests were run one file at a time after the aggregate Node runner hit Windows `spawn EPERM`; no provider calls were made. Source-level endpoint comparison and contract tests confirm the Mobile `/assistant/conversations` client matches the authenticated API routes and request fields.
+
+Integrated source/tests and endpoint compatibility are locally verified. Real Mongo transactions/indexes/TTL and restart behavior, deployed API/mobile runtime, Android/iOS device and accessibility checks, provider, privacy/backup, and deployment gates remain **NOT RUN / NOT CLAIMED AS PASS**. No push, main merge or deployment occurred.
