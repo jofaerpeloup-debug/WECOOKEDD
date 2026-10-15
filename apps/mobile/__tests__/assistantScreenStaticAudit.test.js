@@ -14,6 +14,7 @@ jest.mock('react-native', () => {
   });
 
   return {
+    AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
     ActivityIndicator: host('ActivityIndicator'),
     KeyboardAvoidingView: host('View'),
     Platform: { OS: 'ios', select: (spec) => spec?.ios ?? spec?.default },
@@ -58,6 +59,11 @@ jest.mock('../src/theme/ThemeContext', () => ({
   }),
 }));
 
+let mockUuid = 0;
+const mockSend = jest.fn();
+jest.mock('expo-crypto', () => ({ randomUUID: () => '00000000-0000-4000-8000-' + String(++mockUuid).padStart(12, '0') }));
+const conversation = { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', createdAt: '2026-10-15T00:00:00.000Z', updatedAt: '2026-10-15T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z', version: 0 };
+
 jest.mock('../src/api/client', () => {
   class ApiError extends Error {
     constructor(message, options = {}) {
@@ -69,16 +75,7 @@ jest.mock('../src/api/client', () => {
       return this.kind === 'network';
     }
   }
-  return { ApiError, api: { post: jest.fn() } };
-});
-
-jest.mock('../src/screens/assistantState', () => {
-  const actual = jest.requireActual('../src/screens/assistantState');
-  return {
-    ...actual,
-    completeAssistantRequest: jest.fn(actual.completeAssistantRequest),
-    failAssistantRequest: jest.fn(actual.failAssistantRequest),
-  };
+  return { ApiError, api: { post: jest.fn(), get: jest.fn(), del: jest.fn() } };
 });
 
 let mockAuth = { status: 'authenticated', user: { id: 'user-a' } };
@@ -92,10 +89,6 @@ const {
   waitFor,
 } = require('@testing-library/react-native');
 const { ApiError, api } = require('../src/api/client');
-const {
-  completeAssistantRequest,
-  failAssistantRequest,
-} = require('../src/screens/assistantState');
 const AssistantScreen = require('../src/screens/AssistantScreen').default;
 
 function deferred() {
@@ -117,30 +110,31 @@ function renderAssistant(route, navigation = { goBack: jest.fn(), setParams: jes
 
 it('consumes one bounded route prompt exactly once through the normal send path', async () => {
   const request = deferred();
-  api.post.mockReturnValue(request.promise);
+  mockSend.mockReturnValue(request.promise);
   const route = { params: { initialPrompt: '  Help me use dragon fruit  ' } };
   const navigation = { goBack: jest.fn(), setParams: jest.fn() };
   const view = renderAssistant(route, navigation);
 
-  expect(api.post).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
   expect(navigation.setParams).toHaveBeenCalledWith({ initialPrompt: undefined });
-  expect(api.post).toHaveBeenCalledWith('/assistant/chat', {
-    body: { messages: [{ role: 'user', content: 'Help me use dragon fruit' }] },
+  expect(mockSend).toHaveBeenCalledWith('/assistant/conversations/aaaaaaaaaaaaaaaaaaaaaaaa/messages', {
+    body: { requestId: expect.any(String), expectedVersion: 0, content: 'Help me use dragon fruit' },
   });
   expect(view.getAllByText('Help me use dragon fruit')).toHaveLength(1);
 
   view.rerender(<AssistantScreen navigation={navigation} route={route} />);
   fireEvent.press(view.getByLabelText('Clear conversation'));
   view.rerender(<AssistantScreen navigation={navigation} route={route} />);
-  expect(api.post).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
 
   await settle(request, 'resolve', 'Late old answer');
   expect(view.queryByText('Late old answer')).toBeNull();
 });
 
-function submitTypedQuestion(question) {
+async function submitTypedQuestion(question) {
   fireEvent.changeText(currentView.getByLabelText('Question for Chef Assistant'), question);
   fireEvent.press(currentView.getByLabelText('Send question'));
+  await act(async () => {});
 }
 
 async function settle(deferredRequest, method, value) {
@@ -152,6 +146,16 @@ async function settle(deferredRequest, method, value) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSend.mockReset();
+  api.post.mockImplementation((path, { body }) => {
+    if (path === '/assistant/conversations') return Promise.resolve({ conversation });
+    return Promise.resolve(mockSend(path, { body })).then((data) => ({
+      conversation: { ...conversation, version: 2 }, requestId: body.requestId,
+      userMessage: { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', role: 'user', content: body.content, sequence: 0, createdAt: conversation.createdAt, status: 'complete' },
+      assistantMessage: { id: 'cccccccccccccccccccccccc', role: 'assistant', content: data.reply, sequence: 1, createdAt: conversation.createdAt },
+    }));
+  });
+  api.get.mockResolvedValue({ conversations: [], pageInfo: { hasMore: false, nextCursor: null } });
   mockAuth = { status: 'authenticated', user: { id: 'user-a' } };
 });
 
@@ -161,15 +165,15 @@ afterEach(() => {
 
 it('mounts a successful send with one user bubble, one API call, and one reply', async () => {
   const request = deferred();
-  api.post.mockReturnValue(request.promise);
+  mockSend.mockReturnValue(request.promise);
   renderAssistant();
 
-  submitTypedQuestion('  What can I make with lentils?  ');
+  await submitTypedQuestion('  What can I make with lentils?  ');
 
   expect(currentView.getAllByText('What can I make with lentils?')).toHaveLength(1);
-  expect(api.post).toHaveBeenCalledTimes(1);
-  expect(api.post).toHaveBeenCalledWith('/assistant/chat', {
-    body: { messages: [{ role: 'user', content: 'What can I make with lentils?' }] },
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+  expect(mockSend).toHaveBeenCalledWith('/assistant/conversations/aaaaaaaaaaaaaaaaaaaaaaaa/messages', {
+    body: { requestId: expect.any(String), expectedVersion: 0, content: 'What can I make with lentils?' },
   });
 
   await settle(request, 'resolve', 'Make lentil soup.');
@@ -178,8 +182,8 @@ it('mounts a successful send with one user bubble, one API call, and one reply',
   expect(currentView.getAllByText('Make lentil soup.')).toHaveLength(1);
 });
 
-it('keeps a rapid double send single-flight with one request and one user bubble', () => {
-  api.post.mockReturnValue(new Promise(() => {}));
+it('keeps a rapid double send single-flight with one request and one user bubble', async () => {
+  mockSend.mockReturnValue(new Promise(() => {}));
   renderAssistant();
   fireEvent.changeText(currentView.getByLabelText('Question for Chef Assistant'), 'One question');
   const send = currentView.getByLabelText('Send question');
@@ -189,20 +193,20 @@ it('keeps a rapid double send single-flight with one request and one user bubble
     send.props.onPress();
   });
 
-  expect(api.post).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
   expect(currentView.getAllByText('One question')).toHaveLength(1);
 });
 
-it('retries the exact bounded transcript without duplicating the user', async () => {
+it('replays the exact persistent request without duplicating the user', async () => {
   const first = deferred();
   const retry = deferred();
-  api.post
+  mockSend
     .mockReturnValueOnce(first.promise)
     .mockReturnValueOnce(retry.promise);
   renderAssistant();
 
-  submitTypedQuestion('Use chickpeas');
-  const originalRequest = api.post.mock.calls[0];
+  await submitTypedQuestion('Use chickpeas');
+  const originalRequest = mockSend.mock.calls[0];
   await settle(
     first,
     'reject',
@@ -210,8 +214,9 @@ it('retries the exact bounded transcript without duplicating the user', async ()
   );
 
   fireEvent.press(currentView.getByLabelText('Retry last question'));
-  expect(api.post).toHaveBeenCalledTimes(2);
-  expect(api.post.mock.calls[1]).toEqual(originalRequest);
+  await act(async () => {});
+  expect(mockSend).toHaveBeenCalledTimes(2);
+  expect(mockSend.mock.calls[1]).toEqual(originalRequest);
   expect(currentView.getAllByText('Use chickpeas')).toHaveLength(1);
 
   await settle(retry, 'resolve', 'Try hummus.');
@@ -224,10 +229,10 @@ it.each([
   ['reject', new Error('late failure')],
 ])('ignores an old request %s after Clear', async (method, value) => {
   const request = deferred();
-  api.post.mockReturnValue(request.promise);
+  mockSend.mockReturnValue(request.promise);
   renderAssistant();
 
-  submitTypedQuestion('Old question');
+  await submitTypedQuestion('Old question');
   fireEvent.press(currentView.getByLabelText('Clear conversation'));
   expect(currentView.queryByText('Old question')).toBeNull();
 
@@ -245,31 +250,29 @@ it.each([
   ['reject', new Error('late failure')],
 ])('does not commit an old request %s after unmount', async (method, value) => {
   const request = deferred();
-  api.post.mockReturnValue(request.promise);
+  mockSend.mockReturnValue(request.promise);
   const view = renderAssistant();
 
-  submitTypedQuestion('Unmounted question');
+  await submitTypedQuestion('Unmounted question');
   view.unmount();
-  completeAssistantRequest.mockClear();
-  failAssistantRequest.mockClear();
+  api.get.mockClear();
 
   await settle(request, method, value);
 
-  expect(completeAssistantRequest).not.toHaveBeenCalled();
-  expect(failAssistantRequest).not.toHaveBeenCalled();
+  expect(api.get).not.toHaveBeenCalled();
 });
 
 it('keeps request A from mutating conversation B after reset', async () => {
   const requestA = deferred();
   const requestB = deferred();
-  api.post
+  mockSend
     .mockReturnValueOnce(requestA.promise)
     .mockReturnValueOnce(requestB.promise);
   renderAssistant();
 
-  submitTypedQuestion('Question A');
+  await submitTypedQuestion('Question A');
   fireEvent.press(currentView.getByLabelText('Clear conversation'));
-  submitTypedQuestion('Question B');
+  await submitTypedQuestion('Question B');
 
   await settle(requestA, 'resolve', 'Answer A');
   expect(currentView.queryByText('Question A')).toBeNull();
@@ -281,8 +284,8 @@ it('keeps request A from mutating conversation B after reset', async () => {
   expect(currentView.getAllByText('Answer B')).toHaveLength(1);
 });
 
-it('consumes navigation prompt state across a genuine unmount and remount', () => {
-  api.post.mockReturnValue(new Promise(() => {}));
+it('consumes navigation prompt state across a genuine unmount and remount', async () => {
+  mockSend.mockReturnValue(new Promise(() => {}));
   let route = { params: { initialPrompt: 'Use celeriac' } };
   const navigation = {
     goBack: jest.fn(),
@@ -291,13 +294,13 @@ it('consumes navigation prompt state across a genuine unmount and remount', () =
     }),
   };
   const first = renderAssistant(route, navigation);
-  expect(api.post).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
   expect(navigation.setParams).toHaveBeenCalledWith({ initialPrompt: undefined });
 
   first.unmount();
   renderAssistant(route, navigation);
 
-  expect(api.post).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
   expect(currentView.queryByText('Use celeriac')).toBeNull();
 });
 
@@ -311,17 +314,17 @@ it.each([
 ) => {
   const accountARequest = deferred();
   const accountBRequest = deferred();
-  api.post
+  mockSend
     .mockReturnValueOnce(accountARequest.promise)
     .mockReturnValueOnce(accountBRequest.promise);
   const navigation = { goBack: jest.fn(), setParams: jest.fn() };
   const view = renderAssistant(undefined, navigation);
-  submitTypedQuestion('Account A question');
+  await submitTypedQuestion('Account A question');
 
   mockAuth = { status: 'authenticated', user: { id: 'user-b' } };
   view.rerender(<AssistantScreen navigation={navigation} />);
   await waitFor(() => expect(view.queryByText('Account A question')).toBeNull());
-  submitTypedQuestion('Account B question');
+  await submitTypedQuestion('Account B question');
 
   await settle(accountARequest, method, value);
   expect(view.queryByText('Late account A answer')).toBeNull();
@@ -335,7 +338,7 @@ it.each([
 
 it('routes a quick prompt through the normal service and single-flight path', async () => {
   const request = deferred();
-  api.post.mockReturnValue(request.promise);
+  mockSend.mockReturnValue(request.promise);
   renderAssistant();
   const prompt = 'What can I cook fast?';
 
@@ -345,9 +348,9 @@ it('routes a quick prompt through the normal service and single-flight path', as
     promptButton.props.onPress();
   });
 
-  expect(api.post).toHaveBeenCalledTimes(1);
-  expect(api.post).toHaveBeenCalledWith('/assistant/chat', {
-    body: { messages: [{ role: 'user', content: prompt }] },
+  await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+  expect(mockSend).toHaveBeenCalledWith('/assistant/conversations/aaaaaaaaaaaaaaaaaaaaaaaa/messages', {
+    body: { requestId: expect.any(String), expectedVersion: 0, content: prompt },
   });
   expect(currentView.getAllByText(prompt)).toHaveLength(1);
 
@@ -356,12 +359,12 @@ it('routes a quick prompt through the normal service and single-flight path', as
 });
 
 it('renders validation errors without a deterministic Retry action', async () => {
-  api.post.mockRejectedValue(
+  mockSend.mockRejectedValue(
     new ApiError('unsafe detail', { code: 'VALIDATION_ERROR', status: 400 })
   );
   renderAssistant();
 
-  submitTypedQuestion('Invalid transcript');
+  await submitTypedQuestion('Invalid transcript');
 
   await waitFor(() => {
     expect(
@@ -378,6 +381,9 @@ describe('persistent Assistant provider-boundary audit', () => {
   const expectedFiles = [
     'screens/AssistantScreen.js',
     'screens/assistantState.js',
+    'screens/assistantHistoryState.js',
+    'api/assistantHistoryService.js',
+    'components/AssistantHistoryPanel.js',
     'api/assistantService.js',
     'api/assistantErrors.js',
   ];
@@ -397,11 +403,12 @@ describe('persistent Assistant provider-boundary audit', () => {
     /\bAiContext\b/,
     /\bAiSettings\b/,
     /AsyncStorage/,
+    /SecureStore|expo-secure-store|localStorage|sessionStorage|expo-file-system/,
     /\bSWAPS\b/,
     /mock(?:Data|Response|Reply|Fallback)|fallback(?:Reply|Response)|providerLogic/i,
   ];
 
-  it('scans exactly all four expected production files', () => {
+  it('scans every Assistant production file', () => {
     expect(scannedFiles.map(({ file }) => file)).toEqual(expectedFiles);
   });
 
@@ -418,5 +425,8 @@ describe('persistent Assistant provider-boundary audit', () => {
     const service = scannedFiles.find(({ file }) => file === 'api/assistantService.js').source;
     expect(service).toMatch(/import \{ api \} from ['"]\.\/client['"]/);
     expect(service).toMatch(/api\.post\(['"]\/assistant\/chat['"]/);
+    const persistent = scannedFiles.find(({ file }) => file === 'api/assistantHistoryService.js').source;
+    expect(persistent).toContain("const ROOT = '/assistant/conversations'");
+    expect(persistent).not.toContain('/assistant/chat');
   });
 });

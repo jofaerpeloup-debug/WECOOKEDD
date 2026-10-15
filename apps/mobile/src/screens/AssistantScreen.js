@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -12,22 +12,12 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { sendAssistantMessage } from '../api/assistantService';
-import { getAssistantError } from '../api/assistantErrors';
+import AssistantHistoryPanel from '../components/AssistantHistoryPanel';
+import { historySessionKey, retryableUser, useAssistantHistory } from './assistantHistoryState';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import {
-  ASSISTANT_LIMITS,
-  completeAssistantRequest,
-  createAssistantRequestIdentity,
-  createAssistantState,
-  failAssistantRequest,
-  isAssistantRequestCurrent,
-  prepareAssistantRetry,
-  prepareAssistantSend,
-  setAssistantInput,
-} from './assistantState';
+import { ASSISTANT_LIMITS } from './assistantState';
 
 const QUICK_PROMPTS = [
   'What can I cook fast?',
@@ -38,146 +28,39 @@ const QUICK_PROMPTS = [
 
 export default function AssistantScreen({ navigation, route }) {
   const { colors } = useTheme();
-  const { status: authStatus, user } = useAuth();
+  const auth = useAuth();
+  const session = historySessionKey(auth);
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
-  const authUserId = authStatus === 'authenticated' && typeof user?.id === 'string'
-    ? user.id.trim()
-    : '';
-  const [assistantState, setAssistantState] = useState(createAssistantState);
-  const stateRef = useRef(assistantState);
+  const history = useAssistantHistory(auth);
+  const { state: renderedAssistantState, send, retry, reset: resetConversation, updateInput } = history;
   const scrollRef = useRef(null);
-  const mountedRef = useRef(true);
-  const generationRef = useRef(0);
-  const nextRequestIdRef = useRef(0);
-  const activeRequestRef = useRef(null);
   const initialPromptConsumedRef = useRef(false);
-  const authOwnerRef = useRef(authUserId);
-  const previousAuthOwnerRef = useRef(authUserId);
-  const accountStateIsCurrent = previousAuthOwnerRef.current === authUserId;
-  authOwnerRef.current = authUserId;
-
-  const commitState = useCallback((nextState) => {
-    stateRef.current = nextState;
-    setAssistantState(nextState);
-  }, []);
-
-  const claimRequest = useCallback(() => {
-    if (!mountedRef.current || activeRequestRef.current || !authOwnerRef.current) return null;
-    nextRequestIdRef.current += 1;
-    const identity = {
-      ...createAssistantRequestIdentity(generationRef.current, nextRequestIdRef.current),
-      ownerId: authOwnerRef.current,
-    };
-    activeRequestRef.current = identity;
-    return identity;
-  }, []);
-
-  const requestIsCurrent = useCallback((identity) => {
-    return isAssistantRequestCurrent(
-      {
-        mounted: mountedRef.current,
-        generation: generationRef.current,
-        activeRequest: activeRequestRef.current,
-      },
-      identity
-    ) && identity?.ownerId === authOwnerRef.current;
-  }, []);
-
-  const runRequest = useCallback(
-    async (transcript, identity) => {
-      try {
-        const reply = await sendAssistantMessage(transcript);
-        if (!requestIsCurrent(identity)) return;
-        activeRequestRef.current = null;
-        commitState(completeAssistantRequest(stateRef.current, reply));
-      } catch (error) {
-        if (!requestIsCurrent(identity)) return;
-        activeRequestRef.current = null;
-        const assistantError = getAssistantError(error);
-        const failedState = failAssistantRequest(
-          stateRef.current,
-          transcript,
-          assistantError.message
-        );
-        commitState(
-          assistantError.retryable
-            ? failedState
-            : { ...failedState, failedRequest: null }
-        );
-      }
-    },
-    [commitState, requestIsCurrent]
-  );
-
-  const send = useCallback(
-    (candidate = stateRef.current.input) => {
-      const prepared = prepareAssistantSend(stateRef.current, candidate);
-      if (!prepared.accepted) return;
-      const identity = claimRequest();
-      if (!identity) return;
-      commitState(prepared.state);
-      runRequest(prepared.transcript, identity);
-    },
-    [claimRequest, commitState, runRequest]
-  );
-
-  const retry = useCallback(() => {
-    const prepared = prepareAssistantRetry(stateRef.current);
-    if (!prepared.accepted) return;
-    const identity = claimRequest();
-    if (!identity) return;
-    commitState(prepared.state);
-    runRequest(prepared.transcript, identity);
-  }, [claimRequest, commitState, runRequest]);
-
-  const resetConversation = useCallback(() => {
-    generationRef.current += 1;
-    activeRequestRef.current = null;
-    commitState(createAssistantState());
-  }, [commitState]);
-
-  const updateInput = useCallback(
-    (input) => commitState(setAssistantInput(stateRef.current, input)),
-    [commitState]
-  );
+  const initialSessionRef = useRef(session);
 
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      generationRef.current += 1;
-      activeRequestRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (previousAuthOwnerRef.current === authUserId) return;
-    previousAuthOwnerRef.current = authUserId;
-    generationRef.current += 1;
-    activeRequestRef.current = null;
-    initialPromptConsumedRef.current = true;
-    if (route?.params?.initialPrompt) navigation.setParams({ initialPrompt: undefined });
-    commitState(createAssistantState());
-  }, [authUserId, commitState, navigation, route?.params?.initialPrompt]);
-
-  useEffect(() => {
-    if (!accountStateIsCurrent || initialPromptConsumedRef.current) return;
+    if (initialSessionRef.current !== session) {
+      initialPromptConsumedRef.current = true;
+      if (route?.params?.initialPrompt) navigation.setParams({ initialPrompt: undefined });
+    }
+    if (initialPromptConsumedRef.current) return;
     const initialPrompt = typeof route?.params?.initialPrompt === 'string'
-      ? route.params.initialPrompt.trim()
-      : '';
+      ? route.params.initialPrompt.trim() : '';
     if (!initialPrompt) return;
     initialPromptConsumedRef.current = true;
     navigation.setParams({ initialPrompt: undefined });
     send(initialPrompt.slice(0, ASSISTANT_LIMITS.maxUserLength));
-  }, [accountStateIsCurrent, navigation, route?.params?.initialPrompt, send]);
+  }, [session, navigation, route?.params?.initialPrompt, send]);
 
+  useEffect(() => navigation.addListener?.('blur', resetConversation), [navigation, resetConversation]);
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
-  }, [assistantState.messages, assistantState.status, assistantState.error]);
+  }, [renderedAssistantState.messages, renderedAssistantState.status, renderedAssistantState.error]);
 
-  const renderedAssistantState = accountStateIsCurrent ? assistantState : createAssistantState();
   const isSending = renderedAssistantState.status === 'sending';
+  const isBusy = ['sending', 'creating', 'opening'].includes(renderedAssistantState.status);
+  const composerDisabled = isBusy || renderedAssistantState.reviewRequired || auth.status !== 'authenticated';
+  const canRetry = renderedAssistantState.failedRequest || retryableUser(renderedAssistantState.messages);
 
   return (
     <KeyboardAvoidingView
@@ -188,7 +71,7 @@ export default function AssistantScreen({ navigation, route }) {
         <Pressable
           style={styles.iconBtn}
           hitSlop={8}
-          onPress={() => navigation.goBack()}
+          onPress={() => { resetConversation(); navigation.goBack(); }}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
@@ -210,6 +93,19 @@ export default function AssistantScreen({ navigation, route }) {
         </Pressable>
       </View>
 
+      <View style={styles.historyControls}>
+        <Pressable style={styles.clearBtn} onPress={history.toggleHistory} accessibilityRole="button" accessibilityLabel="History">
+          <Text style={styles.clearText}>History</Text>
+        </Pressable>
+        <Pressable style={styles.clearBtn} onPress={history.newChat} accessibilityRole="button" accessibilityLabel="New Chat">
+          <Text style={styles.clearText}>New Chat</Text>
+        </Pressable>
+      </View>
+      {renderedAssistantState.historyVisible ? <AssistantHistoryPanel key={session}
+        state={renderedAssistantState} onOpen={history.open} onDelete={history.remove}
+        onRefresh={() => history.loadList()}
+        onMore={() => history.loadList(renderedAssistantState.listPage.nextCursor)} /> : null}
+
       <ScrollView
         ref={scrollRef}
         style={styles.scrollFlex}
@@ -218,7 +114,13 @@ export default function AssistantScreen({ navigation, route }) {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
-        {renderedAssistantState.messages.length === 0 ? <>
+        {renderedAssistantState.status === 'opening' ? <ActivityIndicator accessibilityLabel="Loading conversation" /> : null}
+        {renderedAssistantState.status === 'creating' ? <ActivityIndicator accessibilityLabel="Creating conversation" /> : null}
+        {renderedAssistantState.pageInfo.hasMore ? <Pressable onPress={() => history.open(renderedAssistantState.conversation.id, renderedAssistantState.pageInfo.nextCursor)}
+          disabled={composerDisabled} accessibilityRole="button" accessibilityLabel="Load older messages">
+          <Text style={styles.retryText}>Load older messages</Text>
+        </Pressable> : null}
+        {renderedAssistantState.messages.length === 0 && !isBusy ? <>
           <View style={styles.introIcon}>
             <MaterialCommunityIcons name="chef-hat" size={20} color={colors.sageDeep} />
           </View>
@@ -231,10 +133,10 @@ export default function AssistantScreen({ navigation, route }) {
               key={prompt}
               style={[styles.prompt, isSending && styles.controlDisabled]}
               onPress={() => send(prompt)}
-              disabled={isSending}
+              disabled={composerDisabled}
               accessibilityRole="button"
               accessibilityLabel={`Ask: ${prompt}`}
-              accessibilityState={{ disabled: isSending }}
+              accessibilityState={{ disabled: composerDisabled }}
             >
               <Text style={styles.promptText}>{prompt}</Text>
             </Pressable>
@@ -242,9 +144,9 @@ export default function AssistantScreen({ navigation, route }) {
           </View>
         </> : null}
 
-        {renderedAssistantState.messages.map((message, index) => (
+        {renderedAssistantState.messages.map((message) => (
           <View
-            key={`${message.role}-${index}`}
+            key={message.id}
             style={[styles.msgRow, message.role === 'user' && styles.msgRowUser]}
           >
             <Text style={styles.sender}>
@@ -286,13 +188,17 @@ export default function AssistantScreen({ navigation, route }) {
                 style={styles.retryBtn}
                 onPress={retry}
                 accessibilityRole="button"
-                accessibilityLabel="Retry last question"
+                accessibilityLabel={renderedAssistantState.failedRequest.kind === 'open' ? 'Review saved conversation' : 'Retry last question'}
               >
-                <Text style={styles.retryText}>Retry</Text>
+                <Text style={styles.retryText}>{renderedAssistantState.failedRequest.kind === 'open' ? 'Review saved conversation' : 'Retry'}</Text>
               </Pressable>
             ) : null}
           </View>
         ) : null}
+        {!renderedAssistantState.failedRequest && canRetry ? <Pressable onPress={retry}
+          disabled={composerDisabled} accessibilityRole="button" accessibilityLabel="Retry last question">
+          <Text style={styles.retryText}>Retry last question</Text>
+        </Pressable> : null}
       </ScrollView>
 
       <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
@@ -305,17 +211,17 @@ export default function AssistantScreen({ navigation, route }) {
           onSubmitEditing={() => send()}
           returnKeyType="send"
           maxLength={ASSISTANT_LIMITS.maxUserLength}
-          editable={!isSending}
+          editable={!composerDisabled}
           accessibilityLabel="Question for Chef Assistant"
-          accessibilityState={{ disabled: isSending }}
+          accessibilityState={{ disabled: composerDisabled }}
         />
         <Pressable
           style={[styles.sendBtn, isSending && styles.controlDisabled]}
           onPress={() => send()}
-          disabled={isSending}
+          disabled={composerDisabled}
           accessibilityRole="button"
           accessibilityLabel="Send question"
-          accessibilityState={{ disabled: isSending }}
+          accessibilityState={{ disabled: composerDisabled }}
         >
           <Ionicons name="arrow-up" size={18} color={colors.onAccent} />
         </Pressable>
@@ -362,6 +268,7 @@ function makeStyles(colors) {
       fontSize: 12,
       color: colors.sageDeep,
     },
+    historyControls: { flexDirection: 'row', paddingHorizontal: spacing.xl, gap: spacing.sm },
     scrollFlex: { flex: 1 },
     scroll: { padding: spacing.xl, paddingBottom: spacing.lg, gap: 14 },
     introIcon: {

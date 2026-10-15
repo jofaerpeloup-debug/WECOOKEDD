@@ -307,3 +307,78 @@ node --test apps/api/test/assistant-history-send.test.js apps/api/test/assistant
 - SHA-256 comparison: **268 protected files** matched the clean AI2-1 worktree, including all tracked Mobile files, AI1 core/tests, auth/limiter middleware, `app.js` and `v1.routes.js`. Tracked and new-file whitespace checks passed. Exact changed/untracked paths were checked against the frozen allowlist; index remains empty.
 
 The opt-in Mongo generation suite was extended for real unique indexes, claims, retry, rollback, lost completion acknowledgement, Delete fencing and expiry rollback, using only the existing guarded disposable loopback replica-set target and mocked provider. It was **NOT RUN**. The mocked transaction double does not prove Mongo isolation, transaction conflict behavior, indexes, physical TTL cleanup or clock alignment. Independent source review, isolated Mongo/index/TTL/clock proof, runtime/mobile/device/provider/privacy/backup and deployment gates remain **NOT RUN / NOT CLAIMED AS PASS**. No unresolved provider retry, budget or API contract decision blocked this isolated implementation.
+
+## AI2-3 mobile implementation handoff
+
+Date: 2026-10-15 (Asia/Singapore). **READY FOR SOURCE REVIEW.** Independent source review remains pending; this is implementation and focused Jest evidence.
+
+- Isolated worktree: `C:\Users\Clein\OneDrive\Documents\Projects\wecooked-mobile-ai2-mobile-slice3`.
+- Branch: `mobile-ai2-mobile-slice3`; unchanged committed base/HEAD: `afc89b80f1c54b8cc144e85ef3cf89dfb30795aa`, from `feat/mobile-ui-final1-consolidated-2026-10-14`. The committed consolidated Assistant baseline passed its four existing suites, 52 tests, exit 0 before editing. The consolidated worktree's five unrelated dirty paths were preserved and excluded from this isolated checkout.
+- Read the frozen contract and actual AI2-2 commit `b4ab3a854170b6e86f3c605a557d8fdfe03c52ba`, including routes, controller, service and generation tests. The earlier AI2-2 handoff above describes its pre-commit state; the referenced commit is now present. No API source was integrated or changed in this mobile worktree.
+- Changes remain unstaged and uncommitted. No package/config/auth/client/navigation edit, real provider call, database action, push, merge or deployment occurred.
+
+Exact changed paths, within the frozen AI2-C allowlist and shared documentation path:
+
+```text
+apps/mobile/src/screens/AssistantScreen.js
+apps/mobile/src/screens/assistantHistoryState.js
+apps/mobile/src/api/assistantHistoryService.js
+apps/mobile/src/components/AssistantHistoryPanel.js
+apps/mobile/__tests__/assistantHistoryService.test.js
+apps/mobile/__tests__/assistantHistoryState.test.js
+apps/mobile/__tests__/assistantHistoryInteraction.test.js
+apps/mobile/__tests__/assistantScreenStaticAudit.test.js
+docs/milestones/MOBILE-AI2-private-assistant-history.md
+```
+
+History, date-labelled Open, persisted New Chat and confirmed Delete are additive to the existing Ask the Chef route, message bubbles, quick prompts, composer and Clear control. Entry remains blank. Clear only resets the draft; New persists an empty conversation and leaves older saved work intact. List/Open restore server history after remount. Older messages prepend and deduplicate by ID; list order follows immutable creation order. Mutations refresh list page one. Loading, empty, safe error, retry and pagination states use real API outcomes.
+
+Send uses only `/assistant/conversations/:id/messages`, with content or a failed server message reference, expected version and an attempt UUID from the already installed `expo-crypto`. The shared authenticated client continues to own token refresh/retry. The existing stateless service export and three helper regression suites are unchanged. There is no `/chat` fallback, provider access or device transcript storage. A synchronous guard coalesces double submit and New/create actions, retains create identity on retry, and keeps one optimistic user bubble until server reconciliation.
+
+User-requested transport replay retains the exact attempt key/body. Known API failures and ambiguous/conflicting outcomes require explicit Open to inspect saved state and obtain its version. Only a final failed user turn offers an explicit retry with a fresh key and `retryOf`; restored pending turns remain blocked pending another explicit Open, while uncertain turns never receive automatic generation retries. Clear, New, navigation blur, unmount, changed selection, logout, direct owner change and same-owner session replacement invalidate old UI work. All five operation families guard stale completions and failures; list requests also have independent response ordering guards.
+
+The immutable server expiry drives visible-content and retry invalidation, including pending replies and background/resume. Open revalidates on foreground. Opaque not-found clears the active transcript and refreshes List, without creating, resending or restoring local content. These client presentation guards do not establish trusted clock alignment or replace server enforcement.
+
+Validation ran in Windows PowerShell, Node `v24.12.0`, with existing sibling dependencies through `NODE_PATH`: Jest `29.7.0`, React/test renderer `19.2.3`, React Native `0.86.3`, Babel preset Expo `57.0.10`, Expo Crypto `57.0.2`. No dependency installation or manifest/lockfile mutation. From the isolated worktree's `apps/mobile` directory:
+
+```powershell
+$env:NODE_PATH='C:\Users\Clein\OneDrive\Documents\Projects\wecooked\apps\mobile\node_modules;C:\Users\Clein\OneDrive\Documents\Projects\wecooked\node_modules'
+$tests=@('assistantHistoryService.test.js','assistantHistoryState.test.js','assistantHistoryInteraction.test.js','assistantScreenStaticAudit.test.js','assistantService.test.js','assistantErrors.test.js','assistantState.test.js')
+$paths=@($tests | ForEach-Object { Join-Path '__tests__' $_ })
+foreach ($testPath in $paths) {
+  if (-not (Test-Path -LiteralPath $testPath)) { throw "Missing test: $testPath" }
+}
+node C:/Users/Clein/OneDrive/Documents/Projects/wecooked/apps/mobile/node_modules/jest/bin/jest.js --config ./jest.config.js --runTestsByPath @paths --runInBand --watchman=false --silent --testTimeout=30000
+```
+
+- Final gate: exit **0**, **7 suites passed; 119 tests passed, 0 failed, 0 skipped**. Jest transformed the changed production/test JavaScript and JSX. No missing required test file.
+- Coverage includes CRUD restoration, loading/empty/safe errors, cursor pagination/prepend/deduplication, out-of-order List/Open, duplicate submit/New, blank and bounded initial prompts, exact transport replay including explicit-retry replay, known failure by `retryOf`, timeout/conflict/uncertain/pending reconciliation, Delete failure/confirmation and pending reply fencing, Clear/New during unresolved creates/sends, navigation/unmount, direct account switch, every operation family across same-owner session replacement and logout, exact expiry boundary, background clock advance, opaque 404 and late pending outcomes.
+- Expanded source scan covers all seven Assistant production files and rejects direct provider access, credentials, mocked fallback and device persistence. Legacy stateless service/helper regression checks remain passing.
+- All **786 protected tracked files** matched their committed base Git blob hashes (Git checkout line-ending normalization applied), including every API file, AI1 helper/auth/client/navigation code, package/configuration paths and unrelated UI. The two changed existing files are excluded from that protected count. Exactly nine modified/new paths match the allowlist. Index empty; tracked diff and all new/changed file whitespace checks passed.
+
+No full mobile integration rerun was performed for this isolated slice. Independent source review, integrated API/mobile runtime across restart/sign-in, Mongo/index/TTL/clock proof, Android/iOS presentation and accessibility, deployed authentication, provider, privacy/backup and deployment acceptance are **NOT RUN / NOT CLAIMED AS PASS**. The worktree intentionally contains the consolidated backend base; integrated runtime must use the approved AI2-1/AI2-2 API implementation. No source implementation blocker remains within the authorized AI2-3 scope.
+
+### AI2-3 P1-only Delete/reopen repair
+
+Date: 2026-10-15 (Asia/Singapore). **READY FOR RE-REVIEW.** This repairs only the source-review Delete/reopen finding in the existing isolated worktree, branch and nine-path allowlist. HEAD remains `afc89b80f1c54b8cc144e85ef3cf89dfb30795aa`; no commit, push, merge or deployment.
+
+Only these three paths were edited for this repair:
+
+```text
+apps/mobile/src/screens/assistantHistoryState.js
+apps/mobile/__tests__/assistantHistoryInteraction.test.js
+docs/milestones/MOBILE-AI2-private-assistant-history.md
+```
+
+The former Delete completion used the selection epoch, so reopening A invalidated the earlier Delete A result and left deleted content active. Delete now has its own session-bound operation identity, retained across selection resets and still rejected after session replacement or unmount. Selection tracks the target of an unresolved Open as well as the loaded conversation. Confirmed deletion invalidates a matching loaded or loading selection, clears its transcript/input/retry state, and disables Send until explicit Clear or New. Unrelated active B remains intact. Delete failure preserves reopened content and retry eligibility.
+
+Confirmed deleted IDs remain guarded in memory for the current mounted session. They are excluded from History responses and cannot be reopened through stale controls or accepted from late Open/Send responses. Successful Delete refreshes History page one. This changes no API, provider behavior, auth/client code, device storage or backend enforcement.
+
+Actual validation on Windows PowerShell, Node `v24.12.0`, using the same installed sibling dependencies and seven-suite command recorded above:
+
+- Before the production fix, the new mounted `Open A -> Delete A -> reopen A -> Delete succeeds` regression failed because the reopened failed user turn remained visible: exit 1, one selected failure, 42 tests excluded by the focused name filter.
+- After the fix, the full mounted interaction suite passed: exit **0**, **49 tests passed**, none failed or skipped. Seven added cases cover the reported race, late Open success/failure, late Send success/failure, selecting unrelated B, and Delete failure after reopening.
+- Final combined AI2/AI1 gate: exit **0**, **7 suites / 126 tests passed, 0 failed, 0 skipped**. This includes the existing mounted/static Assistant suite and unchanged legacy `assistantService`, `assistantErrors`, and `assistantState` regression suites.
+- SHA-256 comparison confirms the other six slice files are unchanged from the start of this repair. All **786 protected tracked files** still match the committed base Git blob hashes. The overall slice remains exactly nine allowed modified/new paths; index empty. Tracked and new-file whitespace checks pass.
+
+Independent findings-only re-review is pending. Integrated API/device/runtime and release gates remain **NOT RUN / NOT CLAIMED AS PASS**. No backend edit, provider call, dependency change or publication occurred.
