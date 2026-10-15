@@ -4,7 +4,7 @@ const { execFileSync } = require('child_process');
 
 const SRC = path.join(__dirname, '../src');
 const REPO = path.resolve(__dirname, '../../..');
-const SHOP4_BASELINE = '18c79c3e7630f784ed2d3bc2e919f5c1072218ad';
+const SHOP4_BASELINE = 'b2dd9c0197ec897f78c55ec8d9d058aff57eebbf';
 const SHOP5_FREEZE = '7d66ce8a02c476266e234da84f601abaceb14a90';
 const FROZEN_CONTRACT = 'docs/milestones/MOBILE-SHOP5-custom-shopping-items-recipe-provenance.md';
 const SHOP5_ALLOWLIST = new Set([
