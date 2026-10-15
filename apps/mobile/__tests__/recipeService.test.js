@@ -165,3 +165,53 @@ it.each([
     code: expect.stringMatching(/SMART_COLLECTION_RESPONSE_MALFORMED|RECIPE_NUTRITION_MALFORMED/),
   });
 });
+
+const pagination = { page: 1, limit: 20, total: 1, totalPages: 1 };
+const rankedRecipe = {
+  id: '507f1f77bcf86cd799439001',
+  title: 'Adobo',
+  ratingSummary: { averageRating: 4.7, ratingCount: 9 },
+};
+
+beforeEach(() => jest.clearAllMocks());
+
+it('sends only frozen list keys including exclusion and ranking sorts', async () => {
+  api.get.mockResolvedValue({ recipes: [rankedRecipe], pagination });
+  await listRecipes({
+    search: 'adobo', region: 'central-luzon', category: 'dinner', difficulty: 'easy',
+    dietaryTag: 'dairyFree', ingredientId: 'ingredient', maxPrepTimeMinutes: 30,
+    excludeRecipeId: '507f1f77bcf86cd799439099', sort: 'topRated', page: 1, limit: 20,
+    status: 'all', popularity: 99,
+  });
+  expect(api.get).toHaveBeenCalledWith('/recipes', { query: {
+    search: 'adobo', region: 'central-luzon', category: 'dinner', difficulty: 'easy',
+    dietaryTag: 'dairyFree', ingredientId: 'ingredient', maxPrepTimeMinutes: 30,
+    excludeRecipeId: '507f1f77bcf86cd799439099', sort: 'topRated', page: 1, limit: 20,
+  } });
+});
+
+it.each([
+  ['missing recipes', { pagination }],
+  ['missing pagination', { recipes: [rankedRecipe] }],
+  ['malformed recipe id', { recipes: [{ ...rankedRecipe, id: 'local-1' }], pagination }],
+  ['missing summary', { recipes: [{ ...rankedRecipe, ratingSummary: undefined }], pagination }],
+  ['zero count', { recipes: [{ ...rankedRecipe, ratingSummary: { averageRating: 5, ratingCount: 0 } }], pagination }],
+  ['non-numeric average', { recipes: [{ ...rankedRecipe, ratingSummary: { averageRating: '5', ratingCount: 2 } }], pagination }],
+])('fails closed for topRated with %s', async (_label, payload) => {
+  api.get.mockResolvedValue(payload);
+  await expect(listRecipes({ sort: 'topRated' })).rejects.toMatchObject({
+    code: 'INVALID_RANKED_RECIPE_RESPONSE',
+  });
+});
+
+it('requires a real ranked envelope for relevance without requiring ratingSummary', async () => {
+  api.get.mockResolvedValue({ recipes: [{ id: rankedRecipe.id, title: 'Adobo' }], pagination });
+  await expect(listRecipes({ sort: 'relevance', search: 'adobo' })).resolves.toEqual({
+    recipes: [{ id: rankedRecipe.id, title: 'Adobo', nutrition: null }], pagination,
+  });
+});
+
+it('preserves non-ranked legacy envelope handling', async () => {
+  api.get.mockResolvedValue({});
+  await expect(listRecipes({ sort: 'newest' })).resolves.toEqual({ recipes: [], pagination: null });
+});

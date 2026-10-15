@@ -10,6 +10,8 @@ const assert = require('node:assert/strict');
 
 const recipeRepository = require('../src/modules/recipes/recipe.repository');
 const Recipe = require('../src/modules/recipes/recipe.model');
+const Review = require('../src/modules/reviews/review.model');
+const Ingredient = require('../src/modules/ingredients/ingredient.model');
 const ingredientService = require('../src/modules/ingredients/ingredient.service');
 const recipeService = require('../src/modules/recipes/recipe.service');
 const { AppError } = require('../src/shared/errors/app-error');
@@ -74,6 +76,7 @@ function completeStoredRecipe(overrides = {}) {
     instructions: ['Cook until done.'],
     dietaryTags: [],
     imageUrl: null,
+    imageUrlIsPublicHttps: false,
     imageAssetId: null,
     isActive: true,
     ...overrides,
@@ -338,6 +341,23 @@ test('createRecipe validates every ingredient through IngredientService and pers
   assert.equal(capturedArgs.title, 'Chicken Adobo');
   assert.equal(capturedArgs.ingredients.length, 2);
   assert.deepEqual(capturedArgs.dietaryTags, []);
+  assert.equal(capturedArgs.imageUrlIsPublicHttps, false);
+});
+
+test('complete create and Draft create derive public-HTTPS image state server-side', async (t) => {
+  mockNoDuplicateCandidates(t);
+  t.mock.method(ingredientService, 'findIngredientById', async (id) => activeIngredient(id));
+  const writes = [];
+  t.mock.method(recipeRepository, 'createRecipe', async (document) => {
+    writes.push(document);
+    return { _id: `recipe${writes.length}`, ...document };
+  });
+
+  await recipeService.createRecipe(adoboPayload({ imageUrl: 'https://example.com/adobo.jpg' }));
+  await recipeService.createDraft({ title: 'Draft Adobo', imageUrl: 'https://example.com/draft.jpg' });
+
+  assert.equal(writes[0].imageUrlIsPublicHttps, true);
+  assert.equal(writes[1].imageUrlIsPublicHttps, true);
 });
 
 test('createDraft preserves explicit nutrition null as clean unavailability', async (t) => {
@@ -610,11 +630,10 @@ test('listRecipes rejects status=inactive and status=all for a non-admin caller'
 
 test('listRecipes builds a filter from region, category, difficulty, dietaryTag, ingredientId, and maxPrepTimeMinutes', async (t) => {
   let capturedFilter;
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
     capturedFilter = filter;
-    return [];
+    return { items: [], total: 0 };
   });
-  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
 
   await recipeService.listRecipes({
     region: 'central-luzon',
@@ -650,11 +669,10 @@ test('listRecipes builds a filter from region, category, difficulty, dietaryTag,
 
 test('listRecipes guards malformed stored time values and preserves every total-time boundary', async (t) => {
   const filters = [];
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
     filters.push(filter);
-    return [];
+    return { items: [], total: 0 };
   });
-  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
 
   for (const totalTimeBucket of ['under-15', '15-to-30', '31-to-60', 'over-60']) {
     await recipeService.listRecipes({
@@ -691,11 +709,12 @@ test('listRecipes guards malformed stored time values and preserves every total-
   ]);
 });
 
-test('listRecipes deduplicates multi-dietary AND and composes all filters identically for find and count', async (t) => {
+test('listRecipes deduplicates multi-dietary AND in the single eligible page query', async (t) => {
   let findFilter;
-  let countFilter;
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => { findFilter = filter; return []; });
-  t.mock.method(recipeRepository, 'countByFilter', async (filter) => { countFilter = filter; return 0; });
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
+    findFilter = filter;
+    return { items: [], total: 0 };
+  });
 
   await recipeService.listRecipes({
     search: 'adobo.*',
@@ -713,7 +732,6 @@ test('listRecipes deduplicates multi-dietary AND and composes all filters identi
     isAdmin: false,
   });
 
-  assert.deepEqual(findFilter, countFilter);
   assert.deepEqual(findFilter.dietaryTags, { $all: ['vegan', 'glutenFree'] });
   assert.equal(findFilter.region, 'bicol-region');
   assert.equal(findFilter.category, 'dinner');
@@ -751,16 +769,11 @@ test('recipe dependency lookup matches active Published and legacy consumer-visi
   assert.equal(JSON.stringify(capturedFilter).includes('optional'), false);
 });
 
-test('listRecipes composes a region/category filter with search and count over the same universe', async (t) => {
+test('listRecipes composes region/category with non-relevance regex search over the eligible universe', async (t) => {
   let findFilter;
-  let countFilter;
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
     findFilter = filter;
-    return [];
-  });
-  t.mock.method(recipeRepository, 'countByFilter', async (filter) => {
-    countFilter = filter;
-    return 0;
+    return { items: [], total: 0 };
   });
 
   await recipeService.listRecipes({
@@ -774,7 +787,6 @@ test('listRecipes composes a region/category filter with search and count over t
     isAdmin: false,
   });
 
-  assert.deepEqual(findFilter, countFilter);
   assert.equal(findFilter.region, 'bicol-region');
   assert.equal(findFilter.category, 'dinner');
   assert.ok(findFilter.$or);
@@ -806,7 +818,7 @@ test('listRecipes applies the indexed active-Draft filter and updatedDesc sort t
   assert.equal(findArgs.filter.publicationStatus, 'draft');
   assert.equal(findArgs.filter.isActive, true);
   assert.equal(findArgs.filter.$or[0].title.source, 'adobo\\.\\*');
-  assert.deepEqual(findArgs.sort, { updatedAt: -1 });
+  assert.deepEqual(findArgs.sort, { updatedAt: -1, _id: 1 });
   assert.equal(findArgs.skip, 40);
   assert.equal(findArgs.limit, 20);
   assert.equal(result.total, 41);
@@ -840,8 +852,10 @@ test('all five frozen legacy metadata dispositions remain consumer-visible in li
       optional: false,
     }],
   }));
-  t.mock.method(recipeRepository, 'findMany', async () => legacyRecipes);
-  t.mock.method(recipeRepository, 'countByFilter', async () => legacyRecipes.length);
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({
+    items: legacyRecipes,
+    total: legacyRecipes.length,
+  }));
   t.mock.method(recipeRepository, 'findByIdWithIngredients', async (id) => (
     legacyRecipes.find((recipe) => recipe._id === id) || null
   ));
@@ -910,7 +924,9 @@ test('updateRecipe clears region/category via $unset on an explicit null, and do
 
   assert.deepEqual(capturedUpdate.$unset, { region: '' });
   assert.equal('category' in (capturedUpdate.$unset || {}), false);
-  assert.equal(capturedUpdate.$set, undefined);
+  assert.deepEqual(capturedUpdate.$set, {
+    imageUrlIsPublicHttps: false, nutritionSourceUrlIsPublicHttps: false,
+  });
 });
 
 test('updateRecipe replaces one classifier while clearing the other in a single patch', async (t) => {
@@ -930,7 +946,9 @@ test('updateRecipe replaces one classifier while clearing the other in a single 
   await recipeService.updateRecipe('recipe1', { region: null, category: 'snack' });
 
   assert.deepEqual(capturedUpdate.$unset, { region: '' });
-  assert.deepEqual(capturedUpdate.$set, { category: 'snack' });
+  assert.deepEqual(capturedUpdate.$set, {
+    category: 'snack', imageUrlIsPublicHttps: false, nutritionSourceUrlIsPublicHttps: false,
+  });
 });
 
 test('updateRecipe accepts structured steps as an instructions replacement', async (t) => {
@@ -957,11 +975,10 @@ test('updateRecipe accepts structured steps as an instructions replacement', asy
 
 test('listRecipes search matches title/description via an escaped, case-insensitive regex', async (t) => {
   let capturedFilter;
-  t.mock.method(recipeRepository, 'findMany', async ({ filter }) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async ({ filter }) => {
     capturedFilter = filter;
-    return [];
+    return { items: [], total: 0 };
   });
-  t.mock.method(recipeRepository, 'countByFilter', async () => 0);
 
   await recipeService.listRecipes({
     search: 'adobo (chicken)',
@@ -977,18 +994,435 @@ test('listRecipes search matches title/description via an escaped, case-insensit
   assert.equal(capturedFilter.$or[0].title.source.includes('\\('), true);
 });
 
-test('listRecipes drops a recipe whose non-optional ingredient is archived when status=active', async (t) => {
-  t.mock.method(recipeRepository, 'findMany', async () => [
-    completeStoredRecipe({
+test('relevance composes every current filter and exclusion into the server text query', async (t) => {
+  let args;
+  t.mock.method(recipeRepository, 'findRanked', async (value) => {
+    args = value;
+    return { items: [], total: 0 };
+  });
+  await recipeService.listRecipes({
+    search: 'adobo', region: 'central-luzon', category: 'dinner', difficulty: 'easy',
+    dietaryTag: 'dairyFree', ingredientId: CHICKEN_ID, maxPrepTimeMinutes: 30,
+    excludeRecipeId: '507f1f77bcf86cd799439099', status: 'active', page: 1, limit: 20,
+    sort: 'relevance', isAdmin: false,
+  });
+  assert.equal(args.sort, 'relevance');
+  assert.deepEqual(args.filter.$text, { $search: 'adobo' });
+  assert.equal('$or' in args.filter, false, 'relevance must not use substring regex search');
+  assert.equal(args.filter.region, 'central-luzon');
+  assert.equal(args.filter.category, 'dinner');
+  assert.equal(args.filter.difficulty, 'easy');
+  assert.deepEqual(args.filter.dietaryTags, { $all: ['dairyFree'] });
+  assert.equal(args.filter['ingredients.ingredientId'], CHICKEN_ID);
+  assert.deepEqual(args.filter.prepTimeMinutes, { $lte: 30 });
+  assert.deepEqual(args.filter._id, { $ne: '507f1f77bcf86cd799439099' });
+});
+
+test('every non-relevance sort preserves regex search and has an ascending _id tie-breaker', async (t) => {
+  const calls = [];
+  t.mock.method(recipeRepository, 'findConsumerPage', async (args) => {
+    calls.push(args);
+    return { items: [], total: 0 };
+  });
+  const sorts = ['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc', 'updatedDesc'];
+  for (const sort of sorts) {
+    await recipeService.listRecipes({
+      search: 'adobo.*', status: 'active', page: 1, limit: 20, sort, isAdmin: false,
+    });
+  }
+  assert.equal(calls.length, sorts.length);
+  calls.forEach((call) => {
+    assert.equal(call.filter.$or[0].title.source, 'adobo\\.\\*');
+    assert.equal(call.sort._id, 1);
+  });
+});
+
+test('consumer ranked totals and page boundaries come from the database-owned page', async (t) => {
+  const ranked = completeStoredRecipe({
+    _id: 'rated-b',
+    ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
+    _ratingSummary: { averageRating: 4.8, ratingCount: 9 },
+  });
+  let args;
+  t.mock.method(recipeRepository, 'findRanked', async (value) => {
+    args = value;
+    return { items: [ranked], total: 2 };
+  });
+  const result = await recipeService.listRecipes({
+    status: 'active', page: 2, limit: 1, sort: 'topRated', isAdmin: false,
+  });
+  assert.equal(result.total, 2);
+  assert.deepEqual(result.items.map((recipe) => recipe._id), ['rated-b']);
+  assert.deepEqual(result.items[0]._ratingSummary, { averageRating: 4.8, ratingCount: 9 });
+  assert.equal(args.skip, 1);
+  assert.equal(args.limit, 1);
+  assert.equal(args.consumerOnly, true);
+});
+
+test('topRated aggregation orders on raw average/count/id before display rounding', async (t) => {
+  let pipeline;
+  t.mock.method(Recipe, 'aggregate', async (value) => { pipeline = value; return []; });
+  t.mock.method(Recipe, 'populate', async (rows) => rows);
+  await recipeRepository.findRanked({ filter: { isActive: true }, sort: 'topRated', skip: 20, limit: 10 });
+  const facet = pipeline.at(-1).$facet;
+  const sortStage = facet.items.find((stage) => stage.$sort);
+  const summaryStage = facet.items.find((stage) => stage.$set?._ratingSummary);
+  assert.deepEqual(sortStage.$sort, {
+    '_rankingReviews.averageRating': -1,
+    '_rankingReviews.ratingCount': -1,
+    _id: 1,
+  });
+  assert.deepEqual(summaryStage.$set._ratingSummary.averageRating, {
+    $round: ['$_rankingReviews.averageRating', 1],
+  });
+  assert.deepEqual(facet.items.slice(1, 3), [{ $skip: 20 }, { $limit: 10 }]);
+  assert.ok(
+    facet.items.indexOf(summaryStage) > facet.items.findIndex((stage) => stage.$limit),
+    'display rounding must occur only after raw-average ordering and page selection'
+  );
+  assert.deepEqual(pipeline.find((stage) => stage.$match?.['_rankingReviews.ratingCount']), {
+    $match: { '_rankingReviews.ratingCount': { $gt: 0 } },
+  });
+  const reviewLookup = pipeline.find((stage) => stage.$lookup?.as === '_rankingReviews').$lookup;
+  assert.equal(reviewLookup.from, Review.collection.name);
+  assert.deepEqual(reviewLookup.pipeline[1].$group, {
+    _id: null,
+    averageRating: { $avg: '$rating' },
+    ratingCount: { $sum: 1 },
+  });
+  assert.deepEqual(facet.total, [{ $count: 'value' }]);
+});
+
+test('relevance aggregation sorts by full text score then _id in MongoDB', async (t) => {
+  let pipeline;
+  t.mock.method(Recipe, 'aggregate', async (value) => { pipeline = value; return []; });
+  t.mock.method(Recipe, 'populate', async (rows) => rows);
+  await recipeRepository.findRanked({
+    filter: { $text: { $search: 'adobo' } }, sort: 'relevance', skip: 0, limit: 20,
+  });
+  assert.deepEqual(pipeline[0], { $match: { $text: { $search: 'adobo' } } });
+  assert.deepEqual(pipeline[1].$set, {
+    _rankingScore: { $meta: 'textScore' },
+  });
+  assert.deepEqual(pipeline.at(-1).$facet.items[0], {
+    $sort: { _rankingScore: -1, _id: 1 },
+  });
+  assert.deepEqual(pipeline.at(-1).$facet.items.slice(1, 3), [{ $skip: 0 }, { $limit: 20 }]);
+  assert.equal(JSON.stringify(pipeline).includes('"$toLower"'), false);
+  assert.equal(JSON.stringify(pipeline).includes('titleSortKey'), false);
+  assert.deepEqual(pipeline.at(-1).$facet.total, [{ $count: 'value' }]);
+});
+
+test('relevance equal-score pages use _id regardless of ASCII, accented, and non-Latin titles', async (t) => {
+  const rows = [
+    { _id: '0003', title: 'Zebra', _rankingScore: 1.25 },
+    { _id: '0005', title: 'Árbol', _rankingScore: 3.125 },
+    { _id: '0001', title: '東京', _rankingScore: 1.25 },
+    { _id: '0006', title: 'Ωμέγα', _rankingScore: 0.5 },
+    { _id: '0004', title: 'apple', _rankingScore: 3.125 },
+    { _id: '0002', title: 'éclair', _rankingScore: 1.25 },
+  ].map((row) => ({ ...row, _rankingTitle: row.title.toLowerCase() }));
+  const pipelines = [];
+  t.mock.method(Recipe, 'aggregate', async (pipeline) => {
+    pipelines.push(pipeline);
+    const facet = pipeline.at(-1).$facet;
+    let items = [...rows];
+    for (const stage of facet.items) {
+      if (stage.$sort) {
+        items.sort((a, b) => {
+          for (const [field, direction] of Object.entries(stage.$sort)) {
+            if (a[field] < b[field]) return -direction;
+            if (a[field] > b[field]) return direction;
+          }
+          return 0;
+        });
+      }
+      if (stage.$skip !== undefined) items = items.slice(stage.$skip);
+      if (stage.$limit !== undefined) items = items.slice(0, stage.$limit);
+    }
+    return [{ items, total: [{ value: rows.length }] }];
+  });
+  t.mock.method(Recipe, 'populate', async (items) => items);
+
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    const ids = [];
+    for (const skip of [0, 2, 4]) {
+      const page = await recipeRepository.findRanked({
+        filter: { $text: { $search: 'feast' }, isActive: true },
+        sort: 'relevance', consumerOnly: true, skip, limit: 2,
+      });
+      assert.equal(page.total, rows.length);
+      ids.push(...page.items.map(({ _id }) => _id));
+    }
+    assert.deepEqual(ids, ['0004', '0005', '0001', '0002', '0003', '0006']);
+    assert.equal(new Set(ids).size, rows.length, 'repeated pages have no duplicates or gaps');
+  }
+  for (const pipeline of pipelines) {
+    const facetIndex = pipeline.findIndex((stage) => stage.$facet);
+    assert.ok(pipeline.findIndex((stage) => stage.$match?.$expr) < facetIndex);
+    assert.ok(pipeline.findIndex((stage) => stage.$lookup?.as === '_activeRequiredIngredients') < facetIndex);
+    assert.deepEqual(pipeline[facetIndex].$facet.items[0], { $sort: { _rankingScore: -1, _id: 1 } });
+    assert.deepEqual(pipeline[facetIndex].$facet.total, [{ $count: 'value' }]);
+  }
+});
+
+test('consumer pagination filters completeness and active required Ingredients before one database facet', async (t) => {
+  let pipeline;
+  let populatedRows;
+  const pageItem = completeStoredRecipe({ _id: 'page-item' });
+  t.mock.method(Recipe, 'aggregate', async (value) => {
+    pipeline = value;
+    return [{ items: [pageItem], total: [{ value: 21 }] }];
+  });
+  t.mock.method(Recipe, 'populate', async (rows) => {
+    populatedRows = rows;
+    return rows;
+  });
+
+  const result = await recipeRepository.findConsumerPage({
+    filter: { isActive: true },
+    sort: { title: 1, _id: 1 },
+    skip: 20,
+    limit: 10,
+  });
+
+  assert.ok(pipeline.find((stage) => stage.$match?.$expr), 'completeness must be database-filtered');
+  const ingredientLookup = pipeline.find((stage) => stage.$lookup?.as === '_activeRequiredIngredients').$lookup;
+  assert.equal(ingredientLookup.from, Ingredient.collection.name);
+  assert.equal(JSON.stringify(ingredientLookup.pipeline).includes('isActive'), true);
+  const facet = pipeline.at(-1).$facet;
+  assert.deepEqual(facet.items.slice(0, 3), [
+    { $sort: { title: 1, _id: 1 } },
+    { $skip: 20 },
+    { $limit: 10 },
+  ]);
+  assert.deepEqual(facet.total, [{ $count: 'value' }]);
+  assert.deepEqual(populatedRows, [pageItem], 'only the requested page is populated');
+  assert.deepEqual(result, { items: [pageItem], total: 21 });
+});
+
+test('consumer eligibility uses UTF-16 length before paging and requires nutrition attribution', async (t) => {
+  let pipeline;
+  t.mock.method(Recipe, 'aggregate', async (value) => { pipeline = value; return []; });
+  t.mock.method(Recipe, 'populate', async (rows) => rows);
+  await recipeRepository.findConsumerPage({
+    filter: { isActive: true }, sort: { title: 1, _id: 1 }, skip: 0, limit: 20,
+  });
+  const completenessIndex = pipeline.findIndex((stage) => stage.$match?.$expr?.$and);
+  const expression = pipeline[completenessIndex].$match.$expr;
+  const titleTerm = expression.$and.find((term) => JSON.stringify(term).includes('"$title"'));
+  const titleLength = titleTerm.$and[1].$gte[0];
+  const normalizedTitle = { $trim: {
+    input: { $cond: [{ $eq: [{ $type: '$title' }, 'string'] }, '$title', ''] },
+    chars: '\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff',
+  } };
+  const expectedLength = { $add: [
+    { $strLenCP: normalizedTitle },
+    { $size: { $regexFindAll: {
+      input: normalizedTitle,
+      regex: '[\\x{10000}-\\x{10FFFF}]',
+    } } },
+  ] };
+  // The exact type guard and empty-string fallback keep missing, null, and
+  // malformed legacy title values out of string-only aggregation operators.
+  assert.deepEqual(titleTerm.$and[0], { $eq: [{ $type: '$title' }, 'string'] });
+  assert.deepEqual(titleLength, expectedLength, 'the complete Mongo expression must use documented regex options');
+  assert.equal(titleLength.$add[1].$size.$regexFindAll.regex,
+    String.raw`[\x{10000}-\x{10FFFF}]`, 'the emitted string must retain PCRE2 backslashes');
+  for (const unsupportedOption of ['u', 'g']) {
+    const invalidLength = structuredClone(expectedLength);
+    invalidLength.$add[1].$size.$regexFindAll.options = unsupportedOption;
+    assert.throws(() => assert.deepEqual(invalidLength, expectedLength), { name: 'AssertionError' });
+  }
+  assert.deepEqual(titleTerm.$and[2].$lte, [titleLength, 150]);
+  const lengths = [
+    ['A'.repeat(150), true], ['A'.repeat(151), false],
+    ['😀'.repeat(75), true], ['😀'.repeat(76), false],
+    ['A'.repeat(148) + '😀', true], ['A'.repeat(149) + '😀', false],
+    ['\u00a0' + 'A'.repeat(150) + '\ufeff', true],
+    ['\u2028' + '😀'.repeat(76) + '\u2029', false],
+  ];
+  for (const [value, eligible] of lengths) {
+    const normalized = value.trim();
+    const codePoints = [...normalized];
+    const expressionLength = codePoints.length + codePoints.filter((point) => point.codePointAt(0) > 0xffff).length;
+    assert.equal(expressionLength, normalized.length);
+    assert.equal(expressionLength <= 150, eligible);
+  }
+  const serialized = JSON.stringify(expression);
+  for (const field of [
+    '$nutritionProvenance.sourceKind', '$nutritionProvenance.sourceLabel',
+    '$nutritionProvenance.acceptedBy', '$nutritionProvenance.acceptedAt',
+    '$nutritionSourceUrlIsPublicHttps', '$imageUrlIsPublicHttps',
+  ]) assert.ok(serialized.includes(field), `missing ${field}`);
+  assert.ok(completenessIndex < pipeline.findIndex((stage) => stage.$facet));
+});
+
+test('database completeness requires the strict server-derived image fact and contains no URL regex', async (t) => {
+  let pipeline;
+  t.mock.method(Recipe, 'aggregate', async (value) => { pipeline = value; return []; });
+  t.mock.method(Recipe, 'populate', async (rows) => rows);
+
+  await recipeRepository.findConsumerPage({
+    filter: { isActive: true },
+    sort: { title: 1, _id: 1 },
+    skip: 0,
+    limit: 20,
+  });
+
+  const completeness = pipeline.find((stage) => stage.$match?.$expr).$match.$expr;
+  const imageCondition = completeness.$and.find((condition) => (
+    condition.$or?.some((branch) => branch.$and?.some((part) => (
+      part.$eq?.[0] === '$imageUrlIsPublicHttps'
+    )))
+  ));
+  const derivedCheck = imageCondition.$or
+    .flatMap((branch) => branch.$and || [])
+    .find((part) => part.$eq?.[0] === '$imageUrlIsPublicHttps');
+
+  assert.deepEqual(derivedCheck, { $eq: ['$imageUrlIsPublicHttps', true] });
+  assert.equal(JSON.stringify(completeness).includes('$regexMatch'), false);
+  assert.ok(
+    pipeline.indexOf(pipeline.find((stage) => stage.$match?.$expr)) < pipeline.indexOf(pipeline.at(-1)),
+    'derived eligibility must remain before the count/page facet'
+  );
+});
+
+test('publish and restore repository mutations persist the server-derived image fact atomically', async (t) => {
+  const calls = [];
+  t.mock.method(Recipe, 'findOneAndUpdate', (filter, update, options) => {
+    calls.push({ filter, update, options });
+    return { populate: () => ({ _id: 'recipe1' }) };
+  });
+
+  await recipeRepository.publishById('recipe1', {
+    actorId: 'moderator1',
+    publishedAt: new Date('2026-10-05T00:00:00.000Z'),
+    expectedUpdatedAt: '2026-10-04T00:00:00.000Z',
+    imageUrlIsPublicHttps: true,
+  });
+  await recipeRepository.restoreById('recipe1', {
+    actorId: 'moderator1',
+    expectedUpdatedAt: '2026-10-04T00:00:00.000Z',
+    imageUrlIsPublicHttps: false,
+  });
+
+  assert.equal(calls[0].update.$set.imageUrlIsPublicHttps, true);
+  assert.equal(calls[0].update.$set.publicationStatus, 'published');
+  assert.equal(calls[1].update.$set.imageUrlIsPublicHttps, false);
+  assert.equal(calls[1].update.$set.isActive, true);
+  assert.equal(calls[0].options.runValidators, true);
+});
+
+test('repository CAS distinguishes absent, zero, and positive revisions on every mutation', async (t) => {
+  const calls = [];
+  t.mock.method(Recipe, 'findOneAndUpdate', (filter, update) => {
+    calls.push({ filter, update });
+    return { populate: async () => ({ _id: filter._id }) };
+  });
+  const operations = [
+    (revision) => recipeRepository.updateById('recipe1', { $set: { title: 'New' } }, { expectedRevision: revision }),
+    (revision) => recipeRepository.publishById('recipe1', {
+      actorId: CHICKEN_ID, publishedAt: new Date(0), expectedRevision: revision,
+      imageUrlIsPublicHttps: false, nutritionSourceUrlIsPublicHttps: false,
+    }),
+    (revision) => recipeRepository.restoreById('recipe1', {
+      actorId: CHICKEN_ID, expectedRevision: revision,
+      imageUrlIsPublicHttps: false, nutritionSourceUrlIsPublicHttps: false,
+    }),
+    (revision) => recipeRepository.archiveById('recipe1', { actorId: CHICKEN_ID, expectedRevision: revision }),
+  ];
+  for (const revision of [undefined, 0, 5]) {
+    for (const operation of operations) await operation(revision);
+  }
+  for (let i = 0; i < calls.length; i += 1) {
+    const expected = [undefined, 0, 5][Math.floor(i / operations.length)];
+    assert.deepEqual(calls[i].filter.__v,
+      expected === undefined ? { $exists: false } : expected);
+    assert.deepEqual(calls[i].update.$inc, { __v: 1 });
+    assert.equal(calls[i].update.$set.__v, undefined);
+  }
+});
+
+test('same-millisecond competing writes have one revision winner and no stale replay', async (t) => {
+  const stored = { __v: 5, title: 'Original', nutritionSourceUrlIsPublicHttps: true };
+  const calls = [];
+  t.mock.method(Recipe, 'findOneAndUpdate', (filter, update) => {
+    calls.push({ filter, update });
+    const winner = stored.__v === filter.__v;
+    if (winner) {
+      Object.assign(stored, update.$set);
+      stored.__v += update.$inc.__v;
+    }
+    return { populate: async () => winner ? { ...stored } : null };
+  });
+  const options = { expectedRevision: 5, expectedUpdatedAt: '2026-10-11T00:00:00.000Z' };
+  const [first, stale] = await Promise.all([
+    recipeRepository.updateById('recipe1', { $set: { title: 'Winner' } }, options),
+    recipeRepository.updateById('recipe1', { $set: { title: 'Stale' } }, options),
+  ]);
+  assert.equal([first, stale].filter(Boolean).length, 1);
+  assert.equal(stored.__v, 6);
+  assert.equal(stored.title, 'Winner');
+  assert.equal(stored.nutritionSourceUrlIsPublicHttps, true);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.filter.__v), [5, 5]);
+});
+
+test('stale title edit cannot erase a newer nutrition source or derived eligibility fact', async (t) => {
+  const updatedAt = new Date('2026-10-11T00:00:00.000Z');
+  const snapshot = completeStoredRecipe({ __v: 5, publicationStatus: 'draft', updatedAt });
+  const stored = { ...snapshot };
+  let writes = 0;
+  t.mock.method(recipeRepository, 'findRawById', async () => snapshot);
+  t.mock.method(recipeRepository, 'updateById', async (_id, ops, options) => {
+    writes += 1;
+    if (options.expectedRevision !== stored.__v) return null;
+    Object.assign(stored, ops.$set);
+    for (const key of Object.keys(ops.$unset || {})) delete stored[key];
+    stored.__v += 1;
+    return { ...stored };
+  });
+  const nutrition = balancedNutrition();
+  await recipeService.updateRecipe('recipe1', {
+    nutrition,
+    nutritionSource: { kind: 'manual', label: 'Reviewed panel', url: 'https://example.com/panel' },
+  }, { actorId: CHICKEN_ID, now: updatedAt });
+  await assert.rejects(
+    () => recipeService.updateRecipe('recipe1', { title: 'Stale title edit' }),
+    { code: 'RECIPE_EDIT_CONFLICT', statusCode: 409 }
+  );
+  assert.equal(writes, 2, 'the stale patch must not be retried');
+  assert.equal(stored.__v, 6);
+  assert.equal(stored.title, snapshot.title);
+  assert.equal(stored.nutritionProvenance.sourceUrl, 'https://example.com/panel');
+  assert.equal(stored.nutritionSourceUrlIsPublicHttps, true);
+  recipeRepository.findRawById.mock.mockImplementation(async () => ({ ...stored }));
+  await recipeService.updateRecipe('recipe1', { title: 'Deliberate fresh edit' });
+  assert.equal(stored.__v, 7);
+  assert.equal(stored.title, 'Deliberate fresh edit');
+  assert.equal(stored.nutritionSourceUrlIsPublicHttps, true);
+  const reverseSnapshot = { ...stored, nutritionProvenance: { ...stored.nutritionProvenance } };
+  recipeRepository.findRawById.mock.mockImplementation(async () => reverseSnapshot);
+  await recipeService.updateRecipe('recipe1', { title: 'Reverse winner' });
+  await assert.rejects(
+    () => recipeService.updateRecipe('recipe1', { nutrition: null }),
+    { code: 'RECIPE_EDIT_CONFLICT', statusCode: 409 }
+  );
+  assert.equal(stored.__v, 8);
+  assert.equal(stored.title, 'Reverse winner');
+  assert.equal(stored.nutritionProvenance.sourceUrl, 'https://example.com/panel');
+  assert.equal(stored.nutritionSourceUrlIsPublicHttps, true);
+});
+
+test('listRecipes consumes only the database-eligible page and authoritative total', async (t) => {
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({
+    items: [completeStoredRecipe({
       _id: 'recipe1',
       ingredients: [{ ingredientId: activeIngredient(CHICKEN_ID), optional: false }],
-    }),
-    completeStoredRecipe({
-      _id: 'recipe2',
-      ingredients: [{ ingredientId: inactiveIngredient(OTHER_ID), optional: false }],
-    }),
-  ]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 2);
+    })],
+    total: 1,
+  }));
 
   const result = await recipeService.listRecipes({
     status: 'active',
@@ -1000,12 +1434,11 @@ test('listRecipes drops a recipe whose non-optional ingredient is archived when 
 
   assert.equal(result.items.length, 1);
   assert.equal(result.items[0]._id, 'recipe1');
-  // Known V1 trade-off: total reflects the pre-filter database count.
-  assert.equal(result.total, 2);
+  assert.equal(result.total, 1);
 });
 
 test('listRecipes rejects a mixed consumer page when any present nutrition is malformed', async (t) => {
-  t.mock.method(recipeRepository, 'findMany', async () => [
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({ items: [
     completeStoredRecipe({
       _id: 'recipe1',
       nutrition: null,
@@ -1016,8 +1449,7 @@ test('listRecipes rejects a mixed consumer page when any present nutrition is ma
       nutrition: { schemaVersion: 1, basis: 'perServing', caloriesKcal: 320 },
       ingredients: [{ ingredientId: activeIngredient(GARLIC_ID), optional: false }],
     }),
-  ]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 2);
+  ], total: 2 }));
 
   await assert.rejects(() => recipeService.listRecipes({
     status: 'active', page: 1, limit: 20, sort: 'titleAsc', isAdmin: false,
@@ -1046,15 +1478,15 @@ test('listRecipes does not apply the usability trim when an admin requests statu
 });
 
 test('listRecipes omits an archived optional ingredient usage from a normal user\'s results, consistent with getRecipeById', async (t) => {
-  t.mock.method(recipeRepository, 'findMany', async () => [
-    completeStoredRecipe({
+  t.mock.method(recipeRepository, 'findConsumerPage', async () => ({
+    items: [completeStoredRecipe({
       ingredients: [
         { ingredientId: activeIngredient(CHICKEN_ID, 'Chicken'), optional: false },
         { ingredientId: inactiveIngredient(GARLIC_ID, 'Garlic'), optional: true },
       ],
-    }),
-  ]);
-  t.mock.method(recipeRepository, 'countByFilter', async () => 1);
+    })],
+    total: 1,
+  }));
 
   const result = await recipeService.listRecipes({
     status: 'active',
@@ -1206,7 +1638,7 @@ test('updateRecipe throws RECIPE_NOT_FOUND when the id does not exist', async (t
   );
 });
 
-test('restoreRecipe re-verifies every stored ingredient (including optional) for a Published recipe', async (t) => {
+test('restoreRecipe re-verifies every stored ingredient and refreshes image eligibility', async (t) => {
   t.mock.method(recipeRepository, 'findRawById', async () => ({
     ...adoboPayload(),
     _id: 'recipe1',
@@ -1222,11 +1654,16 @@ test('restoreRecipe re-verifies every stored ingredient (including optional) for
     checkedIds.push(id);
     return activeIngredient(id);
   });
-  t.mock.method(recipeRepository, 'restoreById', async (id) => ({ _id: id, isActive: true }));
+  let restoreArgs;
+  t.mock.method(recipeRepository, 'restoreById', async (id, args) => {
+    restoreArgs = args;
+    return { _id: id, isActive: true };
+  });
 
   await recipeService.restoreRecipe('recipe1');
 
   assert.deepEqual(checkedIds.sort(), [CHICKEN_ID, GARLIC_ID].sort());
+  assert.equal(restoreArgs.imageUrlIsPublicHttps, false);
 });
 
 test('restoreRecipe rejects restoration when a Published recipe ingredient (even optional) is inactive', async (t) => {
@@ -1500,6 +1937,9 @@ test('readiness and Publish have decision parity, and Publish reruns DUP1 before
     actorId: 'moderator1',
     publishedAt: new Date('2026-09-30T02:00:00.000Z'),
     expectedUpdatedAt: updatedAt.toISOString(),
+    expectedRevision: undefined,
+    imageUrlIsPublicHttps: false,
+    nutritionSourceUrlIsPublicHttps: false,
   });
 });
 
@@ -1783,7 +2223,7 @@ test('updateRecipe does not re-verify ingredients for an unrelated field update 
   assert.equal(called, false);
 });
 
-test('updateRecipe with only { title } does not wipe ingredients, instructions, dietaryTags, imageUrl, or isActive', async (t) => {
+test('updateRecipe with only { title } preserves content and refreshes image eligibility from merged state', async (t) => {
   t.mock.method(recipeRepository, 'findRawById', async () => ({
     _id: 'recipe1',
     isActive: true,
@@ -1800,7 +2240,10 @@ test('updateRecipe with only { title } does not wipe ingredients, instructions, 
 
   await recipeService.updateRecipe('recipe1', { title: 'Updated Adobo' });
 
-  assert.deepEqual(Object.keys(capturedUpdate.$set), ['title']);
+  assert.deepEqual(Object.keys(capturedUpdate.$set), [
+    'title', 'imageUrlIsPublicHttps', 'nutritionSourceUrlIsPublicHttps',
+  ]);
+  assert.equal(capturedUpdate.$set.imageUrlIsPublicHttps, true);
   for (const untouchedField of ['ingredients', 'instructions', 'dietaryTags', 'imageUrl', 'isActive']) {
     assert.equal(untouchedField in capturedUpdate.$set, false, `expected ${untouchedField} to be absent from $set`);
   }
@@ -1808,6 +2251,7 @@ test('updateRecipe with only { title } does not wipe ingredients, instructions, 
 
 test('archiveRecipe sets isActive: false via the repository', async (t) => {
   let archivedId;
+  t.mock.method(recipeRepository, 'findRawById', async () => ({ _id: 'recipe1', __v: 5, isActive: true }));
   t.mock.method(recipeRepository, 'archiveById', async (id) => {
     archivedId = id;
     return { _id: id, isActive: false };
@@ -1819,7 +2263,7 @@ test('archiveRecipe sets isActive: false via the repository', async (t) => {
 });
 
 test('archiveRecipe throws RECIPE_NOT_FOUND when no document matches', async (t) => {
-  t.mock.method(recipeRepository, 'archiveById', async () => null);
+  t.mock.method(recipeRepository, 'findRawById', async () => null);
 
   await assert.rejects(
     () => recipeService.archiveRecipe('missing'),
@@ -1934,6 +2378,7 @@ test('updateRecipe stores complete nutrition with server-derived provenance unde
     sourceKind: 'jsonLd', sourceLabel: 'Schema.org Recipe JSON-LD', sourceUrl: 'https://example.com/adobo',
     acceptedBy: CHICKEN_ID, acceptedAt,
   });
+  assert.equal(mutation.update.$set.nutritionSourceUrlIsPublicHttps, true);
   assert.equal(mutation.update.$set.updatedBy, CHICKEN_ID);
   assert.equal(mutation.options.expectedUpdatedAt, updatedAt.toISOString());
 });
@@ -1955,6 +2400,7 @@ test('nutrition clearing removes public data and provenance atomically, while st
     nutrition: null, expectedUpdatedAt: updatedAt.toISOString(),
   }, { actorId: CHICKEN_ID });
   assert.deepEqual(mutation.update.$unset, { nutrition: '', nutritionProvenance: '' });
+  assert.equal(mutation.update.$set.nutritionSourceUrlIsPublicHttps, false);
 
   await assert.rejects(() => recipeService.updateRecipe('recipe1', {
     nutrition: null, expectedUpdatedAt: '2026-10-04T00:00:00.000Z',

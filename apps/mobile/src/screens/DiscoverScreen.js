@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { typography, spacing, radius } from '../theme/theme';
 import { useTheme } from '../theme/ThemeContext';
 import { useSearchHistory } from '../context/SearchHistoryContext';
+import { useAuth } from '../context/AuthContext';
 import TopBar from '../components/TopBar';
 import RecipeImage from '../components/RecipeImage';
 import FavoriteHeart from '../components/FavoriteHeart';
@@ -58,8 +59,8 @@ import useRecipeScreenRefresh from '../hooks/useRecipeScreenRefresh';
 //     `{ recipeSource:'api', recipeId, initialRecipe }`; the Dashboard handoff
 //     param `initialFilter` ('all' | 'easy' | 'vegetarian' | 'vegan') is still
 //     consumed on the already-mounted tab.
-//   - the navigation shell is untouched: this stays a root-stack destination
-//     with the shared `<TopBar mode="back">`; no PlusMenu or tab-arch port.
+//   - this stays a root-stack destination with the shared
+//     `<TopBar mode="back">`; no PlusMenu or tab-arch port.
 //
 // Teammate parts that do not map onto our real model, represented honestly:
 //   - the collapsible multi-group filter panel (Cooking Time / Difficulty /
@@ -117,7 +118,9 @@ function mergeById(prev, next) {
 export default function DiscoverScreen({ navigation, route }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
+  const { user } = useAuth();
   const { recentSearches, recordSearch, clearSearchHistory } = useSearchHistory();
+  const ownerKey = String(user?.id || '');
 
   // Seed from a Home shortcut param on first mount so Discover fetches the
   // right filter once, instead of fetching "all" and then re-fetching.
@@ -144,6 +147,7 @@ export default function DiscoverScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState(null);
+  const [rankingNotice, setRankingNotice] = useState(null);
 
   // One monotonic generation per filter/search change / refresh. A response
   // tagged with a superseded generation is dropped instead of mutating the list.
@@ -155,6 +159,8 @@ export default function DiscoverScreen({ navigation, route }) {
   const loadingMoreRef = useRef(false);
   const mountedRef = useRef(true);
   const recipesRef = useRef([]);
+  const ownerRef = useRef(ownerKey);
+  ownerRef.current = ownerKey;
 
   const invalidateForReplacement = useCallback(() => {
     genRef.current += 1;
@@ -217,11 +223,24 @@ export default function DiscoverScreen({ navigation, route }) {
 
   const loadFirstPage = useCallback(
     async ({ refresh = false } = {}) => {
+      const owner = ownerKey;
       const gen = ++genRef.current;
       firstPageGenRef.current = gen;
       loadingMoreRef.current = false;
       setLoadingMore(false);
       setMoreError(null);
+      if (appliedFilters.sort === 'relevance' && !debouncedSearch) {
+        recipesRef.current = [];
+        setRecipes([]);
+        setPagination(null);
+        setPageLoaded(0);
+        setRefreshing(false);
+        setPhase('ready');
+        setRankingNotice('Enter a search term to sort by Relevance.');
+        firstPageGenRef.current = null;
+        return;
+      }
+      setRankingNotice(null);
       if (refresh) {
         setRefreshing(true);
       } else {
@@ -234,7 +253,7 @@ export default function DiscoverScreen({ navigation, route }) {
       try {
         const snapshot = queryFor(1);
         const data = await listRecipes(snapshot);
-        if (!mountedRef.current || gen !== genRef.current) return;
+        if (!mountedRef.current || owner !== ownerRef.current || gen !== genRef.current) return;
         const nextRecipes = dedupeById(data.recipes);
         recipesRef.current = nextRecipes;
         setRecipes(nextRecipes);
@@ -243,17 +262,17 @@ export default function DiscoverScreen({ navigation, route }) {
         setError(null);
         setPhase('ready');
       } catch (err) {
-        if (!mountedRef.current || gen !== genRef.current) return;
+        if (!mountedRef.current || owner !== ownerRef.current || gen !== genRef.current) return;
         setError(getRecipeErrorMessage(err));
         setPhase(recipeCollectionPhaseAfterFailure(recipesRef.current, { background: refresh }));
       } finally {
         // A newer first-page request owns the guard once it replaces this
         // generation. Obsolete completion must never release that newer guard.
         if (firstPageGenRef.current === gen) firstPageGenRef.current = null;
-        if (mountedRef.current && gen === genRef.current) setRefreshing(false);
+        if (mountedRef.current && owner === ownerRef.current && gen === genRef.current) setRefreshing(false);
       }
     },
-    [queryFor]
+    [queryFor, appliedFilters.sort, debouncedSearch, ownerKey]
   );
 
   useEffect(() => {
@@ -271,12 +290,12 @@ export default function DiscoverScreen({ navigation, route }) {
     if (firstPageGenRef.current === genRef.current) return;
     if (loadingMoreRef.current) return;
     if (phase !== 'ready' || !pagination) return;
-    // Backend V1 behavior: the DB page is fetched BEFORE the non-admin "usable"
-    // filter, so a page can arrive SHORT and `total` can overcount. A short
-    // page is NOT terminal — page strictly against totalPages instead.
+    // Server totals and page boundaries already reflect the complete eligible
+    // result set. Continue strictly against authoritative totalPages.
     if (pageLoaded >= (pagination.totalPages || 0)) return;
 
     loadingMoreRef.current = true;
+    const owner = ownerRef.current;
     const gen = genRef.current;
     const nextPage = pageLoaded + 1;
     setLoadingMore(true);
@@ -284,18 +303,18 @@ export default function DiscoverScreen({ navigation, route }) {
     try {
       const snapshot = queryFor(nextPage);
       const data = await listRecipes(snapshot);
-      if (!mountedRef.current || gen !== genRef.current) return;
+      if (!mountedRef.current || owner !== ownerRef.current || gen !== genRef.current) return;
       setRecipes((prev) => mergeById(prev, data.recipes));
       setPagination(data.pagination);
       setPageLoaded(nextPage);
     } catch (err) {
-      if (!mountedRef.current || gen !== genRef.current) return;
+      if (!mountedRef.current || owner !== ownerRef.current || gen !== genRef.current) return;
       setMoreError(getRecipeErrorMessage(err));
     } finally {
       // A first-page load may have superseded this request and already reset
       // both load-more flags. Stale cleanup must not interfere with a newer
       // generation (including a later load-more request).
-      if (mountedRef.current && gen === genRef.current) {
+      if (mountedRef.current && owner === ownerRef.current && gen === genRef.current) {
         loadingMoreRef.current = false;
         setLoadingMore(false);
       }
@@ -334,6 +353,10 @@ export default function DiscoverScreen({ navigation, route }) {
   };
 
   const applyAdvancedFilters = (filters) => {
+    if (filters.sort === 'relevance' && !search.trim()) {
+      setRankingNotice('Enter a search term to sort by Relevance.');
+      return;
+    }
     invalidateForReplacement();
     setFiltersOpen(false);
     setAppliedFilters(filters);
@@ -376,6 +399,10 @@ export default function DiscoverScreen({ navigation, route }) {
 
   const changeSort = (sort) => {
     if (sort === appliedFilters.sort) return;
+    if (sort === 'relevance' && !search.trim()) {
+      setRankingNotice('Enter a search term to sort by Relevance.');
+      return;
+    }
     invalidateForReplacement();
     setAppliedFilters((current) => ({ ...current, sort }));
   };
@@ -447,6 +474,7 @@ export default function DiscoverScreen({ navigation, route }) {
         </View>
       );
     }
+    if (rankingNotice) return null;
     return (
       <View style={styles.centerBox}>
         <View style={styles.stateIcon}>
@@ -454,9 +482,9 @@ export default function DiscoverScreen({ navigation, route }) {
         </View>
         <Text style={styles.stateTitle}>Nothing matches</Text>
         <Text style={styles.stateMessage}>
-          {debouncedSearch
+          {rankingNotice || (debouncedSearch
             ? `No recipes match “${debouncedSearch}”.`
-            : 'No recipes match this filter yet.'}
+            : 'No recipes match this filter yet.')}
         </Text>
       </View>
     );
@@ -654,6 +682,11 @@ export default function DiscoverScreen({ navigation, route }) {
               );
             })}
           </View>
+          {rankingNotice && (
+            <Text style={styles.errorText} accessibilityLiveRegion="polite">
+              {rankingNotice}
+            </Text>
+          )}
         </View>
 
         <View style={styles.appliedSummary}>

@@ -10,6 +10,7 @@ import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import MainTabs from './MainTabs';
 import DiscoverScreen from '../screens/DiscoverScreen';
+import TrendingScreen from '../screens/TrendingScreen';
 import SavedScreen from '../screens/SavedScreen';
 import CollectionDetailScreen from '../screens/CollectionDetailScreen';
 import AssistantScreen from '../screens/AssistantScreen';
@@ -119,6 +120,7 @@ export default function RootNavigator() {
               warning.
             */}
             <Stack.Screen name="Discover" component={DiscoverScreen} />
+            <Stack.Screen name="Trending" component={TrendingScreen} />
             <Stack.Screen name="Saved" component={SavedScreen} />
             {/*
               CollectionDetail is Saved's real next screen (teammate "My

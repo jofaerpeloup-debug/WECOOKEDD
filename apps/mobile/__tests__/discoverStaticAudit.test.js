@@ -41,11 +41,11 @@ describe('MOBILE-DISC5 Search shell static contract', () => {
     expect(recipeService).not.toMatch(/\$expr|minimumTotalTime|maximumTotalTime/);
   });
 
-  it('keeps exactly the six supported sorts visible outside narrowing filters', () => {
+  it('keeps exactly the eight supported sorts visible outside narrowing filters', () => {
     expect(screen).toMatch(/DISCOVER_SORT_OPTIONS\.map/);
     expect(screen).toMatch(/accessibilityLabel=\{`Sort: \$\{option\.label\}`\}/);
     expect(panel).not.toMatch(/DISCOVER_SORT_OPTIONS|label="Sort"/);
-    expect(screen).not.toMatch(/rating|popularity|relevance|Trending|Top Rated|For You/);
+    expect(screen).not.toMatch(/popularity|trendingScore|For You/);
   });
 
   it('uses real server Recipe and canonical Ingredient authority', () => {
@@ -77,22 +77,24 @@ describe('MOBILE-DISC5 Search shell static contract', () => {
     expect(screen).toMatch(/const nextSemanticQuery = String\(value \|\| ''\)\.trim\(\)/);
     expect(screen).toMatch(/if \(nextSemanticQuery === currentSemanticQuery\)/);
     expect(screen).toMatch(/if \(nextSemanticQuery === debouncedSearch\)/);
-    expect(screen.match(/if \(!mountedRef\.current \|\| gen !== genRef\.current\) return/g).length).toBeGreaterThanOrEqual(3);
+    expect(screen).toMatch(/const \{ user \} = useAuth\(\)/);
+    expect(screen).toMatch(/const ownerKey = String\(user\?\.id \|\| ''\)/);
+    expect(screen.match(/if \(!mountedRef\.current \|\| owner !== ownerRef\.current \|\| gen !== genRef\.current\) return/g).length).toBeGreaterThanOrEqual(3);
   });
 
   it('guards the unmount continuation before isolated local state and exposes no shared effect', () => {
     const awaitIndex = screen.indexOf('const data = await listRecipes(snapshot);');
-    const continuationEnd = screen.indexOf('\n    [queryFor]', awaitIndex);
+    const continuationEnd = screen.indexOf('\n    [queryFor, appliedFilters.sort, debouncedSearch, ownerKey]', awaitIndex);
     expect(awaitIndex).toBeGreaterThan(-1);
     expect(continuationEnd).toBeGreaterThan(awaitIndex);
     const continuation = screen.slice(awaitIndex, continuationEnd);
     const mountedGuard = continuation.indexOf(
-      'if (!mountedRef.current || gen !== genRef.current) return;'
+      'if (!mountedRef.current || owner !== ownerRef.current || gen !== genRef.current) return;'
     );
     expect(mountedGuard).toBeGreaterThan(-1);
     expect(mountedGuard).toBeLessThan(continuation.indexOf('setRecipes(nextRecipes)'));
     expect(continuation).toMatch(
-      /if \(mountedRef\.current && gen === genRef\.current\) setRefreshing\(false\)/
+      /if \(mountedRef\.current && owner === ownerRef\.current && gen === genRef\.current\) setRefreshing\(false\)/
     );
     expect(continuation).not.toMatch(
       /navigation\.|recordSearch\(|clearSearchHistory\(|setTimeout\(|loadFirstPage\(|loadMore\(|api\./

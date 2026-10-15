@@ -65,6 +65,11 @@ jest.mock('../src/utils/recipeFreshnessState', () => ({
   recipeCollectionPhaseAfterFailure: jest.fn((recipes) => (recipes.length ? 'ready' : 'error')),
 }));
 
+let mockUser = { id: 'user-a' };
+jest.mock('../src/context/AuthContext', () => ({
+  useAuth: () => ({ user: mockUser }),
+}));
+
 const mockHistoryState = {
   recentSearches: [],
   recordSearch: jest.fn(),
@@ -147,6 +152,7 @@ async function resolveInitial(view, recipes = [recipe('catalog', 'Catalog')], to
 
 beforeEach(() => {
   jest.useFakeTimers();
+  mockUser = { id: 'user-a' };
   listRecipes.mockReset();
   ingredientApiGet.mockReset();
   ingredientApiGet.mockResolvedValue({
@@ -165,7 +171,7 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-it('renders the Search shell and six visible sort controls in the one list header', async () => {
+it('renders the Search shell and eight visible sort controls in the one list header', async () => {
   listRecipes.mockResolvedValueOnce(page([]));
   const { view } = renderSearch();
   await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
@@ -174,7 +180,48 @@ it('renders the Search shell and six visible sort controls in the one list heade
   for (const label of [
     'Sort: Title: A-Z', 'Sort: Title: Z-A', 'Sort: Newest added',
     'Sort: Oldest added', 'Sort: Prep time: low to high', 'Sort: Prep time: high to low',
+    'Sort: Relevance', 'Sort: Top Rated',
   ]) expect(view.getByLabelText(label)).toBeOnTheScreen();
+});
+
+it('prevents blank-query Relevance without substituting a different server sort', async () => {
+  listRecipes.mockResolvedValueOnce(page([]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.press(view.getByLabelText('Sort: Relevance'));
+  expect(view.getByText('Enter a search term to sort by Relevance.')).toBeOnTheScreen();
+  expect(listRecipes).toHaveBeenCalledTimes(1);
+  expect(view.getByLabelText('Sort: Title: A-Z').props.accessibilityState.selected).toBe(true);
+});
+
+it('sends current search, all filters, and Relevance in one authoritative request', async () => {
+  listRecipes.mockResolvedValue(page([]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.changeText(view.getByLabelText('Search recipes'), 'adobo');
+  await advance();
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({
+    search: 'adobo', sort: 'titleAsc', page: 1, limit: 20,
+  }));
+  fireEvent.press(view.getByLabelText('Sort: Relevance'));
+  await waitFor(() => expect(listRecipes).toHaveBeenLastCalledWith({
+    search: 'adobo', sort: 'relevance', page: 1, limit: 20,
+  }));
+});
+
+it('requests Top Rated and renders the server page without local reordering', async () => {
+  listRecipes
+    .mockResolvedValueOnce(page([]))
+    .mockResolvedValueOnce(page([recipe('low', 'Server First'), recipe('high', 'Server Second')]));
+  const { view } = renderSearch();
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+  fireEvent.press(view.getByLabelText('Sort: Top Rated'));
+  await view.findByText('Server First');
+  expect(listRecipes).toHaveBeenLastCalledWith({ sort: 'topRated', page: 1, limit: 20 });
+  const labels = view.UNSAFE_getAllByType('Pressable')
+    .map((node) => node.props.accessibilityLabel)
+    .filter((label) => label?.startsWith('Open Server'));
+  expect(labels).toEqual(['Open Server First', 'Open Server Second']);
 });
 
 it('keeps the initial blank-query owner when input changes only to whitespace', async () => {
@@ -625,6 +672,25 @@ it('records keyboard submission and opening a result, but typing alone does not'
   fireEvent.press(view.getByLabelText('Open Soup'));
   expect(mockHistoryState.recordSearch).toHaveBeenLastCalledWith('soup');
   expect(navigation.navigate).toHaveBeenCalledWith('RecipeDetail', expect.objectContaining({ recipeId: 's' }));
+});
+
+it('account change rejects the old first page and loads the new owner', async () => {
+  const oldRequest = deferred();
+  const newRequest = deferred();
+  listRecipes.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise);
+  const navigation = { navigate: jest.fn(), goBack: jest.fn(), setParams: jest.fn() };
+  const view = render(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(1));
+
+  mockUser = { id: 'user-b' };
+  view.rerender(<DiscoverScreen navigation={navigation} route={{ params: {} }} />);
+  await waitFor(() => expect(listRecipes).toHaveBeenCalledTimes(2));
+
+  await settle(newRequest, 'resolve', page([recipe('new-owner', 'New Owner')]));
+  expect(view.getByText('New Owner')).toBeOnTheScreen();
+  await settle(oldRequest, 'resolve', page([recipe('old-owner', 'Old Owner')]));
+  expect(view.queryByText('Old Owner')).toBeNull();
+  expect(view.getByText('New Owner')).toBeOnTheScreen();
 });
 
 it.each(['resolve', 'reject'])(

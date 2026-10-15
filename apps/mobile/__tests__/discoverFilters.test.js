@@ -203,7 +203,7 @@ describe('Discover filter normalization and server query projection', () => {
     ).toEqual({ sort: 'titleAsc', ingredientId: 'ingredient-1' });
   });
 
-  it('freezes the exact six consumer sorts and defaults invalid values', () => {
+  it('freezes the exact eight consumer sorts and defaults invalid values', () => {
     expect(DEFAULT_DISCOVER_SORT).toBe('titleAsc');
     expect(DISCOVER_SORT_OPTIONS).toEqual([
       { value: 'titleAsc', label: 'Title: A-Z' },
@@ -212,6 +212,8 @@ describe('Discover filter normalization and server query projection', () => {
       { value: 'oldest', label: 'Oldest added' },
       { value: 'prepTimeAsc', label: 'Prep time: low to high' },
       { value: 'prepTimeDesc', label: 'Prep time: high to low' },
+      { value: 'relevance', label: 'Relevance' },
+      { value: 'topRated', label: 'Top Rated' },
     ]);
     expect(normalizeDiscoverFilters({ sort: 'updatedDesc' })).toEqual({ sort: 'titleAsc' });
     expect(normalizeDiscoverFilters({ sort: 'rating' })).toEqual({ sort: 'titleAsc' });

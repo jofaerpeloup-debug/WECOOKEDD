@@ -44,7 +44,10 @@ export const RECIPE_UNITS = [
   'toTaste',
 ];
 
-export const RECIPE_SORTS = ['titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc', 'prepTimeDesc'];
+export const RECIPE_SORTS = [
+  'titleAsc', 'titleDesc', 'newest', 'oldest', 'prepTimeAsc',
+  'prepTimeDesc', 'relevance', 'topRated',
+];
 export const RECIPE_TOTAL_TIME_BUCKETS = ['under-15', '15-to-30', '31-to-60', 'over-60'];
 
 export const DISCOVER_SORT_OPTIONS = [
@@ -54,6 +57,8 @@ export const DISCOVER_SORT_OPTIONS = [
   { value: 'oldest', label: 'Oldest added' },
   { value: 'prepTimeAsc', label: 'Prep time: low to high' },
   { value: 'prepTimeDesc', label: 'Prep time: high to low' },
+  { value: 'relevance', label: 'Relevance' },
+  { value: 'topRated', label: 'Top Rated' },
 ];
 
 const DIFFICULTY_LABELS = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
