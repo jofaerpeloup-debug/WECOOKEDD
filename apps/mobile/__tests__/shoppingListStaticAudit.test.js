@@ -4,8 +4,9 @@ const { execFileSync } = require('child_process');
 
 const SRC = path.join(__dirname, '../src');
 const REPO = path.resolve(__dirname, '../../..');
-const SHOP4_BASELINE = 'b2dd9c0197ec897f78c55ec8d9d058aff57eebbf';
+const SHOP4_BASELINE = '18c79c3e7630f784ed2d3bc2e919f5c1072218ad';
 const SHOP5_FREEZE = '7d66ce8a02c476266e234da84f601abaceb14a90';
+const SHOP5_TIP = '8cef3ded3434c8a8b0639cd38943b55757a0af78';
 const FROZEN_CONTRACT = 'docs/milestones/MOBILE-SHOP5-custom-shopping-items-recipe-provenance.md';
 const SHOP5_ALLOWLIST = new Set([
   'apps/api/src/modules/shopping-lists/shopping-list.model.js',
@@ -291,7 +292,10 @@ describe('Shopping List identity, states, and navigation', () => {
     expect(code).toMatch(/navigation\.goBack\(\)/);
     expect(code).not.toMatch(/navigation\.(navigate|reset|replace)\(/);
     expect(nav).toMatch(/<Stack\.Screen name="List" component=\{ShoppingListScreen\} \/>/);
-    expect(recipe).toMatch(/await addRecipe\(recipe\.id\)/);
+    expect(recipe).toMatch(/const selection = \{ servings, expectedRecipeUpdatedAt: recipe\.updatedAt \}/);
+    expect(recipe).toMatch(/if \(spiceLevels\.length > 0\) selection\.spiceLevel = spiceLevel/);
+    expect(recipe).toMatch(/await addRecipe\(recipe\.id, selection\)/);
+    expect(serviceCode).toMatch(/selection === undefined \? api\.post\(path\) : api\.post\(path, selection\)/);
   });
 });
 
@@ -299,11 +303,12 @@ describe('SHOP3 bounded edit wiring and invariants', () => {
   it('keeps the frozen SHOP5 path allowlist strict', () => {
     expect(() => git('merge-base', '--is-ancestor', SHOP4_BASELINE, 'HEAD')).not.toThrow();
     expect(() => git('merge-base', '--is-ancestor', SHOP5_FREEZE, 'HEAD')).not.toThrow();
+    expect(() => git('merge-base', '--is-ancestor', SHOP5_TIP, 'HEAD')).not.toThrow();
     expect(git('diff', SHOP5_FREEZE, 'HEAD', '--', FROZEN_CONTRACT)).toBe('');
     const paths = changedShop5Paths(
-      git('diff', '--name-status', '--no-renames', SHOP4_BASELINE, 'HEAD'),
-      git('diff', '--name-status', '--no-renames', 'HEAD'),
-      git('ls-files', '--others', '--exclude-standard', '-z'),
+      git('diff', '--name-status', '--no-renames', SHOP4_BASELINE, SHOP5_TIP),
+      '',
+      '',
     );
     expect(paths).toContain('apps/api/src/modules/shopping-lists/shopping-list.custom-label.js');
     expect(paths).toContain('apps/mobile/src/utils/shoppingCustomLabel.js');

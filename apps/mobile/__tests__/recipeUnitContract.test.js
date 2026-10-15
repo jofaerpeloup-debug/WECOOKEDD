@@ -70,7 +70,7 @@ describe('canonical Recipe unit contract', () => {
     expect(formatter).toMatch(/const unit = entry\.unit \? unitLabel\(entry\.unit\) : ''/);
     expect(formatter).toMatch(/qtyText = \[qty, unit\]\.filter\(Boolean\)\.join\(' '\)/);
     expect(formatter).not.toMatch(/entry\.unit\s*===\s*['"](?:lb|oz)['"]/);
-    expect(dataPath).toMatch(/\(recipe\.ingredients \|\| \[\]\)[\s\S]*\.map\(\(entry\) => ingredientDisplayRow\(entry,/);
+    expect(dataPath).toMatch(/\(selectedIngredients \|\| \[\]\)[\s\S]*\.map\(\(entry\) => ingredientDisplayRow\(entry, \{ selectedServings: servings, baseServings \}\)\)/);
     expect(renderPath).toMatch(/ingredientRows\.map\(\(row, i\) =>/);
     expect(renderPath).toMatch(/\{row\.qtyText \? <Text style=\{styles\.ddIngredientQty\}>\{row\.qtyText\}<\/Text> : null\}/);
   });
