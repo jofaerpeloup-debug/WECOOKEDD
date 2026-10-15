@@ -8,6 +8,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -21,24 +22,35 @@ import SwipeToDelete from '../components/SwipeToDelete';
 import { formatQuantity } from '../utils/recipe';
 import { unitLabel } from '../api/recipeOptions';
 import { groupShoppingListItems } from '../utils/shoppingListGrouping';
+import { normalizeCustomLabel } from '../utils/shoppingCustomLabel';
 
 function itemPrimaryText(item) {
+  if (item.type === 'custom') return item.label;
   return item.ingredient?.name || 'Unavailable ingredient';
 }
 
 function itemAmountText(item) {
+  if (item.type === 'custom') return null;
   if (item.unit === 'toTaste') return 'to taste';
   const quantity = formatQuantity(item.quantity);
   const unit = item.unit ? unitLabel(item.unit) : '';
   return [quantity, unit].filter(Boolean).join(' ') || null;
 }
 
+function sourceText(source) {
+  if (!source || source.kind === 'legacy' || source.kind === 'manual') return null;
+  const label = source.kind === 'single' ? `Includes ${source.title}`
+    : source.kind === 'multiple' ? 'Includes multiple recipes' : 'Recipe source unavailable';
+  return label;
+}
+
 function ItemRow({ item, editing, disabled, pending, onToggle, onRemove, onEdit }) {
   const { colors } = useTheme();
   const styles = makeStyles(colors);
-  const available = item.isAvailable !== false && !!item.ingredient?.name;
+  const available = item.type === 'custom' || (item.isAvailable !== false && !!item.ingredient?.name);
   const primary = itemPrimaryText(item);
   const amount = itemAmountText(item);
+  const sourceLabel = item.type === 'ingredient' ? sourceText(item.source) : null;
   const actionLabel = editing
     ? `Remove ${primary}`
     : `${item.isChecked ? 'Uncheck' : 'Check'} ${primary}`;
@@ -82,9 +94,12 @@ function ItemRow({ item, editing, disabled, pending, onToggle, onRemove, onEdit 
           {primary}
         </Text>
         {!available ? <Text style={styles.unavailable}>No longer in the ingredient catalog</Text> : null}
+        {sourceLabel ? <Text style={styles.unavailable}>{sourceLabel}</Text> : null}
+        {sourceLabel && item.source.quantityEdited
+          ? <Text style={styles.unavailable}>Amount manually adjusted or mixed</Text> : null}
       </View>
       {amount ? <Text style={styles.qty}>{amount}</Text> : null}
-      {!editing && available ? (
+      {!editing && available && item.type === 'ingredient' ? (
         <Pressable
           style={styles.editItemButton}
           onPress={onEdit}
@@ -107,6 +122,7 @@ export default function ShoppingListScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const {
     items,
+    sessionKey,
     status,
     error,
     isInitializing,
@@ -114,6 +130,7 @@ export default function ShoppingListScreen({ navigation }) {
     isItemPending,
     reload,
     addItem,
+    addCustomItem,
     updateItem,
     setChecked,
     removeItem,
@@ -125,10 +142,23 @@ export default function ShoppingListScreen({ navigation }) {
   const [editing, setEditing] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [selectedEditItem, setSelectedEditItem] = useState(null);
+  const [customDraft, setCustomDraft] = useState('');
+  const [customError, setCustomError] = useState(null);
+  const [customSubmitting, setCustomSubmitting] = useState(false);
+  const customSubmitLock = useRef(false);
+  const customSessionRef = useRef(sessionKey);
+  customSessionRef.current = sessionKey;
   const mountedRef = useRef(true);
   const focusRef = useRef(0);
   const focusedRef = useRef(false);
   const checkedCount = items.filter((item) => item.isChecked === true).length;
+
+  useEffect(() => {
+    setCustomDraft('');
+    setCustomError(null);
+    setCustomSubmitting(false);
+    customSubmitLock.current = false;
+  }, [sessionKey]);
   const clearCheckedLabel = `Clear ${checkedCount} checked ${checkedCount === 1 ? 'item' : 'items'}`;
 
   useFocusEffect(
@@ -158,7 +188,7 @@ export default function ShoppingListScreen({ navigation }) {
   useEffect(() => {
     if (!selectedEditItem) return;
     const current = items.find((item) => item.id === selectedEditItem.id);
-    if (!current || current.isAvailable === false || !current.ingredient) {
+    if (!current || current.type === 'custom' || current.isAvailable === false || !current.ingredient) {
       setSelectedEditItem(null);
     }
   }, [items, selectedEditItem]);
@@ -174,7 +204,7 @@ export default function ShoppingListScreen({ navigation }) {
 
   const onToggle = useCallback(async (item) => {
     const focus = focusRef.current;
-    const result = await setChecked(item.id, !item.isChecked);
+    const result = await setChecked(item.id, !item.isChecked, item.type);
     if (!result.ok && result.error && mayAlert(focus)) Alert.alert('Could not update item', result.error);
   }, [mayAlert, setChecked]);
 
@@ -204,6 +234,30 @@ export default function ShoppingListScreen({ navigation }) {
       },
     ]);
   }, [clear]);
+
+  const onAddCustom = useCallback(async () => {
+    if (customSubmitLock.current || isMutating) return;
+    const label = normalizeCustomLabel(customDraft);
+    if (label === null) {
+      setCustomError('Enter a visible item name of 1 to 80 characters.');
+      return;
+    }
+    const session = sessionKey;
+    customSubmitLock.current = true;
+    setCustomSubmitting(true);
+    setCustomError(null);
+    try {
+      const result = await addCustomItem(label);
+      if (!mountedRef.current || session !== customSessionRef.current) return;
+      if (result.ok) setCustomDraft('');
+      else if (!result.superseded) setCustomError(result.error || 'Could not add custom item.');
+    } finally {
+      if (mountedRef.current && session === customSessionRef.current) {
+        customSubmitLock.current = false;
+        setCustomSubmitting(false);
+      }
+    }
+  }, [addCustomItem, customDraft, isMutating, sessionKey]);
 
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
@@ -313,6 +367,31 @@ export default function ShoppingListScreen({ navigation }) {
           />
         }
       >
+        <View style={styles.customEntry}>
+          <Text style={styles.groupLabel} accessibilityRole="header">Add Custom Item</Text>
+          <View style={styles.customEntryRow}>
+            <TextInput
+              style={styles.customInput}
+              value={customDraft}
+              onChangeText={(value) => { setCustomDraft(value); setCustomError(null); }}
+              placeholder="Add a custom item"
+              placeholderTextColor={colors.inkFaint}
+              accessibilityLabel="Custom item name"
+              editable={!customSubmitting}
+              returnKeyType="done"
+              onSubmitEditing={onAddCustom}
+            />
+            <Pressable
+              style={styles.customAdd}
+              onPress={onAddCustom}
+              disabled={isMutating || customSubmitting}
+              accessibilityRole="button"
+              accessibilityLabel="Add custom item"
+              accessibilityState={{ disabled: isMutating || customSubmitting, busy: customSubmitting }}
+            ><Text style={styles.customAddText}>Add</Text></Pressable>
+          </View>
+          {customError ? <Text style={styles.customError} accessibilityRole="alert">{customError}</Text> : null}
+        </View>
         {error && items.length > 0 ? (
           <Pressable
             style={styles.inlineBanner}
@@ -330,7 +409,7 @@ export default function ShoppingListScreen({ navigation }) {
             <Ionicons name="cart-outline" size={28} color={colors.inkFaint} />
             <Text style={styles.emptyTitle}>Your shopping list is empty</Text>
             <Text style={styles.emptyText}>
-              Add a catalog ingredient below, or add ingredients from a recipe.
+              Add a custom item above, a catalog ingredient below, or ingredients from a recipe.
             </Text>
           </View>
         ) : (
@@ -436,6 +515,15 @@ function makeStyles(colors) {
     },
     inlineBannerText: { flex: 1, fontFamily: typography.body.medium, fontSize: typography.sizes.xs, color: colors.error },
     group: { marginBottom: spacing.lg },
+    customEntry: { marginBottom: spacing.lg },
+    customEntryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    customInput: { flex: 1, minHeight: 48, paddingHorizontal: spacing.md, borderWidth: 1,
+      borderColor: colors.hairline, borderRadius: radius.md, backgroundColor: colors.paper,
+      color: colors.ink, fontFamily: typography.body.fontFamily },
+    customAdd: { minHeight: 48, paddingHorizontal: spacing.lg, justifyContent: 'center',
+      borderRadius: radius.md, backgroundColor: colors.sageDeep },
+    customAddText: { color: colors.onAccent, fontFamily: typography.body.semibold },
+    customError: { color: colors.error, marginTop: spacing.xs, fontFamily: typography.body.fontFamily },
     groupLabel: {
       fontFamily: typography.body.bold, fontSize: 11.5, letterSpacing: 1.1,
       textTransform: 'uppercase', color: colors.inkFaint, marginBottom: spacing.xs,

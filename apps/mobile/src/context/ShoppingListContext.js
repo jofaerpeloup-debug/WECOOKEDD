@@ -92,7 +92,7 @@ export function ShoppingListProvider({ children }) {
   // 'idle' (no session) | 'loading' (initial load) | 'ready' | 'error' (initial load failed, nothing to show)
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState(null);
-  // { type: 'addItem' | 'addRecipe' | 'updateItem' | 'setChecked' | 'removeItem' | 'clearChecked' | 'clear', itemId?: string } | null
+  // { type: 'addItem' | 'addCustomItem' | 'addRecipe' | 'updateItem' | 'setChecked' | 'removeItem' | 'clearChecked' | 'clear', itemId?: string } | null
   const [pendingAction, setPendingAction] = useState(null);
   const [reconciliationRequired, setReconciliationRequired] = useState(false);
 
@@ -105,6 +105,7 @@ export function ShoppingListProvider({ children }) {
   const statusRef = useRef(status);
   const authUserIdRef = useRef(authUserId);
   const reconciliationRequiredRef = useRef(false);
+  const capabilityRef = useRef(false);
 
   useEffect(() => {
     statusRef.current = status;
@@ -128,6 +129,7 @@ export function ShoppingListProvider({ children }) {
     try {
       const fresh = await shoppingListService.getShoppingList();
       if (stale()) return;
+      capabilityRef.current = true;
       setList(normalizeList(fresh));
       reconciliationRequiredRef.current = false;
       setReconciliationRequired(false);
@@ -135,6 +137,7 @@ export function ShoppingListProvider({ children }) {
       setStatus('ready');
       statusRef.current = 'ready';
     } catch (err) {
+      if (session === sessionRef.current && mountedRef.current) capabilityRef.current = false;
       if (stale()) return;
       const message = getShoppingListErrorMessage(err);
       if (statusRef.current === 'ready') {
@@ -166,6 +169,7 @@ export function ShoppingListProvider({ children }) {
     // Clear the previous session's state before any load starts. The render
     // before this effect runs is covered by the `trusted` gate further down.
     mutatingRef.current = false;
+    capabilityRef.current = false;
     reconciliationRequiredRef.current = false;
     setList(null);
     setPendingAction(null);
@@ -213,6 +217,7 @@ export function ShoppingListProvider({ children }) {
     try {
       const fresh = await shoppingListService.getShoppingList();
       if (stale()) return { ok: false, superseded: true };
+      capabilityRef.current = true;
       setList(normalizeList(fresh));
       reconciliationRequiredRef.current = false;
       setReconciliationRequired(false);
@@ -221,6 +226,7 @@ export function ShoppingListProvider({ children }) {
       statusRef.current = 'ready';
       return { ok: true };
     } catch (err) {
+      if (session === sessionRef.current && mountedRef.current) capabilityRef.current = false;
       if (stale()) return { ok: false, superseded: true };
       const message = getShoppingListErrorMessage(err);
       reconciliationRequiredRef.current = true;
@@ -237,6 +243,9 @@ export function ShoppingListProvider({ children }) {
     async (action, fn, { destructive = false, idempotentDelete = false } = {}) => {
       if (!authUserIdRef.current) {
         return { ok: false, error: 'Your session has expired. Please log in again.' };
+      }
+      if (!capabilityRef.current) {
+        return { ok: false, error: 'Refresh your shopping list before making another change.' };
       }
       if (reconciliationRequiredRef.current) {
         return { ok: false, error: 'Refresh your shopping list before making another change.' };
@@ -319,6 +328,11 @@ export function ShoppingListProvider({ children }) {
     [runMutation]
   );
 
+  const addCustomItem = useCallback(
+    (label) => runMutation({ type: 'addCustomItem' }, () => shoppingListService.addCustomItem(label)),
+    [runMutation]
+  );
+
   const addRecipe = useCallback(
     (recipeId) =>
       runMutation({ type: 'addRecipe', recipeId }, () => shoppingListService.addRecipe(recipeId)),
@@ -326,9 +340,9 @@ export function ShoppingListProvider({ children }) {
   );
 
   const setChecked = useCallback(
-    (itemId, isChecked) =>
+    (itemId, isChecked, type = 'ingredient') =>
       runMutation({ type: 'setChecked', itemId }, () =>
-        shoppingListService.updateItem(itemId, { isChecked })
+        shoppingListService.updateItem(itemId, { type, isChecked })
       ),
     [runMutation]
   );
@@ -336,7 +350,7 @@ export function ShoppingListProvider({ children }) {
   const updateItem = useCallback(
     (itemId, { quantity, unit }) =>
       runMutation({ type: 'updateItem', itemId }, () =>
-        shoppingListService.updateItem(itemId, { quantity, unit })
+        shoppingListService.updateItem(itemId, { type: 'ingredient', quantity, unit })
       ),
     [runMutation]
   );
@@ -393,6 +407,7 @@ export function ShoppingListProvider({ children }) {
   const value = useMemo(
     () => ({
       list: trusted ? list : null,
+      sessionKey: trusted ? authSessionKey : null,
       items,
       status: effectiveStatus, // 'idle' | 'loading' | 'ready' | 'error'
       error: trusted ? error : null,
@@ -403,6 +418,7 @@ export function ShoppingListProvider({ children }) {
       isItemPending,
       reload,
       addItem,
+      addCustomItem,
       addRecipe,
       updateItem,
       setChecked,
@@ -413,6 +429,7 @@ export function ShoppingListProvider({ children }) {
     [
       trusted,
       list,
+      authSessionKey,
       items,
       effectiveStatus,
       error,
@@ -421,6 +438,7 @@ export function ShoppingListProvider({ children }) {
       isItemPending,
       reload,
       addItem,
+      addCustomItem,
       addRecipe,
       updateItem,
       setChecked,

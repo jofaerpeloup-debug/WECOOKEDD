@@ -4,6 +4,7 @@ const recipeService = require('../recipes/recipe.service');
 const ShoppingList = require('./shopping-list.model');
 const { isPositiveFiniteNumber } = require('../../shared/constants/measurement-units');
 const { AppError } = require('../../shared/errors/app-error');
+const { normalizeCustomLabel } = require('./shopping-list.custom-label');
 
 function ingredientNotFoundError() {
   return new AppError('Ingredient not found.', { statusCode: 404, code: 'INGREDIENT_NOT_FOUND' });
@@ -64,8 +65,9 @@ async function saveOrThrowStale(list) {
   }
 }
 
-async function saveAdditiveWithOneRetry(userId, list, applyPayload) {
+async function saveAdditiveWithOneRetry(userId, list, applyPayload, v2 = false) {
   try {
+    list.markModified('items');
     await shoppingListRepository.save(list);
     return list;
   } catch (err) {
@@ -73,8 +75,12 @@ async function saveAdditiveWithOneRetry(userId, list, applyPayload) {
   }
 
   const latest = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(latest);
+  if (!v2) assertV1Compatible(latest);
   applyPayload(latest);
   assertWithinLimit(latest.items);
+  assertProvenanceBounds(latest.items);
+  latest.markModified('items');
   await saveOrThrowStale(latest);
   return latest;
 }
@@ -98,7 +104,8 @@ function isValidQuantityForUnit(quantity, unit) {
 }
 
 function findItemIndex(items, ingredientId, unit) {
-  return items.findIndex((item) => String(item.ingredientId) === String(ingredientId) && item.unit === unit);
+  return items.findIndex((item) => item.type !== 'custom'
+    && String(item.ingredientId) === String(ingredientId) && item.unit === unit);
 }
 
 // Adds one ingredient usage into `items` (a live Mongoose DocumentArray),
@@ -109,17 +116,74 @@ function findItemIndex(items, ingredientId, unit) {
 // ingredient is a no-op merge beyond the isChecked reset. Mutates `items`
 // in place; callers are responsible for enforcing the item-count limit and
 // persisting afterward.
-function mergeItemInto(items, { ingredientId, quantity, unit }) {
+function mergeItemInto(items, { ingredientId, quantity, unit, recipeId }) {
   const index = findItemIndex(items, ingredientId, unit);
   if (index === -1) {
-    items.push({ ingredientId, quantity: unit === 'toTaste' ? undefined : quantity, unit, isChecked: false });
+    items.push({ type: 'ingredient', ingredientId,
+      quantity: unit === 'toTaste' ? undefined : quantity, unit, isChecked: false,
+      originKind: recipeId ? 'recipe' : 'manual',
+      ...(recipeId ? { sourceRecipeIds: [recipeId], quantityEdited: false } : {}),
+    });
     return;
   }
   const existing = items[index];
+  if (recipeId) {
+    const sources = existing.sourceRecipeIds || [];
+    if (!sources.some((id) => String(id) === String(recipeId))) sources.push(recipeId);
+    existing.sourceRecipeIds = sources;
+    existing.quantityEdited = existing.originKind !== 'recipe' || existing.quantityEdited === true;
+    existing.originKind = 'recipe';
+  } else if (existing.sourceRecipeIds?.length) {
+    existing.quantityEdited = true;
+  }
   if (unit !== 'toTaste') {
     existing.quantity = (existing.quantity ?? 0) + quantity;
   }
   existing.isChecked = false;
+}
+
+function assertV1Compatible(list) {
+  if (list.items.some((item) => item.type === 'custom')) {
+    throw new AppError('Update WeCooked to use this shopping list.', {
+      statusCode: 426, code: 'SHOPPING_LIST_UPGRADE_REQUIRED',
+    });
+  }
+}
+
+function assertProvenanceBounds(items) {
+  const all = new Set();
+  for (const item of items) {
+    if (item.type === 'custom') continue;
+    const ids = item.sourceRecipeIds || [];
+    if (ids.length > 8 || new Set(ids.map(String)).size !== ids.length) {
+      throw new AppError('Shopping list Recipe source limit exceeded.', {
+        statusCode: 400, code: 'SHOPPING_LIST_SOURCE_LIMIT_EXCEEDED',
+      });
+    }
+    ids.forEach((id) => all.add(String(id)));
+  }
+  if (all.size > 200) {
+    throw new AppError('Shopping list Recipe source limit exceeded.', {
+      statusCode: 400, code: 'SHOPPING_LIST_SOURCE_LIMIT_EXCEEDED',
+    });
+  }
+  return [...all];
+}
+
+function assertListIntegrity(list) {
+  if (list.$locals?.shoppingStoredItemsArray === false
+    || !Array.isArray(list.items) || list.items.length > ShoppingList.MAX_ITEMS) {
+    throw new AppError('Shopping list requires repair.', { statusCode: 500, code: 'SHOPPING_LIST_INVALID' });
+  }
+  for (const item of list.items) {
+    if (item.$locals?.shoppingStoredShapeValid === false
+      || !ShoppingList.isValidShoppingRow(item.toObject({ depopulate: true }))) {
+      throw new AppError('Shopping list requires repair.', { statusCode: 500, code: 'SHOPPING_LIST_INVALID' });
+    }
+  }
+  try { assertProvenanceBounds(list.items); } catch (_err) {
+    throw new AppError('Shopping list requires repair.', { statusCode: 500, code: 'SHOPPING_LIST_INVALID' });
+  }
 }
 
 function assertWithinLimit(items) {
@@ -135,37 +199,58 @@ function assertWithinLimit(items) {
 // resolves to a document with isActive: false — the serializer treats both
 // as "not available" while still reporting the historical ingredientId.
 async function resolveIngredientsById(list) {
-  const uniqueIds = [...new Set(list.items.map((item) => String(item.ingredientId)))];
+  const uniqueIds = [...new Set(list.items.filter((item) => item.type !== 'custom')
+    .map((item) => String(item.ingredientId)))];
   const found = await Promise.all(uniqueIds.map((id) => ingredientService.findIngredientById(id)));
   const map = new Map();
   uniqueIds.forEach((id, index) => map.set(id, found[index] ?? null));
   return map;
 }
 
-async function toResult(list) {
+async function toResult(list, v2 = false) {
   const ingredientsById = await resolveIngredientsById(list);
-  return { shoppingList: list, ingredientsById };
+  const sourcesById = v2
+    ? await recipeService.findConsumerVisibleShoppingSources(assertProvenanceBounds(list.items))
+    : null;
+  return { shoppingList: list, ingredientsById, sourcesById };
 }
 
-async function getShoppingList(userId) {
+async function getShoppingList(userId, v2 = false) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
-  return toResult(list);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
+  return toResult(list, v2);
 }
 
 // New items may only reference active Ingredients; merging follows the
 // same ingredientId+unit key used everywhere else in this module.
-async function addItem(userId, { ingredientId, quantity, unit }) {
-  await assertActiveIngredient(ingredientId);
-
+async function addItem(userId, { ingredientId, quantity, unit }, v2 = false) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
+  await assertActiveIngredient(ingredientId);
   const applyPayload = (target) => {
     mergeItemInto(target.items, { ingredientId, quantity, unit });
     assertWithinLimit(target.items);
   };
   applyPayload(list);
 
-  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload);
-  return toResult(saved);
+  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload, v2);
+  return toResult(saved, v2);
+}
+
+async function addCustomItem(userId, { label }) {
+  const normalized = normalizeCustomLabel(label);
+  if (normalized === null) throw invalidQuantityError('Invalid custom item label.');
+  const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  const applyPayload = (target) => {
+    target.items.push({ type: 'custom', label: normalized, isChecked: false });
+    assertWithinLimit(target.items);
+  };
+  applyPayload(list);
+  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload, true);
+  return toResult(saved, true);
 }
 
 // Strict/partial: validates the resulting prospective item (not merely each
@@ -174,11 +259,23 @@ async function addItem(userId, { ingredientId, quantity, unit }) {
 // quantity to be null/omitted; switching away from it requires a positive
 // quantity to be supplied in the same request — a stale stored value from
 // the other shape is never silently carried over or cleared.
-async function patchItem(userId, itemId, patch) {
+async function patchItem(userId, itemId, patch, v2 = false) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
   const item = list.items.id(itemId);
   if (!item) {
     throw itemNotFoundError();
+  }
+
+  if (v2 && patch.type !== (item.type || 'ingredient')) {
+    throw invalidQuantityError('Shopping list item type does not match.');
+  }
+  if (item.type === 'custom') {
+    item.isChecked = patch.isChecked;
+    list.markModified('items');
+    await saveOrThrowStale(list);
+    return toResult(list, true);
   }
 
   const nextUnit = patch.unit ?? item.unit;
@@ -204,19 +301,25 @@ async function patchItem(userId, itemId, patch) {
 
   item.unit = nextUnit;
   item.quantity = nextUnit === 'toTaste' ? undefined : nextQuantity;
+  if ((patch.quantity !== undefined || patch.unit !== undefined) && item.sourceRecipeIds?.length) {
+    item.quantityEdited = true;
+  }
   if (patch.isChecked !== undefined) {
     item.isChecked = patch.isChecked;
   }
 
+  list.markModified('items');
   await saveOrThrowStale(list);
-  return toResult(list);
+  return toResult(list, v2);
 }
 
 // The user must still be able to remove a stale item even if its
 // Ingredient has since become archived/missing — this never calls
 // IngredientService.
-async function removeItem(userId, itemId) {
+async function removeItem(userId, itemId, v2 = false) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
   const item = list.items.id(itemId);
   if (!item) {
     throw itemNotFoundError();
@@ -224,11 +327,13 @@ async function removeItem(userId, itemId) {
 
   item.deleteOne();
   await saveOrThrowStale(list);
-  return toResult(list);
+  return toResult(list, v2);
 }
 
-async function clearCheckedItems(userId) {
+async function clearCheckedItems(userId, v2 = false) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
   const checkedIds = list.items
     .filter((item) => item.isChecked === true)
     .map((item) => String(item._id));
@@ -240,20 +345,23 @@ async function clearCheckedItems(userId) {
     // a mutation committed before that update becomes SHOPPING_LIST_STALE.
     list.markModified('items');
     await saveOrThrowStale(list);
-    return toResult(list);
+    return toResult(list, v2);
   }
 
   const checkedIdSet = new Set(checkedIds);
   list.items = list.items.filter((item) => !checkedIdSet.has(String(item._id)));
   await saveOrThrowStale(list);
-  return toResult(list);
+  return toResult(list, v2);
 }
 
-async function clearItems(userId) {
+async function clearItems(userId, v2 = false) {
   const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
   list.items = [];
+  list.markModified('items');
   await saveOrThrowStale(list);
-  return toResult(list);
+  return toResult(list, v2);
 }
 
 // Convenience import: merges every currently-usable ingredient usage from
@@ -263,32 +371,37 @@ async function clearItems(userId) {
 // RecipeService already omits from its own non-admin view never reappears
 // here. Applies every usage to the single ShoppingList document and saves
 // it once — no transaction needed since it's one document.
-async function addRecipeIngredients(userId, recipeId) {
+async function addRecipeIngredients(userId, recipeId, v2 = false) {
+  const list = await shoppingListRepository.findOrCreateByUserId(userId);
+  assertListIntegrity(list);
+  if (!v2) assertV1Compatible(list);
   const recipe = await recipeService.findUsableRecipeById(recipeId);
   if (!recipe) {
     throw recipeNotFoundError();
   }
 
-  const list = await shoppingListRepository.findOrCreateByUserId(userId);
   const applyPayload = (target) => {
     for (const usage of recipe.ingredients) {
       mergeItemInto(target.items, {
         ingredientId: usage.ingredient.id,
         quantity: usage.quantity,
         unit: usage.unit,
+        recipeId,
       });
     }
     assertWithinLimit(target.items);
+    assertProvenanceBounds(target.items);
   };
   applyPayload(list);
 
-  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload);
-  return toResult(saved);
+  const saved = await saveAdditiveWithOneRetry(userId, list, applyPayload, v2);
+  return toResult(saved, v2);
 }
 
 module.exports = {
   getShoppingList,
   addItem,
+  addCustomItem,
   patchItem,
   removeItem,
   clearCheckedItems,

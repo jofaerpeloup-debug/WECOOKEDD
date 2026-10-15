@@ -35,4 +35,25 @@ function toPublicShoppingList({ shoppingList, ingredientsById }) {
   };
 }
 
-module.exports = { toPublicShoppingList };
+function toSource(item, sourcesById) {
+  const ids = item.sourceRecipeIds || [];
+  if (ids.length === 0) return { kind: item.originKind === 'manual' ? 'manual' : 'legacy' };
+  const quantityEdited = item.quantityEdited;
+  const visible = ids.map((id) => sourcesById.get(String(id)));
+  if (visible.some((source) => !source)) return { kind: 'unavailable', quantityEdited };
+  if (visible.length > 1) return { kind: 'multiple', quantityEdited };
+  return { kind: 'single', title: visible[0].title, quantityEdited };
+}
+
+function toPublicShoppingListV2({ shoppingList, ingredientsById, sourcesById }) {
+  return {
+    id: String(shoppingList._id),
+    items: shoppingList.items.map((item) => item.type === 'custom'
+      ? { id: String(item._id), type: 'custom', label: item.label, isChecked: item.isChecked }
+      : { ...toItemSummary(item, ingredientsById), type: 'ingredient', source: toSource(item, sourcesById) }),
+    createdAt: shoppingList.createdAt,
+    updatedAt: shoppingList.updatedAt,
+  };
+}
+
+module.exports = { toPublicShoppingList, toPublicShoppingListV2 };

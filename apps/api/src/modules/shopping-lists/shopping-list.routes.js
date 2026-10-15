@@ -7,9 +7,22 @@ const {
   recipeParamsSchema,
   createItemSchema,
   patchItemSchema,
+  v2GetSchema,
+  v2ItemParamsSchema,
+  v2RecipeParamsSchema,
+  v2CreateItemSchema,
+  v2PatchItemSchema,
 } = require('./shopping-list.validation');
 
 const router = Router();
+
+router.get('/v2', authenticate, validate(v2GetSchema), shoppingListController.getShoppingListV2);
+router.post('/v2/items', authenticate, validate(v2CreateItemSchema), shoppingListController.addItemV2);
+router.patch('/v2/items/:itemId', authenticate, validate(v2PatchItemSchema), shoppingListController.patchItemV2);
+router.delete('/v2/items/checked', authenticate, validate(v2GetSchema), shoppingListController.clearCheckedItemsV2);
+router.delete('/v2/items/:itemId', authenticate, validate(v2ItemParamsSchema), shoppingListController.removeItemV2);
+router.delete('/v2/items', authenticate, validate(v2GetSchema), shoppingListController.clearItemsV2);
+router.post('/v2/recipes/:recipeId', authenticate, validate(v2RecipeParamsSchema), shoppingListController.addRecipeIngredientsV2);
 
 router.get('/', authenticate, shoppingListController.getShoppingList);
 router.post('/items', authenticate, validate(createItemSchema), shoppingListController.addItem);

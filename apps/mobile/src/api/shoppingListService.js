@@ -19,13 +19,13 @@
 // hold current server state (merge results are otherwise not derivable from the
 // request alone).
 //
-// Contract reference: docs/architecture/favorites-shopping-list.md and
-// docs/architecture/mobile-shopping-list-integration.md. Zero Firestore
-// involvement.
+// Contract reference: docs/milestones/MOBILE-SHOP5-custom-shopping-items-recipe-provenance.md.
+// Zero Firestore involvement.
 
 import { INGREDIENT_CATEGORIES } from '@wecooked/contracts';
 import { ApiError, api } from './client';
 import { RECIPE_UNITS } from './recipeOptions';
+import { normalizeCustomLabel } from '../utils/shoppingCustomLabel';
 
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 const CATEGORIES = new Set(INGREDIENT_CATEGORIES);
@@ -67,11 +67,29 @@ function validIngredient(value, ingredientId) {
     && value.name.length > 0;
 }
 
+function validSource(source) {
+  if (!record(source)) return false;
+  if (source.kind === 'legacy' || source.kind === 'manual') return exact(source, ['kind']);
+  if (source.kind === 'single') return exact(source, ['kind', 'title', 'quantityEdited'])
+    && typeof source.title === 'string' && source.title.trim().length > 0
+    && typeof source.quantityEdited === 'boolean';
+  if (source.kind === 'multiple' || source.kind === 'unavailable') {
+    return exact(source, ['kind', 'quantityEdited']) && typeof source.quantityEdited === 'boolean';
+  }
+  return false;
+}
+
 function validItem(item) {
+  if (item?.type === 'custom') {
+    return exact(item, ['id', 'type', 'label', 'isChecked'])
+      && objectId(item.id) && typeof item.isChecked === 'boolean'
+      && normalizeCustomLabel(item.label) === item.label;
+  }
   if (!exact(item, [
     'id', 'ingredient', 'ingredientId', 'isAvailable', 'category',
-    'quantity', 'unit', 'isChecked',
+    'quantity', 'unit', 'isChecked', 'type', 'source',
   ])
+    || item.type !== 'ingredient' || !validSource(item.source)
     || !objectId(item.id)
     || !objectId(item.ingredientId)
     || typeof item.isAvailable !== 'boolean'
@@ -93,12 +111,13 @@ function validItem(item) {
 
 export function parseShoppingListResponse(data) {
   const list = data?.shoppingList;
-  if (!exact(data, ['shoppingList'])
+  if (!exact(data, ['shoppingListFormat', 'shoppingList']) || data.shoppingListFormat !== 2
     || !exact(list, ['id', 'items', 'createdAt', 'updatedAt'])
     || !objectId(list.id)
     || !Array.isArray(list.items)
+    || list.items.length > 200
     || !list.items.every(validItem)
-    || new Set(list.items.map((item) => item.id)).size !== list.items.length
+    || new Set(list.items.map((item) => item.id.toLowerCase())).size !== list.items.length
     || !timestamp(list.createdAt)
     || !timestamp(list.updatedAt)) {
     throw invalidResponse();
@@ -107,7 +126,7 @@ export function parseShoppingListResponse(data) {
 }
 
 /**
- * GET /api/v1/shopping-list
+ * GET /api/v1/shopping-list/v2
  * Lazily creates (upserts) the caller's single list server-side, so a brand-new
  * user gets `200` with `items: []` — never a 404, and no create call is needed.
  * @returns {Promise<{ id: string|null, items: object[], createdAt: string|null, updatedAt: string|null }>}
@@ -115,11 +134,18 @@ export function parseShoppingListResponse(data) {
  *   quantity: number|null, unit, isChecked }`.
  */
 export function getShoppingList() {
-  return api.get('/shopping-list').then(parseShoppingListResponse);
+  return api.get('/shopping-list/v2').then(parseShoppingListResponse).catch((err) => {
+    if (err instanceof ApiError && err.status === 404 && err.code === 'ROUTE_NOT_FOUND') {
+      throw new ApiError('Update WeCooked server to use this shopping list.', {
+        kind: 'api', status: 426, code: 'SHOPPING_LIST_SERVER_UPGRADE_REQUIRED',
+      });
+    }
+    throw err;
+  });
 }
 
 /**
- * POST /api/v1/shopping-list/recipes/:recipeId
+ * POST /api/v1/shopping-list/v2/recipes/:recipeId
  * Imports a recipe's currently-usable ingredient usages (incl. active optional
  * ones) into the caller's list, merged by `ingredientId` + exact `unit`.
  * NO body, NO multiplier, NO servings parameter — the backend uses the recipe's
@@ -131,15 +157,14 @@ export function getShoppingList() {
  *   - SHOPPING_LIST_LIMIT_EXCEEDED (400) — post-merge count would exceed 200
  */
 export function addRecipe(recipeId) {
-  return api.post(`/shopping-list/recipes/${encodeURIComponent(recipeId)}`).then(parseShoppingListResponse);
+  return api.post(`/shopping-list/v2/recipes/${encodeURIComponent(recipeId)}`).then(parseShoppingListResponse);
 }
 
 /**
- * POST /api/v1/shopping-list/items
+ * POST /api/v1/shopping-list/v2/items
  * Adds ONE canonical ingredient to the caller's list, merged by
  * `ingredientId` + exact `unit` (same key as recipe import). The ingredient
- * id MUST come from the canonical Ingredient API — there are no free-text or
- * local-only items.
+ * id MUST come from the canonical Ingredient API; custom rows use addCustomItem.
  *
  * Body contract (createItemSchema, `.strict()`):
  *   - measurable unit -> `{ ingredientId, unit, quantity }` where `quantity`
@@ -156,28 +181,32 @@ export function addRecipe(recipeId) {
  */
 export function addItem({ ingredientId, unit, quantity } = {}) {
   const body =
-    unit === 'toTaste' ? { ingredientId, unit } : { ingredientId, unit, quantity };
-  return api.post('/shopping-list/items', { body }).then(parseShoppingListResponse);
+    unit === 'toTaste' ? { type: 'ingredient', ingredientId, unit } : { type: 'ingredient', ingredientId, unit, quantity };
+  return api.post('/shopping-list/v2/items', { body }).then(parseShoppingListResponse);
+}
+
+export function addCustomItem(label) {
+  return api.post('/shopping-list/v2/items', { body: { type: 'custom', label } })
+    .then(parseShoppingListResponse);
 }
 
 /**
- * PATCH /api/v1/shopping-list/items/:itemId
+ * PATCH /api/v1/shopping-list/v2/items/:itemId
  * @param {string} itemId  the shopping-list ITEM id (not an ingredientId).
- * @param {{ isChecked?: boolean, quantity?: number|null, unit?: string }} patch
- *   This slice only ever sends `{ isChecked }`; the wider shape mirrors the
- *   route for future use.
+ * @param {{ type: 'ingredient'|'custom', isChecked?: boolean, quantity?: number|null, unit?: string }} patch
+ *   The tagged body is validated against the persisted row type by the server.
  * @returns {Promise<object>} the full post-patch list. Throws ApiError:
  *   - SHOPPING_LIST_ITEM_NOT_FOUND (404) — no such item on the caller's list
  *   - SHOPPING_LIST_ITEM_ALREADY_EXISTS (409) — a unit change would collide
  *   - VALIDATION_ERROR (400)
  */
 export function updateItem(itemId, patch) {
-  return api.patch(`/shopping-list/items/${encodeURIComponent(itemId)}`, { body: patch })
+  return api.patch(`/shopping-list/v2/items/${encodeURIComponent(itemId)}`, { body: patch })
     .then(parseShoppingListResponse);
 }
 
 /**
- * DELETE /api/v1/shopping-list/items/:itemId
+ * DELETE /api/v1/shopping-list/v2/items/:itemId
  * Physically removes one item, keyed by the shopping-list ITEM id. Works even
  * when the item's ingredient has since been archived/deleted.
  * @param {string} itemId
@@ -186,24 +215,24 @@ export function updateItem(itemId, patch) {
  *   (idempotent: treat as removed).
  */
 export function removeItem(itemId) {
-  return api.del(`/shopping-list/items/${encodeURIComponent(itemId)}`).then(parseShoppingListResponse);
+  return api.del(`/shopping-list/v2/items/${encodeURIComponent(itemId)}`).then(parseShoppingListResponse);
 }
 
 /**
- * DELETE /api/v1/shopping-list/items/checked
+ * DELETE /api/v1/shopping-list/v2/items/checked
  * Removes only rows currently stored as checked and returns the complete list.
  * No body and no client-derived count or owner/list selector.
  */
 export function clearCheckedItems() {
-  return api.del('/shopping-list/items/checked').then(parseShoppingListResponse);
+  return api.del('/shopping-list/v2/items/checked').then(parseShoppingListResponse);
 }
 
 /**
- * DELETE /api/v1/shopping-list/items
+ * DELETE /api/v1/shopping-list/v2/items
  * Clears every item. No body. Idempotent — clearing an empty list is a no-op
  * that still returns `200` with `items: []`.
  * @returns {Promise<object>} the full (now empty) list.
  */
 export function clearItems() {
-  return api.del('/shopping-list/items').then(parseShoppingListResponse);
+  return api.del('/shopping-list/v2/items').then(parseShoppingListResponse);
 }
