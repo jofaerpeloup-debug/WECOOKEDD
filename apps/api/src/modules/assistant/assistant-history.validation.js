@@ -9,6 +9,10 @@ const pageQuery = z.object({
   cursor: z.string().min(1).max(1000).optional(),
 }).strict();
 const conversationParams = z.object({ conversationId: objectIdSchema }).strict();
+const attemptFields = {
+  requestId: z.uuid().transform((value) => value.toLowerCase()),
+  expectedVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+};
 
 module.exports = {
   createConversationSchema: z.object({
@@ -18,4 +22,11 @@ module.exports = {
   listConversationsSchema: z.object({ body: emptyBody, params: empty, query: pageQuery }),
   openConversationSchema: z.object({ body: emptyBody, params: conversationParams, query: pageQuery }),
   deleteConversationSchema: z.object({ body: emptyBody, params: conversationParams, query: empty }),
+  sendMessageSchema: z.object({
+    body: z.union([
+      z.object({ ...attemptFields, content: z.string().trim().min(1).max(2000) }).strict(),
+      z.object({ ...attemptFields, retryOf: objectIdSchema.transform((value) => value.toLowerCase()) }).strict(),
+    ]),
+    params: conversationParams, query: empty,
+  }),
 };

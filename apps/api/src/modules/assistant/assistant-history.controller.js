@@ -21,4 +21,10 @@ const remove = asyncHandler(async (req, res) => {
   sendSuccess(res, result);
 });
 
-module.exports = { create, list, open, remove };
+const send = asyncHandler(async (req, res) => {
+  const result = await service.send({ userId: req.auth.userId, ...req.validated.params, ...req.validated.body });
+  service.guardConversation(result.conversation);
+  sendSuccess(res, result);
+});
+
+module.exports = { create, list, open, remove, send };

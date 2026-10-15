@@ -151,3 +151,107 @@ test('isolated replica-set indexes, owner isolation, create races, deletion roll
       await mongoose.disconnect();
     }
   });
+
+test('isolated replica-set generation claims, retry, rollback, unknown commits and Delete fencing',
+  { skip: enabled ? false : 'NOT RUN: explicit isolated replica-set opt-in required' }, async (t) => {
+    assertIsolatedTarget(uri);
+    await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 });
+    const userId = String(new mongoose.Types.ObjectId());
+    const models = [Conversation, Message, Request];
+    function deferred() {
+      let resolve;
+      const promise = new Promise((yes) => { resolve = yes; });
+      return { promise, resolve };
+    }
+    const newConversation = async (service) => (await service.create({ userId, requestId: crypto.randomUUID() })).conversation;
+    const body = (conversation, extra = {}) => ({ userId, conversationId: conversation.id,
+      requestId: crypto.randomUUID(), expectedVersion: conversation.version, content: 'lentils', ...extra });
+    try {
+      const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+      assert.ok(hello.setName, 'Replica set required.');
+      for (const model of models) await model.createIndexes();
+      await t.test('competing claims and same-key pending replay dispatch only one mocked provider', async () => {
+        const started = deferred(); const wait = deferred(); let calls = 0;
+        const service = createHistoryService({ chat: async () => { calls += 1; started.resolve(); return wait.promise; } });
+        const conversation = await newConversation(service); const input = body(conversation);
+        const first = service.send(input); await started.promise;
+        await assert.rejects(service.send(input), { code: 'ASSISTANT_REQUEST_IN_PROGRESS' });
+        await assert.rejects(service.send(body(conversation)), { code: 'ASSISTANT_CONVERSATION_STALE' });
+        wait.resolve('mocked real-format reply'); const result = await first;
+        assert.deepEqual(await service.send(input), result); assert.equal(calls, 1);
+        assert.equal(await Message.countDocuments({ userId, conversationId: conversation.id }), 2);
+        assert.equal(await Request.countDocuments({ userId, conversationId: conversation.id }), 1);
+        assert.equal((await Conversation.findById(conversation.id).lean()).version, 2);
+      });
+      await t.test('known failure retries exact persisted snapshot without duplicate user', async () => {
+        const snapshots = []; let fail = true;
+        const service = createHistoryService({ chat: async (snapshot) => {
+          snapshots.push(snapshot); if (fail) throw new Error('injected provider failure'); return 'retry reply';
+        } });
+        const conversation = await newConversation(service); const input = body(conversation);
+        await assert.rejects(service.send(input), { code: 'ASSISTANT_UNAVAILABLE' });
+        await assert.rejects(service.send(input), { code: 'ASSISTANT_UNAVAILABLE' });
+        const message = await Message.findOne({ userId, conversationId: conversation.id, role: 'user' }).lean();
+        fail = false;
+        await service.send({ userId, conversationId: conversation.id, requestId: crypto.randomUUID(),
+          expectedVersion: 2, retryOf: String(message._id) });
+        assert.deepEqual(snapshots[1], snapshots[0]); assert.equal(snapshots.length, 2);
+        assert.equal(await Message.countDocuments({ userId, conversationId: conversation.id, role: 'user' }), 1);
+        assert.equal(await Message.countDocuments({ userId, conversationId: conversation.id, role: 'assistant' }), 1);
+        const children = await Request.find({ userId, conversationId: conversation.id }).lean();
+        assert.ok(children.every((row) => +row.expiresAt === +new Date(conversation.expiresAt)));
+      });
+      await t.test('actual completion rollback leaves no Assistant reply', async (subtest) => {
+        const service = createHistoryService({ chat: async () => 'discard on rollback' });
+        const conversation = await newConversation(service);
+        subtest.mock.method(Request, 'updateOne', async () => { throw new Error('injected completion failure'); });
+        await assert.rejects(service.send(body(conversation)), { code: 'ASSISTANT_SEND_UNCERTAIN' });
+        assert.equal(await Message.countDocuments({ userId, conversationId: conversation.id, role: 'assistant' }), 0);
+        assert.equal((await Request.findOne({ userId, conversationId: conversation.id }).lean()).state, 'pending');
+      });
+      await t.test('lost final commit acknowledgement reconciles Mongo result without generation again', async (subtest) => {
+        let calls = 0; let transactions = 0;
+        const service = createHistoryService({ chat: async () => { calls += 1; return 'committed reply'; } });
+        const conversation = await newConversation(service);
+        const startSession = mongoose.startSession.bind(mongoose);
+        subtest.mock.method(mongoose, 'startSession', async () => {
+          const session = await startSession(); const withTransaction = session.withTransaction.bind(session);
+          session.withTransaction = async (...args) => {
+            const result = await withTransaction(...args);
+            if (++transactions === 2) throw new Error('injected lost commit acknowledgement');
+            return result;
+          };
+          return session;
+        });
+        const input = body(conversation); const result = await service.send(input);
+        assert.deepEqual(await service.send(input), result); assert.equal(calls, 1);
+        assert.equal(await Message.countDocuments({ userId, conversationId: conversation.id }), 2);
+      });
+      await t.test('Delete during pending generation removes all children and fences late completion', async () => {
+        const started = deferred(); const wait = deferred();
+        const service = createHistoryService({ chat: async () => { started.resolve(); return wait.promise; } });
+        const conversation = await newConversation(service); const input = body(conversation);
+        const sending = service.send(input); await started.promise;
+        await service.remove({ userId, conversationId: conversation.id });
+        wait.resolve('reply after Delete');
+        await assert.rejects(sending, { code: 'ASSISTANT_CONVERSATION_NOT_FOUND' });
+        assert.equal(await Conversation.countDocuments({ userId, _id: conversation.id }), 0);
+        for (const model of [Message, Request]) assert.equal(await model.countDocuments({ userId, conversationId: conversation.id }), 0);
+      });
+      await t.test('expiry during completion transaction rolls back inserted reply', async (subtest) => {
+        let time = new Date();
+        const service = createHistoryService({ now: () => time, chat: async () => 'late reply' });
+        const conversation = await newConversation(service);
+        const update = Request.updateOne.bind(Request);
+        subtest.mock.method(Request, 'updateOne', async (...args) => {
+          const result = await update(...args); time = new Date(conversation.expiresAt); return result;
+        });
+        await assert.rejects(service.send(body(conversation)), { code: 'ASSISTANT_CONVERSATION_NOT_FOUND' });
+        assert.equal(await Message.countDocuments({ userId, conversationId: conversation.id, role: 'assistant' }), 0);
+        assert.equal((await Request.findOne({ userId, conversationId: conversation.id }).lean()).state, 'pending');
+      });
+    } finally {
+      for (const model of models) await model.deleteMany({ userId });
+      await mongoose.disconnect();
+    }
+  });

@@ -4,6 +4,41 @@ const repository = require('./assistant-history.repository');
 const { toConversation, toMessage } = require('./assistant-history.serializer');
 const { loadEnv } = require('../../config/env');
 const { AppError } = require('../../shared/errors/app-error');
+const assistant = require('./assistant.service');
+const { PROVIDER_TIMEOUT_MS } = require('./openai.provider');
+
+// Same normalization and contiguous suffix bounds as AI1 buildAssistantTranscript.
+function buildReplay(messages) {
+  const normalized = messages.map((message) => {
+    if (!message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') return null;
+    const content = message.content.trim().slice(0, message.role === 'user' ? 2000 : 4000);
+    return content ? { role: message.role, content } : null;
+  }).filter(Boolean);
+  const suffix = [];
+  let total = 0;
+  for (let index = normalized.length - 1; index >= 0; index -= 1) {
+    if (suffix.length === 12 || total + normalized[index].content.length > 12000) break;
+    suffix.unshift(normalized[index]);
+    total += normalized[index].content.length;
+  }
+  return suffix;
+}
+const outcomes = {
+  ASSISTANT_NOT_CONFIGURED: [503, 'The cooking assistant is not configured.'],
+  ASSISTANT_UNAVAILABLE: [503, 'The cooking assistant is temporarily unavailable.'],
+  ASSISTANT_TIMEOUT: [504, 'The cooking assistant request timed out.'],
+  ASSISTANT_SEND_UNCERTAIN: [409, 'Review the conversation before sending again.'],
+  ASSISTANT_REQUEST_IN_PROGRESS: [409, 'A message is already being processed.'],
+};
+function outcomeError(code) {
+  const [statusCode, message] = outcomes[code] || outcomes.ASSISTANT_SEND_UNCERTAIN;
+  return new AppError(message, { statusCode, code: outcomes[code] ? code : 'ASSISTANT_SEND_UNCERTAIN' });
+}
+function requestFingerprint(input) {
+  return crypto.createHash('sha256').update(JSON.stringify([
+    input.expectedVersion, input.retryOf ? 'retry' : 'send', input.retryOf || input.content,
+  ])).digest('hex');
+}
 
 function notFound() {
   return new AppError('Conversation not found.', { statusCode: 404, code: 'ASSISTANT_CONVERSATION_NOT_FOUND' });
@@ -13,7 +48,8 @@ function invalidCursor() {
 }
 
 function createHistoryService({ repo = repository, now = () => new Date(),
-  getSecret = () => loadEnv().jwtAccessSecret } = {}) {
+  getSecret = () => loadEnv().jwtAccessSecret, chat = (messages) => assistant.chat(messages),
+  newId = () => new mongoose.Types.ObjectId(), newFence = () => crypto.randomUUID() } = {}) {
   function isLive(row) { return row && new Date(row.expiresAt).getTime() > now().getTime(); }
   function guardConversation(row) { if (!isLive(row)) throw notFound(); }
   function scope(userId, endpoint, conversationId = null) {
@@ -82,8 +118,12 @@ function createHistoryService({ repo = repository, now = () => new Date(),
   async function open({ userId, conversationId, limit = 20, cursor }) {
     const binding = scope(userId, 'open', String(conversationId).toLowerCase());
     const boundary = cursor ? decodeCursor(cursor, binding, 'open') : null;
-    const parent = await repo.findConversation({ userId, conversationId, now: now() });
+    let parent = await repo.findConversation({ userId, conversationId, now: now() });
     guardConversation(parent);
+    if (parent.claim && +new Date(parent.claim.expiresAt) <= +now()) {
+      parent = await repo.recoverClaim({ userId, conversationId, now });
+      guardConversation(parent);
+    }
     const rows = await repo.findMessages({ userId, conversationId, expiresAt: parent.expiresAt,
       limit, cursor: boundary, now: now() });
     // Re-read to fence concurrent deletion, and use fresh time after every await.
@@ -103,7 +143,106 @@ function createHistoryService({ repo = repository, now = () => new Date(),
     guardConversation(deleted);
     return { deleted: true };
   }
-  return { create, list, open, remove, guardConversation, guardList };
+
+  async function liveParent(input) {
+    const parent = await repo.findConversation({ userId: input.userId, conversationId: input.conversationId, now: now() });
+    guardConversation(parent);
+    return parent;
+  }
+  function resolveGeneration(result, requestId, { ambiguous = false, fingerprint } = {}) {
+    if (!result) throw outcomeError('ASSISTANT_SEND_UNCERTAIN');
+    guardConversation(result.parent);
+    guardConversation(result.request);
+    if (+new Date(result.request.expiresAt) !== +new Date(result.parent.expiresAt)) throw notFound();
+    if (fingerprint && result.request.fingerprint !== fingerprint) {
+      throw new AppError('Refresh the conversation before sending again.', {
+        statusCode: 409, code: 'ASSISTANT_REQUEST_CONFLICT',
+      });
+    }
+    if (result.request.state === 'pending') {
+      throw outcomeError(ambiguous ? 'ASSISTANT_SEND_UNCERTAIN' : 'ASSISTANT_REQUEST_IN_PROGRESS');
+    }
+    if (result.request.state !== 'complete') throw outcomeError(result.request.safeOutcome?.code);
+    guardConversation(result.userMessage);
+    guardConversation(result.assistantMessage);
+    guardConversation(result.parent);
+    return { conversation: toConversation(result.parent), requestId,
+      userMessage: toMessage(result.userMessage), assistantMessage: toMessage(result.assistantMessage) };
+  }
+  async function reconcile(input) {
+    await liveParent(input);
+    const result = await repo.getGeneration({ ...input, now });
+    return resolveGeneration(result, input.requestId, { ambiguous: true, fingerprint: requestFingerprint(input) });
+  }
+  async function send(input) {
+    let parent = await liveParent(input);
+    if (parent.claim && +new Date(parent.claim.expiresAt) <= +now()) {
+      parent = await repo.recoverClaim({ ...input, now });
+      guardConversation(parent);
+    }
+    const fingerprint = requestFingerprint(input);
+    let claim;
+    try {
+      claim = await repo.claimGeneration({ ...input, fingerprint, fence: newFence(),
+        userMessageId: newId(), assistantMessageId: newId(), now,
+        claimDurationMs: PROVIDER_TIMEOUT_MS, buildReplay });
+    } catch (error) {
+      // A lost claim commit never authorizes dispatch. Resolve only durable state.
+      const currentParent = await liveParent(input);
+      if (error instanceof AppError) throw error;
+      if (error?.code === 11000) {
+        // Unique-index losers did not commit a new claim. Resolve the winner's
+        // request normally, or report the now-obsolete version for another key.
+        const result = await repo.getGeneration({ ...input, now });
+        if (result) return resolveGeneration(result, input.requestId, { fingerprint });
+        guardConversation(currentParent);
+        throw new AppError('Refresh the conversation before sending again.', { statusCode: 409,
+          code: currentParent.version !== input.expectedVersion
+            ? 'ASSISTANT_CONVERSATION_STALE' : 'ASSISTANT_REQUEST_CONFLICT' });
+      }
+      return reconcile(input);
+    }
+    if (!claim.accepted) {
+      const result = await repo.getGeneration({ ...input, now });
+      return resolveGeneration(result, input.requestId);
+    }
+    guardConversation(claim.parent);
+    const current = await repo.getGeneration({ ...input, now });
+    if (!current) throw outcomeError('ASSISTANT_SEND_UNCERTAIN');
+    guardConversation(current.parent);
+    guardConversation(current.request);
+    if (current.request.state !== 'pending' || current.parent.claim?.fence !== claim.request.fence
+      || current.parent.claim?.requestId !== input.requestId) {
+      return resolveGeneration(current, input.requestId, { ambiguous: true });
+    }
+    if (+new Date(current.request.claimExpiresAt) <= +now()) {
+      await repo.recoverClaim({ ...input, now });
+      return reconcile(input);
+    }
+    // No await between the fresh deadline check and the single AI1 invocation.
+    guardConversation(claim.parent);
+    let reply;
+    let safeOutcome;
+    try { reply = await chat(claim.request.replaySnapshot.map(({ role, content }) => ({ role, content }))); }
+    catch (error) {
+      safeOutcome = ['ASSISTANT_NOT_CONFIGURED', 'ASSISTANT_UNAVAILABLE', 'ASSISTANT_TIMEOUT'].includes(error?.code)
+        ? error.code : 'ASSISTANT_UNAVAILABLE';
+    }
+    guardConversation(claim.parent);
+    try {
+      await repo.finishGeneration({ ...input, fence: claim.request.fence, version: claim.parent.version,
+        expiresAt: claim.parent.expiresAt, reply, safeOutcome, now });
+    } catch (error) {
+      // Reconcile an unknown commit through live parent/result reads; no provider retry.
+      guardConversation(claim.parent);
+      if (error?.code === 'ASSISTANT_CONVERSATION_NOT_FOUND') throw notFound();
+      return reconcile(input);
+    }
+    guardConversation(claim.parent);
+    const result = await repo.getGeneration({ ...input, now });
+    return resolveGeneration(result, input.requestId);
+  }
+  return { create, list, open, remove, send, guardConversation, guardList };
 }
 
-module.exports = { createHistoryService, ...createHistoryService() };
+module.exports = { createHistoryService, buildReplay, ...createHistoryService() };

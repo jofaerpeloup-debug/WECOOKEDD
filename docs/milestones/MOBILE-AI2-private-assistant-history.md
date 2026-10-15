@@ -263,3 +263,47 @@ Actual isolated Mongo/index verification, API/mobile runtime across restart/sign
 Contract consistency check: one immutable parent deadline governs every child, replay and pending outcome; equality denies access independently of TTL; activity and ACCOUNT2 cannot renew it; expiry implementation/tests fit the existing exact allowlists; AI1 protections remain unchanged. No unresolved contract decision remains. Automated tests, Mongo cleanup/index proof, provider activation, privacy disclosure, backup policy and runtime acceptance are not claimed by this document review.
 
 **Final contract verdict: FROZEN.** Implementation and every separate release gate still require their own authorization/evidence; freeze does not authorize production edits or publication.
+
+## AI2-2 API generation implementation handoff
+
+Date: 2026-10-15 (Asia/Singapore). **READY FOR SOURCE REVIEW.** This is implementation evidence under the separately authorized AI2-2 task; it does not change the frozen wire contract or close release gates.
+
+- Isolated worktree: `C:\Users\Clein\OneDrive\Documents\Projects\wecooked-mobile-ai2-api-generation-slice2`.
+- Branch: `mobile-ai2-api-generation-slice2`; committed base and unchanged HEAD: `a9711f48fafab3c69eef678911972a836e1ca645` (AI2-1).
+- Work remains unstaged and uncommitted. No push, merge, deployment, Mobile edit, package change, real provider call, production Mongo access, or live index action occurred.
+
+Exact changed paths (all within AI2-B's frozen allowlist and its reused AI2-A test path):
+
+```text
+apps/api/src/modules/assistant/assistant-history.routes.js
+apps/api/src/modules/assistant/assistant-history.validation.js
+apps/api/src/modules/assistant/assistant-history.controller.js
+apps/api/src/modules/assistant/assistant-history.service.js
+apps/api/src/modules/assistant/assistant-history.repository.js
+apps/api/test/assistant-history-send.test.js (new)
+apps/api/test/assistant-history-mongo.test.js
+docs/milestones/MOBILE-AI2-private-assistant-history.md
+```
+
+Persistent Send uses the authenticated owner, strict new-content or retry-reference input, shared AI1 limiter instances, and one call through unchanged `assistant.service.chat`. The server builds and persists the newest bounded replay suffix; explicit retries use that saved snapshot and the same user row. Successful replies retain AI1's full normalized output; only historical replay applies the 4,000-unit Assistant bound. Versions advance for claim and terminal completion; reserved sequence slots preserve missing-reply gaps.
+
+Claim, completion, failure, and abandoned-claim recovery use transactions and finish with an owned parent write carrying immutable expiry and Mongo `$$NOW`, plus version/request/fence predicates. Delete writes the same parent, so a losing completion rolls back its children and cannot recreate deleted records. Provider invocation sits outside transaction callbacks. The existing 20,000 ms provider deadline bounds claim recovery; live Open or Send recovers an abandoned claim to uncertain without redispatching its key. Expiry always takes precedence over recovery, cached results, conflicts and responses, including results whose commit acknowledgement crosses the deadline.
+
+Same-key canonical conflicts, stale devices, active pending requests, known safe provider failures, unique-index losers and unknown commit acknowledgements are handled without automatic generation retries. Unknown claim acknowledgement never authorizes dispatch; unknown completion acknowledgement resolves only live durable state. Explicit retries can cause another external provider charge. Durable deduplication and fenced storage do not promise exactly-once provider execution or billing.
+
+Validation ran on Windows PowerShell, Node `v24.12.0`, with existing installed dependencies supplied through `NODE_PATH` (no installation):
+
+```powershell
+$env:NODE_PATH='C:\Users\Clein\OneDrive\Documents\Projects\wecooked\node_modules;C:\Users\Clein\OneDrive\Documents\Projects\wecooked\apps\api\node_modules'
+Remove-Item Env:AI2_HISTORY_MONGO_QA -ErrorAction SilentlyContinue
+Remove-Item Env:AI2_HISTORY_TTL_QA -ErrorAction SilentlyContinue
+node --test apps/api/test/assistant-history-send.test.js apps/api/test/assistant-history-validation.test.js apps/api/test/assistant-history-routes.test.js apps/api/test/assistant-history-service.test.js apps/api/test/assistant-history-repository.test.js apps/api/test/assistant-history-models.test.js apps/api/test/assistant-history-mongo.test.js apps/api/test/assistant-routes.test.js apps/api/test/assistant-validation.test.js apps/api/test/assistant-service.test.js apps/api/test/assistant-provider.test.js apps/api/test/rate-limiter.test.js apps/api/test/authenticate-middleware.test.js
+```
+
+- Final combined gate: exit **0**, **133 tests: 131 pass, 0 fail, 2 skipped**. Both skips explicitly identify isolated replica-set evidence as NOT RUN. The new Send suite independently passed **42/42**, exit 0.
+- Coverage includes strict send/retry validation; server replay count/length and failed-user context; durable replay/conflict; competing sends; known failure and exact-snapshot retry; Delete during generation; transaction callback replay/rollback; unknown claim/completion acknowledgement; abandoned claim and late fenced completion; immutable expiry before dispatch, during provider execution, at final database writes, after commit and before response; authenticated mounted routes/no-store; shared 10/11 user and 20/21 IP counters.
+- Unchanged AI1 stateless dependency-graph, provider/service/validation/routes, authentication, and limiter regression suites passed. Existing history CRUD, cursor, serialization and three independent TTL declaration tests also passed.
+- Initial sandboxed Node test workers failed with `spawn EPERM`; identical authorized execution outside the sandbox recovered the environment. No test result from that failed worker launch is counted as a behavioral failure or pass.
+- SHA-256 comparison: **268 protected files** matched the clean AI2-1 worktree, including all tracked Mobile files, AI1 core/tests, auth/limiter middleware, `app.js` and `v1.routes.js`. Tracked and new-file whitespace checks passed. Exact changed/untracked paths were checked against the frozen allowlist; index remains empty.
+
+The opt-in Mongo generation suite was extended for real unique indexes, claims, retry, rollback, lost completion acknowledgement, Delete fencing and expiry rollback, using only the existing guarded disposable loopback replica-set target and mocked provider. It was **NOT RUN**. The mocked transaction double does not prove Mongo isolation, transaction conflict behavior, indexes, physical TTL cleanup or clock alignment. Independent source review, isolated Mongo/index/TTL/clock proof, runtime/mobile/device/provider/privacy/backup and deployment gates remain **NOT RUN / NOT CLAIMED AS PASS**. No unresolved provider retry, budget or API contract decision blocked this isolated implementation.
