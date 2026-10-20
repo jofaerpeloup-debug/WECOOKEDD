@@ -24,9 +24,10 @@ const FEED_TABS = [
 ];
 
 export default function CommunityScreen({ navigation, route }) {
-  const { colors, shadow } = useTheme();
+  const { colors, shadow, isDark } = useTheme();
+  const accent = isDark ? colors.sage : colors.sageDeep;
   const { profile } = useProfile();
-  const styles = makeStyles(colors, shadow);
+  const styles = makeStyles(colors, shadow, accent);
   // Rendered as the "Community" bottom tab (no back arrow); the `asTab`
   // guard mirrors the Swaps tab so a future pushed instance still works.
   const asTab = route.name === 'Community';
@@ -237,7 +238,7 @@ export default function CommunityScreen({ navigation, route }) {
         <View style={styles.postBody}>
           {post.recipeTag && (
             <View style={styles.tagRow}>
-              <Ionicons name="restaurant-outline" size={12} color={colors.sageDeep} />
+              <Ionicons name="restaurant-outline" size={12} color={accent} />
               <Text style={styles.tagText} numberOfLines={1}>{post.recipeTag}</Text>
             </View>
           )}
@@ -283,7 +284,7 @@ export default function CommunityScreen({ navigation, route }) {
               <Ionicons
                 name={commentsOpen ? 'chatbubble' : 'chatbubble-outline'}
                 size={17}
-                color={commentsOpen ? colors.sageDeep : colors.inkSoft}
+                color={commentsOpen ? accent : colors.inkSoft}
               />
               <Text style={styles.actionText}>{commentCount}</Text>
             </Pressable>
@@ -301,7 +302,7 @@ export default function CommunityScreen({ navigation, route }) {
               <Ionicons
                 name={bookmarked ? 'bookmark' : 'bookmark-outline'}
                 size={18}
-                color={bookmarked ? colors.sageDeep : colors.inkSoft}
+                color={bookmarked ? accent : colors.inkSoft}
               />
             </Pressable>
           </View>
@@ -320,7 +321,7 @@ export default function CommunityScreen({ navigation, route }) {
                 myComments.map((c) => (
                   <View key={c.id} style={styles.commentRow}>
                     <View style={styles.commentAvatar}>
-                      <Ionicons name="person" size={12} color={colors.sageDeep} />
+                      <Ionicons name="person" size={12} color={accent} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.commentText}>
@@ -401,7 +402,7 @@ export default function CommunityScreen({ navigation, route }) {
   );
 }
 
-function makeStyles(colors, shadow) {
+function makeStyles(colors, shadow, accent) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: colors.cream },
     scroll: { padding: spacing.lg, paddingBottom: TAB_BAR_CLEARANCE },
@@ -443,15 +444,15 @@ function makeStyles(colors, shadow) {
       paddingVertical: 6,
       borderRadius: radius.pill,
       borderWidth: 1,
-      borderColor: colors.sageDeep,
+      borderColor: accent,
     },
     followBtnOn: { backgroundColor: colors.sagePale },
     followBtnText: {
       fontFamily: typography.body.semibold,
       fontSize: 11.5,
-      color: colors.sageDeep,
+      color: accent,
     },
-    followBtnTextOn: { color: colors.sageDeep },
+    followBtnTextOn: { color: accent },
     recipeCtaRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
     recipeCtaBtn: {
       flex: 1,
@@ -462,12 +463,12 @@ function makeStyles(colors, shadow) {
       height: 36,
       borderRadius: radius.pill,
       borderWidth: 1,
-      borderColor: colors.sageDeep,
+      borderColor: accent,
     },
     recipeCtaText: {
       fontFamily: typography.body.semibold,
       fontSize: typography.sizes.xs,
-      color: colors.sageDeep,
+      color: accent,
     },
     composeHeader: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
     composeInput: {
@@ -518,7 +519,7 @@ function makeStyles(colors, shadow) {
       flex: 1,
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.xs,
-      color: colors.sageDeep,
+      color: accent,
     },
     postBtn: {
       backgroundColor: colors.sageDeep,
@@ -565,7 +566,7 @@ function makeStyles(colors, shadow) {
     tagText: {
       fontFamily: typography.body.medium,
       fontSize: typography.sizes.xs,
-      color: colors.sageDeep,
+      color: accent,
       flexShrink: 1,
     },
     caption: {

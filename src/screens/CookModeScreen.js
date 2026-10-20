@@ -211,22 +211,38 @@ export default function CookModeScreen({ navigation, route }) {
             {checklist.map((ing, i) => {
               const on = !!checked[i];
               return (
-                <Pressable
-                  key={i}
-                  style={styles.checkRow}
-                  onPress={() => {
-                    tapLight();
-                    setChecked((c) => ({ ...c, [i]: !c[i] }));
-                  }}
-                >
-                  <View style={[styles.checkbox, on && styles.checkboxOn]}>
-                    {on && <Ionicons name="checkmark" size={13} color={colors.onAccent} />}
+                <View key={i} style={styles.ingredientCard}>
+                  <View style={styles.checkRow}>
+                    <Pressable
+                      style={[styles.checkbox, on && styles.checkboxOn]}
+                      onPress={() => {
+                        tapLight();
+                        setChecked((c) => ({ ...c, [i]: !c[i] }));
+                      }}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: on }}
+                      accessibilityLabel={`${ing.name} ready`}
+                    >
+                      {on && <Ionicons name="checkmark" size={13} color={colors.onAccent} />}
+                    </Pressable>
+                    <View style={styles.ingredientTextColumn}>
+                      <Text style={[styles.checkName, on && styles.checkStruck]}>{ing.name}</Text>
+                      <Pressable
+                        style={styles.swapTextAction}
+                        onPress={() => {
+                          tapLight();
+                          navigation.navigate('IngredientStudio', { recipe, ingredientName: ing.name });
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Substitute for ${ing.name}`}
+                      >
+                        <Ionicons name="swap-horizontal" size={16} color={colors.sageDeep} />
+                        <Text style={styles.swapText}>Substitute</Text>
+                      </Pressable>
+                    </View>
+                    {!!ing.qty && <Text style={[styles.checkQty, on && styles.checkStruck]}>{ing.qty}</Text>}
                   </View>
-                  <Text style={[styles.checkName, on && styles.checkStruck]}>{ing.name}</Text>
-                  {!!ing.qty && (
-                    <Text style={[styles.checkQty, on && styles.checkStruck]}>{ing.qty}</Text>
-                  )}
-                </Pressable>
+                </View>
               );
             })}
             {checklist.length === 0 && (
@@ -395,13 +411,13 @@ function makeStyles(colors) {
     prepTitle: { fontFamily: typography.display.fontFamily, fontSize: 24, color: colors.ink, marginTop: 6 },
     prepSub: { fontFamily: typography.body.fontFamily, fontSize: 12.5, color: colors.inkFaint, marginTop: 6 },
     checkList: { marginTop: spacing.lg, borderTopWidth: 1, borderTopColor: colors.hairline },
+    ingredientCard: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.hairline },
     checkRow: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 12,
-      paddingVertical: 13,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairline,
+      paddingVertical: 16,
     },
     checkbox: {
       width: 22,
@@ -413,9 +429,12 @@ function makeStyles(colors) {
       justifyContent: 'center',
     },
     checkboxOn: { backgroundColor: colors.sageDeep, borderColor: colors.sageDeep },
-    checkName: { flex: 1, fontFamily: typography.body.medium, fontSize: 14, color: colors.ink },
+    ingredientTextColumn: { flex: 1, gap: 4 },
+    checkName: { flexShrink: 1, fontFamily: typography.body.medium, fontSize: 14, color: colors.ink },
     checkQty: { fontFamily: typography.body.fontFamily, fontSize: 13, color: colors.inkFaint },
     checkStruck: { textDecorationLine: 'line-through', color: colors.inkFaint },
+    swapTextAction: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: 2 },
+    swapText: { fontFamily: typography.body.medium, fontSize: 12.5, color: colors.sageDeep },
 
     spiceCard: {
       marginTop: spacing.lg,

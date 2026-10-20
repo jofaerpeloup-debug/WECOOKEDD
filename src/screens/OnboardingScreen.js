@@ -1,230 +1,133 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, Image, Animated, useWindowDimensions } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, Pressable, StyleSheet, Image, Animated, Easing, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { typography, spacing, radius } from '../theme/theme';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../theme/ThemeContext';
 import { tapLight, tapMedium } from '../utils/haptics';
 
-// Swipeable carousel. Each slide: a full-bleed food photo, a headline block over
-// the scrim, and a floating "preview card" that sketches what that part of the
-// app actually looks like — built from WeCooked's own UI, not a screenshot.
-const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-
+// Swipeable carousel. Each slide has its own tinted canvas (light + dark
+// variants), a round dish photo inside soft concentric rings with two floating
+// feature chips, then an eyebrow, a serif headline whose second line is italic
+// in the slide's accent colour, and a short description.
 const SLIDES = [
   {
     image: require('../../assets/recipe-chicken-adobo.jpg'),
-    tag: 'Discover',
-    title: 'One search,\nevery recipe',
-    desc: 'Filters for time, difficulty and diet — tuned to your taste.',
-    mock: 'search',
-    caption: 'Popular Recipes',
-    note: '247 recipes',
+    eyebrow: '01 — DISCOVER',
+    title: 'One search,',
+    accent: 'every recipe.',
+    desc: 'Filters for time, difficulty and diet, tuned to your taste.',
+    chipTop: { icon: 'search', text: '32 Filipino recipes' },
+    chipBottom: { icon: 'time-outline', text: 'Chicken Adobo · 50 min' },
+    tone: 'sage',
   },
   {
     image: require('../../assets/recipe-sisig.jpg'),
-    tag: 'Cook Mode',
-    title: 'Cook it\nhands-free',
+    eyebrow: '02 — COOK MODE',
+    title: 'Cook it',
+    accent: 'hands-free.',
     desc: 'Full-screen guided steps, with a timer built into each one.',
-    mock: 'cook',
-    caption: 'Chicken Adobo',
-    note: 'Step 3 of 7',
+    chipTop: { icon: 'timer-outline', text: 'Step 5 · 19:52 left' },
+    chipBottom: { icon: 'checkmark', text: 'Big, clear steps' },
+    tone: 'saffron',
   },
   {
     image: require('../../assets/recipe-ginataang-gulay.jpg'),
-    tag: 'Ingredient Swaps',
-    title: 'Out of something?\nSwap it',
+    eyebrow: '03 — INGREDIENT SWAPS',
+    title: 'Out of something?',
+    accent: 'Swap it.',
     desc: 'A substitute in the right ratio, with a quick tasting note.',
-    mock: 'swap',
-    caption: 'Find a swap',
-    note: '1 : 1 ratio',
+    chipTop: { icon: 'swap-horizontal', text: 'Coconut milk → Cashew cream' },
+    chipBottom: { icon: 'scale-outline', text: '1 : 1 ratio' },
+    tone: 'sage',
   },
   {
     image: require('../../assets/recipe-kare-kare.jpg'),
-    tag: 'Meal Plan',
-    title: 'Plan the week,\nshop once',
+    eyebrow: '04 — MEAL PLAN',
+    title: 'Plan the week,',
+    accent: 'shop once.',
     desc: 'Add recipes to your week and the grocery list builds itself.',
-    mock: 'plan',
-    caption: 'This Week',
-    note: '3 meals planned',
+    chipTop: { icon: 'calendar-outline', text: 'Thursday · Kare-Kare' },
+    chipBottom: { icon: 'cart-outline', text: 'Grocery list ready' },
+    tone: 'clay',
   },
   {
     image: require('../../assets/recipe-turon.jpg'),
-    tag: 'Community',
-    title: 'Cook with\neveryone',
+    eyebrow: '05 — COMMUNITY',
+    title: 'Cook with',
+    accent: 'everyone.',
     desc: 'Share what you make, get inspired, and ask the Chef anytime.',
-    mock: 'community',
-    caption: 'Latest Post',
-    note: '2h ago',
+    chipTop: { icon: 'heart', text: 'Shared a Turon' },
+    chipBottom: { icon: 'sparkles', text: 'Ask the Chef' },
+    tone: 'saffron',
   },
 ];
 
 const TOTAL = SLIDES.length;
+const SAGE_BTN = '#4A5D4E';
 
-// Fixed light-on-dark palette — this screen lives on a photo.
-const C = {
-  ink: '#FAF9F6',
-  bodyDim: 'rgba(250,249,246,0.72)',
-  faint: 'rgba(250,249,246,0.5)',
-  skip: 'rgba(250,249,246,0.82)',
-  accent: '#D9A64B',
-  dark: '#15180F',
-  seg: 'rgba(250,249,246,0.28)',
-  btn: '#FAF9F6',
-  btnInk: '#26332B',
-  panel: 'rgba(18,21,14,0.94)',
-  panelLine: 'rgba(250,249,246,0.14)',
-  mockFill: 'rgba(250,249,246,0.08)',
-  mockLine: 'rgba(250,249,246,0.16)',
-  mockText: 'rgba(250,249,246,0.9)',
+// Fixed palettes: warm cream + tan rings + gold accents (light), deep forest
+// green + green rings (dark). Dark slides tint their accent per feature.
+const LIGHT = {
+  bg: '#F6F0E2', ring: '#ECDDBC', dash: '#E0CFA6', ink: '#2A2F28', body: '#6B6F68',
+  chip: '#FFFFFF', chipIcon: '#EEDDB8', photoBorder: '#FFFFFF', dot: '#D9D2C2', track: '#E6DDC6',
+  btn: '#4A5D4E', accent: { sage: '#A8731F', saffron: '#A8731F', clay: '#A8731F' }, eyebrow: { sage: '#A8731F', saffron: '#A8731F', clay: '#A8731F' },
+};
+const DARK = {
+  bg: '#192019', ring: '#2E3A2E', dash: 'rgba(255,255,255,0.08)', ink: '#EDEAE0', body: '#A9ACA3',
+  chip: 'rgba(255,255,255,0.08)', chipIcon: 'rgba(255,255,255,0.08)', photoBorder: '#2E3A2E', dot: '#505750', track: '#3A463B',
+  btn: '#536154', accent: { sage: '#A9C7A0', saffron: '#D9A64B', clay: '#E39A87' }, eyebrow: { sage: '#9CAE98', saffron: '#D9A64B', clay: '#E39A87' },
 };
 
-// --- mini feature "mockups" shown inside the preview card ------------------
-
-function SearchMock() {
+function Chip({ icon, text, accent, isDark }) {
+  const k = isDark ? DARK : LIGHT;
   return (
-    <>
-      <View style={mockStyles.searchRow}>
-        <Ionicons name="search" size={13} color={C.faint} />
-        <Text style={mockStyles.searchText}>Chicken Adobo</Text>
-        <View style={mockStyles.filterDot}>
-          <Ionicons name="options" size={11} color={C.btnInk} />
-        </View>
+    <View style={[styles.chip, isDark ? styles.chipDark : styles.chipLight, { backgroundColor: k.chip }]}>
+      <View style={[styles.chipIcon, { backgroundColor: k.chipIcon }]}>
+        <Ionicons name={icon} size={11} color={accent} />
       </View>
-      <View style={mockStyles.chipRow}>
-        <View style={mockStyles.chip}>
-          <Text style={mockStyles.chipText}>Under 30 min</Text>
-        </View>
-        <View style={mockStyles.chip}>
-          <Text style={mockStyles.chipText}>Easy</Text>
-        </View>
-      </View>
-      {[
-        { name: 'Pork Sinigang', meta: '45 min · Easy' },
-        { name: 'Pancit Canton', meta: '25 min · Easy' },
-      ].map((r) => (
-        <View key={r.name} style={mockStyles.listRow}>
-          <View style={mockStyles.thumb} />
-          <View style={{ flex: 1, gap: 5 }}>
-            <Text style={mockStyles.rowTitle}>{r.name}</Text>
-            <Text style={mockStyles.rowMeta}>{r.meta}</Text>
-          </View>
-        </View>
-      ))}
-    </>
+      <Text style={[styles.chipText, { color: k.ink }]} numberOfLines={1}>
+        {text}
+      </Text>
+    </View>
   );
 }
-
-function CookMock() {
-  return (
-    <>
-      <View style={mockStyles.stepPhoto}>
-        <View style={mockStyles.playDot}>
-          <Ionicons name="play" size={11} color={C.btnInk} />
-        </View>
-      </View>
-      <View style={mockStyles.rowBetween}>
-        <Text style={mockStyles.rowTitle}>Simmer the sauce</Text>
-        <View style={mockStyles.timerChip}>
-          <Ionicons name="time-outline" size={11} color={C.accent} />
-          <Text style={mockStyles.timerText}>2:45</Text>
-        </View>
-      </View>
-      <View style={mockStyles.dotsRow}>
-        {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-          <View key={i} style={[mockStyles.stepDot, i < 2 && mockStyles.stepDotDone, i === 2 && mockStyles.stepDotOn]} />
-        ))}
-      </View>
-    </>
-  );
-}
-
-function SwapMock() {
-  return (
-    <>
-      <View style={mockStyles.swapRow}>
-        <View style={mockStyles.swapChip}>
-          <Text style={mockStyles.swapChipText}>Butter</Text>
-        </View>
-        <Ionicons name="swap-horizontal" size={16} color={C.accent} />
-        <View style={[mockStyles.swapChip, mockStyles.swapChipOn]}>
-          <Text style={mockStyles.swapChipText}>Coconut oil</Text>
-        </View>
-      </View>
-      <Text style={mockStyles.ratioText}>1 tbsp → 1 tbsp</Text>
-      <View style={mockStyles.noteRow}>
-        <Ionicons name="checkmark-circle" size={13} color={C.accent} />
-        <Text style={mockStyles.noteText}>Adds a light coconut note</Text>
-      </View>
-    </>
-  );
-}
-
-function PlanMock() {
-  const planned = new Set([1, 3, 5]);
-  return (
-    <>
-      <View style={mockStyles.weekRow}>
-        {DAY_LABELS.map((d, i) => (
-          <View key={i} style={mockStyles.dayCol}>
-            <Text style={mockStyles.dayLabel}>{d}</Text>
-            <View style={[mockStyles.dayDot, planned.has(i) && mockStyles.dayDotOn]} />
-          </View>
-        ))}
-      </View>
-      <View style={mockStyles.mealChip}>
-        <View style={mockStyles.mealThumb} />
-        <Text style={mockStyles.rowTitle}>Kare-Kare</Text>
-        <Text style={mockStyles.rowMeta}>Wed</Text>
-      </View>
-      <View style={mockStyles.noteRow}>
-        <Ionicons name="cart-outline" size={13} color={C.accent} />
-        <Text style={mockStyles.noteText}>18 items on your list</Text>
-      </View>
-    </>
-  );
-}
-
-function CommunityMock() {
-  return (
-    <>
-      <View style={mockStyles.postHead}>
-        <View style={mockStyles.avatar} />
-        <View style={{ gap: 3 }}>
-          <Text style={mockStyles.rowTitle}>Maria Santos</Text>
-          <Text style={mockStyles.rowMeta}>2 hours ago</Text>
-        </View>
-      </View>
-      <View style={mockStyles.postPhoto} />
-      <Text style={mockStyles.noteText}>First try at sisig — nailed it.</Text>
-      <View style={mockStyles.rowBetween}>
-        <View style={mockStyles.iconCount}>
-          <Ionicons name="heart" size={13} color={C.accent} />
-          <Text style={mockStyles.timerText}>128</Text>
-        </View>
-        <View style={mockStyles.iconCount}>
-          <Ionicons name="chatbubble-outline" size={12} color={C.faint} />
-          <Text style={mockStyles.timerText}>24</Text>
-        </View>
-      </View>
-    </>
-  );
-}
-
-const MOCKS = { search: SearchMock, cook: CookMock, swap: SwapMock, plan: PlanMock, community: CommunityMock };
 
 export default function OnboardingScreen({ navigation, route }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { isLoggedIn, markOnboardingSeen } = useAuth();
+  const { isDark } = useTheme();
+  const k = isDark ? DARK : LIGHT;
 
   const scrollRef = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
+  const float = useRef(new Animated.Value(0)).current;
   const [step, setStep] = useState(0);
   const stepRef = useRef(0);
 
   const replay = route?.params?.replay;
+  const photoD = Math.min(width * 0.6, height * 0.27);
+  const outerD = photoD * 1.42;
+  const midD = photoD * 1.2;
+
+  const ink = k.ink;
+  const body = k.body;
+  const pal = (s) => ({ bg: k.bg, ring: k.ring, accent: k.accent[s.tone] });
+
+  // Gentle idle bob on the dish so the screen is never completely still.
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(float, { toValue: 1, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(float, { toValue: 0, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [float]);
+  const bob = float.interpolate({ inputRange: [0, 1], outputRange: [-5, 5] });
 
   const leave = (dest) => {
     if (replay) {
@@ -261,8 +164,42 @@ export default function OnboardingScreen({ navigation, route }) {
     [width, scrollX]
   );
 
+  // Value for slide i as it enters (left), is centred (middle) and leaves (right).
+  // `reach` is how many pages away the animation spans (smaller = snappier).
+  const at = (i, out, reach = 1) =>
+    scrollX.interpolate({
+      inputRange: [(i - reach) * width, i * width, (i + reach) * width],
+      outputRange: out,
+      extrapolate: 'clamp',
+    });
+
+  const lastFade = scrollX.interpolate({
+    inputRange: [(TOTAL - 2) * width, (TOTAL - 1) * width],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+  const notLastFade = scrollX.interpolate({
+    inputRange: [(TOTAL - 2) * width, (TOTAL - 1) * width],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  const onLast = step === TOTAL - 1;
+  const accent = pal(SLIDES[step]).accent;
+  const filled = Math.ceil(((step + 1) / TOTAL) * 4);
+  const ringColor = (n) => (n <= filled ? accent : k.track);
+
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { backgroundColor: pal(SLIDES[0]).bg }]}>
+      {/* Backgrounds crossfade as you drag. */}
+      {SLIDES.map((s, i) => (
+        <Animated.View
+          key={'bg' + i}
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: pal(s).bg, opacity: at(i, [0, 1, 0]) }]}
+        />
+      ))}
+
       <Animated.ScrollView
         ref={scrollRef}
         horizontal
@@ -276,355 +213,325 @@ export default function OnboardingScreen({ navigation, route }) {
         onScroll={onScroll}
       >
         {SLIDES.map((s, i) => {
-          const isLast = i === TOTAL - 1;
-          const inputRange = [(i - 1) * width, i * width, (i + 1) * width];
-          const anim = {
-            opacity: scrollX.interpolate({ inputRange, outputRange: [0, 1, 0], extrapolate: 'clamp' }),
-            transform: [
-              {
-                translateY: scrollX.interpolate({
-                  inputRange,
-                  outputRange: [14, 0, 14],
-                  extrapolate: 'clamp',
-                }),
-              },
-            ],
-          };
+          const p = pal(s);
 
           // The ScrollView mounts every page up front (it isn't virtualized), so
           // this keeps only the visible photo + its neighbours loaded.
           const nearby = Math.abs(i - step) <= 1;
-          const Mock = MOCKS[s.mock];
+
+          const fade = at(i, [0, 1, 0]);
+          const fadeFast = at(i, [0, 1, 0], 0.6);
+
+          const ringOuterAnim = { opacity: fade, transform: [{ scale: at(i, [0.4, 1, 1.7]) }] };
+          const ringMidAnim = { opacity: fade, transform: [{ scale: at(i, [0.55, 1, 1.45]) }] };
+          // The dish spins in like a plate, scaling up as it settles.
+          const photoAnim = {
+            opacity: fadeFast,
+            transform: [
+              { translateX: at(i, [-width * 0.35, 0, width * 0.35]) },
+              { translateY: bob },
+              { scale: at(i, [0.55, 1, 0.55]) },
+              { rotate: at(i, ['-110deg', '0deg', '110deg']) },
+            ],
+          };
+          // Everything else travels at its own speed for depth.
+          const chipTopAnim = {
+            opacity: fadeFast,
+            transform: [{ translateX: at(i, [width * 0.7, 0, -width * 0.7]) }, { scale: at(i, [0.7, 1, 0.7]) }],
+          };
+          const chipBottomAnim = {
+            opacity: fadeFast,
+            transform: [{ translateX: at(i, [width * 0.95, 0, -width * 0.95]) }, { scale: at(i, [0.7, 1, 0.7]) }],
+          };
+          const eyebrowAnim = {
+            opacity: fadeFast,
+            transform: [{ translateX: at(i, [width * 0.5, 0, -width * 0.5]) }],
+          };
+          const headAnim = {
+            opacity: fadeFast,
+            transform: [{ translateX: at(i, [width * 0.35, 0, -width * 0.35]) }],
+          };
+          const accentAnim = {
+            opacity: fadeFast,
+            transform: [{ translateX: at(i, [width * 0.5, 0, -width * 0.5]) }, { scale: at(i, [0.92, 1, 0.92]) }],
+          };
+          const leadAnim = {
+            opacity: fadeFast,
+            transform: [{ translateX: at(i, [width * 0.7, 0, -width * 0.7]) }],
+          };
 
           return (
-            <View key={i} style={{ width, height, backgroundColor: C.dark }}>
-              {nearby && <Image source={s.image} style={styles.fill} resizeMode="cover" />}
+            <View key={i} style={{ width, height, paddingTop: insets.top + 74 }}>
+              <View style={[styles.stage, { height: outerD }]}>
+                <Animated.View
+                  style={[
+                    styles.ringOuter,
+                    { width: outerD, height: outerD, borderRadius: outerD / 2, backgroundColor: p.ring },
+                    ringOuterAnim,
+                  ]}
+                />
+                <Animated.View
+                  style={[
+                    styles.ringMid,
+                    { width: midD, height: midD, borderRadius: midD / 2, borderColor: k.dash, borderStyle: 'dashed' },
+                    ringMidAnim,
+                  ]}
+                />
+                <Animated.View
+                  style={[
+                    styles.photoRing,
+                    {
+                      width: photoD,
+                      height: photoD,
+                      borderRadius: photoD / 2,
+                      borderColor: k.photoBorder,
+                    },
+                    photoAnim,
+                  ]}
+                >
+                  {nearby && <Image source={s.image} style={styles.fill} resizeMode="cover" />}
+                </Animated.View>
 
-              <LinearGradient
-                colors={[
-                  'rgba(18,21,14,0.82)',
-                  'rgba(18,21,14,0.04)',
-                  'rgba(18,21,14,0.5)',
-                  'rgba(18,21,14,0.98)',
-                ]}
-                locations={[0, 0.3, 0.56, 1]}
-                style={styles.fill}
-                pointerEvents="none"
-              />
+                <Animated.View style={[styles.chipSlot, { top: 8, left: 18 }, chipTopAnim]}>
+                  <Chip {...s.chipTop} accent={p.accent} isDark={isDark} />
+                </Animated.View>
+                <Animated.View style={[styles.chipSlot, { bottom: 8, right: 18 }, chipBottomAnim]}>
+                  <Chip {...s.chipBottom} accent={p.accent} isDark={isDark} />
+                </Animated.View>
+              </View>
 
-              <Animated.View style={[styles.topBlock, { top: insets.top + spacing.xxl, width }, anim]}>
-                <Text style={styles.eyebrow}>{s.tag.toUpperCase()}</Text>
-                <Text style={styles.headline}>{s.title}</Text>
-                <View style={styles.rule} />
-                <Text style={styles.lead} numberOfLines={2}>
-                  {s.desc}
-                </Text>
-              </Animated.View>
-
-              <Animated.View
-                style={[styles.bottomBlock, { width, paddingBottom: insets.bottom + spacing.lg }, anim]}
-              >
-                <View style={styles.panel}>
-                  <View style={styles.notch} />
-                  <View style={styles.captionRow}>
-                    <Text style={styles.caption}>{s.caption}</Text>
-                    <View style={styles.notePill}>
-                      <Text style={styles.noteText}>{s.note}</Text>
-                    </View>
-                  </View>
-                  <Mock />
-                </View>
-
-                <View style={styles.footerRow}>
-                  <View style={styles.dots}>
-                    {SLIDES.map((_, idx) => (
-                      <View key={idx} style={[styles.dot, idx === i && styles.dotOn]} />
-                    ))}
-                  </View>
-                  {isLast ? (
-                    <Pressable
-                      style={styles.cta}
-                      onPress={() => {
-                        tapMedium();
-                        finish();
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Get started"
-                    >
-                      <Text style={styles.ctaText}>Get Started</Text>
-                      <Ionicons name="arrow-forward" size={16} color={C.btnInk} />
-                    </Pressable>
-                  ) : (
-                    <Pressable
-                      hitSlop={12}
-                      onPress={next}
-                      style={styles.chevronBtn}
-                      accessibilityRole="button"
-                      accessibilityLabel="Next"
-                    >
-                      <Ionicons name="chevron-forward" size={20} color={C.ink} />
-                    </Pressable>
-                  )}
-                </View>
-
-                {isLast && !replay && (
-                  <Pressable
-                    style={styles.loginLink}
-                    hitSlop={8}
-                    onPress={() => leave('Login')}
-                    accessibilityRole="button"
-                    accessibilityLabel="I already have an account"
-                  >
-                    <Text style={styles.loginLinkText}>I already have an account</Text>
-                  </Pressable>
-                )}
-              </Animated.View>
+              <View style={styles.textBlock}>
+                <Animated.Text style={[styles.eyebrow, { color: k.eyebrow[s.tone] }, eyebrowAnim]}>
+                  {s.eyebrow}
+                </Animated.Text>
+                <Animated.Text style={[styles.headline, { color: ink }, headAnim]}>{s.title}</Animated.Text>
+                <Animated.Text style={[styles.headlineAccent, { color: p.accent }, accentAnim]}>
+                  {s.accent}
+                </Animated.Text>
+                <Animated.Text style={[styles.lead, { color: body }, leadAnim]}>{s.desc}</Animated.Text>
+              </View>
             </View>
           );
         })}
       </Animated.ScrollView>
 
-      <Text style={[styles.wordmark, { top: insets.top + spacing.sm }]}>WeCooked</Text>
-      {step < TOTAL - 1 && (
-        <Pressable
-          style={[styles.skipBtn, { top: insets.top + spacing.sm }]}
-          hitSlop={10}
-          onPress={() => {
-            tapLight();
-            finish();
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={replay ? 'Close the tour' : 'Skip onboarding'}
+      {/* Footer lives outside the pages so the dots slide and morph continuously. */}
+      <View style={[styles.bottomBlock, { paddingBottom: insets.bottom + spacing.lg }]} pointerEvents="box-none">
+        <Animated.View
+          style={[styles.footerRow, { opacity: notLastFade }]}
+          pointerEvents={onLast ? 'none' : 'box-none'}
         >
-          <Text style={styles.skipText}>{replay ? 'Done' : 'Skip'}</Text>
-        </Pressable>
-      )}
+          <View style={styles.dots}>
+            {SLIDES.map((_, idx) => (
+              <View key={idx} style={styles.dotSlot}>
+                <View
+                  style={[styles.dotBase, { backgroundColor: k.dot }]}
+                />
+                <Animated.View
+                  style={[
+                    styles.dotActive,
+                    {
+                      backgroundColor: ink,
+                      opacity: at(idx, [0, 1, 0]),
+                      transform: [{ scaleX: at(idx, [0.27, 1, 0.27]) }],
+                    },
+                  ]}
+                />
+              </View>
+            ))}
+          </View>
+          <Pressable
+            hitSlop={10}
+            onPress={next}
+            style={[
+              styles.nextRing,
+              {
+                borderTopColor: ringColor(1),
+                borderRightColor: ringColor(2),
+                borderBottomColor: ringColor(3),
+                borderLeftColor: ringColor(4),
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Next"
+          >
+            <View style={[styles.nextInner, { backgroundColor: k.btn }]}>
+              <Ionicons name="arrow-forward" size={18} color="#fff" />
+            </View>
+          </Pressable>
+        </Animated.View>
+
+        <Animated.View
+          style={[
+            styles.lastBlock,
+            {
+              opacity: lastFade,
+              transform: [{ translateY: lastFade.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
+              paddingBottom: insets.bottom + spacing.lg,
+            },
+          ]}
+          pointerEvents={onLast ? 'box-none' : 'none'}
+        >
+          <Pressable
+            style={styles.ctaWide}
+            onPress={() => {
+              tapMedium();
+              finish();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Get started"
+          >
+            <Text style={styles.ctaText}>Get Started →</Text>
+          </Pressable>
+          {!replay && (
+            <Pressable
+              style={styles.loginLink}
+              hitSlop={8}
+              onPress={() => leave('Login')}
+              accessibilityRole="button"
+              accessibilityLabel="I already have an account"
+            >
+              <Text style={[styles.loginLinkPlain, { color: body }]}>
+                Already have an account? <Text style={[styles.loginLinkText, { color: ink }]}>Log in</Text>
+              </Text>
+            </Pressable>
+          )}
+        </Animated.View>
+      </View>
+
+      <View style={[styles.header, { top: insets.top + spacing.md }]} pointerEvents="box-none">
+        <View style={styles.brand}>
+          <View style={styles.logo}>
+            <Image source={require('../../assets/logo-pan.png')} style={styles.logoImg} resizeMode="contain" />
+          </View>
+          <Text style={[styles.wordmark, { color: ink }]}>WeCooked</Text>
+        </View>
+        {!onLast && (
+          <Pressable
+            hitSlop={10}
+            onPress={() => {
+              tapLight();
+              finish();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={replay ? 'Close the tour' : 'Skip onboarding'}
+          >
+            <Text style={[styles.skipText, { color: body }]}>{replay ? 'Done' : 'Skip'}</Text>
+          </Pressable>
+        )}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.dark },
-  fill: { ...StyleSheet.absoluteFillObject },
-  // Both blocks are absolutely positioned and anchored (top-left / bottom-left)
-  // rather than stretched inside a flex container — sized purely by their own
-  // content, the technique proven reliable on-device for this screen.
-  topBlock: { position: 'absolute', left: 0, paddingHorizontal: spacing.xl },
-  bottomBlock: { position: 'absolute', left: 0, bottom: 0, paddingHorizontal: spacing.xl },
+  root: { flex: 1 },
+  fill: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
 
-  eyebrow: {
-    fontFamily: typography.body.bold,
-    fontSize: 12,
-    letterSpacing: 1.8,
-    color: C.bodyDim,
-  },
-  headline: {
-    fontFamily: typography.display.fontFamilyBold,
-    fontSize: 33,
-    lineHeight: 39,
-    color: C.accent,
-    marginTop: spacing.sm,
-  },
-  rule: { width: 44, height: 3, borderRadius: 2, backgroundColor: C.accent, marginVertical: spacing.md },
-  lead: { fontFamily: typography.body.fontFamily, fontSize: 14, lineHeight: 21, color: C.bodyDim },
-
-  panel: {
-    backgroundColor: C.panel,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: C.panelLine,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.lg,
-    gap: spacing.md,
-  },
-  notch: {
-    alignSelf: 'center',
-    width: 44,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(250,249,246,0.2)',
-    marginBottom: spacing.xs,
-  },
-  captionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  caption: { fontFamily: typography.display.fontFamily, fontSize: 16, color: C.ink },
-  notePill: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(217,166,75,0.16)',
-  },
-  noteText: { fontFamily: typography.body.semibold, fontSize: 10.5, color: C.accent, letterSpacing: 0.2 },
-
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: spacing.lg,
-  },
-  dots: { flexDirection: 'row', gap: 6 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.seg },
-  dotOn: { width: 22, backgroundColor: C.accent },
-  chevronBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: 'rgba(250,249,246,0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: 48,
-    paddingHorizontal: spacing.xl,
-    borderRadius: radius.pill,
-    backgroundColor: C.btn,
-  },
-  ctaText: { fontFamily: typography.body.semibold, fontSize: 14, letterSpacing: 0.3, color: C.btnInk },
-  loginLink: { alignSelf: 'center', marginTop: spacing.md, paddingVertical: 4 },
-  loginLinkText: {
-    fontFamily: typography.body.semibold,
-    fontSize: 12.5,
-    color: C.bodyDim,
-    textDecorationLine: 'underline',
-  },
-
-  wordmark: {
+  header: {
     position: 'absolute',
     left: 0,
     right: 0,
-    textAlign: 'center',
-    fontFamily: typography.display.fontFamilyItalic,
-    fontSize: 20,
-    letterSpacing: 0.5,
-    color: C.ink,
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowRadius: 8,
-  },
-  skipBtn: { position: 'absolute', right: spacing.xl, paddingVertical: 2 },
-  skipText: {
-    fontFamily: typography.body.semibold,
-    fontSize: 13,
-    color: C.skip,
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowRadius: 8,
-  },
-});
-
-const mockStyles = StyleSheet.create({
-  searchRow: {
+    paddingHorizontal: 22,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: C.mockFill,
-    borderRadius: radius.md,
-    paddingHorizontal: 12,
-    height: 38,
+    justifyContent: 'space-between',
   },
-  searchText: { flex: 1, fontFamily: typography.body.fontFamily, fontSize: 12, color: C.mockText },
-  filterDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: C.accent,
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  logo: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  chipRow: { flexDirection: 'row', gap: 6 },
+  logoImg: { width: 30, height: 30 },
+  wordmark: { fontFamily: typography.display.fontFamilyItalic, fontSize: 19 },
+  skipText: { fontFamily: typography.body.semibold, fontSize: 13 },
+
+  stage: { alignItems: 'center', justifyContent: 'center' },
+  ringOuter: { position: 'absolute' },
+  ringMid: { position: 'absolute', borderWidth: 1.5 },
+  photoRing: { borderWidth: 5, overflow: 'hidden', backgroundColor: '#ddd' },
+
+  chipSlot: { position: 'absolute', maxWidth: '78%' },
   chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingVertical: 6,
+    paddingLeft: 6,
+    paddingRight: 12,
     borderRadius: radius.pill,
-    backgroundColor: C.mockFill,
   },
-  chipText: { fontFamily: typography.body.medium, fontSize: 10.5, color: C.bodyDim },
-  listRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  thumb: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.mockFill },
-  rowTitle: { fontFamily: typography.body.semibold, fontSize: 12.5, color: C.mockText },
-  rowMeta: { fontFamily: typography.body.fontFamily, fontSize: 10.5, color: C.faint },
+  chipLight: {
+    backgroundColor: '#fff',
+    shadowColor: '#2a2f26',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  chipDark: {},
+  chipIcon: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  chipText: { fontFamily: typography.body.semibold, fontSize: 11.5, flexShrink: 1 },
 
-  stepPhoto: {
-    height: 84,
-    borderRadius: 14,
-    backgroundColor: C.mockFill,
-    alignItems: 'flex-end',
-    justifyContent: 'flex-end',
-    padding: 8,
+  textBlock: { alignItems: 'center', paddingHorizontal: 34, marginTop: spacing.xxl },
+  eyebrow: { fontFamily: typography.body.bold, fontSize: 10.5, letterSpacing: 1.6, marginBottom: spacing.sm },
+  headline: {
+    fontFamily: typography.display.fontFamilyBold,
+    fontSize: 30,
+    lineHeight: 36,
+    textAlign: 'center',
   },
-  playDot: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: C.accent,
+  headlineAccent: {
+    fontFamily: typography.display.fontFamilyItalic,
+    fontSize: 30,
+    lineHeight: 36,
+    textAlign: 'center',
+  },
+  lead: {
+    fontFamily: typography.body.fontFamily,
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: spacing.md,
+  },
+
+  bottomBlock: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 24 },
+  footerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  dotSlot: { width: 14, height: 6, alignItems: 'center', justifyContent: 'center' },
+  dotBase: { width: 6, height: 6, borderRadius: 3 },
+  dotActive: { position: 'absolute', width: 22, height: 6, borderRadius: 3 },
+  lastBlock: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 24 },
+  nextRing: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  timerChip: {
-    flexDirection: 'row',
+  nextInner: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: SAGE_BTN,
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    justifyContent: 'center',
+  },
+  ctaWide: {
+    height: 52,
     borderRadius: radius.pill,
-    backgroundColor: C.mockFill,
-  },
-  timerText: { fontFamily: typography.body.semibold, fontSize: 11, color: C.ink },
-  dotsRow: { flexDirection: 'row', gap: 5 },
-  stepDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.mockLine },
-  stepDotDone: { backgroundColor: 'rgba(217,166,75,0.5)' },
-  stepDotOn: { backgroundColor: C.accent, width: 16 },
-
-  swapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  swapChip: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    backgroundColor: C.mockFill,
+    backgroundColor: SAGE_BTN,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  swapChipOn: { backgroundColor: 'rgba(217,166,75,0.18)' },
-  swapChipText: { fontFamily: typography.body.semibold, fontSize: 12, color: C.ink },
-  ratioText: {
-    fontFamily: typography.body.medium,
-    fontSize: 11,
-    color: C.faint,
-    textAlign: 'center',
-    marginTop: -2,
-  },
-  noteRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  noteText: {
-    fontFamily: typography.body.fontFamily,
-    fontSize: 11,
-    lineHeight: 15,
-    color: C.bodyDim,
-    flexShrink: 1,
-  },
-
-  weekRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dayCol: { alignItems: 'center', gap: 6 },
-  dayLabel: { fontFamily: typography.body.semibold, fontSize: 10.5, color: C.bodyDim },
-  dayDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.mockLine },
-  dayDotOn: { backgroundColor: C.accent },
-  mealChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: C.mockFill,
-    borderRadius: radius.md,
-    padding: 7,
-  },
-  mealThumb: { width: 26, height: 26, borderRadius: 7, backgroundColor: C.mockLine },
-
-  postHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  avatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: C.mockFill },
-  postPhoto: { height: 70, borderRadius: 12, backgroundColor: C.mockFill },
-  iconCount: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  ctaText: { fontFamily: typography.body.semibold, fontSize: 15, letterSpacing: 0.2, color: '#fff' },
+  loginLink: { alignSelf: 'center', marginTop: spacing.md, paddingVertical: 4 },
+  loginLinkPlain: { fontFamily: typography.body.semibold, fontSize: 12 },
+  loginLinkText: { textDecorationLine: 'underline' },
 });

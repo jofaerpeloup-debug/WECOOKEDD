@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Share } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { useNotifications } from '../context/NotificationsContext';
 import { useRecentlyViewed } from '../context/RecentlyViewedContext';
 import CollectionPickerSheet from '../components/CollectionPickerSheet';
 import MealPlanSheet from '../components/MealPlanSheet';
+import SubstitutionsSheet from '../components/SubstitutionsSheet';
 import AppImage from '../components/AppImage';
 import { scaleQty, scaleMinutes, estimateNutrition } from '../utils/recipe';
 import { imageSource } from '../utils/image';
@@ -46,6 +47,8 @@ export default function RecipeDetailScreen({ navigation, route }) {
   const [nutritionOpen, setNutritionOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [substituteIngredient, setSubstituteIngredient] = useState(null);
+  const substitutionCacheRef = useRef(new Map());
   const ratio = servings / baseServings;
   const scaledTime = scaleMinutes(recipe.minutes, ratio);
 
@@ -221,13 +224,21 @@ export default function RecipeDetailScreen({ navigation, route }) {
           </View>
           <View>
             {scaledIngredients.map((ing, i) => (
-              <View key={i} style={styles.ingRow}>
+              <Pressable
+                key={ing.id || i}
+                style={styles.ingRow}
+                disabled={!ing.id}
+                onPress={() => setSubstituteIngredient(ing)}
+                accessibilityRole={ing.id ? 'button' : undefined}
+                accessibilityLabel={ing.id ? `Find a substitute for ${ing.name}` : undefined}
+              >
                 <View style={styles.ingLeft}>
                   <Text style={styles.plus}>−</Text>
                   <Text style={styles.ingName}>{ing.name}</Text>
                 </View>
                 <Text style={styles.ingQty}>{ing.qty}</Text>
-              </View>
+                {ing.id ? <Ionicons name="swap-horizontal" size={15} color={colors.sageDeep} /> : null}
+              </Pressable>
             ))}
           </View>
 
@@ -292,6 +303,12 @@ export default function RecipeDetailScreen({ navigation, route }) {
         recipeId={recipe.id}
       />
       <MealPlanSheet visible={planOpen} onClose={() => setPlanOpen(false)} recipeId={recipe.id} />
+      <SubstitutionsSheet
+        visible={!!substituteIngredient}
+        ingredient={substituteIngredient}
+        cacheRef={substitutionCacheRef}
+        onClose={() => setSubstituteIngredient(null)}
+      />
     </View>
   );
 }

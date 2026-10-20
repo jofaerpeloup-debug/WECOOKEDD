@@ -78,7 +78,7 @@ export const recipes = [
     id: 'r3', title: 'Pancit Canton', imgLabel: 'pancit canton', category: 'noodles', cuisine: 'Luzon',
     minutes: 25, difficulty: 'Easy', servings: 4, rating: 4.7, reviews: 310,
     vibe: ['quick', 'cozy'], dietary: [],
-    image: 'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/35/21/03/352103acf31abc9efa30b132b1e4f5b4.jpg',
     description: 'Stir-fried wheat noodles with pork, shrimp, and vegetables — a birthday-table staple believed to bring long life.',
     ingredients: [
       { name: 'Canton noodles', qty: '250 g' },
@@ -109,7 +109,7 @@ export const recipes = [
     id: 'r4', title: 'Pancit Bihon', imgLabel: 'pancit bihon', category: 'noodles', cuisine: 'Visayas',
     minutes: 25, difficulty: 'Easy', servings: 4, rating: 4.6, reviews: 255,
     vibe: ['quick', 'fresh'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/6b/d4/ba/6bd4badf4ddcecce98ab790a6686fcfb.jpg',
     description: 'Thin rice noodles stir-fried with chicken and vegetables in a light, savory sauce.',
     ingredients: [
       { name: 'Rice noodles (bihon)', qty: '250 g' },
@@ -258,7 +258,7 @@ export const recipes = [
     id: 'r9', title: 'Tapsilog', imgLabel: 'tapsilog', category: 'breakfast', cuisine: 'Luzon',
     minutes: 25, difficulty: 'Easy', servings: 2, rating: 4.7, reviews: 225,
     vibe: ['quick', 'cozy'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1705088293300-8fc8c7be90e2?w=800&q=80',
+    image: 'https://i.pinimg.com/736x/8f/72/ec/8f72ecde41fa4d5e778a32eb845311f9.jpg',
     description: 'Beef tapa, garlic fried rice, and a sunny-side-up egg — the classic Filipino breakfast plate.',
     ingredients: [
       { name: 'Beef sirloin, thin-sliced', qty: '300 g' },
@@ -285,7 +285,7 @@ export const recipes = [
     id: 'r10', title: 'Longsilog', imgLabel: 'longsilog', category: 'breakfast', cuisine: 'Luzon',
     minutes: 20, difficulty: 'Easy', servings: 2, rating: 4.6, reviews: 198,
     vibe: ['quick', 'cozy'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1513104610352-6a2f4d7525c0?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/e6/0b/6d/e60b6df385c04b6f5059b0676e15ede7.jpg',
     description: 'Sweet Filipino sausage with garlic rice and fried egg — a quick, satisfying morning favorite.',
     ingredients: [
       { name: 'Longganisa sausages', qty: '4 links' },
@@ -535,7 +535,7 @@ export const recipes = [
     id: 'r19', title: 'Chicken Inasal', imgLabel: 'chicken inasal', category: 'ulam', cuisine: 'Visayas',
     minutes: 35, difficulty: 'Easy', servings: 4, rating: 4.8, reviews: 312,
     vibe: ['impress', 'fresh'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1779358964755-75464e144187?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/b4/fa/19/b4fa19bf62091208319e9bd73c3df6d9.jpg',
     description: 'Bacolod-style grilled chicken marinated in calamansi, vinegar, and annatto oil for a tangy, smoky char.',
     ingredients: [
       { name: 'Chicken thighs and legs', qty: '1 kg' },
@@ -591,7 +591,7 @@ export const recipes = [
     id: 'r21', title: 'Laing', imgLabel: 'laing', category: 'vegetable', cuisine: 'Luzon',
     minutes: 45, difficulty: 'Easy', servings: 4, rating: 4.5, reviews: 156,
     vibe: ['cozy', 'fresh'], dietary: ['vegetarian', 'glutenfree'],
-    image: 'https://images.unsplash.com/photo-1788724393199-4211511fc3ab?w=800&q=80',
+    image: 'https://i.pinimg.com/736x/4e/85/19/4e8519795fe2dd840fe0c5aea075169b.jpg',
     description: 'Dried taro leaves slow-simmered in coconut milk with chili — a Bicolano classic, rich and gently spicy.',
     ingredients: [
       { name: 'Dried taro leaves', qty: '200 g' },
@@ -778,7 +778,7 @@ export const recipes = [
     id: 'r28', title: 'Adobong Kangkong', imgLabel: 'adobong kangkong', category: 'vegetable', cuisine: 'Luzon',
     minutes: 15, difficulty: 'Easy', servings: 4, rating: 4.4, reviews: 98,
     vibe: ['quick', 'fresh'], dietary: ['vegan', 'vegetarian'],
-    image: 'https://images.unsplash.com/photo-1546072533-675fd58d08e8?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/8e/23/08/8e23089b967dd7ab41ba7693364b64ca.jpg',
     description: 'Water spinach quickly braised in garlic, soy sauce, and vinegar — a fast, punchy way to get your greens in.',
     ingredients: [
       { name: 'Kangkong (water spinach)', qty: '2 bunches' },
@@ -801,7 +801,7 @@ export const recipes = [
     id: 'r29', title: 'Ensaladang Talong', imgLabel: 'ensaladang talong', category: 'vegetable', cuisine: 'Luzon',
     minutes: 20, difficulty: 'Easy', servings: 4, rating: 4.5, reviews: 87,
     vibe: ['fresh', 'quick'], dietary: ['vegan', 'vegetarian', 'glutenfree'],
-    image: 'https://images.unsplash.com/photo-1536489885071-87983c3e2859?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/20/df/8c/20df8cddf01d92ccb16316754b95a552.jpg',
     description: 'Smoky grilled eggplant tossed with tomato, onion, and a tangy calamansi-vinegar dressing — a refreshing side for any grilled dish.',
     ingredients: [
       { name: 'Eggplant', qty: '3 large' },
@@ -824,7 +824,7 @@ export const recipes = [
     id: 'r30', title: 'Dinengdeng', imgLabel: 'dinengdeng', category: 'vegetable', cuisine: 'Luzon',
     minutes: 35, difficulty: 'Easy', servings: 4, rating: 4.3, reviews: 72,
     vibe: ['cozy', 'fresh'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1582271929389-5bbccafeb493?w=800&q=80',
+    image: 'https://i.pinimg.com/736x/7f/92/89/7f9289d825b3283b2c9a6ae38207bf75.jpg',
     description: 'An Ilocano vegetable stew in a light bagoong-seasoned broth, with squash, string beans, and bittermelon leaves.',
     ingredients: [
       { name: 'Calabaza squash (kalabasa)', qty: '1 cup' },
@@ -849,7 +849,7 @@ export const recipes = [
     id: 'r31', title: 'Ginisang Sitaw at Kalabasa', imgLabel: 'ginisang sitaw at kalabasa', category: 'vegetable', cuisine: 'Luzon',
     minutes: 25, difficulty: 'Easy', servings: 4, rating: 4.4, reviews: 105,
     vibe: ['quick', 'cozy'], dietary: ['glutenfree'],
-    image: 'https://images.unsplash.com/photo-1751560048567-b38f5cf3448a?w=800&q=80',
+    image: 'https://i.pinimg.com/1200x/29/02/a2/2902a28908692b8d1cd2afaab5ecccae.jpg',
     description: 'String beans and squash sautéed with garlic, tomato, and a little shrimp — a fast, everyday vegetable side.',
     ingredients: [
       { name: 'String beans (sitaw)', qty: '2 cups' },
@@ -875,7 +875,7 @@ export const recipes = [
     id: 'r32', title: 'Utan Bisaya', imgLabel: 'utan bisaya', category: 'vegetable', cuisine: 'Visayas',
     minutes: 30, difficulty: 'Easy', servings: 4, rating: 4.3, reviews: 64,
     vibe: ['fresh', 'cozy'], dietary: ['vegan', 'vegetarian', 'glutenfree'],
-    image: 'https://images.unsplash.com/photo-1582271929389-5bbccafeb493?w=800&q=80',
+    image: 'https://i.pinimg.com/736x/ea/83/93/ea83934884d1d30c06aa73f1efc0a690.jpg',
     description: 'A light Visayan vegetable soup in a ginger-infused broth — squash, string beans, eggplant, and okra, simmered until tender.',
     ingredients: [
       { name: 'Calabaza squash (kalabasa)', qty: '1 cup' },
